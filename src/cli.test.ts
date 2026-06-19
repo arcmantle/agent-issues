@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli } from "./cli.js";
+import { isEntrypointInvocation, runCli } from "./cli.js";
 import { ensureDatabase } from "./database.js";
 import { listEntities } from "./store.js";
 
@@ -57,6 +58,16 @@ describe("cli", () => {
 		expect(exitCode).toBe(0);
 		expect(stderr.read()).toBe("");
 		expect(stdout.read()).toContain("agent-issues create <kind>");
+	});
+
+	it("treats a symlinked argv path as a direct invocation", () => {
+		const root = createTempDir();
+		const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
+		const linkedPath = path.join(root, "agent-issues");
+
+		symlinkSync(cliPath, linkedPath);
+
+		expect(isEntrypointInvocation(pathToFileURL(cliPath).href, linkedPath)).toBe(true);
 	});
 
 	it("creates entities through clipanion-parsed options", async () => {
