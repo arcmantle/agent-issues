@@ -1,0 +1,39 @@
+{
+	"name": "agent-issues",
+	"version": "0.1.0",
+	"description": "CLI for managing initiatives, PRDs, user stories, ADRs, and issues.",
+	"type": "module",
+	"bin": {
+		"agent-issues": "./dist/cli.js"
+	},
+	"files": [
+		"dist",
+		"site/dist",
+		".github/agents",
+		".github/hooks",
+		"skills"
+	],
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"prepare": "pnpm run build",
+		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && pnpm --dir site build && tsc -p tsconfig.json",
+		"postbuild": "node --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/cli.js', 0o755);\"",
+		"site:dev": "pnpm --dir site dev",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "pnpm --dir site exec tsc -p tsconfig.json --noEmit && tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/node": "^25.9.2",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"better-sqlite3": "^12.10.0",
+		"clipanion": "4.0.0-rc.4",
+		"fuse.js": "^7.4.2"
+	}
+}

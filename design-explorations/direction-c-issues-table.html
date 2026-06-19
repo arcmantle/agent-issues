@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Direction C · Issues Table — agent-issues</title>
+	<link rel="stylesheet" href="shared.css" />
+	<style>
+		:root {
+			--page-bg: #ffffff;
+			--surface: #ffffff;
+			--surface-muted: #f6f8fa;
+			--canvas-subtle: #f6f8fa;
+			--border: #d1d9e0;
+			--border-muted: #e4e8ec;
+			--text: #1f2328;
+			--muted: #59636e;
+			--accent: #0969da;
+			--success: #1a7f37;
+			--success-bg: #dafbe1;
+			--warn: #9a6700;
+			--warn-bg: #fff8c5;
+			--danger: #cf222e;
+			--danger-bg: #ffebe9;
+			--done: #8250df;
+			--done-bg: #fbefff;
+			--header-bg: #f6f8fa;
+		}
+		* { box-sizing: border-box; }
+		body { margin: 0; background: var(--page-bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; font-size: 14px; }
+		button, input { font: inherit; color: inherit; }
+		a { color: var(--accent); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+
+		.subnav { border-bottom: 1px solid var(--border); background: var(--surface); }
+		.subnav-inner { max-width: 1216px; margin: 0 auto; padding: 16px 24px 0; }
+		.org-row { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+		.org-row .crumb-owner, .org-row .crumb-sep { color: var(--muted); }
+		.project-switcher { position: relative; }
+		.project-switcher > button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-weight: 600; cursor: pointer; }
+		.project-switcher > button:hover { background: var(--surface-muted); }
+		.menu { position: absolute; top: calc(100% + 6px); left: 0; min-width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px rgba(31,35,40,.2); z-index: 40; overflow: hidden; display: none; }
+		.menu.open { display: block; }
+		.menu-head { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border-muted); background: var(--surface-muted); }
+		.menu-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 10px 14px; border: 0; background: transparent; text-align: left; cursor: pointer; border-bottom: 1px solid var(--border-muted); }
+		.menu-item:hover { background: var(--surface-muted); }
+		.menu-item .check { width: 14px; color: var(--accent); }
+		.menu-item .mi-name { font-weight: 600; }
+		.menu-item .mi-desc { color: var(--muted); font-size: 12px; }
+
+		.tabs { display: flex; gap: 2px; margin-top: 16px; }
+		.tab { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; cursor: pointer; }
+		.tab:hover { background: var(--surface-muted); border-radius: 6px 6px 0 0; }
+		.tab.active { border-bottom-color: #fd8c73; font-weight: 600; }
+		.tab .count { padding: 0 7px; height: 18px; display: inline-grid; place-items: center; background: rgba(175,184,193,.2); border-radius: 999px; font-size: 12px; }
+
+		.wrap { max-width: 1216px; margin: 0 auto; padding: 24px; }
+
+		.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+		.search-box { flex: 1; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); }
+		.search-box input { flex: 1; border: 0; background: transparent; outline: none; }
+		.btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-weight: 500; cursor: pointer; }
+		.btn:hover { background: var(--surface-muted); }
+		.btn.primary { background: #1f883d; border-color: rgba(31,136,61,.4); color: #fff; }
+
+		.table { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+		.table-head { display: flex; align-items: center; gap: 16px; padding: 12px 16px; background: var(--header-bg); border-bottom: 1px solid var(--border); font-size: 13px; }
+		.table-head .filters { display: flex; gap: 16px; }
+		.table-head .filters button { border: 0; background: none; cursor: pointer; color: var(--muted); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+		.table-head .filters button.on { color: var(--text); }
+		.spacer { flex: 1; }
+		.sortbtn { border: 0; background: none; cursor: pointer; color: var(--muted); font-weight: 600; }
+
+		.trow { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 12px 16px; border: 0; border-top: 1px solid var(--border-muted); background: var(--surface); text-align: left; cursor: pointer; }
+		.trow:hover { background: var(--canvas-subtle); }
+		.trow .stat { margin-top: 2px; flex-shrink: 0; }
+		.trow .main { flex: 1; min-width: 0; }
+		.trow .t-title { font-size: 15px; font-weight: 600; }
+		.trow:hover .t-title { color: var(--accent); }
+		.trow .t-meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
+		.trow .t-right { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
+
+		.badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid transparent; }
+		.badge.green { background: var(--success-bg); color: var(--success); }
+		.badge.purple { background: var(--done-bg); color: var(--done); }
+		.badge.yellow { background: var(--warn-bg); color: var(--warn); }
+		.badge.red { background: var(--danger-bg); color: var(--danger); }
+		.badge.gray { background: var(--surface-muted); color: var(--muted); border-color: var(--border); }
+		.badge.blue { background: #ddf4ff; color: var(--accent); }
+		.label { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid; }
+		.label.init { color: #0550ae; border-color: #54aeff66; background: #ddf4ff; }
+		.idtag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+		.progmini { width: 120px; height: 6px; border-radius: 999px; background: #eaeef2; overflow: hidden; }
+		.progmini > span { display: block; height: 100%; background: var(--done); }
+
+		.back { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: var(--muted); cursor: pointer; margin-bottom: 14px; }
+		.back:hover { color: var(--accent); }
+		.ms-head { padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+		.ms-title { margin: 0; font-size: 26px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+		.ms-sub { color: var(--muted); margin: 10px 0 16px; max-width: 80ch; }
+		.ms-prog { display: flex; align-items: center; gap: 16px; }
+		.ms-prog .bigbar { flex: 1; max-width: 420px; height: 10px; border-radius: 999px; background: #eaeef2; display: flex; overflow: hidden; }
+		.ms-prog .bigbar .pd { background: var(--done); }
+		.ms-prog .bigbar .po { background: var(--success); }
+		.ms-prog .pct { font-size: 22px; font-weight: 700; }
+		.ms-stats { display: flex; gap: 20px; color: var(--muted); margin-top: 12px; }
+		.ms-stats b { color: var(--text); }
+
+		.group-tabs { display: flex; gap: 2px; margin: 24px 0 0; border-bottom: 1px solid var(--border); }
+		.group-tab { padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer; color: var(--muted); font-weight: 600; }
+		.group-tab.active { color: var(--text); border-bottom-color: #fd8c73; }
+
+		.dtable { border: 1px solid var(--border); border-top: 0; border-radius: 0 0 6px 6px; overflow: hidden; }
+		.drow { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 16px; border: 0; border-top: 1px solid var(--border-muted); background: var(--surface); text-align: left; font: inherit; color: inherit; cursor: pointer; }
+		.drow:first-child { border-top: 0; }
+		.drow:hover { background: var(--canvas-subtle); }
+		.drow .d-body { flex: 1; min-width: 0; }
+		.drow .d-title { font-weight: 600; }
+		.drow:hover .d-title { color: var(--accent); }
+		.drow .d-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+		.subhead { padding: 10px 16px; background: var(--header-bg); border-top: 1px solid var(--border-muted); font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+		.subhead:hover { color: var(--text); }
+		.chev { color: var(--muted); margin-left: auto; }
+	</style>
+</head>
+<body>
+	<div class="subnav">
+		<div class="subnav-inner">
+			<div class="org-row">
+				<span class="crumb-owner">agent-issues</span>
+				<span class="crumb-sep">/</span>
+				<div class="project-switcher">
+					<button id="switcherBtn"><span id="switcherLabel">content-hub-demo</span> <span style="color:var(--muted)">▾</span></button>
+					<div class="menu" id="switcherMenu"></div>
+				</div>
+			</div>
+			<nav class="tabs" id="tabs">
+				<button class="tab active" data-tab="initiatives">📁 Initiatives <span class="count" id="cInit">4</span></button>
+				<button class="tab" data-tab="adrs">📐 ADRs <span class="count" id="cAdr">2</span></button>
+				<button class="tab" data-tab="graph">🕸️ Graph</button>
+			</nav>
+		</div>
+	</div>
+
+	<main class="wrap" id="view"></main>
+
+	<script src="data.js"></script>
+	<script src="shared.js"></script>
+	<script>
+		const DATA = window.AGENT_ISSUES_DATA;
+		const S = window.AIShared;
+		const state = { projectId: DATA.projects[0].id, tab: "initiatives", view: { name: "root" }, group: "all" };
+		const project = () => DATA.projects.find(p => p.id === state.projectId);
+		const initById = (id) => project().initiatives.find(i => i.id === id);
+		const badge = S.badge;
+		const issueIcon = (s) => {
+			if (s==="done") return `<svg width="16" height="16" viewBox="0 0 16 16" fill="#8250df"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm3.78 5.97a.75.75 0 0 0-1.06-.02L7.2 9.38 5.28 7.47a.75.75 0 1 0-1.06 1.06l2.45 2.44a.75.75 0 0 0 1.06 0l4.05-3.94a.75.75 0 0 0 0-1.06Z"/></svg>`;
+			if (s==="blocked") return `<svg width="16" height="16" viewBox="0 0 16 16" fill="#cf222e"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm-.75 4.75a.75.75 0 0 1 1.5 0v3.5a.75.75 0 0 1-1.5 0Zm.75 6.25a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>`;
+			return `<svg width="16" height="16" viewBox="0 0 16 16" fill="#1a7f37"><path d="M8 9.5A1.5 1.5 0 1 0 8 6.5a1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg>`;
+		};
+
+		function renderSwitcher() {
+			const m = document.getElementById("switcherMenu");
+			m.innerHTML = `<div class="menu-head">Switch project</div>` + DATA.projects.map(p => `
+				<button class="menu-item" data-p="${p.id}">
+					<span class="check">${p.id===state.projectId?"✓":""}</span>
+					<span><span class="mi-name">${p.name}</span><br/><span class="mi-desc">${p.description}</span></span>
+				</button>`).join("");
+			m.querySelectorAll(".menu-item").forEach(b => b.onclick = () => { state.projectId=b.dataset.p; state.view={name:"root"}; m.classList.remove("open"); renderAll(); });
+		}
+		document.getElementById("switcherBtn").onclick = (e)=>{ e.stopPropagation(); document.getElementById("switcherMenu").classList.toggle("open"); };
+		document.addEventListener("click", ()=>document.getElementById("switcherMenu").classList.remove("open"));
+		document.getElementById("tabs").addEventListener("click",(e)=>{ const t=e.target.closest(".tab"); if(!t)return; state.tab=t.dataset.tab; state.view={name:"root"}; renderAll(); });
+
+		function openEntity(kind, id, initId) { state.view = { name: "entity", kind, id, initId, from: state.view }; renderAll(); }
+		function wireRefs(scope) {
+			scope.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { const [kind,id]=el.dataset.open.split(":"); openEntity(kind, id, el.dataset.init); });
+		}
+
+		function graphView() {
+			return `<button class="back" id="backBtn">← ${project().name}</button>
+				<h1 style="margin:0 0 6px;font-size:22px">Project relationship graph</h1>
+				<p style="color:var(--muted);margin:0 0 18px">Initiatives with their PRDs &amp; ADRs. Click an initiative or record to open it.</p>
+				<div class="ai-graph-wrap">
+					<div class="ai-graph-legend">
+						<span class="lg"><span class="sw" style="background:#24292f"></span>Project</span>
+						<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
+						<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
+						<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
+						<span class="ai-graph-hint">Hover a node for its full title</span>
+					</div>
+					<div id="graphHost"></div>
+				</div>`;
+		}
+
+		function rootView() {
+			const p = project();
+			if (state.tab === "graph") return graphView();
+
+			if (state.tab === "adrs") {
+				return `<div class="table">
+					<div class="table-head">
+						<div class="filters"><button class="on">✓ ${p.adrs.filter(a=>a.status==="accepted").length} Accepted</button><button>◷ ${p.adrs.filter(a=>a.status!=="accepted").length} Proposed</button></div>
+						<span class="spacer"></span><button class="sortbtn">Sort ▾</button>
+					</div>
+					${p.adrs.map(a=>`<button class="trow" data-adr="${a.id}">
+						<span class="stat"><svg width="16" height="16" viewBox="0 0 16 16" fill="#0969da"><path d="M2 2.75A.75.75 0 0 1 2.75 2h10.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75H2.75a.75.75 0 0 1-.75-.75Z"/></svg></span>
+						<div class="main"><div class="t-title">${a.title}</div><div class="t-meta"><span class="idtag">${a.id}</span><span>linked to initiative ${a.initiative}</span><span>updated ${a.updatedAt}</span></div></div>
+						<div class="t-right">${badge(a.status)}</div>
+					</button>`).join("")}
+				</div>`;
+			}
+
+			const active = p.initiatives.filter(i=>i.status==="active").length;
+			const rows = p.initiatives.map(i => {
+				const done = i.issues.filter(x=>x.status==="done").length;
+				const pct = i.issues.length ? Math.round(done/i.issues.length*100) : 0;
+				return `<button class="trow" data-init="${i.id}">
+					<span class="stat"><svg width="16" height="16" viewBox="0 0 16 16" fill="#0969da"><path d="M1.75 2.5A1.75 1.75 0 0 0 0 4.25v7.5C0 12.72.78 13.5 1.75 13.5h12.5A1.75 1.75 0 0 0 16 11.75v-6A1.75 1.75 0 0 0 14.25 4H7.5L6.07 2.57a1.75 1.75 0 0 0-1.24-.51Z"/></svg></span>
+					<div class="main">
+						<div class="t-title">${i.title} <span class="label init">initiative</span></div>
+						<div class="t-meta"><span class="idtag">${i.id}</span><span>${i.summary}</span></div>
+						<div class="t-meta" style="margin-top:8px"><span><b>${i.prds.length}</b> PRD</span><span><b>${i.stories.length}</b> stories</span><span><b>${i.adrs.length}</b> ADRs</span><span>${done}/${i.issues.length} issues</span></div>
+					</div>
+					<div class="t-right">${badge(i.status)}<div class="progmini" title="${pct}%"><span style="width:${pct}%"></span></div></div>
+				</button>`;
+			}).join("");
+
+			return `
+			<div class="toolbar">
+				<div class="search-box">🔍 <input placeholder="is:initiative status:active …" /></div>
+				<button class="btn">Labels</button><button class="btn">Sort</button><button class="btn primary">New initiative</button>
+			</div>
+			<div class="table">
+				<div class="table-head"><div class="filters"><button class="on">● ${active} Active</button><button>○ ${p.initiatives.length-active} Draft</button></div><span class="spacer"></span><button class="sortbtn">Initiative ▾</button></div>
+				${rows}
+			</div>`;
+		}
+
+		function entityView(v) {
+			const init = initById(v.initId);
+			let e;
+			if (v.kind === "prd") e = init.prds.find(x => x.id === v.id);
+			else if (v.kind === "adr") e = init.adrs.find(x => x.id === v.id) || project().adrs.find(x => x.id === v.id);
+			else if (v.kind === "story") e = init.stories.find(x => x.id === v.id);
+			else e = init.issues.find(x => x.id === v.id);
+			return `<button class="back" id="backBtn">← Back</button>
+				<div class="ai-crumbs">${project().name} · ${init.title}</div>
+				${S.detailHTML(S.detail(e, v.kind, init))}`;
+		}
+
+		function milestoneView(initId) {
+			const p = project();
+			const init = initById(initId);
+			const done = init.issues.filter(i=>i.status==="done").length;
+			const open = init.issues.length - done;
+			const pct = init.issues.length ? Math.round(done/init.issues.length*100) : 0;
+			const storyTitle = (id) => (init.stories.find(s=>s.id===id)||{}).title || id;
+
+			let body = "";
+			if (state.group === "graph") {
+				body = `<div class="ai-graph-wrap" style="margin-top:18px">
+					<div class="ai-graph-legend">
+						<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
+						<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
+						<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
+						<span class="lg"><span class="sw" style="background:#bf8700"></span>Story</span>
+						<span class="lg"><span class="sw" style="background:#0a7ea4"></span>Issue</span>
+						<span class="ai-graph-hint">Click any node to open it</span>
+					</div>
+					<div id="graphHost"></div>
+				</div>`;
+			} else if (state.group === "stories") {
+				body = `<div class="dtable">` + init.stories.map(s => {
+					const kids = init.issues.filter(i=>i.story===s.id);
+					return `<button class="subhead" data-open="story:${s.id}" data-init="${init.id}">📝 <span class="idtag">${s.id}</span> ${s.title} ${badge(s.status)} <span class="chev">›</span></button>` +
+						kids.map(k=>`<button class="drow" data-open="issue:${k.id}" data-init="${init.id}"><span>${issueIcon(k.status)}</span><div class="d-body"><div class="d-title">${k.title}</div><div class="d-sub idtag">${k.id}</div></div>${badge(k.status)}</button>`).join("");
+				}).join("") + `</div>`;
+			} else if (state.group === "adrs") {
+				body = `<div class="dtable">` + (init.adrs.length ? init.adrs.map(a=>`<button class="drow" data-open="adr:${a.id}" data-init="${init.id}"><span><svg width="16" height="16" viewBox="0 0 16 16" fill="#0969da"><path d="M2 2.75A.75.75 0 0 1 2.75 2h10.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75H2.75a.75.75 0 0 1-.75-.75Z"/></svg></span><div class="d-body"><div class="d-title">${a.title}</div><div class="d-sub idtag">${a.id}</div></div>${badge(a.status)}</button>`).join("") : `<div class="drow" style="cursor:default"><span class="d-sub">No ADRs linked to this initiative yet.</span></div>`) + `</div>`;
+			} else {
+				body = `<div class="dtable">` + init.issues.map(i=>`<button class="drow" data-open="issue:${i.id}" data-init="${init.id}"><span>${issueIcon(i.status)}</span><div class="d-body"><div class="d-title">${i.title}</div><div class="d-sub"><span class="idtag">${i.id}</span> · implements ${i.story} ${storyTitle(i.story)}</div></div>${badge(i.status)}</button>`).join("") + `</div>`;
+			}
+
+			return `
+			<button class="back" id="backBtn">← ${p.name} / Initiatives</button>
+			<div class="ms-head">
+				<h1 class="ms-title">${init.title} ${badge(init.status)} <span class="idtag" style="font-size:14px">${init.id}</span></h1>
+				<p class="ms-sub">${init.summary}</p>
+				<div class="ms-prog"><div class="bigbar"><span class="pd" style="width:${pct}%"></span><span class="po" style="width:${100-pct}%"></span></div><span class="pct">${pct}%</span></div>
+				<div class="ms-stats"><span><b>${open}</b> Open</span><span><b>${done}</b> Closed</span><span><b>${init.stories.length}</b> User stories</span><span><b>${init.prds.length}</b> PRDs</span><span><b>${init.adrs.length}</b> ADRs</span></div>
+			</div>
+			<div class="group-tabs" id="groupTabs">
+				<button class="group-tab ${state.group==="all"?"active":""}" data-g="all">All issues ${init.issues.length}</button>
+				<button class="group-tab ${state.group==="stories"?"active":""}" data-g="stories">By user story ${init.stories.length}</button>
+				<button class="group-tab ${state.group==="adrs"?"active":""}" data-g="adrs">ADRs ${init.adrs.length}</button>
+				<button class="group-tab ${state.group==="graph"?"active":""}" data-g="graph">Graph</button>
+			</div>
+			${body}`;
+		}
+
+		function renderAll() {
+			const p = project();
+			document.getElementById("switcherLabel").textContent = p.id;
+			document.getElementById("cInit").textContent = p.initiatives.length;
+			document.getElementById("cAdr").textContent = p.adrs.length;
+			document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===state.tab));
+			renderSwitcher();
+
+			const view = document.getElementById("view");
+			if (state.view.name === "entity") {
+				view.innerHTML = entityView(state.view);
+				document.getElementById("backBtn").onclick = () => { state.view = state.view.from || { name: "root" }; renderAll(); };
+				wireRefs(view);
+				return;
+			}
+			if (state.view.name === "initiative") {
+				view.innerHTML = milestoneView(state.view.id);
+				document.getElementById("backBtn").onclick = () => { state.view={name:"root"}; state.group="all"; renderAll(); };
+				document.getElementById("groupTabs").addEventListener("click",(e)=>{ const g=e.target.closest(".group-tab"); if(!g)return; state.group=g.dataset.g; renderAll(); });
+				if (state.group === "graph") {
+					S.renderGraph(document.getElementById("graphHost"), S.buildInitiativeGraph(initById(state.view.id)), (n) => openEntity(n.kind, n.id, n.initId));
+				} else {
+					wireRefs(view);
+				}
+				return;
+			}
+			// root
+			view.innerHTML = rootView();
+			if (state.tab === "graph") {
+				document.getElementById("backBtn").onclick = () => { state.tab = "initiatives"; renderAll(); };
+				S.renderGraph(document.getElementById("graphHost"), S.buildProjectGraph(p), (n) => {
+					if (!n.id) return;
+					if (n.kind === "initiative") { state.tab = "initiatives"; state.view = { name: "initiative", id: n.initId }; state.group = "all"; }
+					else { state.view = { name: "entity", kind: n.kind, id: n.id, initId: n.initId, from: { name: "root" } }; }
+					renderAll();
+				});
+				return;
+			}
+			view.querySelectorAll("[data-init]").forEach(r=>r.onclick=()=>{ state.view={name:"initiative",id:r.dataset.init}; state.group="all"; renderAll(); });
+			view.querySelectorAll("[data-adr]").forEach(r=>r.onclick=()=>{ const a=p.adrs.find(x=>x.id===r.dataset.adr); openEntity("adr", a.id, a.initiative); });
+		}
+		renderAll();
+	</script>
+</body>
+</html>

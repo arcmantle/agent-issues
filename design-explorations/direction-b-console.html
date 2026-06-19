@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Direction B · Console — agent-issues</title>
+	<link rel="stylesheet" href="shared.css" />
+	<style>
+		:root {
+			--bg: #fbfcfd;
+			--surface: #ffffff;
+			--surface-muted: #f6f8fa;
+			--rail-bg: #f6f8fa;
+			--border: #d1d9e0;
+			--border-muted: #e4e8ec;
+			--text: #1f2328;
+			--muted: #59636e;
+			--accent: #0969da;
+			--accent-soft: #ddf4ff;
+			--success: #1a7f37;
+			--success-bg: #dafbe1;
+			--warn: #9a6700;
+			--warn-bg: #fff8c5;
+			--danger: #cf222e;
+			--danger-bg: #ffebe9;
+			--done: #8250df;
+			--done-bg: #fbefff;
+		}
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			height: 100vh;
+			display: grid;
+			grid-template-columns: 256px 380px 1fr;
+			background: var(--bg);
+			color: var(--text);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+			font-size: 14px;
+			overflow: hidden;
+		}
+		body.wide { grid-template-columns: 256px 1fr; }
+		button { font: inherit; color: inherit; }
+
+		.badge {
+			display: inline-flex; align-items: center; gap: 4px;
+			height: 20px; padding: 0 8px; border-radius: 999px;
+			font-size: 12px; font-weight: 600; border: 1px solid transparent;
+		}
+		.badge.green { background: var(--success-bg); color: var(--success); }
+		.badge.purple { background: var(--done-bg); color: var(--done); }
+		.badge.yellow { background: var(--warn-bg); color: var(--warn); }
+		.badge.red { background: var(--danger-bg); color: var(--danger); }
+		.badge.gray { background: var(--surface-muted); color: var(--muted); border-color: var(--border); }
+		.badge.blue { background: var(--accent-soft); color: var(--accent); }
+
+		/* ---------- Left rail ---------- */
+		.rail { background: var(--rail-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+		.rail-switcher { position: relative; padding: 12px; border-bottom: 1px solid var(--border-muted); }
+		.rail-switcher > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; text-align: left; }
+		.rail-switcher > button:hover { background: var(--surface-muted); }
+		.avatar { width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; background: linear-gradient(135deg, #0969da, #8250df); }
+		.sw-name { font-weight: 600; }
+		.sw-sub { color: var(--muted); font-size: 12px; }
+		.sw-caret { margin-left: auto; color: var(--muted); }
+
+		.menu { position: absolute; top: calc(100% - 4px); left: 12px; right: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 28px rgba(31,35,40,.18); z-index: 40; overflow: hidden; display: none; }
+		.menu.open { display: block; }
+		.menu-item { display: flex; gap: 10px; align-items: center; width: 100%; padding: 10px 12px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+		.menu-item:hover { background: var(--surface-muted); }
+		.menu-item .check { width: 14px; color: var(--accent); }
+
+		.rail-nav { padding: 12px 8px; overflow-y: auto; flex: 1; }
+		.nav-group-label { padding: 8px 12px 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+		.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 12px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; color: var(--text); }
+		.nav-item:hover { background: var(--surface-muted); }
+		.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+		.nav-item .nav-count { margin-left: auto; font-size: 12px; color: var(--muted); }
+		.nav-item.active .nav-count { color: var(--accent); }
+		.rail-foot { padding: 12px; border-top: 1px solid var(--border-muted); color: var(--muted); font-size: 12px; }
+
+		/* ---------- Master ---------- */
+		.master { border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); }
+		body.wide .master { display: none; }
+		.master-head { padding: 16px; border-bottom: 1px solid var(--border-muted); }
+		.master-head h1 { margin: 0; font-size: 16px; }
+		.master-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+		.master-search { margin-top: 12px; width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); font: inherit; }
+		.master-list { overflow-y: auto; flex: 1; }
+		.m-item { display: block; width: 100%; text-align: left; border: 0; cursor: pointer; padding: 14px 16px; border-bottom: 1px solid var(--border-muted); background: transparent; }
+		.m-item:hover { background: var(--surface-muted); }
+		.m-item.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+		.m-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+		.m-title { font-weight: 600; font-size: 14px; }
+		.m-sub { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+		.m-meta { display: flex; gap: 10px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+		.m-meta b { color: var(--text); }
+		.miniprog { height: 4px; border-radius: 999px; background: #eaeef2; margin-top: 10px; overflow: hidden; }
+		.miniprog > span { display: block; height: 100%; background: var(--done); }
+
+		/* ---------- Detail ---------- */
+		.detail { overflow-y: auto; }
+		.detail-inner { max-width: 920px; margin: 0 auto; padding: 28px 32px 64px; }
+		.empty { height: 100%; display: grid; place-items: center; color: var(--muted); text-align: center; }
+		.d-title { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+		.d-sub { color: var(--muted); margin: 10px 0 0; max-width: 70ch; }
+
+		.kpis { display: flex; gap: 12px; margin: 20px 0 8px; }
+		.kpi { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: var(--surface); }
+		.kpi .k-num { font-size: 22px; font-weight: 700; }
+		.kpi .k-label { color: var(--muted); font-size: 12px; }
+		.bar { height: 8px; border-radius: 999px; background: #eaeef2; display: flex; overflow: hidden; margin-top: 16px; }
+		.bar .b-done { background: var(--done); }
+		.bar .b-open { background: var(--success); }
+
+		.subtabs { display: flex; gap: 2px; margin: 22px 0 0; border-bottom: 1px solid var(--border); }
+		.subtab { padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer; color: var(--muted); font-weight: 600; }
+		.subtab.active { color: var(--text); border-bottom-color: #fd8c73; }
+
+		.sec { margin-top: 24px; }
+		.sec h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+		.sec h2 .c { color: var(--muted); font-weight: 400; }
+		.card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+		.line { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 0; border-top: 1px solid var(--border-muted); background: var(--surface); text-align: left; font: inherit; color: inherit; }
+		.line:first-child { border-top: 0; }
+		.line.click { cursor: pointer; }
+		.line.click:hover { background: var(--surface-muted); }
+		.line .l-body { flex: 1; min-width: 0; }
+		.line .l-title { font-weight: 600; }
+		.line .l-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+		.idtag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); }
+		.chev { color: var(--muted); }
+
+		.story-block { border-top: 1px solid var(--border-muted); padding: 8px 6px 12px; }
+		.story-block:first-child { border-top: 0; }
+		.story-head { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; padding: 6px 8px; border-radius: 6px; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+		.story-head:hover { background: var(--surface-muted); }
+		.story-head .s-title { font-weight: 600; flex: 1; }
+		.child { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px 7px 30px; border: 0; background: none; cursor: pointer; text-align: left; font: inherit; color: inherit; border-radius: 6px; }
+		.child:hover { background: var(--surface-muted); }
+		.child .idtag { width: 56px; }
+
+		.graph-host { padding: 0; }
+	</style>
+</head>
+<body>
+	<aside class="rail">
+		<div class="rail-switcher">
+			<button id="switcherBtn">
+				<span class="avatar" id="swAvatar">C</span>
+				<span><div class="sw-name" id="swName">Content Hub Demo</div><div class="sw-sub">Switch project</div></span>
+				<span class="sw-caret">⇅</span>
+			</button>
+			<div class="menu" id="switcherMenu"></div>
+		</div>
+		<nav class="rail-nav" id="railNav"></nav>
+		<div class="rail-foot" id="railFoot"></div>
+	</aside>
+
+	<section class="master">
+		<div class="master-head">
+			<h1 id="masterTitle">Initiatives</h1>
+			<p id="masterDesc">Select an initiative to explore its issues and user stories.</p>
+			<input class="master-search" placeholder="Filter…" id="masterSearch" />
+		</div>
+		<div class="master-list" id="masterList"></div>
+	</section>
+
+	<section class="detail" id="detail"></section>
+
+	<script src="data.js"></script>
+	<script src="shared.js"></script>
+	<script>
+		const DATA = window.AGENT_ISSUES_DATA;
+		const S = window.AIShared;
+		const state = { projectId: DATA.projects[0].id, section: "initiatives", selected: null, initTab: "overview", entity: null, filter: "" };
+		const project = () => DATA.projects.find(p => p.id === state.projectId);
+		const initById = (id) => project().initiatives.find(i => i.id === id);
+		const badge = S.badge;
+		const issueDot = (s) => { const c = s === "done" ? "var(--done)" : s === "blocked" ? "var(--danger)" : "var(--success)"; return `<span style="width:14px;height:14px;border-radius:50%;border:2px solid ${c};display:inline-block;${s==="done"?`background:${c}`:""}"></span>`; };
+
+		/* switcher */
+		function renderSwitcher() {
+			const m = document.getElementById("switcherMenu");
+			m.innerHTML = DATA.projects.map(p => `
+				<button class="menu-item" data-p="${p.id}">
+					<span class="check">${p.id===state.projectId?"✓":""}</span>
+					<span class="avatar" style="width:24px;height:24px;font-size:11px">${p.name[0]}</span>
+					<span><div class="sw-name">${p.name}</div><div class="sw-sub">${p.initiatives.length} initiatives · ${p.adrs.length} ADRs</div></span>
+				</button>`).join("");
+			m.querySelectorAll(".menu-item").forEach(b => b.onclick = () => { state.projectId = b.dataset.p; state.selected = null; state.entity = null; m.classList.remove("open"); renderAll(); });
+		}
+		document.getElementById("switcherBtn").onclick = (e) => { e.stopPropagation(); document.getElementById("switcherMenu").classList.toggle("open"); };
+		document.addEventListener("click", () => document.getElementById("switcherMenu").classList.remove("open"));
+
+		/* rail */
+		function renderRail() {
+			const p = project();
+			document.getElementById("swName").textContent = p.name;
+			document.getElementById("swAvatar").textContent = p.name[0];
+			const stories = p.initiatives.reduce((n,i)=>n+i.stories.length,0);
+			const issues = p.initiatives.reduce((n,i)=>n+i.issues.length,0);
+			document.getElementById("railNav").innerHTML = `
+				<div class="nav-group-label">Plan</div>
+				<button class="nav-item ${state.section==="initiatives"?"active":""}" data-s="initiatives">📁 Initiatives <span class="nav-count">${p.initiatives.length}</span></button>
+				<button class="nav-item ${state.section==="adrs"?"active":""}" data-s="adrs">📐 ADRs <span class="nav-count">${p.adrs.length}</span></button>
+				<button class="nav-item ${state.section==="graph"?"active":""}" data-s="graph">🕸️ Graph <span class="nav-count">map</span></button>
+				<div class="nav-group-label" style="margin-top:8px">Totals</div>
+				<button class="nav-item" disabled style="cursor:default">📝 User stories <span class="nav-count">${stories}</span></button>
+				<button class="nav-item" disabled style="cursor:default">⊙ Issues <span class="nav-count">${issues}</span></button>`;
+			document.getElementById("railFoot").textContent = p.description;
+			document.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { state.section = b.dataset.s; state.selected = null; state.entity = null; state.initTab = "overview"; renderAll(); });
+		}
+
+		/* master */
+		document.getElementById("masterSearch").addEventListener("input", (e) => { state.filter = e.target.value.toLowerCase(); renderMaster(); });
+		function renderMaster() {
+			const p = project();
+			const title = document.getElementById("masterTitle");
+			const desc = document.getElementById("masterDesc");
+			const list = document.getElementById("masterList");
+			const f = state.filter;
+
+			if (state.section === "adrs") {
+				title.textContent = "Architecture decisions";
+				desc.textContent = "Open a decision to read its context, decision and consequences.";
+				const adrs = p.adrs.filter(a => (a.title+a.id).toLowerCase().includes(f));
+				list.innerHTML = adrs.map(a => `
+					<button class="m-item ${state.selected===a.id&&!state.entity?"active":""}" data-adr="${a.id}">
+						<div class="m-top"><span class="m-title">${a.title}</span>${badge(a.status)}</div>
+						<div class="m-meta"><span class="idtag">${a.id}</span><span>initiative ${a.initiative}</span><span>updated ${a.updatedAt}</span></div>
+					</button>`).join("");
+				list.querySelectorAll("[data-adr]").forEach(b => b.onclick = () => { state.selected = b.dataset.adr; state.entity = null; renderAll(); });
+				return;
+			}
+
+			title.textContent = "Initiatives";
+			desc.textContent = "Select an initiative to explore its issues and user stories.";
+			const inits = p.initiatives.filter(i => (i.title+i.summary).toLowerCase().includes(f));
+			list.innerHTML = inits.map(i => {
+				const done = i.issues.filter(x=>x.status==="done").length;
+				const pct = i.issues.length ? Math.round(done/i.issues.length*100) : 0;
+				return `<button class="m-item ${state.selected===i.id?"active":""}" data-init="${i.id}">
+					<div class="m-top"><span class="m-title">${i.title}</span>${badge(i.status)}</div>
+					<div class="m-sub">${i.summary}</div>
+					<div class="m-meta"><span><b>${i.stories.length}</b> stories</span><span><b>${done}/${i.issues.length}</b> issues</span><span><b>${i.adrs.length}</b> ADRs</span></div>
+					<div class="miniprog"><span style="width:${pct}%"></span></div>
+				</button>`;
+			}).join("");
+			list.querySelectorAll("[data-init]").forEach(b => b.onclick = () => { state.selected = b.dataset.init; state.entity = null; state.initTab = "overview"; renderAll(); });
+		}
+
+		/* open an entity detail (prd/adr/story/issue) */
+		function openEntity(kind, id, initId) {
+			state.entity = { kind, id, initId };
+			renderDetail();
+		}
+
+		function entityDetailHTML(ent) {
+			const init = initById(ent.initId);
+			let e;
+			if (ent.kind === "prd") e = init.prds.find(x => x.id === ent.id);
+			else if (ent.kind === "adr") e = (init.adrs.find(x => x.id === ent.id)) || project().adrs.find(x => x.id === ent.id);
+			else if (ent.kind === "story") e = init.stories.find(x => x.id === ent.id);
+			else e = init.issues.find(x => x.id === ent.id);
+			const d = S.detail(e, ent.kind, init);
+			const backLabel = state.section === "adrs" ? "ADRs" : `${init.title}`;
+			return `<div class="detail-inner">
+				<button class="ai-back" id="entBack">← Back to ${backLabel}</button>
+				<div class="ai-crumbs">${project().name} · ${init.title}</div>
+				${S.detailHTML(d)}
+			</div>`;
+		}
+
+		function wireRefs(scope) {
+			scope.querySelectorAll("[data-open]").forEach(el => el.onclick = () => {
+				const [kind, id] = el.dataset.open.split(":");
+				openEntity(kind, id, el.dataset.init);
+			});
+		}
+
+		function renderDetail() {
+			const p = project();
+			const el = document.getElementById("detail");
+			document.body.classList.toggle("wide", state.section === "graph");
+
+			if (state.section === "graph") {
+				el.innerHTML = `<div class="detail-inner" style="max-width:none">
+					<h1 class="d-title">Project relationship graph</h1>
+					<p class="d-sub">Every initiative and its PRDs &amp; ADRs. Click an initiative or record to open it.</p>
+					<div class="ai-graph-wrap" style="margin-top:18px">
+						<div class="ai-graph-legend">
+							<span class="lg"><span class="sw" style="background:#24292f"></span>Project</span>
+							<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
+							<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
+							<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
+							<span class="ai-graph-hint">Tip: hover a node for its full title</span>
+						</div>
+						<div class="graph-host" id="graphHost"></div>
+					</div>
+				</div>`;
+				S.renderGraph(document.getElementById("graphHost"), S.buildProjectGraph(p), (n) => {
+					if (!n.id) return;
+					state.section = "initiatives"; state.selected = n.initId; state.initTab = "overview";
+					if (n.kind === "initiative") { state.entity = null; } else { state.entity = { kind: n.kind, id: n.id, initId: n.initId }; }
+					renderAll();
+				});
+				return;
+			}
+
+			if (state.entity) { el.innerHTML = entityDetailHTML(state.entity); document.getElementById("entBack").onclick = () => { state.entity = null; renderDetail(); }; wireRefs(el); return; }
+
+			if (!state.selected) { el.innerHTML = `<div class="empty"><div><div style="font-size:40px">🗂️</div><p>Select ${state.section==="adrs"?"an ADR":"an initiative"} from the list</p></div></div>`; return; }
+
+			if (state.section === "adrs") {
+				const a = p.adrs.find(x => x.id === state.selected);
+				const init = initById(a.initiative) || p.initiatives[0];
+				el.innerHTML = `<div class="detail-inner"><div class="ai-crumbs">${p.name} · ADRs</div>${S.detailHTML(S.detail(a, "adr", init))}</div>`;
+				wireRefs(el);
+				return;
+			}
+
+			const init = initById(state.selected);
+			const done = init.issues.filter(i=>i.status==="done").length;
+			const open = init.issues.length - done;
+			const pct = init.issues.length ? Math.round(done/init.issues.length*100) : 0;
+
+			const overview = `
+				<div class="sec">
+					<h2>📝 User stories &amp; their issues <span class="c">${init.stories.length} stories · ${init.issues.length} issues</span></h2>
+					<div class="card">${init.stories.map(s => {
+						const kids = init.issues.filter(i => i.story === s.id);
+						return `<div class="story-block">
+							<button class="story-head" data-open="story:${s.id}" data-init="${init.id}"><span class="idtag">${s.id}</span><span class="s-title">${s.title}</span>${badge(s.status)}<span class="chev">›</span></button>
+							${kids.map(k => `<button class="child" data-open="issue:${k.id}" data-init="${init.id}"><span class="idtag">${k.id}</span>${issueDot(k.status)}<span style="flex:1">${k.title}</span>${badge(k.status)}</button>`).join("")}
+						</div>`;
+					}).join("")}</div>
+				</div>
+				<div class="sec">
+					<h2>📄 PRDs <span class="c">${init.prds.length}</span></h2>
+					<div class="card">${init.prds.map(pr=>`<button class="line click" data-open="prd:${pr.id}" data-init="${init.id}"><div class="l-body"><div class="l-title">${pr.title}</div><div class="l-sub idtag">${pr.id}</div></div>${badge(pr.status)}<span class="chev">›</span></button>`).join("")}</div>
+				</div>
+				<div class="sec">
+					<h2>📐 ADRs <span class="c">${init.adrs.length}</span></h2>
+					<div class="card">${init.adrs.length ? init.adrs.map(a=>`<button class="line click" data-open="adr:${a.id}" data-init="${init.id}"><div class="l-body"><div class="l-title">${a.title}</div><div class="l-sub idtag">${a.id}</div></div>${badge(a.status)}<span class="chev">›</span></button>`).join("") : `<div class="line"><div class="l-sub">No ADRs linked to this initiative yet.</div></div>`}</div>
+				</div>`;
+
+			const graphTab = `<div class="ai-graph-wrap" style="margin-top:18px">
+					<div class="ai-graph-legend">
+						<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
+						<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
+						<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
+						<span class="lg"><span class="sw" style="background:#bf8700"></span>Story</span>
+						<span class="lg"><span class="sw" style="background:#0a7ea4"></span>Issue</span>
+						<span class="ai-graph-hint">Click any node to open it</span>
+					</div>
+					<div class="graph-host" id="graphHost"></div>
+				</div>`;
+
+			el.innerHTML = `<div class="detail-inner">
+				<div class="ai-crumbs">${p.name} · Initiatives</div>
+				<h1 class="d-title">${init.title} ${badge(init.status)}</h1>
+				<p class="d-sub">${init.summary}</p>
+				<div class="kpis">
+					<div class="kpi"><div class="k-num">${init.stories.length}</div><div class="k-label">User stories</div></div>
+					<div class="kpi"><div class="k-num">${init.issues.length}</div><div class="k-label">Issues</div></div>
+					<div class="kpi"><div class="k-num">${pct}%</div><div class="k-label">Complete</div></div>
+					<div class="kpi"><div class="k-num">${init.adrs.length}</div><div class="k-label">ADRs</div></div>
+				</div>
+				<div class="bar"><span class="b-done" style="width:${pct}%"></span><span class="b-open" style="width:${100-pct}%"></span></div>
+				<div class="subtabs">
+					<button class="subtab ${state.initTab==="overview"?"active":""}" data-t="overview">Overview</button>
+					<button class="subtab ${state.initTab==="graph"?"active":""}" data-t="graph">Graph</button>
+				</div>
+				${state.initTab === "graph" ? graphTab : overview}
+			</div>`;
+
+			el.querySelectorAll(".subtab").forEach(t => t.onclick = () => { state.initTab = t.dataset.t; renderDetail(); });
+			if (state.initTab === "graph") {
+				S.renderGraph(document.getElementById("graphHost"), S.buildInitiativeGraph(init), (n) => openEntity(n.kind, n.id, n.initId));
+			} else {
+				wireRefs(el);
+			}
+		}
+
+		function renderAll() { renderSwitcher(); renderRail(); renderMaster(); renderDetail(); }
+		renderAll();
+	</script>
+</body>
+</html>

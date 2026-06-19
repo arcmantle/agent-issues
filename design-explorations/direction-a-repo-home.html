@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Direction A · Repo Home — agent-issues</title>
+	<style>
+		:root {
+			--page-bg: #f6f8fa;
+			--surface: #ffffff;
+			--surface-muted: #f6f8fa;
+			--border: #d1d9e0;
+			--border-muted: #d8dee4;
+			--text: #1f2328;
+			--muted: #59636e;
+			--accent: #0969da;
+			--accent-emphasis: #0969da;
+			--header-bg: #24292f;
+			--header-text: #ffffff;
+			--header-muted: #c4cdd5;
+			--success: #1a7f37;
+			--success-bg: #dafbe1;
+			--open: #1a7f37;
+			--warn: #9a6700;
+			--warn-bg: #fff8c5;
+			--danger: #cf222e;
+			--danger-bg: #ffebe9;
+			--done: #8250df;
+			--done-bg: #fbefff;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			background: var(--page-bg);
+			color: var(--text);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+			font-size: 14px;
+			line-height: 1.5;
+		}
+
+		a { color: var(--accent); text-decoration: none; }
+		a:hover { text-decoration: underline; }
+
+		/* ---------- Global dark nav ---------- */
+		.global-nav {
+			display: flex;
+			align-items: center;
+			gap: 16px;
+			height: 62px;
+			padding: 0 16px;
+			background: var(--header-bg);
+			color: var(--header-text);
+		}
+
+		.global-nav .mark {
+			width: 32px; height: 32px;
+			display: grid; place-items: center;
+			color: var(--header-text);
+		}
+
+		.breadcrumb {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			font-size: 16px;
+		}
+		.breadcrumb .owner { color: var(--header-muted); }
+		.breadcrumb .sep { color: var(--header-muted); }
+		.breadcrumb .repo { font-weight: 600; }
+
+		.project-switcher {
+			position: relative;
+		}
+		.project-switcher > button {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			height: 30px;
+			padding: 0 8px 0 10px;
+			border: 1px solid #424a53;
+			border-radius: 6px;
+			background: #2f363d;
+			color: var(--header-text);
+			font: inherit;
+			font-size: 13px;
+			font-weight: 600;
+			cursor: pointer;
+		}
+		.project-switcher > button:hover { background: #393f46; }
+		.project-switcher .caret { color: var(--header-muted); font-size: 10px; }
+
+		.menu {
+			position: absolute;
+			top: calc(100% + 6px);
+			left: 0;
+			min-width: 300px;
+			background: var(--surface);
+			border: 1px solid var(--border);
+			border-radius: 12px;
+			box-shadow: 0 8px 24px rgba(31, 35, 40, 0.2);
+			padding: 0;
+			z-index: 30;
+			overflow: hidden;
+			display: none;
+		}
+		.menu.open { display: block; }
+		.menu-head {
+			padding: 12px 16px 8px;
+			font-size: 12px;
+			font-weight: 600;
+			color: var(--muted);
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.menu-item {
+			display: flex;
+			align-items: flex-start;
+			gap: 10px;
+			width: 100%;
+			padding: 10px 16px;
+			border: 0;
+			background: transparent;
+			color: var(--text);
+			text-align: left;
+			font: inherit;
+			cursor: pointer;
+			border-bottom: 1px solid var(--surface-muted);
+		}
+		.menu-item:hover { background: var(--surface-muted); }
+		.menu-item .check { width: 16px; color: var(--accent); }
+		.menu-item .mi-name { font-weight: 600; }
+		.menu-item .mi-desc { color: var(--muted); font-size: 12px; }
+
+		.nav-spacer { flex: 1; }
+		.nav-search {
+			height: 30px;
+			width: 280px;
+			padding: 0 12px;
+			border: 1px solid #424a53;
+			border-radius: 6px;
+			background: #2f363d;
+			color: var(--header-text);
+			font: inherit;
+			font-size: 13px;
+		}
+		.nav-search::placeholder { color: var(--header-muted); }
+
+		/* ---------- Repo header ---------- */
+		.repo-header {
+			padding: 16px 24px 0;
+			background: var(--surface);
+			border-bottom: 1px solid var(--border);
+		}
+		.repo-title-row {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			margin-bottom: 12px;
+		}
+		.repo-title-row h1 {
+			margin: 0;
+			font-size: 20px;
+			font-weight: 400;
+		}
+		.repo-title-row h1 .repo-name { font-weight: 600; color: var(--accent); }
+		.pill {
+			display: inline-flex;
+			align-items: center;
+			height: 20px;
+			padding: 0 8px;
+			border: 1px solid var(--border);
+			border-radius: 999px;
+			font-size: 12px;
+			font-weight: 500;
+			color: var(--muted);
+		}
+
+		.repo-tabs {
+			display: flex;
+			gap: 4px;
+		}
+		.repo-tab {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			padding: 8px 12px;
+			border: 0;
+			border-bottom: 2px solid transparent;
+			background: transparent;
+			color: var(--text);
+			font: inherit;
+			font-size: 14px;
+			cursor: pointer;
+		}
+		.repo-tab:hover { background: var(--surface-muted); border-radius: 6px 6px 0 0; }
+		.repo-tab.active { border-bottom-color: #fd8c73; font-weight: 600; }
+		.repo-tab .count {
+			min-width: 20px;
+			padding: 0 6px;
+			height: 18px;
+			display: inline-grid;
+			place-items: center;
+			background: rgba(175,184,193,0.2);
+			border-radius: 999px;
+			font-size: 12px;
+			font-weight: 500;
+		}
+
+		/* ---------- Layout ---------- */
+		.page {
+			max-width: 1280px;
+			margin: 0 auto;
+			padding: 24px;
+			display: grid;
+			grid-template-columns: 1fr 300px;
+			gap: 24px;
+			align-items: start;
+		}
+		.page.single { grid-template-columns: 1fr; }
+
+		/* list */
+		.listbox {
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			overflow: hidden;
+			background: var(--surface);
+		}
+		.listbox-head {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 12px 16px;
+			background: var(--surface-muted);
+			border-bottom: 1px solid var(--border);
+			font-size: 13px;
+		}
+		.list-filters { display: flex; gap: 16px; color: var(--muted); }
+		.list-filters .on { color: var(--text); font-weight: 600; }
+
+		.row {
+			display: flex;
+			align-items: flex-start;
+			gap: 12px;
+			width: 100%;
+			padding: 14px 16px;
+			border: 0;
+			border-top: 1px solid var(--border-muted);
+			background: var(--surface);
+			text-align: left;
+			font: inherit;
+			cursor: pointer;
+		}
+		.row:first-child { border-top: 0; }
+		.row:hover { background: #f6f8fafa; }
+		.row .icon { margin-top: 2px; flex-shrink: 0; }
+		.row .body { flex: 1; min-width: 0; }
+		.row .title {
+			font-size: 15px;
+			font-weight: 600;
+			color: var(--text);
+		}
+		.row:hover .title { color: var(--accent); }
+		.row .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+		.row .meta { display: flex; gap: 12px; align-items: center; }
+
+		.badge {
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			height: 20px;
+			padding: 0 8px;
+			border-radius: 999px;
+			font-size: 12px;
+			font-weight: 600;
+			border: 1px solid transparent;
+		}
+		.badge.green { background: var(--success-bg); color: var(--success); }
+		.badge.purple { background: var(--done-bg); color: var(--done); }
+		.badge.yellow { background: var(--warn-bg); color: var(--warn); }
+		.badge.red { background: var(--danger-bg); color: var(--danger); }
+		.badge.gray { background: var(--surface-muted); color: var(--muted); border-color: var(--border); }
+		.badge.blue { background: #ddf4ff; color: var(--accent); }
+
+		.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+		.dot.green { background: var(--open); }
+		.dot.gray { background: #818b98; }
+
+		.counts { display: flex; gap: 12px; color: var(--muted); font-size: 12px; }
+		.counts b { color: var(--text); }
+
+		/* sidebar */
+		.sidebar { display: grid; gap: 24px; }
+		.about h2, .sidebar h2 {
+			font-size: 14px;
+			margin: 0 0 8px;
+		}
+		.about p { margin: 0 0 12px; color: var(--text); }
+		.sidebar .divider { border: 0; border-top: 1px solid var(--border-muted); margin: 16px 0; }
+		.stat-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; color: var(--muted); }
+		.stat-row b { color: var(--text); }
+
+		/* ---------- Initiative detail ---------- */
+		.detail-head { margin-bottom: 16px; }
+		.back-link {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			margin-bottom: 12px;
+			color: var(--muted);
+			background: none;
+			border: 0;
+			font: inherit;
+			cursor: pointer;
+		}
+		.back-link:hover { color: var(--accent); }
+		.detail-title { font-size: 24px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+		.detail-title .num { color: var(--muted); font-weight: 400; }
+		.detail-sub { color: var(--muted); margin: 8px 0 0; }
+
+		.progress {
+			height: 8px;
+			border-radius: 999px;
+			background: #eaeef2;
+			overflow: hidden;
+			margin: 16px 0 8px;
+			display: flex;
+		}
+		.progress > span { display: block; height: 100%; }
+		.progress .p-done { background: var(--done); }
+		.progress .p-open { background: var(--open); }
+		.progress-legend { display: flex; gap: 16px; color: var(--muted); font-size: 12px; }
+
+		.section { margin-top: 24px; }
+		.section > h2 {
+			font-size: 16px;
+			margin: 0 0 12px;
+			display: flex;
+			align-items: center;
+			gap: 8px;
+		}
+		.section > h2 .count { color: var(--muted); font-weight: 400; }
+
+		.detail-grid { display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: start; }
+		@media (max-width: 1000px) { .detail-grid, .page { grid-template-columns: 1fr; } }
+	</style>
+</head>
+<body>
+	<header class="global-nav">
+		<div class="mark" title="agent-issues">
+			<svg height="28" viewBox="0 0 16 16" width="28" fill="currentColor"><path d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.34c-2.23.49-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.71 1.22 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.52.56.83 1.28.83 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"/></svg>
+		</div>
+		<div class="breadcrumb">
+			<span class="owner">agent-issues</span>
+			<span class="sep">/</span>
+			<div class="project-switcher">
+				<button id="switcherBtn">
+					<span class="repo" id="switcherLabel">Content Hub Demo</span>
+					<span class="caret">▾</span>
+				</button>
+				<div class="menu" id="switcherMenu"></div>
+			</div>
+		</div>
+		<span class="nav-spacer"></span>
+		<input class="nav-search" placeholder="Search initiatives, issues, ADRs…" />
+	</header>
+
+	<div class="repo-header">
+		<div class="repo-title-row">
+			<h1><span class="repo-name" id="repoName">content-hub-demo</span></h1>
+			<span class="pill">Project</span>
+			<span class="pill" id="repoUpdated">Updated 2026-06-09</span>
+		</div>
+		<nav class="repo-tabs" id="repoTabs">
+			<button class="repo-tab active" data-tab="initiatives">📁 Initiatives <span class="count" id="tabCountInit">4</span></button>
+			<button class="repo-tab" data-tab="adrs">📐 ADRs <span class="count" id="tabCountAdr">2</span></button>
+		</nav>
+	</div>
+
+	<main id="view"></main>
+
+	<script src="data.js"></script>
+	<script>
+		const DATA = window.AGENT_ISSUES_DATA;
+		const state = { projectId: DATA.projects[0].id, tab: "initiatives", view: { name: "root" } };
+
+		const project = () => DATA.projects.find(p => p.id === state.projectId);
+
+		const statusBadge = (status) => {
+			const map = {
+				active: "green", draft: "gray", done: "purple", todo: "gray",
+				ready: "blue", blocked: "red", accepted: "green", approved: "green", proposed: "yellow"
+			};
+			return `<span class="badge ${map[status] || "gray"}">${status}</span>`;
+		};
+
+		const issueIcon = (status) => {
+			if (status === "done") return `<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#8250df"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm3.78 5.97a.75.75 0 0 0-1.06-.02L7.2 9.38 5.28 7.47a.75.75 0 1 0-1.06 1.06l2.45 2.44a.75.75 0 0 0 1.06 0l4.05-3.94a.75.75 0 0 0 0-1.06Z"/></svg>`;
+			if (status === "blocked") return `<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#cf222e"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm0 4a.75.75 0 0 0-.75.75v3.5a.75.75 0 0 0 1.5 0v-3.5A.75.75 0 0 0 8 4Zm0 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>`;
+			return `<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#1a7f37"><path d="M8 9.5A1.5 1.5 0 1 0 8 6.5a1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg>`;
+		};
+
+		/* ---------- Project switcher ---------- */
+		function renderSwitcher() {
+			const menu = document.getElementById("switcherMenu");
+			menu.innerHTML = `<div class="menu-head">Switch project</div>` + DATA.projects.map(p => `
+				<button class="menu-item" data-project="${p.id}">
+					<span class="check">${p.id === state.projectId ? "✓" : ""}</span>
+					<span>
+						<span class="mi-name">${p.name}</span><br/>
+						<span class="mi-desc">${p.description}</span>
+					</span>
+				</button>`).join("");
+			menu.querySelectorAll(".menu-item").forEach(b => b.onclick = () => {
+				state.projectId = b.dataset.project;
+				state.view = { name: "root" };
+				menu.classList.remove("open");
+				renderAll();
+			});
+		}
+
+		document.getElementById("switcherBtn").onclick = (e) => {
+			e.stopPropagation();
+			document.getElementById("switcherMenu").classList.toggle("open");
+		};
+		document.addEventListener("click", () => document.getElementById("switcherMenu").classList.remove("open"));
+
+		document.getElementById("repoTabs").addEventListener("click", (e) => {
+			const t = e.target.closest(".repo-tab");
+			if (!t) return;
+			state.tab = t.dataset.tab;
+			state.view = { name: "root" };
+			renderAll();
+		});
+
+		/* ---------- Root view ---------- */
+		function rootView() {
+			const p = project();
+			if (state.tab === "adrs") {
+				return `<div class="page single">
+					<div class="listbox">
+						<div class="listbox-head">
+							<div class="list-filters"><span class="on">${p.adrs.length} architecture decisions</span></div>
+						</div>
+						${p.adrs.map(a => `
+							<div class="row">
+								<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#0969da"><path d="M2 2.75A.75.75 0 0 1 2.75 2h10.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75H2.75a.75.75 0 0 1-.75-.75Zm2 2a.75.75 0 0 0 0 1.5h8a.75.75 0 0 0 0-1.5Zm0 3a.75.75 0 0 0 0 1.5h8a.75.75 0 0 0 0-1.5Zm0 3a.75.75 0 0 0 0 1.5h5a.75.75 0 0 0 0-1.5Z"/></svg>
+								<div class="body">
+									<div class="title">${a.title}</div>
+									<div class="sub">${a.id} · part of initiative ${a.initiative}</div>
+								</div>
+								<div class="meta">${statusBadge(a.status)}<span class="sub">updated ${a.updatedAt}</span></div>
+							</div>`).join("")}
+					</div>
+				</div>`;
+			}
+
+			const rows = p.initiatives.map(init => {
+				const total = init.issues.length;
+				const done = init.issues.filter(i => i.status === "done").length;
+				return `
+				<button class="row" data-init="${init.id}">
+					<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#0969da"><path d="M1.75 2.5A1.75 1.75 0 0 0 0 4.25v7.5C0 12.72.78 13.5 1.75 13.5h12.5A1.75 1.75 0 0 0 16 11.75v-6A1.75 1.75 0 0 0 14.25 4H7.5L6.07 2.57a1.75 1.75 0 0 0-1.24-.51H1.75Z"/></svg>
+					<div class="body">
+						<div class="title">${init.title}</div>
+						<div class="sub">${init.summary}</div>
+						<div class="counts" style="margin-top:8px">
+							<span><b>${init.prds.length}</b> PRD</span>
+							<span><b>${init.stories.length}</b> stories</span>
+							<span><b>${init.adrs.length}</b> ADRs</span>
+							<span><b>${done}</b>/<b>${total}</b> issues done</span>
+						</div>
+					</div>
+					<div class="meta">${statusBadge(init.status)}</div>
+				</button>`;
+			}).join("");
+
+			const totals = p.initiatives.reduce((acc, i) => {
+				acc.issues += i.issues.length; acc.stories += i.stories.length; return acc;
+			}, { issues: 0, stories: 0 });
+
+			return `<div class="page">
+				<div class="listbox">
+					<div class="listbox-head">
+						<div class="list-filters">
+							<span class="on">● ${p.initiatives.filter(i => i.status === "active").length} Active</span>
+							<span>○ ${p.initiatives.filter(i => i.status !== "active").length} Draft</span>
+						</div>
+						<span class="sub">Sort: Recently updated ▾</span>
+					</div>
+					${rows}
+				</div>
+				<aside class="sidebar">
+					<div class="about">
+						<h2>About</h2>
+						<p>${p.description}</p>
+					</div>
+					<hr class="divider"/>
+					<div>
+						<h2>Workspace at a glance</h2>
+						<div class="stat-row"><span class="dot green"></span><span><b>${p.initiatives.length}</b> initiatives</span></div>
+						<div class="stat-row">📐 <span><b>${p.adrs.length}</b> architecture decisions</span></div>
+						<div class="stat-row">📝 <span><b>${totals.stories}</b> user stories</span></div>
+						<div class="stat-row">⊙ <span><b>${totals.issues}</b> issues</span></div>
+					</div>
+				</aside>
+			</div>`;
+		}
+
+		/* ---------- Initiative detail ---------- */
+		function initiativeView(initId) {
+			const p = project();
+			const init = p.initiatives.find(i => i.id === initId);
+			const total = init.issues.length;
+			const done = init.issues.filter(i => i.status === "done").length;
+			const pct = total ? Math.round((done / total) * 100) : 0;
+
+			const storyTitle = (id) => (init.stories.find(s => s.id === id) || {}).title || id;
+
+			const issueRows = init.issues.map(i => `
+				<div class="row" style="cursor:default">
+					${issueIcon(i.status)}
+					<div class="body">
+						<div class="title">${i.title}</div>
+						<div class="sub">${i.id} · implements <a href="#">${i.story}</a> ${storyTitle(i.story)}</div>
+					</div>
+					<div class="meta">${statusBadge(i.status)}</div>
+				</div>`).join("");
+
+			const storyRows = init.stories.map(s => {
+				const linked = init.issues.filter(i => i.story === s.id);
+				return `
+				<div class="row" style="cursor:default">
+					<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#59636e"><path d="M0 1.75C0 .78.78 0 1.75 0h12.5C15.22 0 16 .78 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm4 2a.75.75 0 0 0 0 1.5h8a.75.75 0 0 0 0-1.5Zm0 3a.75.75 0 0 0 0 1.5h8a.75.75 0 0 0 0-1.5Zm0 3a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5Z"/></svg>
+					<div class="body">
+						<div class="title">${s.title}</div>
+						<div class="sub">${s.id} · ${linked.length} linked issue${linked.length === 1 ? "" : "s"}</div>
+					</div>
+					<div class="meta">${statusBadge(s.status)}</div>
+				</div>`;
+			}).join("");
+
+			const adrRows = init.adrs.length ? init.adrs.map(a => `
+				<div class="row" style="cursor:default">
+					<svg class="icon" width="16" height="16" viewBox="0 0 16 16" fill="#0969da"><path d="M2 2.75A.75.75 0 0 1 2.75 2h10.5a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75H2.75a.75.75 0 0 1-.75-.75Z"/></svg>
+					<div class="body"><div class="title">${a.title}</div><div class="sub">${a.id}</div></div>
+					<div class="meta">${statusBadge(a.status)}</div>
+				</div>`).join("") : `<div class="row" style="cursor:default;color:var(--muted)">No ADRs linked to this initiative yet.</div>`;
+
+			return `<div class="page single">
+				<div class="detail-head">
+					<button class="back-link" id="backBtn">← ${p.name} / Initiatives</button>
+					<h1 class="detail-title">${init.title} ${statusBadge(init.status)} <span class="num">${init.id}</span></h1>
+					<p class="detail-sub">${init.summary}</p>
+					<div class="progress">
+						<span class="p-done" style="width:${pct}%"></span>
+						<span class="p-open" style="width:${100 - pct}%"></span>
+					</div>
+					<div class="progress-legend">
+						<span><b>${pct}%</b> complete</span>
+						<span>${done} done</span>
+						<span>${total - done} open</span>
+					</div>
+				</div>
+
+				<div class="detail-grid">
+					<div>
+						<section class="section">
+							<h2>⊙ Issues <span class="count">${init.issues.length}</span></h2>
+							<div class="listbox">${issueRows}</div>
+						</section>
+						<section class="section">
+							<h2>📝 User stories <span class="count">${init.stories.length}</span></h2>
+							<div class="listbox">${storyRows}</div>
+						</section>
+					</div>
+					<aside class="sidebar">
+						<div>
+							<h2>PRDs</h2>
+							${init.prds.map(pr => `<div class="stat-row">📄 <span>${pr.title} ${statusBadge(pr.status)}</span></div>`).join("")}
+						</div>
+						<hr class="divider"/>
+						<div>
+							<h2>ADRs</h2>
+							${adrRows}
+						</div>
+						<hr class="divider"/>
+						<div>
+							<h2>Rollup</h2>
+							<div class="stat-row">⊙ <span><b>${done}/${total}</b> issues done</span></div>
+							<div class="stat-row">📝 <span><b>${init.stories.filter(s => s.status === "done").length}/${init.stories.length}</b> stories done</span></div>
+						</div>
+					</aside>
+				</div>
+			</div>`;
+		}
+
+		/* ---------- Render ---------- */
+		function renderAll() {
+			const p = project();
+			document.getElementById("switcherLabel").textContent = p.name;
+			document.getElementById("repoName").textContent = p.id;
+			document.getElementById("repoUpdated").textContent = "Updated " + p.updatedAt;
+			document.getElementById("tabCountInit").textContent = p.initiatives.length;
+			document.getElementById("tabCountAdr").textContent = p.adrs.length;
+			document.querySelectorAll(".repo-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === state.tab));
+			renderSwitcher();
+
+			const view = document.getElementById("view");
+			if (state.view.name === "initiative") {
+				view.innerHTML = initiativeView(state.view.id);
+				document.getElementById("backBtn").onclick = () => { state.view = { name: "root" }; renderAll(); };
+			} else {
+				view.innerHTML = rootView();
+				view.querySelectorAll("[data-init]").forEach(r => r.onclick = () => {
+					state.view = { name: "initiative", id: r.dataset.init };
+					renderAll();
+				});
+			}
+		}
+
+		renderAll();
+	</script>
+</body>
+</html>
