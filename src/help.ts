@@ -788,7 +788,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		options: [
 			{
 				name: "--target <path>",
-				description: "Destination prompts directory for the custom agent. Defaults to ~/Library/Application Support/Code/User/prompts."
+				description: "Destination prompts directory for the custom agent. Defaults to the VS Code user prompts directory for the current OS."
 			},
 			{
 				name: "--force",
@@ -846,7 +846,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		options: [
 			{
 				name: "--target <path>",
-				description: "Prompts directory to inspect. Defaults to ~/Library/Application Support/Code/User/prompts."
+				description: "Prompts directory to inspect. Defaults to the VS Code user prompts directory for the current OS."
 			}
 		],
 		examples: ["agent-issues list-agent", "agent-issues list-agent --target ./tmp/prompts --json"],
@@ -895,7 +895,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		options: [
 			{
 				name: "--target <path>",
-				description: "Prompts directory from which the custom agent and hook should be removed. Defaults to ~/Library/Application Support/Code/User/prompts."
+				description: "Prompts directory from which the custom agent and hook should be removed. Defaults to the VS Code user prompts directory for the current OS."
 			}
 		],
 		examples: ["agent-issues uninstall-agent", "agent-issues uninstall-agent --target ./tmp/prompts --json"],

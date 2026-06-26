@@ -174,8 +174,8 @@ agent-issues list issue
 - Force-refresh an existing installed copy: `agent-issues install-agent --force`
 - Workspace source agent: `.github/agents/agent-issues.agent.md`
 - Workspace source hook: `.github/hooks/agent-issues-enforcer.mjs`
-- Installed user agent path: `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md`
-- Installed user hook path: `~/Library/Application Support/Code/User/prompts/agent-issues-enforcer.mjs`
+- Installed user agent path (default): the VS Code user prompts directory for your OS, e.g. `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md` (macOS), `%APPDATA%\Code\User\prompts\agent-issues.agent.md` (Windows), `~/.config/Code/User/prompts/agent-issues.agent.md` (Linux)
+- Installed user hook path (default): the same prompts directory, e.g. `.../Code/User/prompts/agent-issues-enforcer.mjs`
 - Enable `chat.useCustomAgentHooks` in VS Code so the inline hooks run only while the Agent Issues custom agent is active.
 - When the active prompt includes an `ISS` id, the hook blocks edits and unrelated terminal commands until these preload commands have run:
 	- `agent-issues show <ISS-ID> --json`

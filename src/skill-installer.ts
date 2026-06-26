@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // The packaged skill folders under `skills/` are named identically to their
 // installed names. Keeping a single name per skill makes drift between the
@@ -45,7 +46,7 @@ export function getDefaultSkillsInstallDir(): string {
 
 export function installSkills(input: { targetDir?: string; force?: boolean }): InstallSkillsResult {
 	const targetDir = path.resolve(input.targetDir ?? getDefaultSkillsInstallDir());
-	const sourceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "skills");
+	const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "skills");
 
 	if (!existsSync(sourceRoot)) {
 		throw new Error(`Packaged skills directory not found: ${sourceRoot}`);

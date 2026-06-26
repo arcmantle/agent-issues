@@ -1,6 +1,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const AGENT_FILE_NAME = "agent-issues.agent.md";
 const HOOK_FILE_NAME = "agent-issues-enforcer.mjs";
@@ -27,13 +28,28 @@ export type ListAgentResult = {
 	agent: AgentInstallRecord & { status: "installed" | "partial" | "missing" };
 };
 
+function getVsCodeUserDir(): string {
+	if (process.platform === "win32") {
+		const appData = process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming");
+
+		return path.join(appData, "Code", "User");
+	}
+
+	if (process.platform === "darwin")
+		return path.join(homedir(), "Library", "Application Support", "Code", "User");
+
+	const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config");
+
+	return path.join(configHome, "Code", "User");
+}
+
 export function getDefaultAgentInstallDir(): string {
-	return path.join(homedir(), "Library", "Application Support", "Code", "User", "prompts");
+	return path.join(getVsCodeUserDir(), "prompts");
 }
 
 export function installAgent(input: { targetDir?: string; force?: boolean }): InstallAgentResult {
 	const targetDir = path.resolve(input.targetDir ?? getDefaultAgentInstallDir());
-	const sourceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ".github");
+	const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".github");
 	const sourceAgentFile = path.join(sourceRoot, "agents", AGENT_FILE_NAME);
 	const sourceHookFile = path.join(sourceRoot, "hooks", HOOK_FILE_NAME);
 	const destinationAgentFile = path.join(targetDir, AGENT_FILE_NAME);
