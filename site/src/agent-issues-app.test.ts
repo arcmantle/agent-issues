@@ -26,6 +26,7 @@ function makeBundle(initiative: Entity, overrides: Partial<InitiativeBundle> = {
 		initiative,
 		issues: [],
 		prds: [],
+		subIssueLinks: [],
 		userStories: [],
 		...overrides
 	};
@@ -134,8 +135,10 @@ describe("three-pane console shell", () => {
 	});
 
 	it("opens the selected initiative in the detail pane while keeping the rail and master list", async () => {
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
 		const snapshot = makeSnapshot({
-			initiatives: [makeBundle(makeEntity({ id: "INIT1", title: "Console Viewer" }))]
+			entities: [initiative],
+			initiatives: [makeBundle(initiative)]
 		});
 		const store = makeStore(makeConfig(), snapshot);
 		const app = await mountApp(store);
@@ -145,10 +148,69 @@ describe("three-pane console shell", () => {
 		await app.updateComplete;
 
 		const root = app.shadowRoot;
+		const cascade = root?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & { updateComplete: Promise<unknown> };
+		await cascade?.updateComplete;
 		expect(store.selectedInitiativeId.get()).toBe("INIT1");
-		expect(root?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view')).not.toBeNull();
+		expect(cascade?.shadowRoot?.querySelector('agent-issues-initiative-detail-view')).not.toBeNull();
 		expect(root?.querySelector('[data-pane="rail"] [data-tenant]')).not.toBeNull();
 		expect(root?.querySelector('[data-pane="master"] [data-initiative]')).not.toBeNull();
+	});
+
+	it("opens the selected initiative as the root column of a cascade", async () => {
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
+		const snapshot = makeSnapshot({
+			entities: [initiative],
+			initiatives: [makeBundle(initiative)]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+
+		const masterItem = app.shadowRoot?.querySelector<HTMLButtonElement>('[data-pane="master"] [data-initiative="INIT1"]');
+		masterItem?.click();
+		await app.updateComplete;
+
+		const cascade = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & {
+			updateComplete: Promise<unknown>;
+		};
+		expect(cascade).not.toBeNull();
+		expect(store.cascadePath.get()).toEqual(["INIT1"]);
+
+		await cascade.updateComplete;
+		const columns = cascade.shadowRoot?.querySelectorAll(".cascade-column");
+		expect(columns?.length).toBe(1);
+		expect(columns?.[0]?.getAttribute("data-column-id")).toBe("INIT1");
+	});
+
+	it("opens a new cascade column when a child reference is clicked, without a reload", async () => {
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "ready", title: "Drill the lineage" });
+		const snapshot = makeSnapshot({
+			entities: [initiative, story],
+			initiatives: [makeBundle(initiative, { userStories: [story] })]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-pane="master"] [data-initiative="INIT1"]')?.click();
+		await app.updateComplete;
+
+		const cascade = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & {
+			updateComplete: Promise<unknown>;
+		};
+		await cascade.updateComplete;
+		const initiativeView = cascade.shadowRoot?.querySelector('agent-issues-initiative-detail-view') as HTMLElement & {
+			updateComplete: Promise<unknown>;
+		};
+		await initiativeView.updateComplete;
+		initiativeView.shadowRoot?.querySelector<HTMLButtonElement>('.story-head')?.click();
+		await app.updateComplete;
+		await cascade.updateComplete;
+
+		expect(store.cascadePath.get()).toEqual(["INIT1", "US1"]);
+		const columnIds = [...(cascade.shadowRoot?.querySelectorAll('.cascade-column') ?? [])].map((column) =>
+			column.getAttribute("data-column-id")
+		);
+		expect(columnIds).toEqual(["INIT1", "US1"]);
 	});
 
 	it("switches the active project when a rail item is clicked", async () => {
@@ -239,9 +301,11 @@ describe("three-pane console shell", () => {
 	});
 
 	it("renders KPI cards and overview/graph subtabs in the initiative detail", async () => {
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
 		const snapshot = makeSnapshot({
+			entities: [initiative],
 			initiatives: [
-				makeBundle(makeEntity({ id: "INIT1", title: "Console Viewer" }), {
+				makeBundle(initiative, {
 					issues: [
 						makeEntity({ id: "ISS1", kind: "issue", status: "done" }),
 						makeEntity({ id: "ISS2", kind: "issue", status: "todo" })
@@ -256,10 +320,11 @@ describe("three-pane console shell", () => {
 		store.selectInitiative("INIT1");
 		await app.updateComplete;
 
-		const detail = app.shadowRoot
-			?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view')
-			?.shadowRoot;
-		await (app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view') as HTMLElement & { updateComplete: Promise<unknown> })?.updateComplete;
+		const cascade = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & { updateComplete: Promise<unknown> };
+		await cascade?.updateComplete;
+		const initiativeView = cascade?.shadowRoot?.querySelector('agent-issues-initiative-detail-view') as HTMLElement & { updateComplete: Promise<unknown> };
+		await initiativeView?.updateComplete;
+		const detail = initiativeView?.shadowRoot;
 
 		const kpis = detail?.querySelectorAll(".kpi");
 		const subtabs = [...(detail?.querySelectorAll(".subtab") ?? [])].map((element) => element.textContent?.trim());
@@ -311,6 +376,48 @@ describe("three-pane console shell", () => {
 		const anchoredInit2 = app.shadowRoot?.querySelector('[data-pane="master"] [data-initiative="INIT2"]');
 		expect(anchoredInit1?.classList.contains("active")).toBe(false);
 		expect(anchoredInit2?.classList.contains("active")).toBe(true);
+	});
+});
+
+describe("collapse toggles", () => {
+	it("collapses the rail when its collapse toggle is clicked", async () => {
+		const store = makeStore(makeConfig(), makeSnapshot());
+		const app = await mountApp(store);
+
+		const toggle = app.shadowRoot?.querySelector<HTMLButtonElement>('[data-collapse="rail"]');
+		toggle?.click();
+		await app.updateComplete;
+
+		expect(store.railCollapsed.get()).toBe(true);
+		expect(app.shadowRoot?.querySelector(".console")?.classList.contains("rail-collapsed")).toBe(true);
+	});
+
+	it("collapses the master list when its collapse toggle is clicked", async () => {
+		const store = makeStore(makeConfig(), makeSnapshot());
+		const app = await mountApp(store);
+
+		const toggle = app.shadowRoot?.querySelector<HTMLButtonElement>('[data-collapse="master"]');
+		toggle?.click();
+		await app.updateComplete;
+
+		expect(store.masterCollapsed.get()).toBe(true);
+		expect(app.shadowRoot?.querySelector(".console")?.classList.contains("master-collapsed")).toBe(true);
+	});
+
+	it("auto-collapses the master list while drilling two columns deep", async () => {
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
+		const child = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
+		const snapshot = makeSnapshot({
+			entities: [initiative, child],
+			initiatives: [makeBundle(initiative)]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+
+		store.cascadePath.set(["INIT1", "PRD1"]);
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector(".console")?.classList.contains("master-collapsed")).toBe(true);
 	});
 });
 

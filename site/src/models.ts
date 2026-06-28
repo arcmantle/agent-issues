@@ -25,6 +25,11 @@ export type FixLink = {
 	userStory: Entity;
 };
 
+export type SubIssueLink = {
+	parent: Entity;
+	issue: Entity;
+};
+
 export type BlockerLink = {
 	source: Entity;
 	target: Entity;
@@ -57,6 +62,7 @@ export type InitiativeBundle = {
 	adrs: Entity[];
 	issues: Entity[];
 	fixLinks: FixLink[];
+	subIssueLinks: SubIssueLink[];
 	blockerLinks: BlockerLink[];
 	constrainsLinks: ConstrainsLink[];
 	handoffs: HandoffRecord[];

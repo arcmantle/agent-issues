@@ -23,13 +23,14 @@ export const ALLOWED_RELATIONS = [
 	{ fromKind: "initiative", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "issue", type: "tracks" },
 	{ fromKind: "prd", toKind: "userStory", type: "creates" },
+	{ fromKind: "issue", toKind: "issue", type: "decomposes" },
 	{ fromKind: "issue", toKind: "userStory", type: "fixes" },
 	{ fromKind: "adr", toKind: "issue", type: "constrains" },
 	{ fromKind: "adr", toKind: "adr", type: "supersedes" },
 	{ fromKind: "issue", toKind: "issue", type: "blocks" }
 ] as const;
 
-export const STRUCTURAL_RELATION_TYPES = ["owns", "records", "tracks", "creates"] as const;
+export const STRUCTURAL_RELATION_TYPES = ["owns", "records", "tracks", "creates", "decomposes"] as const;
 
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 export type BodySource = (typeof BODY_SOURCES)[number];
@@ -169,10 +170,24 @@ export function deriveAdrStatus(storedStatus: string, constrainedIssueStatuses: 
 	return storedStatus;
 }
 
+export function deriveIssueStatus(storedStatus: string, subIssueStatuses: string[]): string {
+	if (subIssueStatuses.length === 0) {
+		return storedStatus;
+	}
+
+	if (subIssueStatuses.some((status) => status !== "done")) {
+		return "blocked";
+	}
+
+	return storedStatus === "blocked" ? "todo" : storedStatus;
+}
+
 export function deriveEntityStatuses(entities: EntityRecord[], relations: RelationRecord[]): EntityRecord[] {
 	const storedStatusById = new Map(entities.map((entity) => [entity.id, entity.status]));
+	const entityById = new Map(entities.map((entity) => [entity.id, entity]));
 	const kindById = new Map(entities.map((entity) => [entity.id, entity.kind]));
 
+	const decomposedSubIssuesByIssue = new Map<string, string[]>();
 	const fixingIssuesByStory = new Map<string, string[]>();
 	const createdStoriesByPrd = new Map<string, string[]>();
 	const trackedIssuesByInitiative = new Map<string, string[]>();
@@ -194,7 +209,9 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 			continue;
 		}
 
-		if (relation.type === "fixes" && kindById.get(relation.fromId) === "issue" && kindById.get(relation.toId) === "userStory") {
+		if (relation.type === "decomposes" && kindById.get(relation.fromId) === "issue" && kindById.get(relation.toId) === "issue") {
+			pushTo(decomposedSubIssuesByIssue, relation.fromId, relation.toId);
+		} else if (relation.type === "fixes" && kindById.get(relation.fromId) === "issue" && kindById.get(relation.toId) === "userStory") {
 			pushTo(fixingIssuesByStory, relation.toId, relation.fromId);
 		} else if (relation.type === "creates" && kindById.get(relation.toId) === "userStory") {
 			pushTo(createdStoriesByPrd, relation.fromId, relation.toId);
@@ -209,38 +226,47 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 		}
 	}
 
-	// Derive bottom-up: issues are leaves, then stories, then PRDs, then initiatives.
-	const derivedStatusById = new Map(storedStatusById);
-	const statusesOf = (ids: string[] | undefined) => (ids ?? []).map((id) => derivedStatusById.get(id) ?? "");
-
-	for (const entity of entities) {
-		if (entity.kind === "userStory") {
-			derivedStatusById.set(entity.id, deriveUserStoryStatus(entity.status, statusesOf(fixingIssuesByStory.get(entity.id))));
+	const derivedStatusById = new Map<string, string>();
+	const deriveStatusFor = (entityId: string): string => {
+		const cached = derivedStatusById.get(entityId);
+		if (cached !== undefined) {
+			return cached;
 		}
-	}
 
-	for (const entity of entities) {
-		if (entity.kind === "prd") {
-			derivedStatusById.set(entity.id, derivePrdStatus(entity.status, statusesOf(createdStoriesByPrd.get(entity.id))));
+		const entity = entityById.get(entityId);
+		if (!entity) {
+			return storedStatusById.get(entityId) ?? "";
 		}
-	}
 
-	for (const entity of entities) {
-		if (entity.kind === "initiative") {
-			derivedStatusById.set(
-				entity.id,
-				deriveInitiativeStatus(entity.status, statusesOf(trackedIssuesByInitiative.get(entity.id)), statusesOf(ownedPrdsByInitiative.get(entity.id)))
+		const statusesOf = (ids: string[] | undefined) => (ids ?? []).map((id) => deriveStatusFor(id));
+		let derivedStatus = entity.status;
+
+		if (entity.kind === "issue") {
+			derivedStatus = deriveIssueStatus(entity.status, statusesOf(decomposedSubIssuesByIssue.get(entity.id)));
+		} else if (entity.kind === "userStory") {
+			derivedStatus = deriveUserStoryStatus(entity.status, statusesOf(fixingIssuesByStory.get(entity.id)));
+		} else if (entity.kind === "prd") {
+			derivedStatus = derivePrdStatus(entity.status, statusesOf(createdStoriesByPrd.get(entity.id)));
+		} else if (entity.kind === "initiative") {
+			derivedStatus = deriveInitiativeStatus(
+				entity.status,
+				statusesOf(trackedIssuesByInitiative.get(entity.id)),
+				statusesOf(ownedPrdsByInitiative.get(entity.id))
+			);
+		} else if (entity.kind === "adr") {
+			derivedStatus = deriveAdrStatus(
+				entity.status,
+				statusesOf(constrainedIssuesByAdr.get(entity.id)),
+				supersededAdrIds.has(entity.id)
 			);
 		}
-	}
+
+		derivedStatusById.set(entityId, derivedStatus);
+		return derivedStatus;
+	};
 
 	for (const entity of entities) {
-		if (entity.kind === "adr") {
-			derivedStatusById.set(
-				entity.id,
-				deriveAdrStatus(entity.status, statusesOf(constrainedIssuesByAdr.get(entity.id)), supersededAdrIds.has(entity.id))
-			);
-		}
+		deriveStatusFor(entity.id);
 	}
 
 	return entities.map((entity) => {

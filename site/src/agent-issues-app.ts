@@ -5,6 +5,7 @@ import { classMap } from "lit/directives/class-map.js";
 import { map } from "lit/directives/map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { when } from "lit/directives/when.js";
+import "./components/cascade-view.js";
 import "./components/context-view.js";
 import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
@@ -56,6 +57,14 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	protected onSearchInput = (event: Event) => {
 		this.store.search.set((event.target as HTMLInputElement).value);
+	};
+
+	protected onToggleRail = () => {
+		this.store.toggleRail();
+	};
+
+	protected onToggleMaster = () => {
+		this.store.toggleMaster();
 	};
 
 	protected onContextSearchInput = (event: Event) => {
@@ -142,6 +151,14 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 		return html`
 		<aside class="rail" data-pane="rail">
+			<button
+				class="pane-collapse"
+				data-collapse="rail"
+				title=${store.railCollapsed.get() ? "Expand rail" : "Collapse rail"}
+				@click=${this.onToggleRail}
+			>
+				${store.railCollapsed.get() ? "»" : "«"}
+			</button>
 			<div class="rail-switcher">
 				<button
 					class="switcher-button"
@@ -360,6 +377,14 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 		return html`
 		<section class="master" data-pane="master">
+			<button
+				class="pane-collapse"
+				data-collapse="master"
+				title=${store.masterCollapsed.get() ? "Expand list" : "Collapse list"}
+				@click=${this.onToggleMaster}
+			>
+				${store.masterCollapsed.get() ? "»" : "«"}
+			</button>
 			<div class="master-head">
 				<h1>${when(isAdrs, () => html`Architecture decisions`, () => html`Initiatives`)}</h1>
 				<p>${when(
@@ -472,6 +497,14 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			`;
 		}
 
+		if (store.cascadePath.get().length > 0) {
+			return html`
+			<section class="detail" data-pane="detail">
+				<agent-issues-cascade-view .store=${store}></agent-issues-cascade-view>
+			</section>
+			`;
+		}
+
 		if (selectedId) {
 			return html`
 			<section class="detail" data-pane="detail">
@@ -504,9 +537,11 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const store = this.store;
 		const section = store.activeSection.get();
 		const wide = section === "graph" || section === "context";
+		const railCollapsed = store.railCollapsed.get();
+		const masterCollapsed = !wide && store.masterCollapsed.get();
 
 		return html`
-		<div class=${classMap({ console: true, wide })}>
+		<div class=${classMap({ console: true, wide, "rail-collapsed": railCollapsed, "master-collapsed": masterCollapsed })}>
 			${this.renderRail()}
 			${when(!wide, () => this.renderMaster(), () => nothing)}
 			${this.renderDetail()}
@@ -533,6 +568,51 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 		.console.wide {
 			grid-template-columns: 256px 1fr;
+		}
+		.console.rail-collapsed {
+			grid-template-columns: 44px 380px 1fr;
+		}
+		.console.wide.rail-collapsed {
+			grid-template-columns: 44px 1fr;
+		}
+		.console.master-collapsed {
+			grid-template-columns: 256px 44px 1fr;
+		}
+		.console.rail-collapsed.master-collapsed {
+			grid-template-columns: 44px 44px 1fr;
+		}
+		.console.rail-collapsed .rail-switcher,
+		.console.rail-collapsed .rail-nav,
+		.console.rail-collapsed .rail-foot,
+		.console.master-collapsed .master-head,
+		.console.master-collapsed .master-list {
+			display: none;
+		}
+		.pane-collapse {
+			display: flex;
+			flex-shrink: 0;
+			align-items: center;
+			justify-content: center;
+			align-self: flex-end;
+			width: 24px;
+			height: 24px;
+			margin: 8px;
+			padding: 0;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--muted);
+			font-size: 13px;
+			line-height: 1;
+			cursor: pointer;
+		}
+		.pane-collapse:hover {
+			border-color: var(--accent);
+			color: var(--text);
+		}
+		.console.rail-collapsed .rail .pane-collapse,
+		.console.master-collapsed .master .pane-collapse {
+			align-self: center;
 		}
 		.rail {
 			display: flex;

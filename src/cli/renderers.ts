@@ -52,6 +52,7 @@ export function renderInitiativeBundle(bundle: {
 	adrs: Array<{ id: string; status: string }>;
 	issues: Array<{ id: string; status: string }>;
 	fixLinks: Array<{ issue: { id: string }; userStory: { id: string } }>;
+	subIssueLinks: Array<{ parent: { id: string }; issue: { id: string } }>;
 	blockerLinks: Array<{ source: { id: string }; target: { id: string } }>;
 	constrainsLinks: Array<{ adr: { id: string }; issue: { id: string } }>;
 }): string {
@@ -62,6 +63,7 @@ export function renderInitiativeBundle(bundle: {
 		`ADRs: ${renderCompactList(bundle.adrs)}`,
 		`Issues: ${renderCompactList(bundle.issues)}`,
 		`Fixes: ${bundle.fixLinks.length ? bundle.fixLinks.map((link) => `${link.issue.id} -> ${link.userStory.id}`).join(", ") : "none"}`,
+		`Sub-issues: ${bundle.subIssueLinks.length ? bundle.subIssueLinks.map((link) => `${link.parent.id} -> ${link.issue.id}`).join(", ") : "none"}`,
 		`Blockers: ${bundle.blockerLinks.length ? bundle.blockerLinks.map((link) => `${link.source.id} -> ${link.target.id}`).join(", ") : "none"}`,
 		`Constrains: ${bundle.constrainsLinks.length ? bundle.constrainsLinks.map((link) => `${link.adr.id} -> ${link.issue.id}`).join(", ") : "none"}`
 	].join("\n");
@@ -290,6 +292,18 @@ export function renderLiveSite(result: ReturnType<typeof startLiveSite>["info"],
 			? "Browser launch requested; keep this process running to continue listening for database changes."
 			: "Keep this process running to continue listening for database changes."
 	].join("\n");
+}
+
+export function renderStopLiveSite(result: { host: string; port: number; url: string; reachable: boolean; stopped: boolean }): string {
+	if (!result.stopped) {
+		if (result.reachable) {
+			return `A server is listening at ${result.url}, but it does not expose the agent-issues stop endpoint.`;
+		}
+
+		return `No live site was running at ${result.url}`;
+	}
+
+	return `Stopped live site at ${result.url}`;
 }
 
 export function renderBackfillBodies(result: {

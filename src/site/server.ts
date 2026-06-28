@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { ensureDatabase, listTenants, resolveDatabasePath, resolveTenantSlug } from "../database.js";
 import { getDatabaseSnapshot } from "../store.js";
@@ -20,6 +20,16 @@ export type LiveSiteHandle = {
 	server: Server;
 	close: () => void;
 };
+
+export type StopLiveSiteResult = {
+	host: string;
+	port: number;
+	url: string;
+	reachable: boolean;
+	stopped: boolean;
+};
+
+const LIVE_SITE_STOP_PATH = "/__agent_issues/stop";
 
 export function startLiveSite(input: {
 	dbPath?: string;
@@ -44,7 +54,7 @@ export function startLiveSite(input: {
 	let databaseSignature = getDatabaseSignature(dbPath);
 
 	const server = createServer((request, response) => {
-		handleRequest({ request, response, dbPath, clients, defaultTenant });
+		handleRequest({ request, response, dbPath, clients, defaultTenant, server });
 	});
 
 	const interval = setInterval(() => {
@@ -84,15 +94,81 @@ export function startLiveSite(input: {
 	};
 }
 
+export async function stopLiveSite(input: { host?: string; port?: number }): Promise<StopLiveSiteResult> {
+	const host = input.host ?? "127.0.0.1";
+	const port = input.port ?? 4173;
+	const url = `http://${host}:${port}`;
+
+	return await new Promise<StopLiveSiteResult>((resolve, reject) => {
+		let timedOut = false;
+		const request = sendRequest(
+			{
+				host,
+				method: "POST",
+				path: LIVE_SITE_STOP_PATH,
+				port
+			},
+			(response) => {
+				response.resume();
+				response.once("end", () => {
+					resolve({
+						host,
+						port,
+						reachable: true,
+						url,
+						stopped: response.statusCode === 200
+					});
+				});
+			}
+		);
+
+		request.setTimeout(500, () => {
+			timedOut = true;
+			request.destroy(new Error("Timed out waiting for the live site stop response."));
+		});
+
+		request.once("error", (error) => {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (timedOut) {
+				resolve({ host, port, reachable: true, url, stopped: false });
+				return;
+			}
+
+			if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "EPIPE") {
+				resolve({ host, port, reachable: false, url, stopped: false });
+				return;
+			}
+
+			reject(error);
+		});
+
+		request.end();
+	});
+}
+
 function handleRequest(input: {
 	request: IncomingMessage;
 	response: ServerResponse;
 	dbPath: string;
 	clients: Set<ServerResponse>;
 	defaultTenant: string;
+	server: Server;
 }) {
 	const requestUrl = new URL(input.request.url ?? "/", "http://127.0.0.1");
 	const requestedTenant = requestUrl.searchParams.get("tenant")?.trim() || input.defaultTenant;
+
+	if (requestUrl.pathname === LIVE_SITE_STOP_PATH) {
+		if (input.request.method !== "POST") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+
+		writeText(input.response, 200, "Stopping live site");
+		setImmediate(() => {
+			input.server.close();
+		});
+		return;
+	}
 
 	if (input.request.method !== "GET") {
 		writeText(input.response, 405, "Method Not Allowed");
@@ -203,7 +279,7 @@ function writeJson(response: ServerResponse, payload: unknown) {
 		"Content-Type": "application/json; charset=utf-8",
 		"Cache-Control": "no-store"
 	});
-	response.end(`${JSON.stringify(payload, null, 2)}\n`);
+	response.end(`${JSON.stringify(payload)}\n`);
 }
 
 function writeText(response: ServerResponse, statusCode: number, body: string) {

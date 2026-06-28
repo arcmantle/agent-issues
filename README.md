@@ -92,9 +92,11 @@ agent-issues delete ISS2
 agent-issues create prd --title "Workflow PRD" --parent INIT1
 agent-issues create userStory --title "Story one" --parent PRD1
 agent-issues create issue --title "Implement CLI" --parent INIT1
+agent-issues create issue --title "Handle parser edge cases" --parent ISS1
 agent-issues bundle INIT1
 agent-issues handoff show ISS1 --json
 agent-issues move US1 PRD2
+agent-issues move ISS7 ISS1
 agent-issues relations ISS1
 agent-issues orphans
 agent-issues link ISS1 fixes US1
@@ -109,6 +111,7 @@ agent-issues list issue
 - PRDs create user stories.
 - Initiatives record ADRs.
 - Initiatives track issues.
+- Issues can decompose into sub-issues.
 - Issues fix user stories.
 - ADRs constrain issues.
 - Issues block other issues.
@@ -116,7 +119,8 @@ agent-issues list issue
 ## Output
 
 - Default output is human-readable text.
-- Use `--json` for machine-readable skill-friendly output.
+- Use `--json` for compact machine-readable skill-friendly output.
+- Add `--pretty` with `--json` when you want indented JSON.
 
 ## Tenant management
 
@@ -133,6 +137,7 @@ agent-issues list issue
 - `capabilities` returns both the help catalog and the workflow schema in one call.
 - `serve-site` starts a local live browser view backed by HTTP, live DB reads, and server-sent events.
 - `open-site` starts the same live server and asks the OS to open it in the default browser.
+- `stop-site` asks the local live server on the selected port to stop.
 - `install-agent` installs the packaged Agent Issues custom agent and hook into a VS Code prompts directory.
 - `list-agent` reports whether the packaged Agent Issues custom agent is present in a prompts directory.
 - `uninstall-agent` removes the packaged Agent Issues custom agent and hook from a prompts directory.
@@ -202,6 +207,7 @@ The live server exposes the viewer assets together with `site-config.json`, `/ap
 ## Query-focused commands
 
 - `bundle <initiativeId>` returns one initiative bundle directly.
+- Initiative bundles include structural sub-issue links so issue trees can be reconstructed in the CLI and UI.
 - `handoff <entityId>` returns focused handoff context for one entity, including its structural path, active blockers, and owning initiative bundle when one exists.
 - `relations <entityId>` returns incoming and outgoing relations for one entity.
 - `orphans [kind]` returns entities not reachable from any initiative.
@@ -215,3 +221,4 @@ The live server exposes the viewer assets together with `site-config.json`, `/ap
 ## Move command
 
 - `move <id> <newParentId>` reparents an entity by replacing its structural parent relation in one guarded operation.
+- For issues, `move` can also reparent a sub-issue under a different parent issue.

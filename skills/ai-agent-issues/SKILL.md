@@ -33,6 +33,12 @@ Once oriented, stop explaining to yourself and act. Map the task to the smallest
 - `adr`: a hard-to-reverse architectural decision.
 - `context`: the database-backed glossary for shared or initiative-scoped language.
 
+Issues are not always flat leaves. An issue may structurally `decompose` into sub-issues.
+
+- Use `agent-issues create issue --parent ISSx ...` to create a sub-issue under another issue.
+- Use `agent-issues move ISSx ISSy` to reparent a sub-issue under a different parent issue.
+- Treat leaf issues as the normal place for `fixes` links to user stories; parent issues represent grouped work and can own sub-issues.
+
 Use `agent-issues show <id> --json` for one record, `agent-issues relations <id> --json` for its edges, and `agent-issues bundle <initiativeId> --json` for the whole initiative view.
 
 ## Initiative fast path
@@ -62,7 +68,7 @@ Use the right command family for the job:
 - Discover entities: `list`, `show`, `relations`, `bundle`, `handoff`
 - Change tracking data: `create`, `link`, `status`
 - Manage vocabulary: `context list`, `context show`, `context search`, `context conflicts`, `context set`, `context define`, `context forget`
-- Inspect the live graph visually: `serve-site`, `open-site`
+- Inspect the live graph visually: `serve-site`, `open-site`, `stop-site`
 - Discover agent integration surfaces: `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `capabilities`
 
 Prefer `--json` whenever you are reading output programmatically or using the results to drive the next action.

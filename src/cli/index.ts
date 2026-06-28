@@ -17,6 +17,7 @@ import {
 	StatusCommand,
 	UnlinkCommand
 } from "./commands/entities.js";
+import { ExportCommand } from "./commands/export.js";
 import { FallbackCommand } from "./commands/fallback.js";
 import { HandoffCommand } from "./commands/handoff.js";
 import {
@@ -28,7 +29,7 @@ import {
 	UninstallSkillsCommand
 } from "./commands/installers.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
-import { OpenSiteCommand, ServeSiteCommand } from "./commands/site.js";
+import { OpenSiteCommand, ServeSiteCommand, StopSiteCommand } from "./commands/site.js";
 import {
 	CurrentTenantCommand,
 	DeleteTenantCommand,
@@ -36,7 +37,7 @@ import {
 	ListTenantsCommand,
 	RenameTenantCommand
 } from "./commands/tenants.js";
-import type { AgentIssuesContext } from "./shared.js";
+import { stringifyJson, type AgentIssuesContext } from "./shared.js";
 
 export type { AgentIssuesContext } from "./shared.js";
 
@@ -57,6 +58,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(UninstallAgentCommand);
 	cli.register(ServeSiteCommand);
 	cli.register(OpenSiteCommand);
+	cli.register(StopSiteCommand);
 	cli.register(InitCommand);
 	cli.register(CurrentTenantCommand);
 	cli.register(ListTenantsCommand);
@@ -73,6 +75,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(UnlinkCommand);
 	cli.register(StatusCommand);
 	cli.register(BundleCommand);
+	cli.register(ExportCommand);
 	cli.register(HandoffCommand);
 	cli.register(RelationsCommand);
 	cli.register(OrphansCommand);
@@ -99,7 +102,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 		const message = error instanceof Error ? error.message : String(error);
 
 		if (argv.includes("--json")) {
-			process.stderr.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
+			process.stderr.write(`${stringifyJson({ error: message }, argv.includes("--pretty"))}\n`);
 		} else if (error instanceof Error) {
 			process.stderr.write(cli.error(error));
 		} else {

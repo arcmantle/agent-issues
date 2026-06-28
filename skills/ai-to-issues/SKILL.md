@@ -7,7 +7,7 @@ description: Break a plan or PRD into independently grabbable issues, then creat
 
 Break a plan into independently grabbable issues using tracer-bullet vertical slices.
 
-`agent-issues` is the canonical issue tracker for this workflow. Do not consider a slice published until the corresponding `issue` entity exists and its `fixes` and `blocks` relationships have been recorded.
+`agent-issues` is the canonical issue tracker for this workflow. Do not consider a slice published until the corresponding `issue` entity exists and its `fixes`, `blocks`, and structural parent relationships have been recorded.
 
 ## Process
 
@@ -38,6 +38,7 @@ Rules:
 - Each slice delivers a narrow but complete path through the affected behavior.
 - A completed slice is demoable or verifiable on its own.
 - Prefer many thin slices over a few thick ones.
+- Use sub-issues when one approved issue clearly decomposes into smaller executable steps but should still roll up under one parent issue. In that shape, leaf sub-issues normally carry the `fixes` links to user stories.
 
 ### 4. Quiz the user
 
@@ -58,9 +59,9 @@ For each approved slice:
 
 1. Write a concise markdown issue body before publishing. Preserve the substance of the approved slice in the body, not just the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, acceptance criteria, and any explicit blockers or dependencies that were part of the approved breakdown.
 2. For multiline bodies, write the markdown to a temporary file first and publish it with `--body-file` rather than relying on fragile shell quoting.
-3. Create the issue under the correct initiative with `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json`.
+3. Create the issue under the correct structural parent with `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json` for top-level initiative work, or `agent-issues create issue --title ... --parent ISSx --body-file "$issueBodyFile" --json` for sub-issues.
 4. If you are reusing an existing issue whose body is missing or stale, refresh it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json` before linking anything else.
-5. Link the issue to every user story it satisfies with `agent-issues link ISSx fixes USy`.
+5. Link each leaf issue to every user story it satisfies with `agent-issues link ISSx fixes USy`.
 6. Record dependencies with `agent-issues link BLOCKER_ISS blocks BLOCKED_ISS`.
 
 Publish blockers first so that later issues can link to real issue IDs.

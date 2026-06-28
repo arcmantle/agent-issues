@@ -1,5 +1,6 @@
 import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html, nothing } from "lit";
+import type { TemplateResult } from "lit";
 import { choose } from "lit/directives/choose.js";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -18,14 +19,45 @@ function renderMarkdownBody(markdown: string): string {
 	return DOMPurify.sanitize(rawHtml);
 }
 
+type IssueTreeNode = {
+	issue: Entity;
+	children: IssueTreeNode[];
+};
+
 class InitiativeDetailView extends SignalWatcher(LitElement) {
 	static properties = {
-		store: { attribute: false }
+		store: { attribute: false },
+		initiativeId: { attribute: false },
+		cascade: { attribute: false },
+		activeChildId: { attribute: false }
 	};
 
 	public store: AgentIssuesStore | null = null;
+	public initiativeId: string | null = null;
+	public cascade = false;
+	public activeChildId: string | null = null;
+	protected collapsedIssueIds = new Set<string>();
+	protected collapsedOverviewSectionIds = new Set<string>();
+
+	protected activeBundle() {
+		const store = this.store;
+		if (!store) {
+			return null;
+		}
+
+		return store.bundleForInitiativeId(this.initiativeId ?? store.selectedInitiativeId.get());
+	}
 
 	protected onSelectEntityClick = (event: Event) => {
+		if (this.cascade) {
+			const childId = (event.currentTarget as HTMLElement).dataset.id;
+			if (childId && this.initiativeId) {
+				this.store?.drillCascade(this.initiativeId, childId);
+			}
+
+			return;
+		}
+
 		this.store?.selectEntityFromEvent(event);
 	};
 
@@ -47,6 +79,37 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		this.store?.selectEntity(id);
 	};
 
+	protected onToggleIssueBranch = (event: Event) => {
+		event.stopPropagation();
+		const issueId = (event.currentTarget as HTMLElement).dataset.id;
+		if (!issueId) {
+			return;
+		}
+
+		if (this.collapsedIssueIds.has(issueId)) {
+			this.collapsedIssueIds.delete(issueId);
+		} else {
+			this.collapsedIssueIds.add(issueId);
+		}
+
+		this.requestUpdate();
+	};
+
+	protected onToggleOverviewSection = (event: Event) => {
+		const sectionId = (event.currentTarget as HTMLElement).dataset.sectionId;
+		if (!sectionId) {
+			return;
+		}
+
+		if (this.collapsedOverviewSectionIds.has(sectionId)) {
+			this.collapsedOverviewSectionIds.delete(sectionId);
+		} else {
+			this.collapsedOverviewSectionIds.add(sectionId);
+		}
+
+		this.requestUpdate();
+	};
+
 	protected renderBodySourceNotice() {
 		return html`
 		<div class="ai-body-source ai-body-source-generated">
@@ -56,23 +119,52 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderIssueChild(issue: Entity) {
+	protected renderIssueBranch(node: IssueTreeNode): TemplateResult {
 		const store = this.store;
 		if (!store) {
-			return nothing;
+			return html``;
 		}
 
+		const isCollapsed = this.collapsedIssueIds.has(node.issue.id);
+
 		return html`
-		<button
-			class="child"
-			data-id=${issue.id}
-			@click=${this.onSelectEntityClick}
-		>
-			<span class="idtag">${issue.id}</span>
-			<span class=${`issue-dot ${store.issueStatusTone(issue.status)}`}></span>
-			<span class="child-title">${issue.title}</span>
-			<span class=${`badge ${store.badgeTone(issue.status)}`}>${issue.status}</span>
-		</button>
+		<div class="issue-branch">
+			<div class="issue-branch-row">
+				${when(
+					node.children.length > 0,
+					() => html`
+					<button
+						class="branch-toggle"
+						data-id=${node.issue.id}
+						aria-expanded=${String(!isCollapsed)}
+						@click=${this.onToggleIssueBranch}
+					>
+						${isCollapsed ? "+" : "-"}
+					</button>
+					`,
+					() => html`<span class="branch-spacer"></span>`
+				)}
+				<button
+					class=${`child issue-branch-head ${node.issue.id === this.activeChildId ? "is-active-ref" : ""}`}
+					data-id=${node.issue.id}
+					@click=${this.onSelectEntityClick}
+				>
+				<span class="idtag">${node.issue.id}</span>
+				<span class=${`issue-dot ${store.issueStatusTone(node.issue.status)}`}></span>
+				<span class="child-title">${node.issue.title}</span>
+				<span class=${`badge ${store.badgeTone(node.issue.status)}`}>${node.issue.status}</span>
+				</button>
+			</div>
+			${when(
+				node.children.length > 0 && !isCollapsed,
+				() => html`
+				<div class="issue-branch-children">
+					${repeat(node.children, (child) => child.issue.id, (child) => this.renderIssueBranch(child))}
+				</div>
+				`,
+				() => nothing
+			)}
+		</div>
 		`;
 	}
 
@@ -82,13 +174,13 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			return nothing;
 		}
 
-		const bundle = store.selectedInitiativeBundle.get();
-		const issues = bundle ? store.issuesForStory(bundle, story.id) : [];
+		const bundle = this.activeBundle();
+		const issueTree = bundle ? store.issueTreeForStory(bundle, story.id) : [];
 
 		return html`
 		<div class="story-block">
 			<button
-				class="story-head"
+				class=${`story-head ${story.id === this.activeChildId ? "is-active-ref" : ""}`}
 				data-id=${story.id}
 				@click=${this.onSelectEntityClick}
 			>
@@ -98,11 +190,48 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				<span class="chev">›</span>
 			</button>
 			${when(
-				issues.length > 0,
-				() => html`<div class="children">${repeat(issues, (issue) => issue.id, (issue) => this.renderIssueChild(issue))}</div>`,
+				issueTree.length > 0,
+				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node))}</div>`,
 				() => html`<div class="children empty-children">No issues fix this story yet.</div>`
 			)}
 		</div>
+		`;
+	}
+
+	protected renderOverviewSection(
+		sectionId: string,
+		title: string,
+		body: TemplateResult,
+		options: { count?: string; sectionClassName?: string } = {}
+	): TemplateResult {
+		const isCollapsed = this.collapsedOverviewSectionIds.has(sectionId);
+		const sectionClassName = options.sectionClassName ? `sec ${options.sectionClassName}` : "sec";
+
+		return html`
+		<section class=${sectionClassName}>
+			<button
+				class="sec-toggle"
+				data-section-id=${sectionId}
+				aria-expanded=${String(!isCollapsed)}
+				@click=${this.onToggleOverviewSection}
+			>
+				<span class="sec-head">
+					<span class="sec-title">${title}</span>
+					${when(
+						Boolean(options.count),
+						() => html`<span class="sec-count">${options.count}</span>`,
+						() => nothing
+					)}
+				</span>
+				<span
+					class=${classMap({ collapsed: isCollapsed, "sec-chevron": true })}
+					aria-hidden="true"
+				>
+					>
+				</span>
+			</button>
+			${when(!isCollapsed, () => body, () => nothing)}
+		</section>
 		`;
 	}
 
@@ -127,7 +256,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 
 	protected renderHandoff(handoff: HandoffRecord) {
 		const store = this.store;
-		const bundle = store?.selectedInitiativeBundle.get() ?? null;
+		const bundle = this.activeBundle();
 		const focus = bundle
 			? [bundle.initiative, ...bundle.prds, ...bundle.userStories, ...bundle.adrs, ...bundle.issues].find(
 				(entity) => entity.id === handoff.entityId
@@ -148,7 +277,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			${when(
 				focus !== null,
 				() => html`
-				<button class="handoff-focus" data-id=${handoff.entityId} @click=${this.onSelectEntityClick}>
+				<button class=${`handoff-focus ${handoff.entityId === this.activeChildId ? "is-active-ref" : ""}`} data-id=${handoff.entityId} @click=${this.onSelectEntityClick}>
 					<span class="idtag">${focus!.id}</span>
 					<span class="handoff-focus-title">${focus!.title}</span>
 				</button>
@@ -175,7 +304,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			return nothing;
 		}
 
-		const bundle = store.selectedInitiativeBundle.get();
+		const bundle = this.activeBundle();
 		if (!bundle) {
 			return nothing;
 		}
@@ -257,18 +386,17 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					${when(
 						body.length > 0,
 						() => html`
-						<section class="sec initiative-body">
-							<div class="sec-head">Overview</div>
-							<div class="sec-body">
-								${when(bodySource === "generated", () => this.renderBodySourceNotice())}
-								<div class="ai-body">${unsafeHTML(renderMarkdownBody(body))}</div>
-							</div>
-						</section>
+						<div class="initiative-body overview-body">
+							${when(bodySource === "generated", () => this.renderBodySourceNotice(), () => nothing)}
+							<div class="ai-body">${unsafeHTML(renderMarkdownBody(body))}</div>
+						</div>
 						`,
 						() => nothing
 					)}
-					<section class="sec">
-						<div class="sec-head">📝 User stories &amp; their issues <span class="sec-count">${stats.stories} stories · ${stats.issues} issues</span></div>
+					${this.renderOverviewSection(
+						"stories",
+						"User stories & issues",
+						html`
 						<div class="sec-body">
 							${when(
 								bundle.userStories.length > 0,
@@ -276,9 +404,13 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 								() => html`<div class="empty-children">No user stories yet.</div>`
 							)}
 						</div>
-					</section>
-					<section class="sec">
-						<div class="sec-head">📄 PRDs</div>
+						`,
+						{ count: `${stats.stories} stories · ${stats.issues} issues` }
+					)}
+					${this.renderOverviewSection(
+						"prds",
+						"PRDs",
+						html`
 						<div class="sec-body">
 							${when(
 								bundle.prds.length > 0,
@@ -286,9 +418,12 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 								() => html`<div class="empty-children">No PRDs attached.</div>`
 							)}
 						</div>
-					</section>
-					<section class="sec">
-						<div class="sec-head">📐 ADRs</div>
+						`
+					)}
+					${this.renderOverviewSection(
+						"adrs",
+						"ADRs",
+						html`
 						<div class="sec-body">
 							${when(
 								bundle.adrs.length > 0,
@@ -296,7 +431,8 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 								() => html`<div class="empty-children">No ADRs recorded.</div>`
 							)}
 						</div>
-					</section>
+						`
+					)}
 					`],
 					["context", () => html`
 					<section class="sec context-sec">
@@ -432,12 +568,31 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			border-radius: 12px;
 			background: var(--surface);
 		}
+		.sec-toggle {
+			display: flex;
+			gap: 12px;
+			align-items: center;
+			justify-content: space-between;
+			width: stretch;
+			padding: 12px 16px;
+			border: 0;
+			border-bottom: 1px solid var(--border-muted);
+			background: transparent;
+			color: var(--text);
+			cursor: pointer;
+			font: inherit;
+			text-align: left;
+		}
+		.sec-toggle:hover {
+			background: var(--surface-muted);
+		}
 		.sec-head {
 			display: flex;
 			gap: 10px;
 			align-items: baseline;
-			padding: 12px 16px;
-			border-bottom: 1px solid var(--border-muted);
+			flex-wrap: wrap;
+		}
+		.sec-title {
 			font-weight: 600;
 		}
 		.sec-count {
@@ -445,11 +600,21 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			font-size: 12px;
 			font-weight: 400;
 		}
+		.sec-chevron {
+			color: var(--muted);
+			font-size: 14px;
+			line-height: 1;
+			transform: rotate(90deg);
+			transition: transform 120ms ease;
+		}
+		.sec-chevron.collapsed {
+			transform: rotate(0deg);
+		}
 		.sec-body {
 			padding: 8px;
 		}
-		.initiative-body .sec-body {
-			padding: 16px;
+		.overview-body {
+			margin-top: 18px;
 		}
 		.context-sec {
 			padding: 16px;
@@ -476,14 +641,64 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		.line:hover {
 			background: var(--surface-muted);
 		}
+		.story-head.is-active-ref,
+		.child.is-active-ref,
+		.handoff-focus.is-active-ref {
+			background: var(--surface-muted);
+			box-shadow: inset 3px 0 0 0 var(--accent);
+		}
+		.issue-branch {
+			display: grid;
+			gap: 6px;
+		}
+		.issue-branch-row {
+			display: flex;
+			gap: 8px;
+			align-items: stretch;
+		}
+		.issue-branch + .issue-branch {
+			margin-top: 6px;
+		}
+		.branch-toggle,
+		.branch-spacer {
+			flex-shrink: 0;
+			width: 24px;
+			height: 24px;
+			margin-top: 8px;
+		}
+		.branch-toggle {
+			border: 1px solid var(--border-muted);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+			line-height: 1;
+		}
+		.branch-toggle:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+		.issue-branch-children {
+			display: grid;
+			gap: 6px;
+			margin-left: 22px;
+			padding-left: 12px;
+			border-left: 1px solid var(--border-muted);
+		}
 		.s-title {
 			flex: 1;
 			font-weight: 600;
 		}
 		.chev {
 			color: var(--muted);
-		}		.children {
+		}
+		.children {
 			padding: 0 8px 8px 28px;
+		}
+		.issue-tree {
+			display: grid;
+			gap: 6px;
 		}
 		.empty-children {
 			padding: 12px 8px;

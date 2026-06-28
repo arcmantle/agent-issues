@@ -64,6 +64,7 @@ export type InitiativeBundle = {
 	adrs: EntityRecord[];
 	issues: EntityRecord[];
 	fixLinks: Array<{ issue: EntityRecord; userStory: EntityRecord }>;
+	subIssueLinks: Array<{ parent: EntityRecord; issue: EntityRecord }>;
 	blockerLinks: Array<{ source: EntityRecord; target: EntityRecord }>;
 	constrainsLinks: Array<{ adr: EntityRecord; issue: EntityRecord }>;
 	handoffs: HandoffRecord[];
@@ -284,6 +285,13 @@ export function updateEntityStatus(
 	}
 
 	if (entity.kind === "issue" && (input.status === "in-progress" || input.status === "done")) {
+		const openSubIssues = getOpenSubIssues(db, entity.id);
+		if (openSubIssues.length > 0) {
+			throw new Error(
+				`Cannot set ${entity.id} to ${input.status} while sub-issues remain open: ${openSubIssues.map((issue) => issue.id).join(", ")}.`
+			);
+		}
+
 		const blockingIssues = getActiveBlockingIssues(db, entity.id);
 		if (blockingIssues.length > 0) {
 			throw new Error(
@@ -572,6 +580,12 @@ export function getInitiativeBundle(db: DatabaseHandle, initiativeId: string): I
 			.map((relation) => ({
 				issue: entityById.get(relation.from_id)!,
 				userStory: entityById.get(relation.to_id)!
+			})),
+		subIssueLinks: relationRows
+			.filter((relation) => relation.type === "decomposes")
+			.map((relation) => ({
+				parent: entityById.get(relation.from_id)!,
+				issue: entityById.get(relation.to_id)!
 			})),
 		blockerLinks: relationRows
 			.filter((relation) => relation.type === "blocks")
@@ -1016,24 +1030,20 @@ function getInitiativeChildStatuses(
 	initiativeId: string
 ): { trackedIssueStatuses: string[]; ownedPrdStatuses: string[] } {
 	const statusMap = getDerivedStatusMap(db);
-	const rows = db
-		.prepare(
-			`SELECT relations.type AS relation_type, entities.id, entities.kind
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.from_id = @initiativeId
-			   AND relations.type IN ('tracks', 'owns')`
-		)
-		.all(tenantParams(db, { initiativeId })) as Array<{ relation_type: string; id: string; kind: string }>;
+	const reachableIds = collectReachableIds(
+		getAllRelations(db).filter((relation) => isStructuralRelationType(relation.type)),
+		initiativeId
+	);
+	reachableIds.delete(initiativeId);
+	const entities = getAllEntities(db);
 
 	return {
-		trackedIssueStatuses: rows
-			.filter((row) => row.relation_type === "tracks" && row.kind === "issue")
-			.map((row) => statusMap.get(row.id) ?? ""),
-		ownedPrdStatuses: rows
-			.filter((row) => row.relation_type === "owns" && row.kind === "prd")
-			.map((row) => statusMap.get(row.id) ?? "")
+		trackedIssueStatuses: entities
+			.filter((entity) => entity.kind === "issue" && reachableIds.has(entity.id))
+			.map((entity) => statusMap.get(entity.id) ?? ""),
+		ownedPrdStatuses: entities
+			.filter((entity) => entity.kind === "prd" && reachableIds.has(entity.id))
+			.map((entity) => statusMap.get(entity.id) ?? "")
 	};
 }
 
@@ -1090,7 +1100,7 @@ function hasStructuralPath(db: DatabaseHandle, startId: string, targetId: string
 }
 
 function wouldOrphanSubtree(db: DatabaseHandle, relation: RelationRecord): boolean {
-	if (!["owns", "records", "tracks", "creates"].includes(relation.type)) {
+	if (!isStructuralRelationType(relation.type)) {
 		return false;
 	}
 
@@ -1138,6 +1148,26 @@ function getActiveBlockingIssues(db: DatabaseHandle, entityId: string): EntityRe
 		.all(tenantParams(db, { entityId })) as EntityRow[];
 
 	return rows.map(mapEntityRow);
+}
+
+function getOpenSubIssues(db: DatabaseHandle, issueId: string): EntityRecord[] {
+	const statusMap = getDerivedStatusMap(db);
+	const rows = db
+		.prepare(
+			`SELECT entities.*
+			 FROM relations
+			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+			 WHERE relations.tenant_id = @tenantId
+			   AND relations.from_id = @issueId
+			   AND relations.type = 'decomposes'
+			 ORDER BY entities.id`
+		)
+		.all(tenantParams(db, { issueId })) as EntityRow[];
+
+	return rows
+		.map(mapEntityRow)
+		.map((entity) => applyDerivedStatus(entity, statusMap))
+		.filter((entity) => entity.status !== "done");
 }
 
 function mapEntityRow(row: EntityRow): EntityRecord {

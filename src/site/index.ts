@@ -1,1 +1,1 @@
-export { startLiveSite, type LiveSiteHandle, type LiveSiteInfo } from "./server.js";
+export { startLiveSite, stopLiveSite, type LiveSiteHandle, type LiveSiteInfo, type StopLiveSiteResult } from "./server.js";

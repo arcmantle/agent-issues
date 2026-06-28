@@ -38,10 +38,11 @@ From the initiative's issues, choose the single next issue to implement.
 
 - List candidates with `agent-issues list issue --json` and inspect dependencies with `agent-issues relations <id> --json`.
 - An issue is **workable** when it is not `done` and nothing that `blocks` it is still open.
+- If an issue owns open sub-issues, prefer selecting one of those sub-issues as the next slice unless the parent issue is already at the explicit coordination/closure step.
 - Among workable issues, prefer the one that unblocks the most downstream work, then the thinnest tracer-bullet slice.
 - If every remaining issue is blocked, stop and report the blocker chain instead of guessing. Surface the blocking issue and what it needs.
 
-Present your pick to the user with its title, the user stories it `fixes`, and its blockers. Confirm it is the right next slice before writing any code. Ask one question; do not present a long menu unless the user asks.
+Present your pick to the user with its title, whether it is a parent issue or a leaf sub-issue, the user stories it `fixes`, and its blockers. Confirm it is the right next slice before writing any code. Ask one question; do not present a long menu unless the user asks.
 
 ### 3. Decide how to approach it
 

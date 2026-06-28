@@ -26,6 +26,7 @@ function makeBundle(initiative: Entity, overrides: Partial<InitiativeBundle> = {
 		initiative,
 		issues: [],
 		prds: [],
+		subIssueLinks: [],
 		userStories: [],
 		...overrides
 	};
@@ -82,6 +83,32 @@ afterEach(() => {
 });
 
 describe("initiative detail overview tab", () => {
+	it("renders an explicitly supplied initiative id without relying on the global selection", async () => {
+		const initiative = makeEntity({
+			body: "Overview of the work.",
+			bodySource: "authored",
+			id: "INIT2",
+			kind: "initiative",
+			status: "active",
+			title: "Status derivation"
+		});
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.snapshot.set(makeSnapshot({ initiatives: [makeBundle(initiative)] }));
+		const view = document.createElement("agent-issues-initiative-detail-view") as HTMLElement & {
+			store: AgentIssuesStore;
+			initiativeId: string | null;
+			updateComplete: Promise<unknown>;
+		};
+		view.store = store;
+		view.initiativeId = "INIT2";
+		document.body.appendChild(view);
+		await view.updateComplete;
+
+		expect(view.shadowRoot?.querySelector(".d-title")?.textContent).toContain("Status derivation");
+		expect(store.selectedInitiativeId.get()).toBeNull();
+	});
+
 	it("renders the authored markdown body of the selected initiative", async () => {
 		const initiative = makeEntity({
 			body: "Overview of the work.\n\n## Plan\n\nShip the **initiative** detail pane.",
@@ -100,6 +127,136 @@ describe("initiative detail overview tab", () => {
 		expect(body?.querySelector("h2")?.textContent?.trim()).toBe("Plan");
 		expect(body?.querySelector("strong")?.textContent?.trim()).toBe("initiative");
 		expect(view.shadowRoot?.querySelector(".initiative-body .ai-body-source")).toBeNull();
+	});
+
+	it("renders the overview body flat, without a boxed collapsible section", async () => {
+		const initiative = makeEntity({
+			body: "Overview of the work.\n\n## Plan\n\nShip the **initiative** detail pane.",
+			bodySource: "authored",
+			id: "INIT1",
+			kind: "initiative",
+			status: "active",
+			title: "Console Viewer"
+		});
+		const store = makeStore(makeBundle(initiative));
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const overview = view.shadowRoot?.querySelector(".initiative-body");
+		expect(overview?.classList.contains("sec")).toBe(false);
+		expect(view.shadowRoot?.querySelector('.sec-toggle[data-section-id="overview-body"]')).toBeNull();
+	});
+
+	it("renders sub-issues nested beneath their parent issue in the story overview", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
+		const subIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Sub-issue" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue: subIssue, userStory: story }],
+			issues: [parentIssue, subIssue],
+			subIssueLinks: [{ issue: subIssue, parent: parentIssue }],
+			userStories: [story]
+		});
+		const store = makeStore(bundle);
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const issueButtons = [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".issue-tree .child") ?? [])];
+		expect(issueButtons.map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2"]);
+		expect(view.shadowRoot?.querySelector(".issue-branch-children .child")?.getAttribute("data-id")).toBe("ISS2");
+	});
+
+	it("shows child issues when the parent issue itself fixes the story", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Child issue" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue: parentIssue, userStory: story }],
+			issues: [parentIssue, childIssue],
+			subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
+			userStories: [story]
+		});
+		const store = makeStore(bundle);
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		expect([...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".issue-tree .child") ?? [])].map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2"]);
+		expect(view.shadowRoot?.querySelector('.issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
+	});
+
+	it("collapses and expands nested sub-issues in the story overview", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
+		const subIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Sub-issue" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue: subIssue, userStory: story }],
+			issues: [parentIssue, subIssue],
+			subIssueLinks: [{ issue: subIssue, parent: parentIssue }],
+			userStories: [story]
+		});
+		const store = makeStore(bundle);
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const toggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.branch-toggle[data-id="ISS1"]');
+		toggle?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.issue-branch-children .child[data-id="ISS2"]')).toBeNull();
+
+		toggle?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
+	});
+
+	it("collapses large overview sections independently", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render nodes" });
+		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Graph PRD" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "proposed", title: "SVG graph layout" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue, userStory: story }],
+			issues: [issue],
+			prds: [prd],
+			adrs: [adr],
+			userStories: [story]
+		});
+		const store = makeStore(bundle);
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const prdToggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.sec-toggle[data-section-id="prds"]');
+		const storyToggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.sec-toggle[data-section-id="stories"]');
+		const adrToggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.sec-toggle[data-section-id="adrs"]');
+
+		prdToggle?.click();
+		await view.updateComplete;
+		expect(prdToggle?.getAttribute("aria-expanded")).toBe("false");
+		expect(view.shadowRoot?.querySelector('.line[data-id="PRD1"]')).toBeNull();
+		expect(view.shadowRoot?.querySelector('.story-head[data-id="US1"]')).not.toBeNull();
+
+		storyToggle?.click();
+		await view.updateComplete;
+		expect(storyToggle?.getAttribute("aria-expanded")).toBe("false");
+		expect(view.shadowRoot?.querySelector('.story-head[data-id="US1"]')).toBeNull();
+
+		adrToggle?.click();
+		await view.updateComplete;
+		expect(adrToggle?.getAttribute("aria-expanded")).toBe("false");
+		expect(view.shadowRoot?.querySelector('.line[data-id="ADR1"]')).toBeNull();
+
+		prdToggle?.click();
+		await view.updateComplete;
+		expect(prdToggle?.getAttribute("aria-expanded")).toBe("true");
+		expect(view.shadowRoot?.querySelector('.line[data-id="PRD1"]')).not.toBeNull();
 	});
 });
 
@@ -123,6 +280,26 @@ describe("initiative detail graph tab", () => {
 		expect(nodes.length).toBe(1);
 		const svgNodes = nodes[0]?.shadowRoot?.querySelectorAll(".ai-node") ?? [];
 		expect(svgNodes.length).toBe(3);
+	});
+
+	it("renders sub-issues in their own graph column", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Parent issue" });
+		const subIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Sub-issue" });
+		const bundle = makeBundle(initiative, {
+			issues: [parentIssue, subIssue],
+			subIssueLinks: [{ issue: subIssue, parent: parentIssue }]
+		});
+		const store = makeStore(bundle);
+		store.setInitTab("graph");
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const graph = view.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		const labels = [...(graph?.shadowRoot?.querySelectorAll<SVGTextElement>(".ai-colhead") ?? [])].map((node) => node.textContent?.trim());
+
+		expect(labels).toContain("Sub-issues");
 	});
 
 	it("opens a record when its graph node is clicked", async () => {

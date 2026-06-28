@@ -18,9 +18,10 @@ export const CONTEXT_SUBCOMMANDS = new Set(["list", "show", "search", "conflicts
 
 export abstract class BaseCommand extends Command<AgentIssuesContext> {
 	public asJson = Option.Boolean("--json", false);
+	public prettyJson = Option.Boolean("--pretty", false);
 
 	protected print(payload: object, text: string) {
-		printOutput(this.context.stdout, this.asJson, payload, text);
+		printOutput(this.context.stdout, this.asJson, this.prettyJson, payload, text);
 	}
 }
 
@@ -84,9 +85,13 @@ export function parsePortOption(value: string | undefined): number | undefined {
 	return parsedPort;
 }
 
-export function printOutput(output: Writable, asJson: boolean, payload: object, text: string) {
+export function stringifyJson(value: unknown, pretty: boolean): string {
+	return pretty ? JSON.stringify(value, null, 2) : JSON.stringify(value);
+}
+
+export function printOutput(output: Writable, asJson: boolean, prettyJson: boolean, payload: object, text: string) {
 	if (asJson) {
-		output.write(`${JSON.stringify(payload, null, 2)}\n`);
+		output.write(`${stringifyJson(payload, prettyJson)}\n`);
 		return;
 	}
 

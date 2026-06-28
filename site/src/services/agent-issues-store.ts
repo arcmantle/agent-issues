@@ -1,6 +1,11 @@
 import { computed, signal } from "@lit-labs/signals";
 import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, Entity, FixLink, GraphEdge, GraphNode, InitiativeBundle, InitiativeTab, PageMode, ProjectContextTermEntry, ProjectContextTermSource, Relation, RelationshipGraph, RootTab, SiteConfig, Snapshot, ViewMode } from "../models.js";
 
+type IssueTreeNode = {
+	issue: Entity;
+	children: IssueTreeNode[];
+};
+
 export class AgentIssuesStore {
 	public config = signal<SiteConfig | null>(null);
 	public snapshot = signal<Snapshot | null>(null);
@@ -11,6 +16,12 @@ export class AgentIssuesStore {
 	public selectedTenant = signal<string | null>(null);
 	public selectedInitiativeId = signal<string | null>(null);
 	public selectedId = signal<string | null>(null);
+	public cascadePath = signal<string[]>([]);
+	public cascadeAvailableWidth = signal<number>(0);
+	public cascadeWindowStart = signal<number | null>(null);
+	public reRootTrail = signal<string[][]>([]);
+	public railCollapsed = signal<boolean>(false);
+	public masterCollapsedOverride = signal<boolean | null>(null);
 	public syncLabel = signal("loading");
 	public errorMessage = signal<string | null>(null);
 	public activeView = signal<ViewMode>("overview");
@@ -45,34 +56,183 @@ export class AgentIssuesStore {
 
 	public entityById = computed(() => new Map((this.snapshot.get()?.entities ?? []).map((entity) => [entity.id, entity])));
 
-	public selectedEntity = computed(() => {
-		const selectedId = this.selectedId.get();
-		return selectedId ? this.entityById.get().get(selectedId) ?? null : null;
+	public entityForId(entityId: string | null): Entity | null {
+		return entityId ? this.entityById.get().get(entityId) ?? null : null;
+	}
+
+	public cascadeColumns = computed(() =>
+		this.cascadePath.get()
+			.map((entityId) => this.entityForId(entityId))
+			.filter((entity): entity is Entity => Boolean(entity))
+	);
+
+	public masterCollapsed = computed((): boolean => {
+		const override = this.masterCollapsedOverride.get();
+		if (override !== null) {
+			return override;
+		}
+
+		return this.cascadePath.get().length >= 2;
 	});
 
-	public selectedBundle = computed(() => {
-		const entity = this.selectedEntity.get();
-		if (!entity) {
+	public readonly cascadeColumnWidth = 480;
+	public readonly cascadeColumnGap = 16;
+
+	public cascadeCapacityForWidth(availableWidth: number): number {
+		if (availableWidth <= 0) {
+			return Number.POSITIVE_INFINITY;
+		}
+
+		return Math.max(1, Math.floor(availableWidth / (this.cascadeColumnWidth + this.cascadeColumnGap)));
+	}
+
+	public cascadeHopRelation(parentId: string, childId: string): string | null {
+		const relations = this.snapshot.get()?.relations ?? [];
+		const structural = relations.find((relation) => relation.fromId === parentId && relation.toId === childId);
+		if (structural) {
+			return structural.type;
+		}
+
+		const reversed = relations.find((relation) => relation.fromId === childId && relation.toId === parentId);
+		return reversed?.type ?? null;
+	}
+
+	public cascadeColumnWindow = computed((): { breadcrumb: Entity[]; columns: Entity[] } => {
+		const path = this.cascadeColumns.get();
+		const capacity = this.cascadeCapacityForWidth(this.cascadeAvailableWidth.get());
+		if (path.length <= capacity) {
+			return { breadcrumb: [], columns: path };
+		}
+
+		const rightAnchoredStart = path.length - capacity;
+		const manualStart = this.cascadeWindowStart.get();
+		const start = Math.min(Math.max(manualStart ?? rightAnchoredStart, 0), path.length - 1);
+
+		return { breadcrumb: path.slice(0, start), columns: path.slice(start) };
+	});
+
+	public cascadePathForLeaf(leafId: string): string[] {
+		const relations = this.snapshot.get()?.relations ?? [];
+
+		const issueChain = [leafId];
+		const seen = new Set<string>([leafId]);
+		let currentId = leafId;
+
+		while (true) {
+			const parentRelation = relations.find((relation) => relation.type === "decomposes" && relation.toId === currentId);
+			if (!parentRelation || seen.has(parentRelation.fromId)) {
+				break;
+			}
+
+			issueChain.unshift(parentRelation.fromId);
+			seen.add(parentRelation.fromId);
+			currentId = parentRelation.fromId;
+		}
+
+		const rootIssueId = issueChain[0];
+		const fixedStories = this.sortEntities(
+			relations
+				.filter((relation) => relation.type === "fixes" && relation.fromId === rootIssueId)
+				.map((relation) => this.entityForId(relation.toId))
+				.filter((entity): entity is Entity => Boolean(entity))
+		);
+		const storyId = fixedStories[0]?.id ?? null;
+		const spine = this.spineForStory(storyId, rootIssueId);
+
+		return [...spine, ...issueChain];
+	}
+
+	protected spineForStory(storyId: string | null, rootIssueId: string): string[] {
+		const relations = this.snapshot.get()?.relations ?? [];
+		const prdId = storyId
+			? relations.find((relation) => relation.type === "creates" && relation.toId === storyId)?.fromId ?? null
+			: null;
+		const initiativeId = prdId
+			? relations.find((relation) => relation.type === "owns" && relation.toId === prdId)?.fromId ?? null
+			: relations.find((relation) => relation.type === "tracks" && relation.toId === rootIssueId)?.fromId ?? null;
+
+		const spine: string[] = [];
+		if (initiativeId) {
+			spine.push(initiativeId);
+		}
+
+		if (prdId) {
+			spine.push(prdId);
+		}
+
+		if (storyId) {
+			spine.push(storyId);
+		}
+
+		return spine;
+	}
+
+	public cascadeSeamFor(
+		parentId: string,
+		childId: string
+	): { relation: string | null; branch: { options: Entity[]; selectedIndex: number } | null } {
+		const relation = this.cascadeHopRelation(parentId, childId);
+		if (relation !== "fixes") {
+			return { relation, branch: null };
+		}
+
+		const relations = this.snapshot.get()?.relations ?? [];
+		const options = this.sortEntities(
+			relations
+				.filter((candidate) => candidate.type === "fixes" && candidate.fromId === childId)
+				.map((candidate) => this.entityForId(candidate.toId))
+				.filter((entity): entity is Entity => Boolean(entity))
+		);
+		if (options.length <= 1) {
+			return { relation, branch: null };
+		}
+
+		return { relation, branch: { options, selectedIndex: options.findIndex((entity) => entity.id === parentId) } };
+	}
+
+	public selectCascadeBranch(rootIssueId: string, storyId: string) {
+		const path = this.cascadePath.get();
+		const chainStart = path.indexOf(rootIssueId);
+		if (chainStart === -1) {
+			return;
+		}
+
+		const issueChain = path.slice(chainStart);
+		const spine = this.spineForStory(storyId, rootIssueId);
+
+		this.cascadeWindowStart.set(null);
+		this.cascadePath.set([...spine, ...issueChain]);
+		this.clearMasterOverrideIfShallow();
+		this.writeCascadeHash();
+	}
+
+	public selectedEntity = computed(() => this.entityForId(this.selectedId.get()));
+
+	public bundleForEntityId(entityId: string | null): InitiativeBundle | null {
+		if (!entityId) {
 			return null;
 		}
 
 		return (
 			(this.snapshot.get()?.initiatives ?? []).find((bundle) =>
 				[bundle.initiative, ...bundle.prds, ...bundle.userStories, ...bundle.adrs, ...bundle.issues].some(
-					(candidate) => candidate.id === entity.id
+					(candidate) => candidate.id === entityId
 				)
 			) ?? null
 		);
-	});
+	}
 
-	public selectedInitiativeBundle = computed(() => {
-		const selectedInitiativeId = this.selectedInitiativeId.get();
-		if (!selectedInitiativeId) {
+	public selectedBundle = computed(() => this.bundleForEntityId(this.selectedId.get()));
+
+	public bundleForInitiativeId(initiativeId: string | null): InitiativeBundle | null {
+		if (!initiativeId) {
 			return null;
 		}
 
-		return (this.snapshot.get()?.initiatives ?? []).find((bundle) => bundle.initiative.id === selectedInitiativeId) ?? null;
-	});
+		return (this.snapshot.get()?.initiatives ?? []).find((bundle) => bundle.initiative.id === initiativeId) ?? null;
+	}
+
+	public selectedInitiativeBundle = computed(() => this.bundleForInitiativeId(this.selectedInitiativeId.get()));
 
 	public activeInitiativeId = computed(() => this.selectedInitiativeId.get() ?? this.selectedBundle.get()?.initiative.id ?? null);
 
@@ -207,23 +367,25 @@ export class AgentIssuesStore {
 
 	public projectContextDuplicateCount = computed(() => this.projectContextTerms.get().filter((entry) => entry.hasDuplicates).length);
 
-	public selectedIncoming = computed(() => {
-		const selectedId = this.selectedId.get();
-		if (!selectedId) {
+	public incomingRelationsFor(entityId: string | null): Relation[] {
+		if (!entityId) {
 			return [];
 		}
 
-		return (this.snapshot.get()?.relations ?? []).filter((relation) => relation.toId === selectedId);
-	});
+		return (this.snapshot.get()?.relations ?? []).filter((relation) => relation.toId === entityId);
+	}
 
-	public selectedOutgoing = computed(() => {
-		const selectedId = this.selectedId.get();
-		if (!selectedId) {
+	public outgoingRelationsFor(entityId: string | null): Relation[] {
+		if (!entityId) {
 			return [];
 		}
 
-		return (this.snapshot.get()?.relations ?? []).filter((relation) => relation.fromId === selectedId);
-	});
+		return (this.snapshot.get()?.relations ?? []).filter((relation) => relation.fromId === entityId);
+	}
+
+	public selectedIncoming = computed(() => this.incomingRelationsFor(this.selectedId.get()));
+
+	public selectedOutgoing = computed(() => this.outgoingRelationsFor(this.selectedId.get()));
 
 	public relatedEntities = computed(() => {
 		const relatedIds = new Set<string>();
@@ -326,6 +488,7 @@ export class AgentIssuesStore {
 
 		this.connected = true;
 		window.addEventListener("hashchange", this.onHashChange);
+		window.addEventListener("popstate", this.onPopState);
 		void this.bootstrap();
 	}
 
@@ -336,6 +499,7 @@ export class AgentIssuesStore {
 
 		this.connected = false;
 		window.removeEventListener("hashchange", this.onHashChange);
+		window.removeEventListener("popstate", this.onPopState);
 		this.events?.close();
 		this.events = null;
 		if (this.pollTimer !== null) {
@@ -348,10 +512,17 @@ export class AgentIssuesStore {
 		const hashParams = new URLSearchParams(window.location.hash.slice(1));
 		const nextSelectedId = hashParams.get("entity");
 		const nextSelectedInitiativeId = hashParams.get("initiative");
+		const nextCascade = hashParams.get("cascade");
+		this.cascadePath.set(nextCascade ? nextCascade.split("~").map((id) => decodeURIComponent(id)) : []);
+		this.clearMasterOverrideIfShallow();
 		this.selectedId.set(nextSelectedId);
 		this.selectedInitiativeId.set(nextSelectedInitiativeId);
 		this.activePage.set(nextSelectedId ? "entity" : nextSelectedInitiativeId ? "initiative" : "list");
 		this.activeView.set("overview");
+	};
+
+	public onPopState = () => {
+		this.popReRoot();
 	};
 
 	public setSearchFromEvent = (event: Event) => {
@@ -411,6 +582,7 @@ export class AgentIssuesStore {
 	};
 
 	public selectEntity(entityId: string) {
+		this.cascadePath.set([]);
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(entityId);
 		this.activePage.set("entity");
@@ -426,6 +598,100 @@ export class AgentIssuesStore {
 		this.selectInitiative(initiativeId);
 	};
 
+	public openCascade(rootId: string) {
+		this.cascadeWindowStart.set(null);
+		this.cascadePath.set([rootId]);
+		this.clearMasterOverrideIfShallow();
+		this.writeCascadeHash();
+	}
+
+	public toggleRail() {
+		this.railCollapsed.set(!this.railCollapsed.get());
+	}
+
+	public toggleMaster() {
+		this.masterCollapsedOverride.set(!this.masterCollapsed.get());
+	}
+
+	protected clearMasterOverrideIfShallow() {
+		if (this.cascadePath.get().length < 2) {
+			this.masterCollapsedOverride.set(null);
+		}
+	}
+
+	public reRootCascade(targetId: string) {
+		const currentPath = this.cascadePath.get();
+		if (currentPath.length > 0) {
+			this.reRootTrail.set([...this.reRootTrail.get(), currentPath]);
+		}
+
+		this.cascadeWindowStart.set(null);
+		this.cascadePath.set(this.cascadePathForLeaf(targetId));
+		this.clearMasterOverrideIfShallow();
+		this.writeCascadeHash();
+	}
+
+	public restoreReRoot(index: number) {
+		const trail = this.reRootTrail.get();
+		const restored = trail[index];
+		if (!restored) {
+			return;
+		}
+
+		this.reRootTrail.set(trail.slice(0, index));
+		this.cascadeWindowStart.set(null);
+		this.cascadePath.set(restored);
+		this.clearMasterOverrideIfShallow();
+		this.writeCascadeHash();
+	}
+
+	public popReRoot() {
+		const trail = this.reRootTrail.get();
+		if (trail.length === 0) {
+			return;
+		}
+
+		this.restoreReRoot(trail.length - 1);
+	}
+
+	public drillCascade(parentId: string, childId: string) {
+		const parentIndex = this.cascadePath.get().indexOf(parentId);
+		if (parentIndex === -1) {
+			return;
+		}
+
+		this.cascadeWindowStart.set(null);
+		this.cascadePath.set([...this.cascadePath.get().slice(0, parentIndex + 1), childId]);
+		this.writeCascadeHash();
+	}
+
+	public restoreAncestor(entityId: string) {
+		const index = this.cascadePath.get().indexOf(entityId);
+		if (index === -1) {
+			return;
+		}
+
+		this.cascadeWindowStart.set(index);
+	}
+
+	public truncateCascadeTo(entityId: string) {
+		const path = this.cascadePath.get();
+		const index = path.indexOf(entityId);
+		if (index === -1 || index === path.length - 1) {
+			return;
+		}
+
+		this.cascadeWindowStart.set(null);
+		this.cascadePath.set(path.slice(0, index + 1));
+		this.clearMasterOverrideIfShallow();
+		this.writeCascadeHash();
+	}
+
+	protected writeCascadeHash() {
+		const path = this.cascadePath.get();
+		window.location.hash = path.length > 0 ? `cascade=${path.map((id) => encodeURIComponent(id)).join("~")}` : "";
+	}
+
 	public selectInitiative(initiativeId: string) {
 		this.selectedId.set(null);
 		this.selectedInitiativeId.set(initiativeId);
@@ -433,10 +699,12 @@ export class AgentIssuesStore {
 		this.activeSection.set("initiatives");
 		this.activeView.set("overview");
 		this.initTab.set("overview");
-		window.location.hash = `initiative=${encodeURIComponent(initiativeId)}`;
+		this.openCascade(initiativeId);
 	}
 
 	public clearSelection() {
+		this.cascadePath.set([]);
+		this.clearMasterOverrideIfShallow();
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(null);
 		this.activePage.set("list");
@@ -477,10 +745,94 @@ export class AgentIssuesStore {
 		return this.sortEntities(bundle.issues.filter((issue) => issueIds.has(issue.id)));
 	}
 
+	public subIssuesForIssue(bundle: InitiativeBundle, issueId: string) {
+		return this.sortEntities(bundle.subIssueLinks.filter((link) => link.parent.id === issueId).map((link) => link.issue));
+	}
+
+	public parentIssueForIssue(bundle: InitiativeBundle, issueId: string) {
+		return bundle.subIssueLinks.find((link) => link.issue.id === issueId)?.parent ?? null;
+	}
+
+	public issueTreeForStory(bundle: InitiativeBundle, storyId: string): IssueTreeNode[] {
+		const parentIssueIdByChildId = new Map(bundle.subIssueLinks.map((link) => [link.issue.id, link.parent.id]));
+		const childIssueIdsByParentId = new Map<string, string[]>();
+
+		for (const link of bundle.subIssueLinks) {
+			const childIssueIds = childIssueIdsByParentId.get(link.parent.id) ?? [];
+			childIssueIds.push(link.issue.id);
+			childIssueIdsByParentId.set(link.parent.id, childIssueIds);
+		}
+
+		const relevantIds = new Set<string>();
+		const fixingIssues = this.issuesForStory(bundle, storyId);
+
+		for (const issue of fixingIssues) {
+			const descendantQueue = [issue.id];
+
+			while (descendantQueue.length > 0) {
+				const currentIssueId = descendantQueue.shift();
+				if (!currentIssueId || relevantIds.has(currentIssueId)) {
+					continue;
+				}
+
+				relevantIds.add(currentIssueId);
+				for (const childIssueId of childIssueIdsByParentId.get(currentIssueId) ?? []) {
+					descendantQueue.push(childIssueId);
+				}
+			}
+
+			let currentIssueId: string | null = issue.id;
+
+			while (currentIssueId) {
+				if (relevantIds.has(currentIssueId)) {
+					currentIssueId = parentIssueIdByChildId.get(currentIssueId) ?? null;
+					continue;
+				}
+
+				relevantIds.add(currentIssueId);
+				currentIssueId = parentIssueIdByChildId.get(currentIssueId) ?? null;
+			}
+		}
+
+		const rootIds = [...relevantIds].filter((issueId) => {
+			const parentIssueId = parentIssueIdByChildId.get(issueId);
+			return !parentIssueId || !relevantIds.has(parentIssueId);
+		});
+
+		return this.buildIssueTree(bundle, rootIds, relevantIds);
+	}
+
+	public subIssueTreeForIssue(bundle: InitiativeBundle, issueId: string): IssueTreeNode[] {
+		const relevantIds = new Set<string>();
+		const queue = this.subIssuesForIssue(bundle, issueId).map((issue) => issue.id);
+
+		while (queue.length > 0) {
+			const currentIssueId = queue.shift();
+			if (!currentIssueId || relevantIds.has(currentIssueId)) {
+				continue;
+			}
+
+			relevantIds.add(currentIssueId);
+			for (const childIssue of this.subIssuesForIssue(bundle, currentIssueId)) {
+				queue.push(childIssue.id);
+			}
+		}
+
+		return this.buildIssueTree(
+			bundle,
+			this.subIssuesForIssue(bundle, issueId).map((issue) => issue.id),
+			relevantIds
+		);
+	}
+
 	public buildInitiativeGraph(bundle: InitiativeBundle): RelationshipGraph {
 		const initiative = bundle.initiative;
 		const nodes: GraphNode[] = [];
 		const edges: GraphEdge[] = [];
+		const issueById = new Map(bundle.issues.map((issue) => [issue.id, issue]));
+		const childIssuesByParentId = new Map<string, Entity[]>();
+		const childIssueIds = new Set(bundle.subIssueLinks.map((link) => link.issue.id));
+		const fixingStoryIdsByIssueId = new Map<string, string[]>();
 
 		nodes.push({ col: 0, fullLabel: initiative.title, id: initiative.id, key: initiative.id, kind: "initiative", label: initiative.title });
 
@@ -499,25 +851,75 @@ export class AgentIssuesStore {
 			edges.push({ from: initiative.id, to: story.id });
 		}
 
+		for (const link of bundle.subIssueLinks) {
+			const children = childIssuesByParentId.get(link.parent.id) ?? [];
+			children.push(link.issue);
+			childIssuesByParentId.set(link.parent.id, children);
+		}
+
+		for (const [parentId, children] of childIssuesByParentId) {
+			childIssuesByParentId.set(parentId, this.sortEntities(children));
+		}
+
+		for (const link of bundle.fixLinks) {
+			const storyIds = fixingStoryIdsByIssueId.get(link.issue.id) ?? [];
+			storyIds.push(link.userStory.id);
+			fixingStoryIdsByIssueId.set(link.issue.id, storyIds);
+		}
+
+		const rootIssues = this.sortEntities(bundle.issues.filter((issue) => !childIssueIds.has(issue.id)));
+		let maxIssueDepth = 0;
 		const seen = new Set<string>();
-		for (const story of bundle.userStories) {
-			for (const issue of this.issuesForStory(bundle, story.id)) {
-				seen.add(issue.id);
-				nodes.push({ col: 3, fullLabel: issue.title, id: issue.id, key: issue.id, kind: "issue", label: issue.title, status: issue.status });
-				edges.push({ from: story.id, to: issue.id });
-			}
-		}
 
-		for (const issue of bundle.issues) {
+		const visitIssue = (issue: Entity, depth: number) => {
 			if (seen.has(issue.id)) {
-				continue;
+				maxIssueDepth = Math.max(maxIssueDepth, depth);
+				return;
 			}
 
-			nodes.push({ col: 3, fullLabel: issue.title, id: issue.id, key: issue.id, kind: "issue", label: issue.title, status: issue.status });
-			edges.push({ from: initiative.id, to: issue.id });
+			seen.add(issue.id);
+			maxIssueDepth = Math.max(maxIssueDepth, depth);
+			nodes.push({
+				col: 3 + depth,
+				fullLabel: issue.title,
+				id: issue.id,
+				key: issue.id,
+				kind: "issue",
+				label: issue.title,
+				status: issue.status
+			});
+
+			const storyIds = fixingStoryIdsByIssueId.get(issue.id) ?? [];
+			if (storyIds.length > 0) {
+				for (const storyId of storyIds) {
+					edges.push({ from: storyId, to: issue.id });
+				}
+			} else if (depth === 0) {
+				edges.push({ from: initiative.id, to: issue.id });
+			}
+
+			for (const child of childIssuesByParentId.get(issue.id) ?? []) {
+				visitIssue(child, depth + 1);
+				edges.push({ from: issue.id, to: child.id });
+			}
+		};
+
+		for (const issue of rootIssues) {
+			visitIssue(issue, 0);
 		}
 
-		return { columns: ["Initiative", "PRDs & ADRs", "User stories", "Issues"], edges, nodes };
+		for (const issue of this.sortEntities(bundle.issues)) {
+			if (!seen.has(issue.id)) {
+				visitIssue(issue, 0);
+			}
+		}
+
+		const issueColumns = ["Issues"];
+		for (let depth = 1; depth <= maxIssueDepth; depth += 1) {
+			issueColumns.push(depth === 1 ? "Sub-issues" : "Nested sub-issues");
+		}
+
+		return { columns: ["Initiative", "PRDs & ADRs", "User stories", ...issueColumns], edges, nodes };
 	}
 
 	public buildProjectGraph(): RelationshipGraph {
@@ -699,6 +1101,7 @@ export class AgentIssuesStore {
 		const incomingLabels: Record<string, string> = {
 			blocks: "Blocked by",
 			constrains: "Constrained by",
+			decomposes: "Parent issue",
 			creates: "Created by",
 			fixes: "Fixed by",
 			owns: "Owned by",
@@ -708,6 +1111,7 @@ export class AgentIssuesStore {
 		const outgoingLabels: Record<string, string> = {
 			blocks: "Blocks",
 			constrains: "Constrains",
+			decomposes: "Sub-issues",
 			creates: "Creates",
 			fixes: "Fixes",
 			owns: "Owns",
@@ -723,37 +1127,60 @@ export class AgentIssuesStore {
 	}
 
 	public detailMeta(entity: Entity): Array<[string, string]> {
-		const bundle = this.selectedBundle.get();
+		return this.detailMetaFor(entity.id);
+	}
+
+	public detailMetaFor(entityId: string | null): Array<[string, string]> {
+		const entity = entityId ? this.entityById.get().get(entityId) ?? null : null;
+		const bundle = this.bundleForEntityId(entityId);
 		return [
 			["Initiative", bundle ? `${bundle.initiative.id} ${bundle.initiative.title}` : "—"],
-			["Status", entity.status],
-			["Updated", this.formatTimestamp(entity.updatedAt)]
+			["Status", entity?.status ?? "—"],
+			["Updated", entity ? this.formatTimestamp(entity.updatedAt) : "—"]
 		];
 	}
 
-	public linkedRecordSections(): Array<{ key: string; records: Entity[]; title: string }> {
-		const grouped = new Map<string, Entity[]>();
-		const add = (relatedId: string, label: string) => {
+	public linkedRecordSections(options?: { excludeRelationTypes?: string[] }): Array<{ key: string; records: Entity[]; title: string }> {
+		return this.linkedRecordSectionsFor(this.selectedId.get(), options);
+	}
+
+	public linkedRecordSectionsFor(
+		entityId: string | null,
+		options?: { excludeRelationTypes?: string[] }
+	): Array<{ key: string; records: Entity[]; title: string; crossLink: boolean }> {
+		const spineRelationTypes = new Set(["owns", "creates", "fixes", "decomposes", "tracks", "constrains"]);
+		const grouped = new Map<string, { records: Entity[]; crossLink: boolean }>();
+		const excludedRelationTypes = new Set(options?.excludeRelationTypes ?? []);
+		const add = (relatedId: string, label: string, relationType: string) => {
 			const entity = this.entityById.get().get(relatedId);
 			if (!entity) {
 				return;
 			}
 
-			const records = grouped.get(label) ?? [];
-			records.push(entity);
-			grouped.set(label, records);
+			const group = grouped.get(label) ?? { crossLink: !spineRelationTypes.has(relationType), records: [] };
+			group.records.push(entity);
+			grouped.set(label, group);
 		};
 
-		for (const relation of this.selectedOutgoing.get()) {
-			add(relation.toId, this.relationLabel(relation.type, false));
+		for (const relation of this.outgoingRelationsFor(entityId)) {
+			if (excludedRelationTypes.has(relation.type)) {
+				continue;
+			}
+
+			add(relation.toId, this.relationLabel(relation.type, false), relation.type);
 		}
-		for (const relation of this.selectedIncoming.get()) {
-			add(relation.fromId, this.relationLabel(relation.type, true));
+		for (const relation of this.incomingRelationsFor(entityId)) {
+			if (excludedRelationTypes.has(relation.type)) {
+				continue;
+			}
+
+			add(relation.fromId, this.relationLabel(relation.type, true), relation.type);
 		}
 
-		return [...grouped.entries()].map(([title, records]) => ({
+		return [...grouped.entries()].map(([title, group]) => ({
+			crossLink: group.crossLink,
 			key: title,
-			records: this.sortEntities(records),
+			records: this.sortEntities(group.records),
 			title
 		}));
 	}
@@ -858,6 +1285,51 @@ export class AgentIssuesStore {
 
 			return left.id.localeCompare(right.id);
 		});
+	}
+
+	protected buildIssueTree(bundle: InitiativeBundle, rootIds: string[], relevantIds: Set<string>): IssueTreeNode[] {
+		const issueById = new Map(bundle.issues.map((issue) => [issue.id, issue]));
+		const childIssueIdsByParentId = new Map<string, string[]>();
+
+		for (const link of bundle.subIssueLinks) {
+			if (!relevantIds.has(link.parent.id) || !relevantIds.has(link.issue.id)) {
+				continue;
+			}
+
+			const childIssueIds = childIssueIdsByParentId.get(link.parent.id) ?? [];
+			childIssueIds.push(link.issue.id);
+			childIssueIdsByParentId.set(link.parent.id, childIssueIds);
+		}
+
+		const buildNode = (issueId: string): IssueTreeNode | null => {
+			const issue = issueById.get(issueId);
+			if (!issue) {
+				return null;
+			}
+
+			const childIssues = this.sortEntities(
+				(childIssueIdsByParentId.get(issueId) ?? [])
+					.map((childIssueId) => issueById.get(childIssueId))
+					.filter((childIssue): childIssue is Entity => Boolean(childIssue))
+			);
+
+			return {
+				issue,
+				children: childIssues
+					.map((childIssue) => buildNode(childIssue.id))
+					.filter((node): node is IssueTreeNode => node !== null)
+			};
+		};
+
+		const rootIssues = this.sortEntities(
+			rootIds
+				.map((issueId) => issueById.get(issueId))
+				.filter((issue): issue is Entity => Boolean(issue))
+		);
+
+		return rootIssues
+			.map((issue) => buildNode(issue.id))
+			.filter((node): node is IssueTreeNode => node !== null);
 	}
 
 	protected formatTenantDisplayName(tenantId: string) {

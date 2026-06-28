@@ -98,7 +98,11 @@ const GLOBAL_OPTIONS: GlobalOptionSpec[] = [
 	},
 	{
 		name: "--json",
-		description: "Print machine-readable JSON."
+		description: "Print machine-readable JSON in compact form."
+	},
+	{
+		name: "--pretty",
+		description: "Pretty-print JSON when used with --json."
 	},
 	{
 		name: "--help, -h",
@@ -383,10 +387,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 			'agent-issues create initiative --title "Workflow tooling"',
 			'agent-issues create prd --title "Handoff support" --parent INIT1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1',
+			'agent-issues create issue --title "Split parser edge cases" --parent ISS1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1 --body-file /tmp/iss1.md'
 		],
 		notes: [
 			"Valid structural parent-child pairs are exposed by `agent-issues schema --json`.",
+			"Issues can be created under initiatives as tracked work, or under other issues as structural sub-issues.",
 			"If no status is supplied, the CLI uses the first status in the workflow for that kind.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
 		],
@@ -432,7 +438,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 				"User Stories: <id:status, ...>",
 				"ADRs: <id:status, ...>",
 				"Issues: <id:status, ...>",
-				"Fixes / Blockers / Constrains summaries"
+				"Fixes / Sub-issues / Blockers / Constrains summaries"
 			],
 			json: [
 				"initiative",
@@ -441,9 +447,60 @@ const COMMAND_SPECS: CommandSpec[] = [
 				"adrs",
 				"issues",
 				"fixLinks",
+				"subIssueLinks",
 				"blockerLinks",
 				"constrainsLinks"
 			]
+		}
+	},
+	{
+		name: "export",
+		summary: "Export one initiative or the whole project as markdown with graph metadata in frontmatter.",
+		usage: [
+			"agent-issues export <initiativeId> [--output <path>] [--force]",
+			"agent-issues export project [--output <path>] [--force]",
+			"agent-issues export <initiativeId|project> --single-file [--output <file>]"
+		],
+		positionals: [
+			{
+				name: "initiativeId|project",
+				description: "One initiative ID, or `project` for a tenant-wide export.",
+				required: true
+			}
+		],
+		options: [
+			{
+				name: "--output <path>",
+				description: "Directory path for grouped export output, or a file path when used with `--single-file`."
+			},
+			{
+				name: "--single-file",
+				description: "Emit one markdown document instead of a grouped folder export. Without `--output`, prints to stdout."
+			},
+			{
+				name: "--force",
+				description: "Replace an existing export directory when writing grouped output."
+			}
+		],
+		examples: [
+			"agent-issues export INIT1",
+			"agent-issues export project --output ./tmp/export --force",
+			"agent-issues export INIT1 --single-file",
+			"agent-issues export INIT1 --single-file --output ./tmp/init1.md",
+			"agent-issues export INIT1 --json"
+		],
+		notes: [
+			"Grouped export is the default: it creates a folder tree that mirrors initiative, entity-kind, handoff, and relation groupings in the database.",
+			"Single-file export remains available with `--single-file` for piping or ad hoc capture.",
+			"The YAML frontmatter summarizes counts, context, and relation edges so connections remain machine-readable.",
+			"Project export includes project-scoped ADRs, orphans, all saved handoffs, top-level relation groups, and one nested initiative export per initiative."
+		],
+		output: {
+			human: [
+				"Default: export summary with output path and file count for a grouped folder export",
+				"With `--single-file`: one markdown document with YAML frontmatter, entity sections, relation summaries, context sections, and handoffs"
+			],
+			json: ["mode", "scope", "initiativeId", "generatedAt", "markdown", "outputPath", "files"]
 		}
 	},
 	{
@@ -509,8 +566,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			{ name: "id", description: "Entity ID to move.", required: true },
 			{ name: "newParentId", description: "New structural parent ID.", required: true }
 		],
-		examples: ["agent-issues move US1 PRD2"],
-		notes: ["Move rejects incompatible parent kinds, cycles, and initiatives."],
+		examples: ["agent-issues move US1 PRD2", "agent-issues move ISS7 ISS1"],
+		notes: [
+			"Move rejects incompatible parent kinds, cycles, and initiatives.",
+			"Use move to reparent a sub-issue under a different parent issue without rebuilding its other relations."
+		],
 		output: {
 			human: ["Moved <id> from <previousParentId|none> to <newParentId> as <relationType>"],
 			json: ["entity", "previousParentId", "newParentId", "relationType"]
@@ -564,7 +624,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: ["agent-issues status ISS1 in-progress", "agent-issues status US1 done"],
 		notes: [
 			"Each entity kind only accepts its own status flow.",
-			"Issues cannot move to in-progress or done while blocked by a non-done issue."
+			"Issues cannot move to in-progress or done while blocked by a non-done issue.",
+			"Parent issues also cannot move to in-progress or done while any sub-issue remains open."
 		],
 		output: {
 			human: ["Updated <id> from <previousStatus> to <status>"],
@@ -617,10 +678,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: [
 			"agent-issues link ISS1 fixes US1",
 			"agent-issues link ADR1 constrains ISS1",
-			"agent-issues link ISS2 blocks ISS1"
+			"agent-issues link ISS2 blocks ISS1",
+			"agent-issues link ISS1 decomposes ISS7"
 		],
 		notes: [
 			"Allowed relation pairs are exposed by `agent-issues schema --json`.",
+			"For structural parent-child work, prefer `create --parent` or `move` over `link` so the intent stays explicit.",
 			"The CLI rejects self-links and cycle-forming `blocks` or `supersedes` links."
 		],
 		output: {
@@ -741,6 +804,30 @@ const COMMAND_SPECS: CommandSpec[] = [
 				"Database path and port summary"
 			],
 			json: ["dbPath", "host", "port", "url", "openInBrowser"]
+		}
+	},
+	{
+		name: "stop-site",
+		summary: "Ask the local live site server on the selected port to stop.",
+		usage: ["agent-issues stop-site [--port <port>]", "agent-issues stop-site --json"],
+		options: [
+			{
+				name: "--port <port>",
+				description: "Port for the local HTTP server. Defaults to 4173."
+			}
+		],
+		examples: [
+			"agent-issues stop-site",
+			"agent-issues stop-site --port 4300",
+			"agent-issues stop-site --json"
+		],
+		notes: [
+			"This command only stops the local live site server listening on the selected port.",
+			"If some other server is running on that port, the command reports that the listener is not a stoppable agent-issues live site."
+		],
+		output: {
+			human: ["Stopped live site at <url> or reported that no live site was running there"],
+			json: ["host", "port", "url", "reachable", "stopped"]
 		}
 	},
 	{
@@ -991,6 +1078,7 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
 			"Use `agent-issues serve-site --json` to start a local live browser view with snapshot and event endpoints.",
 			"Use `agent-issues open-site --json` to launch the live browser view in your default browser.",
+			"Use `agent-issues stop-site --json` to stop the local live browser view on the default or selected port.",
 			"Use `agent-issues install-agent --json` to install the packaged Agent Issues custom agent into the default VS Code prompts directory.",
 			"Use `agent-issues list-agent --json` to inspect the packaged custom agent state in a prompts directory.",
 			"Use `agent-issues uninstall-agent --json` to remove the packaged custom agent from a prompts directory.",

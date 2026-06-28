@@ -339,6 +339,83 @@ describe("derived ADR status", () => {
 	});
 });
 
+describe("derived issue status from sub-issues", () => {
+	function seedIssueWithSubIssues(db: DatabaseHandle, subIssueStatuses: string[]) {
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", status: "active" });
+		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship the parent workflow" });
+		const subIssues = subIssueStatuses.map((status, index) => {
+			const subIssue = createEntity(db, {
+				kind: "issue",
+				parentId: parentIssue.id,
+				title: `Sub-issue ${index + 1}`
+			});
+
+			if (status !== "todo") {
+				updateEntityStatus(db, { entityId: subIssue.id, status });
+			}
+
+			return subIssue;
+		});
+
+		return { initiative, parentIssue, subIssues };
+	}
+
+	it("derives blocked while any sub-issue remains open", () => {
+		const db = openTestDatabase();
+		const { parentIssue } = seedIssueWithSubIssues(db, ["done", "todo"]);
+
+		expect(statusOf(db, parentIssue.id)).toBe("blocked");
+	});
+
+	it("returns to todo once every sub-issue is done", () => {
+		const db = openTestDatabase();
+		const { parentIssue } = seedIssueWithSubIssues(db, ["done", "done"]);
+
+		expect(statusOf(db, parentIssue.id)).toBe("todo");
+	});
+
+	it("counts nested issues when deriving initiative completion", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", status: "active" });
+		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
+		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship parent issue" });
+		const subIssue = createEntity(db, { kind: "issue", parentId: parentIssue.id, title: "Ship sub-issue" });
+
+		updateEntityStatus(db, { entityId: prd.id, status: "approved" });
+		updateEntityStatus(db, { entityId: subIssue.id, status: "done" });
+
+		expect(statusOf(db, parentIssue.id)).toBe("todo");
+		expect(statusOf(db, initiative.id)).toBe("active");
+
+		updateEntityStatus(db, { entityId: parentIssue.id, status: "done" });
+
+		expect(statusOf(db, initiative.id)).toBe("done");
+	});
+
+	it("rejects moving a parent issue forward while sub-issues remain open", () => {
+		const db = openTestDatabase();
+		const { parentIssue } = seedIssueWithSubIssues(db, ["todo"]);
+
+		expect(() => updateEntityStatus(db, { entityId: parentIssue.id, status: "in-progress" })).toThrow(/sub-issues remain open/i);
+		expect(() => updateEntityStatus(db, { entityId: parentIssue.id, status: "done" })).toThrow(/sub-issues remain open/i);
+	});
+
+	it("includes nested sub-issues in the initiative bundle", () => {
+		const db = openTestDatabase();
+		const { initiative, parentIssue, subIssues } = seedIssueWithSubIssues(db, ["todo", "todo"]);
+
+		const bundle = getInitiativeBundle(db, initiative.id);
+
+		expect(bundle.issues.map((issue) => issue.id)).toEqual([parentIssue.id, ...subIssues.map((issue) => issue.id)].sort());
+		expect(bundle.subIssueLinks).toEqual(
+			subIssues.map((issue) => ({
+				parent: expect.objectContaining({ id: parentIssue.id }),
+				issue: expect.objectContaining({ id: issue.id })
+			}))
+		);
+	});
+});
+
 describe("handoffs", () => {
 	it("persists a handoff anchored to the focus entity and its owning initiative", () => {
 		const db = openTestDatabase();
