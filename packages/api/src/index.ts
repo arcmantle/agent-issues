@@ -1,19 +1,26 @@
 import { createServer, type Server } from "node:http";
 
+import type { Pool } from "pg";
+
+import type { AuthProvider } from "./auth/auth-provider.js";
+import { createJsonRpcApp } from "./rpc/create-json-rpc-app.js";
+
 export type { AuthIdentity, AuthProvider } from "./auth/auth-provider.js";
 export { EntraIdAuthProvider, type EntraIdAuthProviderOptions } from "./auth/entra-id-auth-provider.js";
 export { LocalAuthProvider, type LocalAuthProviderOptions } from "./auth/local-auth-provider.js";
+export { createJsonRpcApp, type CreateJsonRpcAppOptions } from "./rpc/create-json-rpc-app.js";
 
 /**
- * Configuration for the agent-issues cloud API host.
- *
- * This package is a deployable scaffold only. A later slice fills in the
- * JSON-RPC gate that fronts the Postgres backend (ADR13); for now the host
- * exists so the monorepo has a home for that service.
+ * Configuration for the agent-issues cloud API host: the single Postgres
+ * gate (ADR13). `pool` and `authProvider` are required with no defaults, so
+ * the gate can never silently start without both real Postgres access and a
+ * real auth seam (ADR12).
  */
 export interface ApiServerOptions {
 	host?: string;
 	port?: number;
+	pool: Pool;
+	authProvider: AuthProvider;
 }
 
 export interface ApiServerHandle {
@@ -21,18 +28,15 @@ export interface ApiServerHandle {
 	url: string;
 }
 
-const NOT_IMPLEMENTED_MESSAGE = "The agent-issues cloud API is not implemented yet.";
-
-export function createApiServer(options: ApiServerOptions = {}): ApiServerHandle {
+export function createApiServer(options: ApiServerOptions): ApiServerHandle {
 	const host = options.host ?? "127.0.0.1";
 	const port = options.port ?? 4400;
 
-	const server = createServer((_request, response) => {
-		response.writeHead(501, { "content-type": "application/json; charset=utf-8" });
-		response.end(JSON.stringify({ error: NOT_IMPLEMENTED_MESSAGE }));
-	});
+	const app = createJsonRpcApp({ pool: options.pool, authProvider: options.authProvider });
+	const server = createServer(app);
 
 	server.listen(port, host);
 
 	return { server, url: `http://${host}:${port}` };
 }
+
