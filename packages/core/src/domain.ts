@@ -1,8 +1,10 @@
-export const ENTITY_KINDS = ["initiative", "prd", "userStory", "adr", "issue"] as const;
+export const ENTITY_KINDS = ["project", "epic", "initiative", "prd", "userStory", "adr", "issue"] as const;
 
 export const BODY_SOURCES = ["authored", "generated"] as const;
 
 export const STATUS_FLOW = {
+	project: ["draft", "active", "paused", "done"],
+	epic: ["draft", "active", "paused", "done"],
 	initiative: ["draft", "active", "paused", "done"],
 	prd: ["draft", "in-progress", "approved"],
 	userStory: ["draft", "ready", "in-progress", "done"],
@@ -11,6 +13,8 @@ export const STATUS_FLOW = {
 } as const;
 
 export const ID_PREFIX = {
+	project: "PROJ",
+	epic: "EPIC",
 	initiative: "INIT",
 	prd: "PRD",
 	userStory: "US",
@@ -19,6 +23,8 @@ export const ID_PREFIX = {
 } as const;
 
 export const ALLOWED_RELATIONS = [
+	{ fromKind: "project", toKind: "epic", type: "contains" },
+	{ fromKind: "epic", toKind: "initiative", type: "contains" },
 	{ fromKind: "initiative", toKind: "prd", type: "owns" },
 	{ fromKind: "initiative", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "issue", type: "tracks" },
@@ -30,7 +36,18 @@ export const ALLOWED_RELATIONS = [
 	{ fromKind: "issue", toKind: "issue", type: "blocks" }
 ] as const;
 
-export const STRUCTURAL_RELATION_TYPES = ["owns", "records", "tracks", "creates", "decomposes"] as const;
+export const STRUCTURAL_RELATION_TYPES = ["contains", "owns", "records", "tracks", "creates", "decomposes"] as const;
+
+/**
+ * Per-tenant sentinel project/epic synthesized so every initiative always
+ * resolves a complete tenant>project>epic>initiative chain (the "full-chain
+ * invariant", ADR7). IDs bypass the per-kind counter (which starts at 1), so
+ * they can never collide with a counter-allocated id.
+ */
+export const DEFAULT_PROJECT_ID = "PROJ0";
+export const DEFAULT_EPIC_ID = "EPIC0";
+export const DEFAULT_PROJECT_TITLE = "Default Project";
+export const DEFAULT_EPIC_TITLE = "Default Epic";
 
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 export type BodySource = (typeof BODY_SOURCES)[number];
@@ -90,6 +107,10 @@ export function isStructuralRelationType(relationType: string): relationType is 
 
 export function getArchiveStatus(kind: EntityKind): EntityStatus {
 	switch (kind) {
+		case "project":
+			return "done";
+		case "epic":
+			return "done";
 		case "initiative":
 			return "done";
 		case "prd":

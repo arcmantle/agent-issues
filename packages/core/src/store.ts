@@ -4,6 +4,7 @@ import {
 	getArchiveStatus,
 	getAllowedRelationType,
 	deriveEntityStatuses,
+	DEFAULT_EPIC_ID,
 	getInitialStatus,
 	isBodySource,
 	isAllowedRelation,
@@ -150,7 +151,8 @@ export function createEntity(
 	}
 
 	const now = new Date().toISOString();
-	const parent = input.parentId ? getEntityOrThrow(db, input.parentId) : null;
+	const parentId = input.parentId ?? (kind === "initiative" ? DEFAULT_EPIC_ID : undefined);
+	const parent = parentId ? getEntityOrThrow(db, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
 
 	if (parent && !relationType) {
@@ -366,10 +368,6 @@ export function moveEntity(
 	const entity = getEntityOrThrow(db, input.entityId);
 	const newParent = getEntityOrThrow(db, input.newParentId);
 
-	if (entity.kind === "initiative") {
-		throw new Error("Initiatives do not have a structural parent and cannot be moved.");
-	}
-
 	const relationType = getAllowedRelationType(newParent.kind, entity.kind);
 	if (!relationType || !isStructuralRelationType(relationType)) {
 		throw new Error(`Cannot move ${entity.kind} under ${newParent.kind}.`);
@@ -446,6 +444,12 @@ export function unlinkEntities(
 	if (wouldOrphanSubtree(db, relation)) {
 		throw new Error(
 			`Unlinking ${relation.fromId} -> ${relation.toId} as ${relation.type} would orphan a subtree. Relink or delete descendants first.`
+		);
+	}
+
+	if (wouldBreakFullChainInvariant(db, relation)) {
+		throw new Error(
+			`Cannot unlink ${relation.fromId} -> ${relation.toId} as ${relation.type}: it is the only remaining structural parent, and every ${getEntityOrThrow(db, relation.toId).kind} must have one.`
 		);
 	}
 
@@ -751,6 +755,10 @@ export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
 			}
 
 			if (entity.kind === "adr") {
+				return false;
+			}
+
+			if (entity.kind === "project" || entity.kind === "epic") {
 				return false;
 			}
 
@@ -1131,6 +1139,35 @@ function wouldOrphanSubtree(db: DatabaseHandle, relation: RelationRecord): boole
 	}
 
 	return remainingRelations.some((candidate) => candidate.fromId === relation.toId);
+}
+
+/**
+ * Blocks unlinking a "contains" relation that is the sole remaining
+ * structural parent of an epic or initiative, which would otherwise silently
+ * break the tenant>project>epic>initiative full-chain invariant (ADR7).
+ * `wouldOrphanSubtree` does not catch this because initiatives (and, by the
+ * same logic, epics reached only through their own descendants) are always
+ * their own downward-reachability root.
+ */
+function wouldBreakFullChainInvariant(db: DatabaseHandle, relation: RelationRecord): boolean {
+	if (relation.type !== "contains") {
+		return false;
+	}
+
+	const target = getEntityOrThrow(db, relation.toId);
+	if (target.kind !== "epic" && target.kind !== "initiative") {
+		return false;
+	}
+
+	const remainingContainsParents = db
+		.prepare(
+			`SELECT COUNT(*) AS count FROM relations
+			 WHERE tenant_id = @tenantId AND to_id = @toId AND type = 'contains'
+			   AND NOT (from_id = @fromId AND to_id = @toId AND type = 'contains')`
+		)
+		.get(tenantParams(db, { toId: relation.toId, fromId: relation.fromId })) as { count: number };
+
+	return remainingContainsParents.count === 0;
 }
 
 function getActiveBlockingIssues(db: DatabaseHandle, entityId: string): EntityRecord[] {

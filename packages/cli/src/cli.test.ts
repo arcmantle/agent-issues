@@ -8,9 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { isEntrypointInvocation, runCli } from "./cli.js";
 import { main } from "./cli/index.js";
-import { ensureDatabase } from "@agent-issues/core";
+import { createEntity, ensureDatabase, getEntityDetails, listEntities } from "@agent-issues/core";
 import { startLiveSite } from "./site/index.js";
-import { createEntity, listEntities } from "@agent-issues/core";
 
 let tempDir: string | null = null;
 const liveSiteClosers = new Set<() => void>();
@@ -180,6 +179,67 @@ describe("cli", () => {
 			expect(initiatives[0]?.title).toBe("Ship clipanion");
 		} finally {
 			db.close();
+		}
+	});
+
+	it("creates a project -> epic -> initiative chain through the create command", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+
+		const projectOut = createCapture();
+		const projectErr = createCapture();
+		const projectExitCode = await runCli(
+			["create", "project", "--title", "Platform", "--db", dbPath, "--tenant", "test-tenant"],
+			{ cwd: root, stderr: projectErr.stream, stdout: projectOut.stream }
+		);
+		expect(projectExitCode).toBe(0);
+		expect(projectErr.read()).toBe("");
+		expect(projectOut.read()).toContain("project");
+
+		const { db: afterProject } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const project = listEntities(afterProject, "project").find((entity) => entity.title === "Platform");
+		afterProject.close();
+		expect(project).toBeDefined();
+
+		const epicOut = createCapture();
+		const epicErr = createCapture();
+		const epicExitCode = await runCli(
+			["create", "epic", "--title", "Checkout revamp", "--parent", project!.id, "--db", dbPath, "--tenant", "test-tenant"],
+			{ cwd: root, stderr: epicErr.stream, stdout: epicOut.stream }
+		);
+		expect(epicExitCode).toBe(0);
+		expect(epicErr.read()).toBe("");
+		expect(epicOut.read()).toContain("epic");
+
+		const { db: afterEpic } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const epic = listEntities(afterEpic, "epic").find((entity) => entity.title === "Checkout revamp");
+		afterEpic.close();
+		expect(epic).toBeDefined();
+
+		const initiativeOut = createCapture();
+		const initiativeErr = createCapture();
+		const initiativeExitCode = await runCli(
+			["create", "initiative", "--title", "Checkout redesign", "--parent", epic!.id, "--db", dbPath, "--tenant", "test-tenant"],
+			{ cwd: root, stderr: initiativeErr.stream, stdout: initiativeOut.stream }
+		);
+		expect(initiativeExitCode).toBe(0);
+		expect(initiativeErr.read()).toBe("");
+		expect(initiativeOut.read()).toContain("Checkout redesign");
+
+		const { db: afterInitiative } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		try {
+			const initiative = listEntities(afterInitiative, "initiative").find((entity) => entity.title === "Checkout redesign");
+			expect(initiative).toBeDefined();
+
+			const epicDetails = getEntityDetails(afterInitiative, epic!.id);
+			const projectParent = epicDetails.incoming.find((entry) => entry.relationType === "contains");
+			expect(projectParent?.entity.id).toBe(project!.id);
+
+			const initiativeDetails = getEntityDetails(afterInitiative, initiative!.id);
+			const epicParent = initiativeDetails.incoming.find((entry) => entry.relationType === "contains");
+			expect(epicParent?.entity.id).toBe(epic!.id);
+		} finally {
+			afterInitiative.close();
 		}
 	});
 

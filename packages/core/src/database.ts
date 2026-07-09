@@ -7,7 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "nod
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { ENTITY_KINDS } from "./domain.js";
+import { DEFAULT_EPIC_ID, DEFAULT_EPIC_TITLE, DEFAULT_PROJECT_ID, DEFAULT_PROJECT_TITLE, ENTITY_KINDS } from "./domain.js";
 
 const MIGRATIONS_FOLDER = path.join(import.meta.dirname, "..", "drizzle");
 
@@ -83,6 +83,10 @@ export function ensureDatabase(inputPath?: string, options?: DatabaseLocationOpt
 		importLegacyTenantDataIfNeeded(db, options);
 	}
 	if (!options?.skipTenantBootstrap) {
+		// Runs before ensureTenantCounters so its "does this tenant already have
+		// data" backup check (tenantHasAnyRows) sees the tenant's true pre-bootstrap
+		// state, not counter rows that ensureTenantCounters is about to seed.
+		ensureFullChainInvariant(db, dbPath);
 		ensureTenantCounters(db);
 	}
 
@@ -475,6 +479,76 @@ function ensureTenantCounters(db: DatabaseHandle): void {
 	}
 
 	insertCounter.run({ tenantId: db.tenantId, kind: "handoff" });
+}
+
+/**
+ * Synthesizes the tenant's sentinel default project/epic and attaches any
+ * parentless initiative to them, so every initiative always resolves a
+ * complete tenant>project>epic>initiative chain (the "full-chain invariant",
+ * ADR7). Idempotent on every open, mirroring `ensureTenantCounters`. Backs up
+ * the database file the first time this runs against a tenant that already
+ * has data (ADR20) — a fresh, empty tenant has nothing worth protecting.
+ */
+function ensureFullChainInvariant(db: DatabaseHandle, dbPath: string): void {
+	if (!entityExists(db, DEFAULT_PROJECT_ID) && tenantHasAnyRows(db, db.tenantId)) {
+		backupDatabaseFile(db, dbPath);
+	}
+
+	const now = new Date().toISOString();
+	insertSentinelEntity(db, DEFAULT_PROJECT_ID, "project", DEFAULT_PROJECT_TITLE, now);
+	insertSentinelEntity(db, DEFAULT_EPIC_ID, "epic", DEFAULT_EPIC_TITLE, now);
+	insertSentinelRelation(db, DEFAULT_PROJECT_ID, DEFAULT_EPIC_ID, now);
+	attachOrphanInitiativesToDefaultEpic(db, now);
+}
+
+function entityExists(db: DatabaseHandle, entityId: string): boolean {
+	return db.prepare(`SELECT 1 FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) !== undefined;
+}
+
+function insertSentinelEntity(db: DatabaseHandle, id: string, kind: string, title: string, now: string): void {
+	db.prepare(
+		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+		 VALUES (@tenantId, @id, @kind, @title, 'active', '', 'generated', @now, @now)
+		 ON CONFLICT (tenant_id, id) DO NOTHING`
+	).run({ tenantId: db.tenantId, id, kind, title, now });
+}
+
+function insertSentinelRelation(db: DatabaseHandle, fromId: string, toId: string, now: string): void {
+	db.prepare(
+		`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
+		 VALUES (@tenantId, @fromId, @toId, 'contains', @now)
+		 ON CONFLICT (tenant_id, from_id, to_id, type) DO NOTHING`
+	).run({ tenantId: db.tenantId, fromId, toId, now });
+}
+
+function attachOrphanInitiativesToDefaultEpic(db: DatabaseHandle, now: string): void {
+	const orphanInitiatives = db
+		.prepare(
+			`SELECT id FROM entities
+			 WHERE tenant_id = @tenantId AND kind = 'initiative'
+			   AND id NOT IN (
+			     SELECT to_id FROM relations WHERE tenant_id = @tenantId AND type = 'contains'
+			   )`
+		)
+		.all({ tenantId: db.tenantId }) as Array<{ id: string }>;
+
+	for (const { id } of orphanInitiatives) {
+		insertSentinelRelation(db, DEFAULT_EPIC_ID, id, now);
+	}
+}
+
+function backupDatabaseFile(db: DatabaseHandle, dbPath: string): void {
+	db.pragma("wal_checkpoint(TRUNCATE)");
+
+	// Co-located with the actual database file rather than a fixed home-directory
+	// path, so this respects an explicit --path/dbPath choice (and keeps tests
+	// that use a temp dbPath from writing into the real user home directory).
+	const backupsDirectory = path.join(path.dirname(dbPath), "backups");
+	mkdirSync(backupsDirectory, { recursive: true });
+
+	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+	const backupPath = path.join(backupsDirectory, `${path.basename(dbPath, ".db")}-${db.tenantId}-${timestamp}.db`);
+	copyFileSync(dbPath, backupPath);
 }
 
 function importLegacyTenantDataIfNeeded(db: DatabaseHandle, options?: DatabaseLocationOptions): void {

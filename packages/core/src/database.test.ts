@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,15 @@ const tempDirs: string[] = [];
 
 function openTestDatabase(dbPath: string, tenant: string): DatabaseHandle {
 	return ensureDatabase(dbPath, { tenant }).db;
+}
+
+function backupsDirectoryFor(dbPath: string): string {
+	return path.join(path.dirname(dbPath), "backups");
+}
+
+function listBackupFiles(dbPath: string): string[] {
+	const backupsDirectory = backupsDirectoryFor(dbPath);
+	return existsSync(backupsDirectory) ? readdirSync(backupsDirectory) : [];
 }
 
 afterEach(() => {
@@ -67,9 +76,9 @@ describe("tenant resolution", () => {
 					counts: {
 						contexts: 1,
 						contextTerms: 1,
-						entities: 2,
+						entities: 4,
 						handoffs: 1,
-						relations: 1
+						relations: 3
 					},
 					displayName: "Alpha Team",
 					id: "alpha-team"
@@ -78,9 +87,9 @@ describe("tenant resolution", () => {
 					counts: {
 						contexts: 0,
 						contextTerms: 0,
-						entities: 1,
+						entities: 3,
 						handoffs: 0,
-						relations: 0
+						relations: 2
 					},
 					displayName: "Beta Team",
 					id: "beta-team"
@@ -92,11 +101,11 @@ describe("tenant resolution", () => {
 				counts: {
 					contexts: 1,
 					contextTerms: 1,
-					entities: 2,
+					entities: 4,
 					handoffs: 1,
-					relations: 1
+					relations: 3
 				},
-				counters: 6,
+				counters: 8,
 				displayName: "Alpha Team",
 				removed: true,
 				tenantId: "alpha-team"
@@ -107,9 +116,9 @@ describe("tenant resolution", () => {
 					counts: {
 						contexts: 0,
 						contextTerms: 0,
-						entities: 1,
+						entities: 3,
 						handoffs: 0,
-						relations: 0
+						relations: 2
 					},
 					displayName: "Beta Team",
 					id: "beta-team"
@@ -146,11 +155,11 @@ describe("tenant resolution", () => {
 				counts: {
 					contexts: 1,
 					contextTerms: 1,
-					entities: 2,
+					entities: 4,
 					handoffs: 1,
-					relations: 1
+					relations: 3
 				},
-				counters: 6,
+				counters: 8,
 				newDisplayName: "Renamed Team",
 				newTenantId: "renamed-team",
 				previousDisplayName: "Source Team",
@@ -176,5 +185,44 @@ describe("tenant resolution", () => {
 			sourceDb.close();
 			otherDb.close();
 		}
+	});
+});
+
+describe("full-chain invariant backup", () => {
+	it("backs up a pre-existing populated tenant exactly once, not again on a later open", () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backup-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+
+		// Simulate a tenant that predates the full-chain invariant (ISS34): schema
+		// exists and has real data, but no PROJ0/EPIC0 yet.
+		const bootstrapping = ensureDatabase(dbPath, { tenant: "legacy-tenant", skipTenantBootstrap: true }).db;
+		const now = new Date().toISOString();
+		bootstrapping.prepare(
+			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+			 VALUES ('legacy-tenant', 'INIT1', 'initiative', 'Pre-existing initiative', 'active', '', 'authored', ?, ?)`
+		).run(now, now);
+		bootstrapping.close();
+
+		expect(listBackupFiles(dbPath)).toEqual([]);
+
+		const firstOpen = ensureDatabase(dbPath, { tenant: "legacy-tenant" }).db;
+		firstOpen.close();
+		expect(listBackupFiles(dbPath)).toHaveLength(1);
+
+		const secondOpen = ensureDatabase(dbPath, { tenant: "legacy-tenant" }).db;
+		secondOpen.close();
+		expect(listBackupFiles(dbPath)).toHaveLength(1);
+	});
+
+	it("never backs up a brand-new tenant that has no pre-existing data", () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backup-fresh-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+
+		const db = openTestDatabase(dbPath, "fresh-tenant");
+		db.close();
+
+		expect(listBackupFiles(dbPath)).toEqual([]);
 	});
 });

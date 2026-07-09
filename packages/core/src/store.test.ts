@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ensureDatabase, type DatabaseHandle } from "./database.js";
-import { createEntity, createHandoff, deleteHandoff, getDatabaseSnapshot, getEntityDetails, getHandoffDetails, getInitiativeBundle, linkEntities, listEntities, listHandoffs, listOrphans, setEntityBody, updateEntityStatus, updateHandoff } from "./store.js";
+import { createEntity, createHandoff, deleteHandoff, getDatabaseSnapshot, getEntityDetails, getHandoffDetails, getInitiativeBundle, linkEntities, listEntities, listHandoffs, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus, updateHandoff } from "./store.js";
 
 function statusOf(db: DatabaseHandle, entityId: string): string {
 	return getEntityDetails(db, entityId).entity.status;
@@ -540,6 +540,87 @@ describe("handoffs", () => {
 		const details = getHandoffDetails(db, issue.id);
 
 		expect(details.handoffs.map((entry) => entry.id)).toContain(handoff.id);
+	});
+});
+
+describe("project and epic tiers", () => {
+	it("attaches a parentless initiative to the tenant's default project and epic", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Payments platform" });
+
+		const initiativeDetails = getEntityDetails(db, initiative.id);
+		const epicParent = initiativeDetails.incoming.find((entry) => entry.relationType === "contains");
+		expect(epicParent?.entity.id).toBe("EPIC0");
+		expect(epicParent?.entity.kind).toBe("epic");
+
+		const epicDetails = getEntityDetails(db, "EPIC0");
+		const projectParent = epicDetails.incoming.find((entry) => entry.relationType === "contains");
+		expect(projectParent?.entity.id).toBe("PROJ0");
+		expect(projectParent?.entity.kind).toBe("project");
+	});
+
+	it("creates an explicit project -> epic -> initiative chain through the generic create path", () => {
+		const db = openTestDatabase();
+		const project = createEntity(db, { kind: "project", title: "Platform" });
+		const epic = createEntity(db, { kind: "epic", title: "Checkout revamp", parentId: project.id });
+		const initiative = createEntity(db, { kind: "initiative", title: "Checkout redesign", parentId: epic.id });
+
+		const epicDetails = getEntityDetails(db, epic.id);
+		const projectParent = epicDetails.incoming.find((entry) => entry.relationType === "contains");
+		expect(projectParent?.entity.id).toBe(project.id);
+		expect(projectParent?.entity.kind).toBe("project");
+
+		const initiativeDetails = getEntityDetails(db, initiative.id);
+		const epicParent = initiativeDetails.incoming.find((entry) => entry.relationType === "contains");
+		expect(epicParent?.entity.id).toBe(epic.id);
+		expect(epicParent?.entity.kind).toBe("epic");
+	});
+
+	it("moves an initiative from one epic to another", () => {
+		const db = openTestDatabase();
+		const sourceEpic = createEntity(db, { kind: "epic", title: "Source epic", parentId: "PROJ0" });
+		const targetEpic = createEntity(db, { kind: "epic", title: "Target epic", parentId: "PROJ0" });
+		const initiative = createEntity(db, { kind: "initiative", title: "Nomadic initiative", parentId: sourceEpic.id });
+
+		const result = moveEntity(db, { entityId: initiative.id, newParentId: targetEpic.id });
+		expect(result.previousParentId).toBe(sourceEpic.id);
+		expect(result.newParentId).toBe(targetEpic.id);
+		expect(result.relationType).toBe("contains");
+
+		const details = getEntityDetails(db, initiative.id);
+		const epicParent = details.incoming.find((entry) => entry.relationType === "contains");
+		expect(epicParent?.entity.id).toBe(targetEpic.id);
+	});
+
+	it("blocks unlinking an initiative's sole remaining epic parent", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Anchored initiative" });
+
+		expect(() => unlinkEntities(db, { fromId: "EPIC0", toId: initiative.id, relationType: "contains" })).toThrow(
+			/only remaining structural parent/
+		);
+
+		const details = getEntityDetails(db, initiative.id);
+		expect(details.incoming.some((entry) => entry.relationType === "contains" && entry.entity.id === "EPIC0")).toBe(true);
+	});
+
+	it("blocks unlinking an epic's sole remaining project parent", () => {
+		const db = openTestDatabase();
+
+		expect(() => unlinkEntities(db, { fromId: "PROJ0", toId: "EPIC0", relationType: "contains" })).toThrow(
+			/only remaining structural parent/
+		);
+
+		const details = getEntityDetails(db, "EPIC0");
+		expect(details.incoming.some((entry) => entry.relationType === "contains" && entry.entity.id === "PROJ0")).toBe(true);
+	});
+
+	it("never lists the default project or epic as orphans", () => {
+		const db = openTestDatabase();
+
+		const orphanIds = listOrphans(db).map((entity) => entity.id);
+		expect(orphanIds).not.toContain("PROJ0");
+		expect(orphanIds).not.toContain("EPIC0");
 	});
 });
 

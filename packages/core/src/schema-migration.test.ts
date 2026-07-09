@@ -49,9 +49,38 @@ describe("golden-fixture migration wall", () => {
 		db.close();
 
 		const after = snapshotTables(staged);
-		for (const table of DOMAIN_TABLES) {
+
+		// Tables untouched by the full-chain-invariant bootstrap (ISS34) stay byte-for-byte identical.
+		for (const table of ["contexts", "context_terms", "handoffs", "metadata"] as const) {
 			expect(after[table]).toEqual(before[table]);
 		}
+
+		// counters/entities/relations gain the synthesized default project+epic (and
+		// the "fixture" tenant's one pre-existing initiative gaining a valid parent),
+		// but every original row survives unchanged.
+		for (const table of ["counters", "entities", "relations"] as const) {
+			expect(after[table]).toEqual(expect.arrayContaining(before[table]));
+			expect(after[table]).toHaveLength(before[table].length + 2);
+		}
+
+		expect(after.entities).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ tenant_id: "fixture", id: "PROJ0", kind: "project" }),
+				expect.objectContaining({ tenant_id: "fixture", id: "EPIC0", kind: "epic" })
+			])
+		);
+		expect(after.relations).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ tenant_id: "fixture", from_id: "PROJ0", to_id: "EPIC0", type: "contains" }),
+				expect.objectContaining({ tenant_id: "fixture", from_id: "EPIC0", to_id: "INIT1", type: "contains" })
+			])
+		);
+		expect(after.counters).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ tenant_id: "fixture", kind: "project", next_value: 1 }),
+				expect.objectContaining({ tenant_id: "fixture", kind: "epic", next_value: 1 })
+			])
+		);
 	});
 
 	it("marks the Drizzle 0000 baseline as applied without re-running it", () => {
@@ -258,12 +287,18 @@ describe("legacy pre-tenant migration through Drizzle", () => {
 		try {
 			const entities = db2.prepare(`SELECT tenant_id, id, kind, body, body_source FROM entities ORDER BY id`).all();
 			expect(entities).toEqual([
+				{ tenant_id: "legacy", id: "EPIC0", kind: "epic", body: "", body_source: "generated" },
 				{ tenant_id: "legacy", id: "INIT1", kind: "initiative", body: "", body_source: "authored" },
-				{ tenant_id: "legacy", id: "ISS1", kind: "issue", body: "", body_source: "authored" }
+				{ tenant_id: "legacy", id: "ISS1", kind: "issue", body: "", body_source: "authored" },
+				{ tenant_id: "legacy", id: "PROJ0", kind: "project", body: "", body_source: "generated" }
 			]);
 
-			const relations = db2.prepare(`SELECT tenant_id, from_id, to_id, type FROM relations`).all();
-			expect(relations).toEqual([{ tenant_id: "legacy", from_id: "INIT1", to_id: "ISS1", type: "tracks" }]);
+			const relations = db2.prepare(`SELECT tenant_id, from_id, to_id, type FROM relations ORDER BY from_id, to_id`).all();
+			expect(relations).toEqual([
+				{ tenant_id: "legacy", from_id: "EPIC0", to_id: "INIT1", type: "contains" },
+				{ tenant_id: "legacy", from_id: "INIT1", to_id: "ISS1", type: "tracks" },
+				{ tenant_id: "legacy", from_id: "PROJ0", to_id: "EPIC0", type: "contains" }
+			]);
 
 			const terms = db2.prepare(`SELECT tenant_id, context_key, term FROM context_terms`).all();
 			expect(terms).toEqual([{ tenant_id: "legacy", context_key: "INIT1", term: "Widget" }]);
