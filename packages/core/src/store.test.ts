@@ -196,6 +196,49 @@ describe("derived initiative status", () => {
 		expect(statusOf(db, initiative.id)).toBe("active");
 	});
 
+	it("promotes a draft initiative to active once a tracked issue starts", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship it" });
+		expect(statusOf(db, initiative.id)).toBe("draft");
+
+		updateEntityStatus(db, { entityId: issue.id, status: "in-progress" });
+
+		expect(statusOf(db, initiative.id)).toBe("active");
+	});
+
+	it("promotes a draft initiative to active once an owned PRD starts", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
+		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
+		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship it" });
+		linkEntities(db, { fromId: issue.id, toId: story.id, relationType: "fixes" });
+
+		updateEntityStatus(db, { entityId: issue.id, status: "in-progress" });
+
+		expect(statusOf(db, initiative.id)).toBe("active");
+	});
+
+	it("does not promote a draft initiative while its tracked issues and owned PRDs are all still untouched", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship it" });
+		createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
+
+		expect(statusOf(db, initiative.id)).toBe("draft");
+	});
+
+	it("leaves a manually paused initiative paused even once a tracked issue starts (pausing stays a human decision)", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", status: "paused" });
+		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship it" });
+
+		updateEntityStatus(db, { entityId: issue.id, status: "in-progress" });
+
+		expect(statusOf(db, initiative.id)).toBe("paused");
+	});
+
 	it("rejects manually marking an initiative done while tracked issues remain open", () => {
 		const db = openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });

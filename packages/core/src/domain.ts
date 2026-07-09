@@ -184,8 +184,26 @@ export function isInitiativeComplete(trackedIssueStatuses: string[], ownedPrdSta
 	);
 }
 
+/**
+ * Whether any of an initiative's tracked issues or owned PRDs shows signs
+ * of started work: a tracked issue that has left its initial `todo` status,
+ * or an owned PRD that has left its initial `draft` status (itself already
+ * derived, so a PRD only reads as started once one of its own stories has).
+ */
+export function isInitiativeActive(trackedIssueStatuses: string[], ownedPrdStatuses: string[]): boolean {
+	return trackedIssueStatuses.some((status) => status !== "todo") || ownedPrdStatuses.some((status) => status !== "draft");
+}
+
 export function deriveInitiativeStatus(storedStatus: string, trackedIssueStatuses: string[], ownedPrdStatuses: string[]): string {
-	return isInitiativeComplete(trackedIssueStatuses, ownedPrdStatuses) ? "done" : storedStatus;
+	if (isInitiativeComplete(trackedIssueStatuses, ownedPrdStatuses)) {
+		return "done";
+	}
+
+	if (storedStatus === "draft" && isInitiativeActive(trackedIssueStatuses, ownedPrdStatuses)) {
+		return "active";
+	}
+
+	return storedStatus;
 }
 
 export function isPrdComplete(createdStoryStatuses: string[]): boolean {
