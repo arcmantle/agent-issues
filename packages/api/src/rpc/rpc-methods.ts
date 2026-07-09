@@ -28,5 +28,20 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	linkEntities: async (store, params) => store.linkEntities(params as Parameters<PgStore["linkEntities"]>[0]),
 	unlinkEntities: async (store, params) => store.unlinkEntities(params as Parameters<PgStore["unlinkEntities"]>[0]),
 	getDatabaseSnapshot: async (store) => store.getDatabaseSnapshot(),
-	getInitiativeBundle: async (store, params) => store.getInitiativeBundle((params as { initiativeId: string }).initiativeId)
+	getInitiativeBundle: async (store, params) => store.getInitiativeBundle((params as { initiativeId: string }).initiativeId),
+
+	// Handoffs and context/glossary (ISS51), same wrapping convention as ISS50.
+	createHandoff: async (store, params) => store.createHandoff(params as Parameters<PgStore["createHandoff"]>[0]),
+	updateHandoff: async (store, params) => store.updateHandoff(params as Parameters<PgStore["updateHandoff"]>[0]),
+	deleteHandoff: async (store, params) => store.deleteHandoff(params as Parameters<PgStore["deleteHandoff"]>[0]),
+	getHandoffDetails: async (store, params) => store.getHandoffDetails((params as { entityId: string }).entityId),
+	listHandoffs: async (store, params) => store.listHandoffs(params as Parameters<PgStore["listHandoffs"]>[0]),
+
+	listContexts: async (store) => store.listContexts(),
+	getContextDetails: async (store, params) => store.getContextDetails(params as Parameters<PgStore["getContextDetails"]>[0]),
+	getContextDirectory: async (store) => store.getContextDirectory(),
+	queryContextDirectory: async (store, params) => store.queryContextDirectory(params as Parameters<PgStore["queryContextDirectory"]>[0]),
+	upsertContext: async (store, params) => store.upsertContext(params as Parameters<PgStore["upsertContext"]>[0]),
+	defineContextTerm: async (store, params) => store.defineContextTerm(params as Parameters<PgStore["defineContextTerm"]>[0]),
+	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<PgStore["forgetContextTerm"]>[0])
 };
