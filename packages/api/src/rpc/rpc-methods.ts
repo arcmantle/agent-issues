@@ -56,3 +56,27 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 		return store.renameTenant(previousTenantId, newTenantId);
 	}
 };
+
+/**
+ * JSON-RPC methods that mutate `PgStore` data (ISS48, ADR13). Only a
+ * successful call to one of these triggers a `snapshot-changed` broadcast on
+ * the gate's SSE change-event channel; read-only methods never do.
+ */
+export const writeMethods = new Set<string>([
+	"createEntity",
+	"updateEntityStatus",
+	"setEntityBody",
+	"archiveEntity",
+	"deleteEntity",
+	"moveEntity",
+	"linkEntities",
+	"unlinkEntities",
+	"createHandoff",
+	"updateHandoff",
+	"deleteHandoff",
+	"upsertContext",
+	"defineContextTerm",
+	"forgetContextTerm",
+	"deleteTenant",
+	"renameTenant"
+]);

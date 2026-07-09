@@ -1,0 +1,187 @@
+import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Pool } from "pg";
+
+import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { LocalAuthProvider } from "../auth/local-auth-provider.js";
+import { createJsonRpcApp } from "./create-json-rpc-app.js";
+
+const ADMIN_CONNECTION_STRING =
+	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";
+
+const APP_CONNECTION_STRING =
+	process.env.AGENT_ISSUES_TEST_PG_APP_URL ?? "postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues";
+
+const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";
+
+type SseEvent = { type: string; at: string };
+
+/**
+ * The gate's SSE endpoint is a genuinely long-lived streaming connection, so
+ * these tests start a real HTTP server and read the response body as a
+ * stream (supertest buffers the full response after `end`, which an SSE
+ * connection never reaches on its own) - matching `index.test.ts`'s
+ * real-HTTP-over-`fetch` style for the same reason.
+ */
+describe("JSON-RPC gate: change/event stream (ADR13)", () => {
+	let adminPool: Pool;
+	let appPool: Pool;
+	let authProvider: LocalAuthProvider;
+	let server: Server;
+	let baseUrl: string;
+
+	beforeAll(async () => {
+		adminPool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
+		await migratePgDatabase(adminPool);
+		appPool = createPgPool({ connectionString: APP_CONNECTION_STRING });
+		authProvider = new LocalAuthProvider({ secret: LOCAL_AUTH_SECRET });
+
+		const app = createJsonRpcApp({ pool: appPool, authProvider });
+		server = createServer(app);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		baseUrl = `http://127.0.0.1:${port}`;
+	});
+
+	afterAll(async () => {
+		server.close();
+		await adminPool.end();
+		await appPool.end();
+	});
+
+	const openSubscriptions: AbortController[] = [];
+
+	afterEach(() => {
+		for (const controller of openSubscriptions) {
+			controller.abort();
+		}
+		openSubscriptions.length = 0;
+	});
+
+	async function write(token: string, title: string) {
+		await fetch(`${baseUrl}/rpc`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title } })
+		});
+	}
+
+	/**
+	 * Collects every event the subscription receives into `events`, in the
+	 * background, independent of when a test inspects it - so a test can
+	 * assert "still only N events" right after a *different* tenant's write,
+	 * which a purely pull-based reader (awaiting the next chunk) could never
+	 * distinguish from "an event just hasn't arrived yet".
+	 */
+	async function subscribe(token: string) {
+		const controller = new AbortController();
+		openSubscriptions.push(controller);
+
+		const response = await fetch(`${baseUrl}/events`, {
+			headers: { authorization: `Bearer ${token}` },
+			signal: controller.signal
+		});
+
+		const events: SseEvent[] = [];
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+
+		void (async () => {
+			try {
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) return;
+					buffer += decoder.decode(value, { stream: true });
+
+					let eventEnd: number;
+					while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
+						const rawEvent = buffer.slice(0, eventEnd);
+						buffer = buffer.slice(eventEnd + 2);
+						const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data: "));
+						if (dataLine) {
+							events.push(JSON.parse(dataLine.slice("data: ".length)) as SseEvent);
+						}
+					}
+				}
+			} catch {
+				// Subscription aborted by the test's afterEach - nothing to do.
+			}
+		})();
+
+		async function waitForCount(count: number, timeoutMs = 2000): Promise<SseEvent[]> {
+			const deadline = Date.now() + timeoutMs;
+			while (events.length < count) {
+				if (Date.now() > deadline) {
+					throw new Error(`Timed out waiting for ${count} SSE event(s); received ${events.length}.`);
+				}
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			return events;
+		}
+
+		return { response, events, waitForCount };
+	}
+
+	it("subscribes over SSE and receives the initial connected event", async () => {
+		const tenantId = `tenant-${randomUUID()}`;
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+
+		const { response, waitForCount } = await subscribe(token);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/event-stream");
+
+		const events = await waitForCount(1);
+		expect(events[0]?.type).toBe("connected");
+	});
+
+	it("broadcasts a snapshot-changed event to the subscribing tenant after a write through the gate", async () => {
+		const tenantId = `tenant-${randomUUID()}`;
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+
+		const { waitForCount } = await subscribe(token);
+		await waitForCount(1); // connected
+
+		await write(token, "Triggers a broadcast");
+
+		const events = await waitForCount(2);
+		expect(events[1]?.type).toBe("snapshot-changed");
+	});
+
+	it("never broadcasts a write to a different tenant's subscriber", async () => {
+		const tenantId = `tenant-${randomUUID()}`;
+		const otherTenantId = `tenant-${randomUUID()}`;
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const otherToken = await authProvider.issueToken({ userId: "user-2", tenantId: otherTenantId });
+
+		const tenantSub = await subscribe(token);
+		await tenantSub.waitForCount(1); // connected
+		const otherTenantSub = await subscribe(otherToken);
+		await otherTenantSub.waitForCount(1); // connected
+
+		await write(token, "Tenant-scoped write");
+		await tenantSub.waitForCount(2);
+		expect(tenantSub.events[1]?.type).toBe("snapshot-changed");
+
+		// The other tenant's subscriber must still only have its connected
+		// event - proving the write above was never broadcast to it.
+		expect(otherTenantSub.events).toHaveLength(1);
+
+		// A write for the other tenant's own data is the first (and only)
+		// snapshot-changed event it ever receives.
+		await write(otherToken, "Other tenant's own write");
+		await otherTenantSub.waitForCount(2);
+		expect(otherTenantSub.events[1]?.type).toBe("snapshot-changed");
+
+		// ...and that second tenant's write must not have leaked back either.
+		expect(tenantSub.events).toHaveLength(2);
+	});
+
+	it("rejects a subscription request with no Authorization header", async () => {
+		const response = await fetch(`${baseUrl}/events`);
+		expect(response.status).toBe(401);
+	});
+});
