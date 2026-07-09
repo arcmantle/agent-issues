@@ -78,6 +78,7 @@ describe("tenant resolution", () => {
 						contextTerms: 1,
 						entities: 4,
 						handoffs: 1,
+						historyEntries: 4,
 						relations: 3
 					},
 					displayName: "Alpha Team",
@@ -89,6 +90,7 @@ describe("tenant resolution", () => {
 						contextTerms: 0,
 						entities: 3,
 						handoffs: 0,
+						historyEntries: 3,
 						relations: 2
 					},
 					displayName: "Beta Team",
@@ -103,6 +105,7 @@ describe("tenant resolution", () => {
 					contextTerms: 1,
 					entities: 4,
 					handoffs: 1,
+					historyEntries: 4,
 					relations: 3
 				},
 				counters: 9,
@@ -118,6 +121,7 @@ describe("tenant resolution", () => {
 						contextTerms: 0,
 						entities: 3,
 						handoffs: 0,
+						historyEntries: 3,
 						relations: 2
 					},
 					displayName: "Beta Team",
@@ -157,6 +161,7 @@ describe("tenant resolution", () => {
 					contextTerms: 1,
 					entities: 4,
 					handoffs: 1,
+					historyEntries: 4,
 					relations: 3
 				},
 				counters: 9,
@@ -176,9 +181,26 @@ describe("tenant resolution", () => {
 					(SELECT COUNT(*) FROM relations WHERE tenant_id = 'source-team') AS relations,
 					(SELECT COUNT(*) FROM contexts WHERE tenant_id = 'source-team') AS contexts,
 					(SELECT COUNT(*) FROM context_terms WHERE tenant_id = 'source-team') AS context_terms,
-					(SELECT COUNT(*) FROM handoffs WHERE tenant_id = 'source-team') AS handoffs`
-			).get() as { counters: number; entities: number; relations: number; contexts: number; context_terms: number; handoffs: number };
-			expect(sourceCounts).toEqual({ counters: 0, entities: 0, relations: 0, contexts: 0, context_terms: 0, handoffs: 0 });
+					(SELECT COUNT(*) FROM handoffs WHERE tenant_id = 'source-team') AS handoffs,
+					(SELECT COUNT(*) FROM history_entries WHERE tenant_id = 'source-team') AS history_entries`
+			).get() as {
+				counters: number;
+				entities: number;
+				relations: number;
+				contexts: number;
+				context_terms: number;
+				handoffs: number;
+				history_entries: number;
+			};
+			expect(sourceCounts).toEqual({
+				context_terms: 0,
+				contexts: 0,
+				counters: 0,
+				entities: 0,
+				handoffs: 0,
+				history_entries: 0,
+				relations: 0
+			});
 
 			expect(() => renameTenant(sourceDb, "other-team", "renamed-team")).toThrow("Target tenant already exists: renamed-team");
 		} finally {

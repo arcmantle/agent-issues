@@ -125,6 +125,29 @@ export const handoffs = sqliteTable(
 	]
 );
 
+// Append-only audit log (ADR8/ADR16). Deliberately has NO foreign key to
+// `entities`: a history entry must survive deletion of the entity it
+// documents, so an audit trail remains queryable even for deleted entities.
+// Only a whole-tenant wipe (deleteTenant) removes these rows, via an explicit
+// DELETE alongside the other tenant-scoped tables.
+export const historyEntries = sqliteTable(
+	"history_entries",
+	{
+		id: text("id").primaryKey(),
+		tenantId: text("tenant_id").notNull(),
+		entityId: text("entity_id").notNull(),
+		version: integer("version").notNull(),
+		author: text("author").notNull(),
+		title: text("title").notNull(),
+		body: text("body").notNull(),
+		bodySource: text("body_source").notNull(),
+		status: text("status").notNull(),
+		parentId: text("parent_id"),
+		createdAt: text("created_at").notNull()
+	},
+	(table) => [uniqueIndex("history_entries_tenant_entity_version_idx").on(table.tenantId, table.entityId, table.version)]
+);
+
 export const schema = {
 	metadata,
 	counters,
@@ -132,7 +155,8 @@ export const schema = {
 	relations,
 	contexts,
 	contextTerms,
-	handoffs
+	handoffs,
+	historyEntries
 };
 
 export type EntityRow = typeof entities.$inferSelect;
@@ -142,3 +166,4 @@ export type ContextTermRow = typeof contextTerms.$inferSelect;
 export type HandoffRow = typeof handoffs.$inferSelect;
 export type CounterRow = typeof counters.$inferSelect;
 export type MetadataRow = typeof metadata.$inferSelect;
+export type HistoryEntryRow = typeof historyEntries.$inferSelect;

@@ -79,6 +79,31 @@ export type RelationRecord = {
 	createdAt: string;
 };
 
+// Reserved author identity for history entries with no real human/agent
+// author: seeded backfill entries (ADR8 "history seed") and, until a real
+// identity source (e.g. the future auth seam) is wired up, any new write
+// that does not supply one.
+export const RESERVED_SYSTEM_AUTHOR = "system";
+
+// A single append-only entry in an entity's history log (ADR8/ADR16). Each
+// entry is a FULL snapshot of that entity's trackable facts at the time of
+// the write, not a diff, so "resolve latest" and point-in-time
+// reconstruction are both just "read one row". `version` here is the
+// per-entity revision counter (ADR16's "record version" clock) - unrelated
+// to the `version` ENTITY KIND (ISS38's release-line tracking).
+export type HistoryEntryRecord = {
+	id: string;
+	entityId: string;
+	version: number;
+	author: string;
+	title: string;
+	body: string;
+	bodySource: BodySource;
+	status: string;
+	parentId: string | null;
+	createdAt: string;
+};
+
 export function isEntityKind(value: string): value is EntityKind {
 	return ENTITY_KINDS.includes(value as EntityKind);
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ensureDatabase, type DatabaseHandle } from "./database.js";
-import { createEntity, createHandoff, deleteHandoff, getDatabaseSnapshot, getEntityDetails, getHandoffDetails, getInitiativeBundle, linkEntities, listEntities, listHandoffs, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus, updateHandoff } from "./store.js";
+import { createEntity, createHandoff, deleteHandoff, getDatabaseSnapshot, getEntityDetails, getHandoffDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listHandoffs, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus, updateHandoff } from "./store.js";
 
 function statusOf(db: DatabaseHandle, entityId: string): string {
 	return getEntityDetails(db, entityId).entity.status;
@@ -707,4 +707,72 @@ describe("version as first-class entity", () => {
 		expect(orphanVersionIds).toEqual([untaggedVersion.id]);
 	});
 });
+
+describe("append-only history", () => {
+	it("appends a version-1 history entry with a globally-unique id when an entity is created", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
+
+		const history = listEntityHistory(db, initiative.id);
+		expect(history).toHaveLength(1);
+		expect(history[0]?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+		expect(history[0]).toMatchObject({
+			version: 1,
+			author: "system",
+			title: "Payments",
+			status: "draft",
+			parentId: "EPIC0"
+		});
+	});
+
+	it("captures an explicit author instead of the reserved system default", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Payments", author: "kris" });
+
+		const history = listEntityHistory(db, initiative.id);
+		expect(history[0]?.author).toBe("kris");
+	});
+
+	it("appends a new history version when an entity's status changes, carrying forward its other facts", () => {
+		const db = openTestDatabase();
+		const issue = createEntity(db, { kind: "issue", title: "Fix bug" });
+
+		updateEntityStatus(db, { entityId: issue.id, status: "in-progress", author: "kris" });
+
+		const history = listEntityHistory(db, issue.id);
+		expect(history).toHaveLength(2);
+		expect(history[0]).toMatchObject({ version: 1, status: "todo", author: "system" });
+		expect(history[1]).toMatchObject({ version: 2, status: "in-progress", author: "kris", title: "Fix bug" });
+		expect(history[0]?.id).not.toBe(history[1]?.id);
+	});
+
+	it("appends a new history version when an entity's body changes", () => {
+		const db = openTestDatabase();
+		const issue = createEntity(db, { kind: "issue", title: "Fix bug" });
+
+		setEntityBody(db, { entityId: issue.id, body: "Repro steps here.", author: "kris" });
+
+		const history = listEntityHistory(db, issue.id);
+		expect(history).toHaveLength(2);
+		expect(history[1]).toMatchObject({ version: 2, body: "Repro steps here.", bodySource: "authored", author: "kris" });
+	});
+
+	it("appends a new history version capturing the new parent when an entity is moved, but not on a no-op move", () => {
+		const db = openTestDatabase();
+		const projectA = createEntity(db, { kind: "project", title: "Project A" });
+		const projectB = createEntity(db, { kind: "project", title: "Project B" });
+		const version = createEntity(db, { kind: "version", title: "2.0", parentId: projectA.id });
+
+		moveEntity(db, { entityId: version.id, newParentId: projectB.id, author: "kris" });
+
+		const history = listEntityHistory(db, version.id);
+		expect(history).toHaveLength(2);
+		expect(history[0]).toMatchObject({ version: 1, parentId: projectA.id });
+		expect(history[1]).toMatchObject({ version: 2, parentId: projectB.id, author: "kris" });
+
+		moveEntity(db, { entityId: version.id, newParentId: projectB.id });
+		expect(listEntityHistory(db, version.id)).toHaveLength(2);
+	});
+});
+
 

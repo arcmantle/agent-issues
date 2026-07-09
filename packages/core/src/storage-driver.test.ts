@@ -91,6 +91,21 @@ describe("storage-driver seam: entity lifecycle", () => {
 			await store.close();
 		}
 	});
+
+	it("lists an entity's append-only history through the async seam", async () => {
+		const store = openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+			await store.updateEntityStatus({ entityId: initiative.id, status: "active" });
+
+			const history = await store.listEntityHistory(initiative.id);
+			expect(history.map((entry) => entry.version)).toEqual([1, 2]);
+			expect(history[1]?.status).toBe("active");
+		} finally {
+			await store.close();
+		}
+	});
 });
 
 describe("storage-driver seam: handoff lifecycle", () => {

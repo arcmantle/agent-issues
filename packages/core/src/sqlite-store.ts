@@ -24,6 +24,7 @@ import {
 	getInitiativeBundle,
 	linkEntities,
 	listEntities,
+	listEntityHistory,
 	listHandoffs,
 	listOrphans,
 	listProjectAdrs,
@@ -53,7 +54,7 @@ export class SqliteStore implements StorageDriver {
 		return this.db.tenantId;
 	}
 
-	public async createEntity(input: { kind: string; title: string; parentId?: string; status?: string; body?: string }) {
+	public async createEntity(input: { kind: string; title: string; parentId?: string; status?: string; body?: string; author?: string }) {
 		return createEntity(this.db, input);
 	}
 
@@ -65,6 +66,10 @@ export class SqliteStore implements StorageDriver {
 		return listEntities(this.db, kind);
 	}
 
+	public async listEntityHistory(entityId: string) {
+		return listEntityHistory(this.db, entityId);
+	}
+
 	public async listOrphans(kind?: string) {
 		return kind ? listOrphans(this.db, kind) : listOrphans(this.db);
 	}
@@ -73,11 +78,11 @@ export class SqliteStore implements StorageDriver {
 		return listProjectAdrs(this.db);
 	}
 
-	public async updateEntityStatus(input: { entityId: string; status: string }) {
+	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }) {
 		return updateEntityStatus(this.db, input);
 	}
 
-	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource }) {
+	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }) {
 		return setEntityBody(this.db, input);
 	}
 
@@ -89,7 +94,7 @@ export class SqliteStore implements StorageDriver {
 		return deleteEntity(this.db, input);
 	}
 
-	public async moveEntity(input: { entityId: string; newParentId: string }) {
+	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }) {
 		return moveEntity(this.db, input);
 	}
 

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -7,7 +7,15 @@ import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "nod
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { DEFAULT_EPIC_ID, DEFAULT_EPIC_TITLE, DEFAULT_PROJECT_ID, DEFAULT_PROJECT_TITLE, ENTITY_KINDS } from "./domain.js";
+import {
+	DEFAULT_EPIC_ID,
+	DEFAULT_EPIC_TITLE,
+	DEFAULT_PROJECT_ID,
+	DEFAULT_PROJECT_TITLE,
+	ENTITY_KINDS,
+	RESERVED_SYSTEM_AUTHOR,
+	STRUCTURAL_RELATION_TYPES
+} from "./domain.js";
 
 const MIGRATIONS_FOLDER = path.join(import.meta.dirname, "..", "drizzle");
 
@@ -32,6 +40,7 @@ export type TenantRecordCounts = {
 	contexts: number;
 	contextTerms: number;
 	handoffs: number;
+	historyEntries: number;
 };
 
 export type TenantSummary = {
@@ -88,6 +97,10 @@ export function ensureDatabase(inputPath?: string, options?: DatabaseLocationOpt
 		// state, not counter rows that ensureTenantCounters is about to seed.
 		ensureFullChainInvariant(db, dbPath);
 		ensureTenantCounters(db);
+		// Runs after ensureFullChainInvariant so the PROJ0/EPIC0 sentinels (and any
+		// orphan-initiative attachment) already exist and get swept up as ordinary
+		// "entities lacking history" - no special-casing needed.
+		ensureHistorySeed(db);
 	}
 
 	return { db, dbPath };
@@ -135,13 +148,16 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				SELECT tenant_id FROM context_terms
 				UNION
 				SELECT tenant_id FROM handoffs
+				UNION
+				SELECT tenant_id FROM history_entries
 			)
 			SELECT tenant_ids.tenant_id,
 				COALESCE(entity_counts.entity_count, 0) AS entity_count,
 				COALESCE(relation_counts.relation_count, 0) AS relation_count,
 				COALESCE(context_counts.context_count, 0) AS context_count,
 				COALESCE(context_term_counts.context_term_count, 0) AS context_term_count,
-				COALESCE(handoff_counts.handoff_count, 0) AS handoff_count
+				COALESCE(handoff_counts.handoff_count, 0) AS handoff_count,
+				COALESCE(history_entry_counts.history_entry_count, 0) AS history_entry_count
 			FROM tenant_ids
 			LEFT JOIN (
 				SELECT tenant_id, COUNT(*) AS entity_count
@@ -168,6 +184,11 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				FROM handoffs
 				GROUP BY tenant_id
 			) AS handoff_counts ON handoff_counts.tenant_id = tenant_ids.tenant_id
+			LEFT JOIN (
+				SELECT tenant_id, COUNT(*) AS history_entry_count
+				FROM history_entries
+				GROUP BY tenant_id
+			) AS history_entry_counts ON history_entry_counts.tenant_id = tenant_ids.tenant_id
 			ORDER BY tenant_ids.tenant_id`
 		)
 		.all() as Array<{
@@ -177,6 +198,7 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 			context_count: number;
 			context_term_count: number;
 			handoff_count: number;
+			history_entry_count: number;
 		}>;
 
 	return rows.map((row) => ({
@@ -185,6 +207,7 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 			contextTerms: row.context_term_count,
 			entities: row.entity_count,
 			handoffs: row.handoff_count,
+			historyEntries: row.history_entry_count,
 			relations: row.relation_count
 		},
 		displayName: formatTenantDisplayName(row.tenant_id),
@@ -195,6 +218,7 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 export function deleteTenant(db: Database.Database, tenantId: string): DeleteTenantResult {
 	const counts = getTenantRecordCounts(db, tenantId);
 	const deleteHandoffs = db.prepare(`DELETE FROM handoffs WHERE tenant_id = ?`);
+	const deleteHistoryEntries = db.prepare(`DELETE FROM history_entries WHERE tenant_id = ?`);
 	const deleteContextTerms = db.prepare(`DELETE FROM context_terms WHERE tenant_id = ?`);
 	const deleteRelations = db.prepare(`DELETE FROM relations WHERE tenant_id = ?`);
 	const deleteContexts = db.prepare(`DELETE FROM contexts WHERE tenant_id = ?`);
@@ -203,6 +227,7 @@ export function deleteTenant(db: Database.Database, tenantId: string): DeleteTen
 
 	const counters = db.transaction(() => {
 		deleteHandoffs.run(tenantId);
+		deleteHistoryEntries.run(tenantId);
 		deleteContextTerms.run(tenantId);
 		deleteRelations.run(tenantId);
 		deleteContexts.run(tenantId);
@@ -250,6 +275,7 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 	const renameContexts = db.prepare(`UPDATE contexts SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameContextTerms = db.prepare(`UPDATE context_terms SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameHandoffs = db.prepare(`UPDATE handoffs SET tenant_id = ? WHERE tenant_id = ?`);
+	const renameHistoryEntries = db.prepare(`UPDATE history_entries SET tenant_id = ? WHERE tenant_id = ?`);
 
 	db.pragma("defer_foreign_keys = ON");
 	try {
@@ -260,6 +286,7 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 			renameContexts.run(newTenantId, previousTenantId);
 			renameContextTerms.run(newTenantId, previousTenantId);
 			renameHandoffs.run(newTenantId, previousTenantId);
+			renameHistoryEntries.run(newTenantId, previousTenantId);
 		})();
 	} finally {
 		db.pragma("defer_foreign_keys = OFF");
@@ -338,7 +365,8 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 				(SELECT COUNT(*) FROM relations WHERE tenant_id = @tenantId) AS relation_count,
 				(SELECT COUNT(*) FROM contexts WHERE tenant_id = @tenantId) AS context_count,
 				(SELECT COUNT(*) FROM context_terms WHERE tenant_id = @tenantId) AS context_term_count,
-				(SELECT COUNT(*) FROM handoffs WHERE tenant_id = @tenantId) AS handoff_count`
+				(SELECT COUNT(*) FROM handoffs WHERE tenant_id = @tenantId) AS handoff_count,
+				(SELECT COUNT(*) FROM history_entries WHERE tenant_id = @tenantId) AS history_entry_count`
 		)
 		.get({ tenantId }) as {
 			entity_count: number;
@@ -346,6 +374,7 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 			context_count: number;
 			context_term_count: number;
 			handoff_count: number;
+			history_entry_count: number;
 		};
 
 	return {
@@ -353,6 +382,7 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 		contextTerms: row.context_term_count,
 		entities: row.entity_count,
 		handoffs: row.handoff_count,
+		historyEntries: row.history_entry_count,
 		relations: row.relation_count
 	};
 }
@@ -479,6 +509,70 @@ function ensureTenantCounters(db: DatabaseHandle): void {
 	}
 
 	insertCounter.run({ tenantId: db.tenantId, kind: "handoff" });
+}
+
+// Structural relation types are a fixed, code-controlled constant (never
+// user input), so inlining them into the SQL text below is safe and keeps
+// this query automatically in sync with domain.ts's canonical list.
+const STRUCTURAL_TYPES_SQL_LIST = STRUCTURAL_RELATION_TYPES.map((type) => `'${type}'`).join(", ");
+
+/**
+ * Backfills a synthetic version-1 history entry (ADR8) for every entity that
+ * predates append-only history (ISS35) or was inserted outside `createEntity`
+ * (the PROJ0/EPIC0 sentinels), so `listEntityHistory` always has at least one
+ * row regardless of when an entity was created. Idempotent: only entities
+ * with zero history rows are seeded. Uses each entity's own current facts,
+ * its structural parent (if any), and its `updated_at` as the seed's
+ * `created_at` (its last known-true state), with RESERVED_SYSTEM_AUTHOR since
+ * the real original author was never captured for pre-history data.
+ */
+function ensureHistorySeed(db: DatabaseHandle): void {
+	const unseeded = db
+		.prepare(
+			`SELECT id, title, body, body_source, status, updated_at FROM entities
+			 WHERE tenant_id = @tenantId
+			   AND id NOT IN (SELECT entity_id FROM history_entries WHERE tenant_id = @tenantId)`
+		)
+		.all({ tenantId: db.tenantId }) as Array<{
+			id: string;
+			title: string;
+			body: string;
+			body_source: string;
+			status: string;
+			updated_at: string;
+		}>;
+
+	if (unseeded.length === 0) {
+		return;
+	}
+
+	const getParentId = db.prepare(
+		`SELECT from_id FROM relations
+		 WHERE tenant_id = @tenantId AND to_id = @entityId AND type IN (${STRUCTURAL_TYPES_SQL_LIST})
+		 LIMIT 1`
+	);
+
+	const insertHistoryEntry = db.prepare(
+		`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+		 VALUES (@id, @tenantId, @entityId, 1, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
+	);
+
+	for (const entity of unseeded) {
+		const parent = getParentId.get({ tenantId: db.tenantId, entityId: entity.id }) as { from_id: string } | undefined;
+
+		insertHistoryEntry.run({
+			id: randomUUID(),
+			tenantId: db.tenantId,
+			entityId: entity.id,
+			author: RESERVED_SYSTEM_AUTHOR,
+			title: entity.title,
+			body: entity.body,
+			bodySource: entity.body_source,
+			status: entity.status,
+			parentId: parent?.from_id ?? null,
+			createdAt: entity.updated_at
+		});
+	}
 }
 
 /**

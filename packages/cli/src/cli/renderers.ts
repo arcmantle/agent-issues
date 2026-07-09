@@ -222,7 +222,7 @@ export function renderTenantList(result: {
 	for (const tenant of result.tenants) {
 		const marker = tenant.id === result.currentTenantId ? "*" : "-";
 		lines.push(
-			`${marker} ${tenant.id} (${tenant.displayName}) entities=${tenant.counts.entities} relations=${tenant.counts.relations} contexts=${tenant.counts.contexts} terms=${tenant.counts.contextTerms} handoffs=${tenant.counts.handoffs}`
+			`${marker} ${tenant.id} (${tenant.displayName}) entities=${tenant.counts.entities} relations=${tenant.counts.relations} contexts=${tenant.counts.contexts} terms=${tenant.counts.contextTerms} handoffs=${tenant.counts.handoffs} history=${tenant.counts.historyEntries}`
 		);
 	}
 
@@ -241,6 +241,7 @@ export function renderDeleteTenant(result: {
 		contexts: number;
 		contextTerms: number;
 		handoffs: number;
+		historyEntries: number;
 	};
 	counters: number;
 }): string {
@@ -251,7 +252,7 @@ export function renderDeleteTenant(result: {
 	return [
 		`Deleted tenant ${result.tenantId} (${result.displayName})`,
 		`Database: ${result.dbPath}`,
-		`Removed rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} counters=${result.counters}`
+		`Removed rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} history=${result.counts.historyEntries} counters=${result.counters}`
 	].join("\n");
 }
 
@@ -269,6 +270,7 @@ export function renderRenameTenant(result: {
 		contexts: number;
 		contextTerms: number;
 		handoffs: number;
+		historyEntries: number;
 	};
 	counters: number;
 }): string {
@@ -279,7 +281,7 @@ export function renderRenameTenant(result: {
 	return [
 		`Renamed tenant ${result.previousTenantId} (${result.previousDisplayName}) to ${result.newTenantId} (${result.newDisplayName})`,
 		`Database: ${result.dbPath}`,
-		`Moved rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} counters=${result.counters}`
+		`Moved rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} history=${result.counts.historyEntries} counters=${result.counters}`
 	].join("\n");
 }
 

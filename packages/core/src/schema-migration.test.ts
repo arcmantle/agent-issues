@@ -89,7 +89,34 @@ describe("golden-fixture migration wall", () => {
 		);
 	});
 
-	it("marks the Drizzle 0000 baseline as applied without re-running it", () => {
+	it("backfills a synthetic version-1 history entry for every pre-existing record and the new sentinels", () => {
+		const staged = stageFixture();
+		const before = snapshotTables(staged);
+
+		const { db } = ensureDatabase(staged, { tenant: "fixture" });
+		db.close();
+
+		const db2 = new Database(staged, { readonly: true, fileMustExist: true });
+		try {
+			const historyRows = db2
+				.prepare(`SELECT entity_id, version, author, status, parent_id FROM history_entries WHERE tenant_id = 'fixture' ORDER BY entity_id`)
+				.all() as Array<{ entity_id: string; version: number; author: string; status: string; parent_id: string | null }>;
+
+			const preExistingIds = (before.entities as Array<{ id: string }>).map((entity) => entity.id);
+			const seededIds = historyRows.map((row) => row.entity_id);
+			expect(seededIds.sort()).toEqual([...preExistingIds, "EPIC0", "PROJ0"].sort());
+			expect(historyRows.every((row) => row.version === 1)).toBe(true);
+			expect(historyRows.every((row) => row.author === "system")).toBe(true);
+
+			expect(historyRows.find((row) => row.entity_id === "INIT1")).toMatchObject({ parent_id: "EPIC0" });
+			expect(historyRows.find((row) => row.entity_id === "PROJ0")).toMatchObject({ parent_id: null, status: "active" });
+			expect(historyRows.find((row) => row.entity_id === "EPIC0")).toMatchObject({ parent_id: "PROJ0", status: "active" });
+		} finally {
+			db2.close();
+		}
+	});
+
+	it("marks the Drizzle 0000 and 0001 migrations as applied without re-running them", () => {
 		const staged = stageFixture();
 
 		const { db } = ensureDatabase(staged, { tenant: "fixture" });
@@ -103,7 +130,7 @@ describe("golden-fixture migration wall", () => {
 			expect(hasMigrationsTable).toBeTruthy();
 
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(1);
+			expect(applied.count).toBe(2);
 		} finally {
 			db2.close();
 		}
@@ -154,7 +181,7 @@ function indexNames(dbPath: string): string[] {
 }
 
 describe("fresh install schema parity", () => {
-	it("creates the exact v7 table set via the Drizzle baseline", () => {
+	it("creates the full current table set via Drizzle migrations", () => {
 		const dbPath = freshDatabasePath();
 		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
@@ -166,7 +193,7 @@ describe("fresh install schema parity", () => {
 		).map((row) => row.name);
 
 		expect(tables).toEqual(
-			["__drizzle_migrations", "context_terms", "contexts", "counters", "entities", "handoffs", "metadata", "relations"].sort()
+			["__drizzle_migrations", "context_terms", "contexts", "counters", "entities", "handoffs", "history_entries", "metadata", "relations"].sort()
 		);
 	});
 
@@ -188,7 +215,7 @@ describe("fresh install schema parity", () => {
 		]);
 	});
 
-	it("reproduces the v7 named indexes", () => {
+	it("reproduces the v7 named indexes plus the new history_entries index", () => {
 		const dbPath = freshDatabasePath();
 		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
@@ -198,11 +225,12 @@ describe("fresh install schema parity", () => {
 			"contexts_tenant_scope_entity_id_idx",
 			"handoffs_tenant_entity_id_idx",
 			"handoffs_tenant_initiative_id_idx",
+			"history_entries_tenant_entity_version_idx",
 			"relations_tenant_to_id_idx"
 		]);
 	});
 
-	it("records the 0000 baseline so forward migrations are tracked", () => {
+	it("records the 0000 and 0001 migrations so future forward migrations are tracked", () => {
 		const dbPath = freshDatabasePath();
 		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
@@ -210,7 +238,7 @@ describe("fresh install schema parity", () => {
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(1);
+			expect(applied.count).toBe(2);
 		} finally {
 			db2.close();
 		}
@@ -310,7 +338,7 @@ describe("legacy pre-tenant migration through Drizzle", () => {
 			expect(terms).toEqual([{ tenant_id: "legacy", context_key: "INIT1", term: "Widget" }]);
 
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(1);
+			expect(applied.count).toBe(2);
 
 			const legacyTables = db2
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_%'`)

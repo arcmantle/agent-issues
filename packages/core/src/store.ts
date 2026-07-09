@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { DatabaseHandle } from "./database.js";
 import { getContextDetails, type ContextDetails } from "./context-store.js";
 import {
@@ -13,9 +15,11 @@ import {
 	isStructuralRelationType,
 	isValidStatus,
 	ID_PREFIX,
+	RESERVED_SYSTEM_AUTHOR,
 	type BodySource,
 	type EntityKind,
 	type EntityRecord,
+	type HistoryEntryRecord,
 	type RelationRecord,
 	type RelationType
 } from "./domain.js";
@@ -44,6 +48,19 @@ type HandoffRow = {
 	initiative_id: string | null;
 	summary: string;
 	body: string;
+	created_at: string;
+};
+
+type HistoryEntryRow = {
+	id: string;
+	entity_id: string;
+	version: number;
+	author: string;
+	title: string;
+	body: string;
+	body_source: string;
+	status: string;
+	parent_id: string | null;
 	created_at: string;
 };
 
@@ -131,7 +148,7 @@ export type MoveResult = {
 
 export function createEntity(
 	db: DatabaseHandle,
-	input: { kind: string; title: string; parentId?: string; status?: string; body?: string }
+	input: { kind: string; title: string; parentId?: string; status?: string; body?: string; author?: string }
 ): EntityRecord {
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
@@ -184,7 +201,9 @@ export function createEntity(
 			});
 		}
 
-		return getEntityOrThrow(db, id);
+		const entity = getEntityOrThrow(db, id);
+		appendHistoryEntry(db, entity, input.author);
+		return entity;
 	});
 
 	return tx();
@@ -233,7 +252,7 @@ export function linkEntities(
 
 export function updateEntityStatus(
 	db: DatabaseHandle,
-	input: { entityId: string; status: string }
+	input: { entityId: string; status: string; author?: string }
 ): StatusUpdateResult {
 	const entity = getEntityOrThrow(db, input.entityId);
 
@@ -317,15 +336,18 @@ export function updateEntityStatus(
 		updatedAt
 	}));
 
+	const updated = getEntityOrThrow(db, input.entityId);
+	appendHistoryEntry(db, updated, input.author);
+
 	return {
-		entity: getEntityOrThrow(db, input.entityId),
+		entity: updated,
 		previousStatus
 	};
 }
 
 export function setEntityBody(
 	db: DatabaseHandle,
-	input: { entityId: string; body: string; bodySource?: BodySource }
+	input: { entityId: string; body: string; bodySource?: BodySource; author?: string }
 ): EntityRecord {
 	getEntityOrThrow(db, input.entityId);
 
@@ -346,7 +368,9 @@ export function setEntityBody(
 		updatedAt
 	}));
 
-	return getEntityOrThrow(db, input.entityId);
+	const updated = getEntityOrThrow(db, input.entityId);
+	appendHistoryEntry(db, updated, input.author);
+	return updated;
 }
 
 export function archiveEntity(db: DatabaseHandle, input: { entityId: string }): StatusUpdateResult {
@@ -359,7 +383,7 @@ export function archiveEntity(db: DatabaseHandle, input: { entityId: string }): 
 
 export function moveEntity(
 	db: DatabaseHandle,
-	input: { entityId: string; newParentId: string }
+	input: { entityId: string; newParentId: string; author?: string }
 ): MoveResult {
 	if (input.entityId === input.newParentId) {
 		throw new Error("Cannot move an entity under itself.");
@@ -425,6 +449,8 @@ export function moveEntity(
 			entityId: entity.id,
 			updatedAt
 		}));
+
+		appendHistoryEntry(db, getEntityOrThrow(db, entity.id), input.author);
 	})();
 
 	return {
@@ -724,6 +750,20 @@ export function listEntities(db: DatabaseHandle, kind: string): EntityRecord[] {
 	return getAllDerivedEntities(db).filter((entity) => entity.kind === kind);
 }
 
+// Full append-only history for one entity, oldest first - enables
+// point-in-time reconstruction (walk forward) and "resolve latest" (take
+// the last entry) from a single query. Deliberately does NOT require the
+// entity to still exist: the whole point of an audit trail is that it
+// outlives the record it documents (a deleted entity's history is still
+// queryable; only a whole-tenant wipe removes it).
+export function listEntityHistory(db: DatabaseHandle, entityId: string): HistoryEntryRecord[] {
+	const rows = db
+		.prepare(`SELECT * FROM history_entries WHERE tenant_id = ? AND entity_id = ? ORDER BY version ASC`)
+		.all(db.tenantId, entityId) as HistoryEntryRow[];
+
+	return rows.map(mapHistoryEntryRow);
+}
+
 export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
@@ -947,6 +987,54 @@ function insertRelation(db: DatabaseHandle, relation: RelationRecord) {
 			 VALUES (@tenantId, @fromId, @toId, @type, @createdAt)`
 		)
 		.run(tenantParams(db, relation));
+}
+
+function getNextHistoryVersion(db: DatabaseHandle, entityId: string): number {
+	const row = db
+		.prepare(`SELECT MAX(version) AS max_version FROM history_entries WHERE tenant_id = ? AND entity_id = ?`)
+		.get(db.tenantId, entityId) as { max_version: number | null };
+
+	return (row.max_version ?? 0) + 1;
+}
+
+// Appends a FULL snapshot of `entity`'s current trackable facts (title, body,
+// bodySource, stored status, structural parent) as the next history version.
+// Called after every entity-level write (create/status/body/move - ADR8), so
+// "resolve latest" and point-in-time reconstruction are always "read one row".
+function appendHistoryEntry(db: DatabaseHandle, entity: EntityRecord, author: string | undefined): void {
+	const parentId = getStructuralParentRelations(db, entity.id)[0]?.fromId ?? null;
+	const version = getNextHistoryVersion(db, entity.id);
+
+	db.prepare(
+		`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+		 VALUES (@id, @tenantId, @entityId, @version, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
+	).run(tenantParams(db, {
+		id: randomUUID(),
+		entityId: entity.id,
+		version,
+		author: author?.trim() || RESERVED_SYSTEM_AUTHOR,
+		title: entity.title,
+		body: entity.body,
+		bodySource: entity.bodySource,
+		status: entity.status,
+		parentId,
+		createdAt: entity.updatedAt
+	}));
+}
+
+function mapHistoryEntryRow(row: HistoryEntryRow): HistoryEntryRecord {
+	return {
+		id: row.id,
+		entityId: row.entity_id,
+		version: row.version,
+		author: row.author,
+		title: row.title,
+		body: row.body,
+		bodySource: isBodySource(row.body_source) ? row.body_source : "authored",
+		status: row.status,
+		parentId: row.parent_id,
+		createdAt: row.created_at
+	};
 }
 
 function getAllEntities(db: DatabaseHandle): EntityRecord[] {

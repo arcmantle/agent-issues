@@ -8,7 +8,7 @@ import type {
 	QueryContextDirectoryResult
 } from "./context-store.js";
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
-import type { BodySource, EntityRecord } from "./domain.js";
+import type { BodySource, EntityRecord, HistoryEntryRecord } from "./domain.js";
 import type {
 	DatabaseSnapshot,
 	DeleteResult,
@@ -33,16 +33,17 @@ export interface StorageDriver {
 	readonly tenantId: string;
 
 	// Entities
-	createEntity(input: { kind: string; title: string; parentId?: string; status?: string; body?: string }): Promise<EntityRecord>;
+	createEntity(input: { kind: string; title: string; parentId?: string; status?: string; body?: string; author?: string }): Promise<EntityRecord>;
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
 	listEntities(kind: string): Promise<EntityRecord[]>;
+	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
-	updateEntityStatus(input: { entityId: string; status: string }): Promise<StatusUpdateResult>;
-	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource }): Promise<EntityRecord>;
+	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;
+	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord>;
 	archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult>;
 	deleteEntity(input: { entityId: string }): Promise<DeleteResult>;
-	moveEntity(input: { entityId: string; newParentId: string }): Promise<MoveResult>;
+	moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult>;
 	linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult>;
 	unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult>;
 	getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
