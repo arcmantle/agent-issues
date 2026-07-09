@@ -11,7 +11,8 @@ abstract class SiteCommand extends TenantCommand {
 	protected openInBrowser = false;
 
 	public async execute(): Promise<number> {
-		const result = startLiveSite({
+		const result = await startLiveSite({
+			currentWorkingDirectory: this.context.cwd,
 			dbPath: this.dbPath,
 			openInBrowser: this.openInBrowser,
 			port: parsePortOption(this.portValue),

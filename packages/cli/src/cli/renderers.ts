@@ -285,7 +285,7 @@ export function renderRenameTenant(result: {
 	].join("\n");
 }
 
-export function renderLiveSite(result: ReturnType<typeof startLiveSite>["info"], opened: boolean): string {
+export function renderLiveSite(result: Awaited<ReturnType<typeof startLiveSite>>["info"], opened: boolean): string {
 	return [
 		`${opened ? "Opened" : "Serving"} live site at ${result.url}`,
 		`Database: ${result.dbPath}`,

@@ -23,6 +23,14 @@ export type OpenStorageDriverResult = {
 	backend: "local" | "cloud";
 	/** The SQLite file path in local mode, or the cloud API base URL in cloud mode - kept as one field so callers that already echo it keep the same output shape (ADR13). */
 	dbPath: string;
+	/**
+	 * Only set when `backend` is `"cloud"` - the raw base URL/bearer token
+	 * behind the `HttpStore` this call opened. Ordinary `StorageDriver`
+	 * callers never need this; it exists for the site server's `/events`
+	 * relay (ISS56), which must subscribe to the cloud API's own SSE channel
+	 * directly rather than through a `StorageDriver` method.
+	 */
+	cloudConnection?: { baseUrl: string; bearerToken: string; tenantId: string };
 };
 
 function isSessionExpired(expiresAt: string): boolean {
@@ -61,5 +69,10 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 	}
 
 	const store = new HttpStore({ baseUrl: binding.cloudApiUrl, bearerToken: session.accessToken, tenantId: binding.tenantId });
-	return { store, backend: "cloud", dbPath: binding.cloudApiUrl };
+	return {
+		store,
+		backend: "cloud",
+		dbPath: binding.cloudApiUrl,
+		cloudConnection: { baseUrl: binding.cloudApiUrl, bearerToken: session.accessToken, tenantId: binding.tenantId }
+	};
 }

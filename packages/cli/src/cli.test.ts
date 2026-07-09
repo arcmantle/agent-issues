@@ -447,7 +447,7 @@ describe("cli", () => {
 		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
 		db.close();
 
-		const handle = startLiveSite({ dbPath, port, tenant: "test-tenant" });
+		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
 		liveSiteClosers.add(() => {
 			if (handle.server.listening) {
 				handle.close();
@@ -484,7 +484,7 @@ describe("cli", () => {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		db.close();
 
-		const handle = startLiveSite({ dbPath, port, tenant: "test-tenant" });
+		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
 		liveSiteClosers.add(() => {
 			if (handle.server.listening) {
 				handle.close();

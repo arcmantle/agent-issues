@@ -35,6 +35,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			expect(result.backend).toBe("local");
 			expect(result.store).toBeInstanceOf(SqliteStore);
 			expect(result.dbPath).toBeTruthy();
+			expect(result.cloudConnection).toBeUndefined();
 		} finally {
 			await result.store.close();
 		}
@@ -63,6 +64,11 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			expect(result.store).toBeInstanceOf(HttpStore);
 			expect(result.store.tenantId).toBe("tenant-a");
 			expect(result.dbPath).toBe("https://api.example.com");
+			expect(result.cloudConnection).toEqual({
+				baseUrl: "https://api.example.com",
+				bearerToken: "token-a",
+				tenantId: "tenant-a"
+			});
 		} finally {
 			await result.store.close();
 		}

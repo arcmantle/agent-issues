@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { resolveDatabasePath, resolveTenantSlug } from "@agent-issues/core";
+import { openStorageDriver, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/core";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
+import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
 
 export type LiveSiteInfo = {
@@ -31,14 +32,16 @@ export type StopLiveSiteResult = {
 
 const LIVE_SITE_STOP_PATH = "/__agent_issues/stop";
 
-export function startLiveSite(input: {
+export async function startLiveSite(input: {
 	dbPath?: string;
 	host?: string;
 	port?: number;
 	openInBrowser?: boolean;
 	tenant?: string;
-}): LiveSiteHandle {
-	const defaultTenant = resolveTenantSlug({ tenant: input.tenant });
+	currentWorkingDirectory?: string;
+}): Promise<LiveSiteHandle> {
+	const currentWorkingDirectory = input.currentWorkingDirectory;
+	const defaultTenant = resolveTenantSlug({ currentWorkingDirectory, tenant: input.tenant });
 	const dbPath = resolveDatabasePath(input.dbPath, { tenant: input.tenant });
 	const host = input.host ?? "127.0.0.1";
 	const port = input.port ?? 4173;
@@ -51,24 +54,46 @@ export function startLiveSite(input: {
 		openInBrowser: input.openInBrowser ?? false
 	};
 	const clients = new Set<ServerResponse>();
-	let databaseSignature = getDatabaseSignature(dbPath);
+
+	// Resolved once at startup (ADR13, ADR18): decides whether live-refresh
+	// polls the local file or relays the cloud API's own SSE channel (ISS56).
+	// Snapshot/site-config reads re-resolve per request through `withStore`
+	// instead, since a long-lived cloud session could expire mid-run.
+	const opened = await openStorageDriver({
+		dbPath: input.dbPath,
+		databaseOptions: { currentWorkingDirectory, tenant: input.tenant }
+	});
+	await opened.store.close();
+
+	let databaseSignature = opened.backend === "local" ? getDatabaseSignature(dbPath) : undefined;
+	let pollInterval: NodeJS.Timeout | undefined;
+	let stopCloudEventsRelay: (() => void) | undefined;
 
 	const server = createServer((request, response) => {
-		void handleRequest({ request, response, dbPath, clients, defaultTenant, server });
+		void handleRequest({ request, response, dbPath, clients, currentWorkingDirectory, defaultTenant, server });
 	});
 
-	const interval = setInterval(() => {
-		const nextSignature = getDatabaseSignature(dbPath);
-		if (nextSignature === databaseSignature) {
-			return;
-		}
+	if (opened.backend === "local") {
+		pollInterval = setInterval(() => {
+			const nextSignature = getDatabaseSignature(dbPath);
+			if (nextSignature === databaseSignature) {
+				return;
+			}
 
-		databaseSignature = nextSignature;
-		broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString() }));
-	}, 1000);
+			databaseSignature = nextSignature;
+			broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString() }));
+		}, 1000);
+	} else if (opened.cloudConnection) {
+		stopCloudEventsRelay = subscribeToCloudEvents(opened.cloudConnection, (event) => {
+			broadcast(clients, JSON.stringify(event));
+		});
+	}
 
 	server.on("close", () => {
-		clearInterval(interval);
+		if (pollInterval) {
+			clearInterval(pollInterval);
+		}
+		stopCloudEventsRelay?.();
 		for (const client of clients) {
 			client.end();
 		}
@@ -76,7 +101,10 @@ export function startLiveSite(input: {
 	});
 
 	server.on("error", () => {
-		clearInterval(interval);
+		if (pollInterval) {
+			clearInterval(pollInterval);
+		}
+		stopCloudEventsRelay?.();
 	});
 
 	server.listen(port, host, () => {
@@ -151,6 +179,7 @@ async function handleRequest(input: {
 	response: ServerResponse;
 	dbPath: string;
 	clients: Set<ServerResponse>;
+	currentWorkingDirectory: string | undefined;
 	defaultTenant: string;
 	server: Server;
 }) {
@@ -176,12 +205,12 @@ async function handleRequest(input: {
 	}
 
 	if (requestUrl.pathname === "/site-config.json") {
-		writeJson(input.response, await readSiteConfig(input.dbPath, input.defaultTenant));
+		writeJson(input.response, await readSiteConfig(input.dbPath, input.defaultTenant, input.currentWorkingDirectory));
 		return;
 	}
 
 	if (requestUrl.pathname === "/api/snapshot") {
-		writeJson(input.response, await readSnapshot(input.dbPath, requestedTenant));
+		writeJson(input.response, await readSnapshot(input.dbPath, requestedTenant, input.currentWorkingDirectory));
 		return;
 	}
 
@@ -214,8 +243,8 @@ async function handleRequest(input: {
 	writeText(input.response, 404, "Not Found");
 }
 
-async function readSiteConfig(dbPath: string, defaultTenant: string) {
-	return withStore(dbPath, { tenant: defaultTenant }, async (store) => {
+async function readSiteConfig(dbPath: string, defaultTenant: string, currentWorkingDirectory: string | undefined) {
+	return withStore(dbPath, { currentWorkingDirectory, tenant: defaultTenant }, async (store, resolvedDbPath) => {
 		const availableTenants = await store.listTenants();
 		const currentTenant = availableTenants.some((tenant) => tenant.id === defaultTenant)
 			? defaultTenant
@@ -224,13 +253,13 @@ async function readSiteConfig(dbPath: string, defaultTenant: string) {
 		return {
 			availableTenants,
 			currentTenant,
-			dbPath
+			dbPath: resolvedDbPath
 		};
 	});
 }
 
-async function readSnapshot(dbPath: string, tenant: string) {
-	return withStore(dbPath, { tenant }, (store) => store.getDatabaseSnapshot());
+async function readSnapshot(dbPath: string, tenant: string, currentWorkingDirectory: string | undefined) {
+	return withStore(dbPath, { currentWorkingDirectory, tenant }, (store) => store.getDatabaseSnapshot());
 }
 
 function getDatabaseSignature(dbPath: string): string {
