@@ -108,6 +108,20 @@ export type DeleteResult = {
 	removed: boolean;
 };
 
+export type HandoffDetails = {
+	focus: EntityDetails;
+	structuralPath: Array<{ relationType: RelationType; entity: EntityRecord }>;
+	initiative: InitiativeBundle | null;
+	orphaned: boolean;
+	activeBlockers: EntityRecord[];
+	handoffs: HandoffRecord[];
+};
+
+export type HandoffDeleteResult = {
+	handoff: HandoffRecord;
+	removed: boolean;
+};
+
 export type InitiativeBundle = {
 	initiative: EntityRecord;
 	prds: EntityRecord[];
@@ -225,6 +239,49 @@ async function getStructuralParentRelations(client: PoolClient, tenantId: string
 	return result.rows
 		.filter((row) => isStructuralRelationType(row.type))
 		.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
+}
+
+// Walks structural-only parent relations up to the root, mirroring core's
+// store.ts getStructuralPath, so handoffs can resolve their owning
+// initiative the same way locally and in the cloud.
+async function getStructuralPath(
+	client: PoolClient,
+	tenantId: string,
+	entityId: string
+): Promise<Array<{ relationType: RelationType; entity: EntityRecord }>> {
+	const path: Array<{ relationType: RelationType; entity: EntityRecord }> = [];
+	const seen = new Set<string>([entityId]);
+	let currentId = entityId;
+
+	while (true) {
+		const parents = await getStructuralParentRelations(client, tenantId, currentId);
+
+		if (parents.length === 0) {
+			return path.reverse();
+		}
+
+		if (parents.length > 1) {
+			throw new Error(`Cannot build structural path for ${entityId} because ${currentId} has multiple structural parents.`);
+		}
+
+		const parent = parents[0]!;
+		if (seen.has(parent.fromId)) {
+			throw new Error(`Cannot build structural path for ${entityId} because the structural graph contains a cycle.`);
+		}
+
+		seen.add(parent.fromId);
+		path.push({ relationType: parent.type, entity: await getEntityOrThrow(client, tenantId, parent.fromId) });
+		currentId = parent.fromId;
+	}
+}
+
+async function resolveOwningInitiativeId(client: PoolClient, tenantId: string, focus: EntityRecord): Promise<string | null> {
+	if (focus.kind === "initiative") {
+		return focus.id;
+	}
+
+	const structuralPath = await getStructuralPath(client, tenantId, focus.id);
+	return structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
 }
 
 async function nextEntityId(client: PoolClient, tenantId: string, kind: EntityKind): Promise<string> {
@@ -547,14 +604,70 @@ function mapHandoffRow(row: HandoffRow): HandoffRecord {
 	};
 }
 
-// Read-only for now: exposed publicly (with create/update/delete) by ISS44,
-// which owns the handoffs section of the storage-driver seam. Reused here
-// so getInitiativeBundle/getDatabaseSnapshot embed real handoff data
-// instead of a placeholder.
-async function listHandoffsForInitiative(client: PoolClient, tenantId: string, initiativeId: string): Promise<HandoffRecord[]> {
+async function nextHandoffId(client: PoolClient, tenantId: string): Promise<string> {
+	const result = await client.query<{ next_value: number }>(
+		`SELECT next_value FROM counters WHERE tenant_id = $1 AND kind = 'handoff'`,
+		[tenantId]
+	);
+	const row = result.rows[0];
+
+	if (!row) {
+		throw new Error("Counter missing for handoffs.");
+	}
+
+	await client.query(`UPDATE counters SET next_value = next_value + 1 WHERE tenant_id = $1 AND kind = 'handoff'`, [tenantId]);
+	return `HO${row.next_value}`;
+}
+
+function normalizeHandoffSummary(summary: string | undefined): string {
+	return (summary ?? "").trim();
+}
+
+function normalizeHandoffBody(body: string): string {
+	const trimmed = body.trim();
+
+	if (trimmed.length === 0) {
+		throw new Error("Handoff body must not be empty.");
+	}
+
+	return trimmed;
+}
+
+async function getHandoffOrThrow(client: PoolClient, tenantId: string, handoffId: string): Promise<HandoffRecord> {
+	const result = await client.query<HandoffRow>(`SELECT * FROM handoffs WHERE tenant_id = $1 AND id = $2`, [tenantId, handoffId]);
+	const row = result.rows[0];
+
+	if (!row) {
+		throw new Error(`Handoff not found: ${handoffId}`);
+	}
+
+	return mapHandoffRow(row);
+}
+
+// Shared query path for both the public listHandoffs seam method and
+// getInitiativeBundle/getDatabaseSnapshot's embedded handoff data, so both
+// stay in sync with a single tenant-scoped, optionally-filtered query.
+async function listHandoffsFiltered(
+	client: PoolClient,
+	tenantId: string,
+	filter?: { initiativeId?: string; entityId?: string }
+): Promise<HandoffRecord[]> {
+	const conditions = ["tenant_id = $1"];
+	const params: unknown[] = [tenantId];
+
+	if (filter?.initiativeId !== undefined) {
+		params.push(filter.initiativeId);
+		conditions.push(`initiative_id = $${params.length}`);
+	}
+
+	if (filter?.entityId !== undefined) {
+		params.push(filter.entityId);
+		conditions.push(`entity_id = $${params.length}`);
+	}
+
 	const result = await client.query<HandoffRow>(
-		`SELECT * FROM handoffs WHERE tenant_id = $1 AND initiative_id = $2 ORDER BY created_at DESC, id DESC`,
-		[tenantId, initiativeId]
+		`SELECT * FROM handoffs WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC`,
+		params
 	);
 
 	return result.rows.map(mapHandoffRow);
@@ -647,11 +760,11 @@ function parseAvoidTerms(value: string): string[] {
  * always active for the query.
  *
  * This is a partial implementation: it does not yet `implements
- * StorageDriver` because the handoff (beyond the read-only helper reused
- * here), context/glossary (beyond the minimal shared/initiative lookup
- * reused here), and tenant-administration sections of that seam are
- * unimplemented (tracked as ISS39 follow-up issues ISS44-ISS46), as is the
- * JSON-RPC gate and change/event stream (ISS47, ISS48).
+ * StorageDriver` because the context/glossary (beyond the minimal
+ * shared/initiative lookup reused here) and tenant-administration sections
+ * of that seam are unimplemented (tracked as ISS39 follow-up issues
+ * ISS45-ISS46), as is the JSON-RPC gate and change/event stream (ISS47,
+ * ISS48). The handoffs section (ISS44) is fully implemented below.
  */
 export class PgStore {
 	public constructor(
@@ -1105,7 +1218,7 @@ export class PgStore {
 				constrainsLinks: relationRows.rows
 					.filter((relation) => relation.type === "constrains")
 					.map((relation) => ({ adr: entityById.get(relation.from_id)!, issue: entityById.get(relation.to_id)! })),
-				handoffs: await listHandoffsForInitiative(client, this.tenantId, initiative.id)
+				handoffs: await listHandoffsFiltered(client, this.tenantId, { initiativeId: initiative.id })
 			};
 		});
 	}
@@ -1154,6 +1267,109 @@ export class PgStore {
 				}
 			};
 		});
+	}
+
+	public async createHandoff(input: { entityId: string; summary?: string; body: string }): Promise<HandoffRecord> {
+		const summary = normalizeHandoffSummary(input.summary);
+		const body = normalizeHandoffBody(input.body);
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const focus = await getEntityOrThrow(client, this.tenantId, input.entityId);
+			const initiativeId = await resolveOwningInitiativeId(client, this.tenantId, focus);
+			const now = new Date().toISOString();
+			const id = await nextHandoffId(client, this.tenantId);
+
+			await client.query(
+				`INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				[this.tenantId, id, focus.id, initiativeId, summary, body, now]
+			);
+
+			return getHandoffOrThrow(client, this.tenantId, id);
+		});
+	}
+
+	public async updateHandoff(input: { handoffId: string; summary?: string; body?: string }): Promise<HandoffRecord> {
+		if (input.summary === undefined && input.body === undefined) {
+			throw new Error("Provide --summary, --body, or --body-file to update a handoff.");
+		}
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const current = await getHandoffOrThrow(client, this.tenantId, input.handoffId);
+			const summary = input.summary === undefined ? current.summary : normalizeHandoffSummary(input.summary);
+			const body = input.body === undefined ? current.body : normalizeHandoffBody(input.body);
+
+			await client.query(`UPDATE handoffs SET summary = $1, body = $2 WHERE tenant_id = $3 AND id = $4`, [
+				summary,
+				body,
+				this.tenantId,
+				input.handoffId
+			]);
+
+			return getHandoffOrThrow(client, this.tenantId, input.handoffId);
+		});
+	}
+
+	public async deleteHandoff(input: { handoffId: string }): Promise<HandoffDeleteResult> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const handoff = await getHandoffOrThrow(client, this.tenantId, input.handoffId);
+			const result = await client.query(`DELETE FROM handoffs WHERE tenant_id = $1 AND id = $2`, [this.tenantId, input.handoffId]);
+
+			return { handoff, removed: (result.rowCount ?? 0) > 0 };
+		});
+	}
+
+	public async getHandoffDetails(entityId: string): Promise<HandoffDetails> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const focus = await getEntityOrThrow(client, this.tenantId, entityId);
+			const structuralPath = await getStructuralPath(client, this.tenantId, entityId);
+			const initiativeAncestor =
+				focus.kind === "initiative" ? focus : (structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity ?? null);
+
+			const incomingResult = await client.query<EntityRow & { type: string }>(
+				`SELECT relations.type, entities.*
+				 FROM relations
+				 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+				 WHERE relations.tenant_id = $1 AND relations.to_id = $2
+				 ORDER BY entities.id`,
+				[this.tenantId, entityId]
+			);
+			const outgoingResult = await client.query<EntityRow & { type: string }>(
+				`SELECT relations.type, entities.*
+				 FROM relations
+				 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+				 WHERE relations.tenant_id = $1 AND relations.from_id = $2
+				 ORDER BY entities.id`,
+				[this.tenantId, entityId]
+			);
+			const statusMap = await getDerivedStatusMap(client, this.tenantId);
+			const focusDetails: EntityDetails = {
+				entity: applyDerivedStatus(focus, statusMap),
+				incoming: incomingResult.rows.map((row) => ({
+					relationType: row.type as RelationType,
+					entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+				})),
+				outgoing: outgoingResult.rows.map((row) => ({
+					relationType: row.type as RelationType,
+					entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+				}))
+			};
+
+			return {
+				focus: focusDetails,
+				structuralPath,
+				initiative: initiativeAncestor ? await this.getInitiativeBundle(initiativeAncestor.id) : null,
+				orphaned: focus.kind !== "initiative" && initiativeAncestor === null,
+				activeBlockers: focus.kind === "issue" ? await getActiveBlockingIssues(client, this.tenantId, focus.id) : [],
+				handoffs: initiativeAncestor
+					? await listHandoffsFiltered(client, this.tenantId, { initiativeId: initiativeAncestor.id })
+					: await listHandoffsFiltered(client, this.tenantId, { entityId: focus.id })
+			};
+		});
+	}
+
+	public async listHandoffs(filter?: { initiativeId?: string; entityId?: string }): Promise<HandoffRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => listHandoffsFiltered(client, this.tenantId, filter));
 	}
 
 	public async close(): Promise<void> {

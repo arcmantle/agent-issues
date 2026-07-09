@@ -283,4 +283,138 @@ describe("PgStore entity lifecycle", () => {
 		expect(snapshot.initiatives.map((bundle) => bundle.initiative.id)).toContain(initiative.id);
 		expect(snapshot.contexts.shared.context.exists).toBe(false);
 	});
+
+	describe("handoffs", () => {
+		it("persists a handoff anchored to the focus entity and its owning initiative", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Add handoff persistence" });
+
+			const handoff = await store.createHandoff({
+				entityId: issue.id,
+				summary: "Paused mid-refactor",
+				body: "## State\n\nStore layer done, UI pending."
+			});
+
+			expect(handoff.id).toMatch(/^HO\d+$/);
+			expect(handoff.entityId).toBe(issue.id);
+			expect(handoff.initiativeId).toBe(initiative.id);
+			expect(handoff.summary).toBe("Paused mid-refactor");
+			expect(handoff.body).toBe("## State\n\nStore layer done, UI pending.");
+		});
+
+		it("resolves the owning initiative when the focus is the initiative itself", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+
+			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Initiative-level handoff." });
+
+			expect(handoff.initiativeId).toBe(initiative.id);
+		});
+
+		it("rejects an empty handoff body", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+
+			await expect(store.createHandoff({ entityId: initiative.id, body: "   " })).rejects.toThrow(/body/i);
+		});
+
+		it("lists handoffs for an initiative newest first", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const first = await store.createHandoff({ entityId: initiative.id, body: "First handoff." });
+			const second = await store.createHandoff({ entityId: initiative.id, body: "Second handoff." });
+
+			const listed = await store.listHandoffs({ initiativeId: initiative.id });
+
+			expect(listed.map((handoff) => handoff.id)).toEqual([second.id, first.id]);
+		});
+
+		it("updates an existing handoff body and summary", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const handoff = await store.createHandoff({ entityId: initiative.id, summary: "Paused mid-refactor", body: "Initial draft." });
+
+			const updated = await store.updateHandoff({ handoffId: handoff.id, summary: "Ready for pickup", body: "Updated draft." });
+
+			expect(updated.id).toBe(handoff.id);
+			expect(updated.summary).toBe("Ready for pickup");
+			expect(updated.body).toBe("Updated draft.");
+		});
+
+		it("allows clearing a handoff summary while preserving the current body", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const handoff = await store.createHandoff({ entityId: initiative.id, summary: "Temporary summary", body: "Resume here." });
+
+			const updated = await store.updateHandoff({ handoffId: handoff.id, summary: "" });
+
+			expect(updated.summary).toBe("");
+			expect(updated.body).toBe("Resume here.");
+		});
+
+		it("rejects handoff updates that do not supply any mutable fields", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
+
+			await expect(store.updateHandoff({ handoffId: handoff.id })).rejects.toThrow(/provide/i);
+		});
+
+		it("deletes a handoff by id", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
+
+			const removed = await store.deleteHandoff({ handoffId: handoff.id });
+
+			expect(removed.handoff.id).toBe(handoff.id);
+			expect(removed.removed).toBe(true);
+			expect(await store.listHandoffs({ initiativeId: initiative.id })).toHaveLength(0);
+		});
+
+		it("exposes handoffs in the initiative bundle and snapshot", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
+			const handoff = await store.createHandoff({ entityId: issue.id, body: "Resume from the failing test." });
+
+			const bundle = await store.getInitiativeBundle(initiative.id);
+			expect(bundle.handoffs.map((entry) => entry.id)).toContain(handoff.id);
+
+			const snapshot = await store.getDatabaseSnapshot();
+			const bundled = snapshot.initiatives.find((entry) => entry.initiative.id === initiative.id);
+			expect(bundled?.handoffs.map((entry) => entry.id)).toContain(handoff.id);
+		});
+
+		it("returns saved handoffs, the owning initiative bundle, and active blockers from getHandoffDetails", async () => {
+			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
+			const blocker = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Blocker" });
+			await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
+			const handoff = await store.createHandoff({ entityId: issue.id, body: "Resume here." });
+
+			const details = await store.getHandoffDetails(issue.id);
+
+			expect(details.handoffs.map((entry) => entry.id)).toContain(handoff.id);
+			expect(details.initiative?.initiative.id).toBe(initiative.id);
+			expect(details.orphaned).toBe(false);
+			expect(details.activeBlockers.map((entity) => entity.id)).toEqual([blocker.id]);
+		});
+
+		it("keeps handoffs isolated per tenant even for an unfiltered listHandoffs call", async () => {
+			const tenantA = `tenant-${randomUUID()}`;
+			const tenantB = `tenant-${randomUUID()}`;
+			const storeA = new PgStore(appPool, tenantA);
+			const storeB = new PgStore(appPool, tenantB);
+
+			const initiativeA = await storeA.createEntity({ kind: "initiative", title: "Tenant A initiative" });
+			await storeA.createHandoff({ entityId: initiativeA.id, body: "Tenant A handoff." });
+			const initiativeB = await storeB.createEntity({ kind: "initiative", title: "Tenant B initiative" });
+
+			expect(await storeB.listHandoffs({ initiativeId: initiativeB.id })).toHaveLength(0);
+			expect(await storeA.listHandoffs({ initiativeId: initiativeA.id })).toHaveLength(1);
+		});
+	});
 });
