@@ -51,7 +51,10 @@ async function resolveIdentity(request: Request, authProvider: AuthProvider): Pr
 export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 	const { pool, authProvider } = options;
 	const app = express();
-	app.use(express.json());
+	// Express's default 100kb body limit is too small for `applyHistoryEntries`
+	// (ISS57/ADR16): `synchronize` sends a whole project's history log in one
+	// request, which routinely exceeds that for any project with real content.
+	app.use(express.json({ limit: "50mb" }));
 	const changeEvents = new ChangeEventBroadcaster();
 
 	app.get("/events", async (request, response) => {
