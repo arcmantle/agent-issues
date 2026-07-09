@@ -385,3 +385,23 @@ export function renderAuthStatus(session: AuthSessionView): string {
 export function renderAuthSwitch(session: AuthSessionView): string {
 	return `Switched to tenant ${session.tenantId} (${session.displayName ?? session.userId}).`;
 }
+
+export function renderCloudBind(binding: { projectIdentity: string; cloudApiUrl: string; tenantId: string }): string {
+	return `Bound project "${binding.projectIdentity}" to ${binding.cloudApiUrl} (tenant ${binding.tenantId}).`;
+}
+
+export function renderCloudUnbind(projectIdentity: string, wasBound: boolean): string {
+	return wasBound ? `Unbound project "${projectIdentity}" from cloud.` : `Project "${projectIdentity}" has no cloud binding.`;
+}
+
+export function renderCloudStatus(status: {
+	projectIdentity: string;
+	backend: "local" | "cloud";
+	binding?: { cloudApiUrl: string; tenantId: string };
+}): string {
+	if (status.backend === "local") {
+		return `Project "${status.projectIdentity}" is local.`;
+	}
+
+	return `Project "${status.projectIdentity}" is cloud-bound to ${status.binding?.cloudApiUrl} (tenant ${status.binding?.tenantId}).`;
+}
