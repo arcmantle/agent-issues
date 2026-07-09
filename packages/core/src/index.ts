@@ -5,5 +5,6 @@ export * from "./context-store.js";
 export * from "./schema.js";
 export * from "./storage-driver.js";
 export * from "./sqlite-store.js";
+export * from "./http-store.js";
 export * from "./project-identity.js";
 export * from "./auth-session.js";
