@@ -56,13 +56,20 @@ Session expires: 2026-07-09T13:22:21.198Z
 ## What this does not cover yet
 
 Running the cloud API and Postgres locally (so the whole dual-mode cloud
-path - not just the auth seam - runs without any Azure dependency) is
-separate, larger scope tracked under ISS39 (cloud API single Postgres gate)
-and ISS40 (HttpStore/backend switch). A first vertical slice of ISS39 -
-Postgres, RLS, and a `PgStore` covering the core entity-create/read path -
-is now in place; see "Local Postgres" below. The Express JSON-RPC gate,
-change/event stream, and the handoff/context/tenant-administration methods
-are still unstarted.
+path - not just the auth seam - runs without any Azure dependency) was
+tracked under ISS39 (cloud API single Postgres gate) and ISS40
+(HttpStore/backend switch). Both are now complete: `PgStore`, the Express
+JSON-RPC gate, the change/event stream, and `cloud bind`/`unbind`/`status`
+plus `synchronize` all work end to end against the local Postgres started
+below (see "Local Postgres"). There's no bundled long-running local cloud
+API server yet, though - starting one for manual testing still means
+writing a small script that calls `createApiServer` directly with a
+`LocalAuthProvider`.
+
+One known gap: `synchronize` currently replicates the `entities` and
+`history_entries` tables but not `relations`, so data that depends on
+relations (e.g. derived initiative status) can disagree between the local
+and cloud copies of the same project until that's fixed (tracked as ISS60).
 
 ## Local Postgres (ISS39, partial)
 
@@ -99,3 +106,36 @@ postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issue
 If you already had a container from before this role was introduced, the
 init script won't retroactively run - reset the volume once:
 `docker compose down -v && docker compose up -d`.
+
+## Browsing the local Postgres data (CloudBeaver)
+
+`docker compose up -d` also starts
+[CloudBeaver](https://github.com/dbeaver/cloudbeaver) Community Edition
+(`agent-issues-local-cloudbeaver`, port 8978) - a web UI for browsing tables,
+running ad-hoc SQL, and inspecting data without a desktop client.
+
+```
+http://localhost:8978
+```
+
+Log in with `agent_issues_admin` / `agent_issues_dev_only` (seeded via
+`CB_ADMIN_NAME`/`CB_ADMIN_PASSWORD`, so the first-run setup wizard is skipped).
+Two connections are pre-configured (from
+`docker/cloudbeaver/initial-data-sources.conf`, applied once to a fresh
+`agent-issues-cloudbeaver-workspace` volume) and visible to any logged-in
+user without further setup - `CLOUDBEAVER_APP_GRANT_CONNECTIONS_ACCESS_TO_ANONYMOUS_TEAM`
+grants every user's default team access to predefined connections, since
+CloudBeaver otherwise leaves them ungranted (and therefore invisible) until
+explicitly shared with a team:
+
+- **agent-issues (admin, bypasses RLS)** - connects as the `agent_issues`
+  superuser. Use this to see all tenants' data at once (RLS doesn't apply to
+  superusers - see above).
+- **agent-issues (app role, RLS enforced)** - connects as `agent_issues_app`,
+  the same role `PgStore` uses. Use this to see exactly what a given
+  session/tenant sees.
+
+If you reset the CloudBeaver volume (`docker compose down -v` or manually
+removing `agent-issues-cloudbeaver-workspace`), these connections and the
+admin login are reapplied automatically on next startup - nothing to
+reconfigure by hand.
