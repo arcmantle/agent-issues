@@ -9,6 +9,7 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
+			"@agent-issues/core/storage-driver-contract": fileURLToPath(new URL("../core/src/storage-driver-contract.ts", import.meta.url)),
 			"@agent-issues/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url))
 		}
 	}

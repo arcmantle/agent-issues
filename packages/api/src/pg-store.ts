@@ -33,6 +33,7 @@ import {
 	type ContextRecord,
 	type ContextTermRecord,
 	type DefineContextTermResult,
+	type DeleteTenantResult,
 	type EntityKind,
 	type EntityRecord,
 	type ForgetContextTermResult,
@@ -41,7 +42,11 @@ import {
 	type QueryContextDirectoryInput,
 	type QueryContextDirectoryResult,
 	type RelationRecord,
-	type RelationType
+	type RelationType,
+	type RenameTenantResult,
+	type StorageDriver,
+	type TenantRecordCounts,
+	type TenantSummary
 } from "@agent-issues/core";
 import type { Pool, PoolClient } from "pg";
 
@@ -85,6 +90,11 @@ type HandoffRow = {
 	summary: string;
 	body: string;
 	created_at: string;
+};
+
+type CounterRow = {
+	kind: string;
+	next_value: number;
 };
 
 export type EntityDetails = {
@@ -1109,20 +1119,108 @@ async function getContextTermRecord(client: PoolClient, tenantId: string, contex
 	return row ? mapContextTermRow(row) : null;
 }
 
+// Mirrors database.ts's formatTenantDisplayName field-for-field: strips a
+// trailing 12-hex-char workspace hash suffix, then title-cases the
+// remaining hyphen/underscore-separated segments.
+function formatTenantDisplayName(tenantId: string): string {
+	const withoutHashSuffix = tenantId.replace(/-[0-9a-f]{12}$/i, "");
+	return withoutHashSuffix
+		.split(/[-_]+/)
+		.filter((segment) => segment.length > 0)
+		.map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
+		.join(" ");
+}
+
+async function getTenantRecordCounts(client: PoolClient, tenantId: string): Promise<TenantRecordCounts> {
+	const result = await client.query<{
+		entity_count: string;
+		relation_count: string;
+		context_count: string;
+		context_term_count: string;
+		handoff_count: string;
+		history_entry_count: string;
+	}>(
+		`SELECT
+			(SELECT COUNT(*) FROM entities WHERE tenant_id = $1) AS entity_count,
+			(SELECT COUNT(*) FROM relations WHERE tenant_id = $1) AS relation_count,
+			(SELECT COUNT(*) FROM contexts WHERE tenant_id = $1) AS context_count,
+			(SELECT COUNT(*) FROM context_terms WHERE tenant_id = $1) AS context_term_count,
+			(SELECT COUNT(*) FROM handoffs WHERE tenant_id = $1) AS handoff_count,
+			(SELECT COUNT(*) FROM history_entries WHERE tenant_id = $1) AS history_entry_count`,
+		[tenantId]
+	);
+	const row = result.rows[0]!;
+
+	return {
+		contexts: Number(row.context_count),
+		contextTerms: Number(row.context_term_count),
+		entities: Number(row.entity_count),
+		handoffs: Number(row.handoff_count),
+		historyEntries: Number(row.history_entry_count),
+		relations: Number(row.relation_count)
+	};
+}
+
+async function getTenantCounterCount(client: PoolClient, tenantId: string): Promise<number> {
+	const result = await client.query<{ counter_count: string }>(`SELECT COUNT(*) AS counter_count FROM counters WHERE tenant_id = $1`, [
+		tenantId
+	]);
+	return Number(result.rows[0]!.counter_count);
+}
+
+async function tenantHasAnyRows(client: PoolClient, tenantId: string): Promise<boolean> {
+	const result = await client.query<{ has_rows: boolean }>(
+		`SELECT EXISTS(
+			SELECT 1 FROM counters WHERE tenant_id = $1
+			UNION SELECT 1 FROM entities WHERE tenant_id = $1
+			UNION SELECT 1 FROM relations WHERE tenant_id = $1
+			UNION SELECT 1 FROM contexts WHERE tenant_id = $1
+			UNION SELECT 1 FROM context_terms WHERE tenant_id = $1
+			UNION SELECT 1 FROM handoffs WHERE tenant_id = $1
+			UNION SELECT 1 FROM history_entries WHERE tenant_id = $1
+		) AS has_rows`,
+		[tenantId]
+	);
+	return result.rows[0]!.has_rows;
+}
+
+// RLS (ADR9, the 0001 migration) scopes every query to whatever
+// `app.tenant_id` is currently set to, so re-pointing it mid-transaction is
+// how a tenant-administration method deliberately looks at (or writes) rows
+// for a tenant other than the one `withTenantTransaction` opened for.
+async function setSessionTenant(client: PoolClient, tenantId: string): Promise<void> {
+	await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
+}
+
+// Tenant-administration methods only ever act on the calling store's own
+// tenant (ADR9): a request authenticated for one tenant must never be able
+// to delete or rename another tenant's data just by passing a different id.
+// This also matches Postgres reality - RLS makes every query silently see
+// zero rows for any tenant other than `this.tenantId`, so without this guard
+// a mismatched id would fail confusingly quiet instead of loud.
+function requireOwnTenant(ownTenantId: string, requestedTenantId: string, operation: string): void {
+	if (requestedTenantId !== ownTenantId) {
+		throw new Error(`${operation} may only act on this store's own tenant (${ownTenantId}), not ${requestedTenantId}.`);
+	}
+}
+
 /**
- * Postgres implementation of the entity-lifecycle slice of the
- * storage-driver seam (ADR11, ADR13, ISS39). Every method opens exactly one
- * `withTenantTransaction` (ADR9's `SET LOCAL app.tenant_id`), so RLS is
- * always active for the query.
+ * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
+ * Every method opens exactly one `withTenantTransaction` (ADR9's `SET LOCAL
+ * app.tenant_id`), so RLS is always active for the query.
  *
- * This is a partial implementation: it does not yet `implements
- * StorageDriver` because the tenant-administration section of that seam
- * (listTenants/deleteTenant/renameTenant) is unimplemented (tracked as
- * ISS39 follow-up issue ISS46), as is the JSON-RPC gate and change/event
- * stream (ISS47, ISS48). The handoffs (ISS44) and context/glossary (ISS45)
- * sections are fully implemented below.
+ * Tenant administration (`listTenants`/`deleteTenant`/`renameTenant`) is
+ * necessarily narrower here than `SqliteStore`'s: RLS makes each `PgStore`
+ * instance's own tenant the only one it can ever see or touch (ADR9), so
+ * these methods only ever report on or act on `this.tenantId` - never an
+ * arbitrary other tenant the way a single SQLite file's admin CLI can.
+ * `renameTenant` copies every row to the new tenant id under a temporarily
+ * re-pointed `app.tenant_id` and then deletes the old rows, rather than a
+ * single `UPDATE ... SET tenant_id`, because RLS's `USING` (old value) and
+ * `WITH CHECK` (new value) can never both pass for one statement scoped to
+ * a single session tenant id.
  */
-export class PgStore {
+export class PgStore implements StorageDriver {
 	public constructor(
 		private readonly pool: Pool,
 		public readonly tenantId: string
@@ -1854,6 +1952,192 @@ export class PgStore {
 				context: (await queryContextDetails(client, this.tenantId, input.scopeRef)).context,
 				term,
 				removed: (result.rowCount ?? 0) > 0
+			};
+		});
+	}
+
+	public async listTenants(): Promise<TenantSummary[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const counts = await getTenantRecordCounts(client, this.tenantId);
+			const hasRows = Object.values(counts).some((count) => count > 0);
+
+			if (!hasRows) {
+				return [];
+			}
+
+			return [{ counts, displayName: formatTenantDisplayName(this.tenantId), id: this.tenantId }];
+		});
+	}
+
+	public async deleteTenant(tenantId: string): Promise<DeleteTenantResult> {
+		requireOwnTenant(this.tenantId, tenantId, "deleteTenant");
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const counts = await getTenantRecordCounts(client, tenantId);
+
+			await client.query(`DELETE FROM handoffs WHERE tenant_id = $1`, [tenantId]);
+			await client.query(`DELETE FROM history_entries WHERE tenant_id = $1`, [tenantId]);
+			await client.query(`DELETE FROM context_terms WHERE tenant_id = $1`, [tenantId]);
+			await client.query(`DELETE FROM relations WHERE tenant_id = $1`, [tenantId]);
+			await client.query(`DELETE FROM contexts WHERE tenant_id = $1`, [tenantId]);
+			await client.query(`DELETE FROM entities WHERE tenant_id = $1`, [tenantId]);
+			const deleteCounters = await client.query(`DELETE FROM counters WHERE tenant_id = $1`, [tenantId]);
+			const counters = deleteCounters.rowCount ?? 0;
+
+			return {
+				counters,
+				counts,
+				displayName: formatTenantDisplayName(tenantId),
+				removed: counters > 0 || Object.values(counts).some((count) => count > 0),
+				tenantId
+			};
+		});
+	}
+
+	public async renameTenant(previousTenantId: string, newTenantId: string): Promise<RenameTenantResult> {
+		requireOwnTenant(this.tenantId, previousTenantId, "renameTenant");
+
+		if (previousTenantId === newTenantId) {
+			throw new Error("Source and destination tenant ids are the same.");
+		}
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			// Briefly re-point RLS at the destination to answer "does it already
+			// have rows?" - `previousTenantId`'s scope can never see that.
+			await setSessionTenant(client, newTenantId);
+			const targetHasRows = await tenantHasAnyRows(client, newTenantId);
+			await setSessionTenant(client, previousTenantId);
+
+			if (targetHasRows) {
+				throw new Error(`Target tenant already exists: ${newTenantId}`);
+			}
+
+			const counts = await getTenantRecordCounts(client, previousTenantId);
+			const counters = await getTenantCounterCount(client, previousTenantId);
+			const renamed = counters > 0 || Object.values(counts).some((count) => count > 0);
+
+			if (!renamed) {
+				return {
+					counters,
+					counts,
+					newDisplayName: formatTenantDisplayName(newTenantId),
+					newTenantId,
+					previousDisplayName: formatTenantDisplayName(previousTenantId),
+					previousTenantId,
+					renamed: false
+				};
+			}
+
+			const entityRows = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1`, [previousTenantId]);
+			const relationRows = await client.query<RelationRow>(`SELECT * FROM relations WHERE tenant_id = $1`, [previousTenantId]);
+			const contextRows = await client.query<ContextRow>(`SELECT * FROM contexts WHERE tenant_id = $1`, [previousTenantId]);
+			const contextTermRows = await client.query<ContextTermRow & { context_key: string }>(
+				`SELECT * FROM context_terms WHERE tenant_id = $1`,
+				[previousTenantId]
+			);
+			const handoffRows = await client.query<HandoffRow>(`SELECT * FROM handoffs WHERE tenant_id = $1`, [previousTenantId]);
+			const historyRows = await client.query<HistoryEntryRow>(`SELECT * FROM history_entries WHERE tenant_id = $1`, [previousTenantId]);
+			const counterRows = await client.query<CounterRow>(`SELECT * FROM counters WHERE tenant_id = $1`, [previousTenantId]);
+
+			// `history_entries.id` is a bare (non-tenant-scoped) primary key, so
+			// the old rows must be gone before re-inserting the same ids under
+			// the new tenant id - unlike every other table, whose primary key
+			// includes tenant_id and so tolerates the copy-before-delete order.
+			await client.query(`DELETE FROM history_entries WHERE tenant_id = $1`, [previousTenantId]);
+
+			// Copy every row under the new tenant id (parent tables - entities,
+			// contexts - before the tables that foreign-key to them), then
+			// delete the old rows. A single cross-value `UPDATE ... SET
+			// tenant_id` cannot satisfy RLS's USING (old value) and WITH CHECK
+			// (new value) in one statement scoped to one session tenant id.
+			await setSessionTenant(client, newTenantId);
+
+			for (const row of entityRows.rows) {
+				await client.query(
+					`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+					[newTenantId, row.id, row.kind, row.title, row.status, row.body, row.body_source, row.created_at, row.updated_at]
+				);
+			}
+
+			for (const row of contextRows.rows) {
+				await client.query(
+					`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+					[newTenantId, row.key, row.scope_entity_id, row.title, row.summary, row.created_at, row.updated_at]
+				);
+			}
+
+			for (const row of relationRows.rows) {
+				await client.query(`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at) VALUES ($1, $2, $3, $4, $5)`, [
+					newTenantId,
+					row.from_id,
+					row.to_id,
+					row.type,
+					row.created_at
+				]);
+			}
+
+			for (const row of handoffRows.rows) {
+				await client.query(
+					`INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+					[newTenantId, row.id, row.entity_id, row.initiative_id, row.summary, row.body, row.created_at]
+				);
+			}
+
+			for (const row of contextTermRows.rows) {
+				await client.query(
+					`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+					[newTenantId, row.context_key, row.term, row.definition, row.avoid_terms, row.created_at, row.updated_at]
+				);
+			}
+
+			for (const row of historyRows.rows) {
+				await client.query(
+					`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+					[
+						row.id,
+						newTenantId,
+						row.entity_id,
+						row.version,
+						row.author,
+						row.title,
+						row.body,
+						row.body_source,
+						row.status,
+						row.parent_id,
+						row.created_at
+					]
+				);
+			}
+
+			for (const row of counterRows.rows) {
+				await client.query(`INSERT INTO counters (tenant_id, kind, next_value) VALUES ($1, $2, $3)`, [
+					newTenantId,
+					row.kind,
+					row.next_value
+				]);
+			}
+
+			await setSessionTenant(client, previousTenantId);
+			await client.query(`DELETE FROM handoffs WHERE tenant_id = $1`, [previousTenantId]);
+			await client.query(`DELETE FROM context_terms WHERE tenant_id = $1`, [previousTenantId]);
+			await client.query(`DELETE FROM relations WHERE tenant_id = $1`, [previousTenantId]);
+			await client.query(`DELETE FROM contexts WHERE tenant_id = $1`, [previousTenantId]);
+			await client.query(`DELETE FROM entities WHERE tenant_id = $1`, [previousTenantId]);
+			await client.query(`DELETE FROM counters WHERE tenant_id = $1`, [previousTenantId]);
+
+			return {
+				counters,
+				counts,
+				newDisplayName: formatTenantDisplayName(newTenantId),
+				newTenantId,
+				previousDisplayName: formatTenantDisplayName(previousTenantId),
+				previousTenantId,
+				renamed: true
 			};
 		});
 	}
