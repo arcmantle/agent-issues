@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import {
+	DEFAULT_CONTEXT_KEY,
+	DEFAULT_CONTEXT_SUMMARY,
+	DEFAULT_CONTEXT_TITLE,
 	DEFAULT_EPIC_ID,
 	DEFAULT_EPIC_TITLE,
 	DEFAULT_PROJECT_ID,
@@ -19,8 +22,11 @@ import {
 	RESERVED_SYSTEM_AUTHOR,
 	ID_PREFIX,
 	type BodySource,
+	type ContextDetails,
+	type ContextTermRecord,
 	type EntityKind,
 	type EntityRecord,
+	type HandoffRecord,
 	type HistoryEntryRecord,
 	type RelationRecord,
 	type RelationType
@@ -60,6 +66,15 @@ type HistoryEntryRow = {
 	created_at: string;
 };
 
+type HandoffRow = {
+	id: string;
+	entity_id: string;
+	initiative_id: string | null;
+	summary: string;
+	body: string;
+	created_at: string;
+};
+
 export type EntityDetails = {
 	entity: EntityRecord;
 	incoming: Array<{ relationType: RelationType; entity: EntityRecord }>;
@@ -91,6 +106,32 @@ export type MoveResult = {
 export type DeleteResult = {
 	entity: EntityRecord;
 	removed: boolean;
+};
+
+export type InitiativeBundle = {
+	initiative: EntityRecord;
+	prds: EntityRecord[];
+	userStories: EntityRecord[];
+	adrs: EntityRecord[];
+	issues: EntityRecord[];
+	fixLinks: Array<{ issue: EntityRecord; userStory: EntityRecord }>;
+	subIssueLinks: Array<{ parent: EntityRecord; issue: EntityRecord }>;
+	blockerLinks: Array<{ source: EntityRecord; target: EntityRecord }>;
+	constrainsLinks: Array<{ adr: EntityRecord; issue: EntityRecord }>;
+	handoffs: HandoffRecord[];
+};
+
+export type DatabaseSnapshot = {
+	generatedAt: string;
+	entities: EntityRecord[];
+	relations: RelationRecord[];
+	orphans: EntityRecord[];
+	projectAdrs: EntityRecord[];
+	initiatives: InitiativeBundle[];
+	contexts: {
+		shared: ContextDetails;
+		initiatives: ContextDetails[];
+	};
 };
 
 /**
@@ -491,6 +532,114 @@ async function getInitiativeChildStatuses(
 	};
 }
 
+async function getAllDerivedEntities(client: PoolClient, tenantId: string): Promise<EntityRecord[]> {
+	return deriveEntityStatuses(await getAllEntities(client, tenantId), await getAllRelations(client, tenantId));
+}
+
+function mapHandoffRow(row: HandoffRow): HandoffRecord {
+	return {
+		id: row.id,
+		entityId: row.entity_id,
+		initiativeId: row.initiative_id,
+		summary: row.summary ?? "",
+		body: row.body,
+		createdAt: row.created_at
+	};
+}
+
+// Read-only for now: exposed publicly (with create/update/delete) by ISS44,
+// which owns the handoffs section of the storage-driver seam. Reused here
+// so getInitiativeBundle/getDatabaseSnapshot embed real handoff data
+// instead of a placeholder.
+async function listHandoffsForInitiative(client: PoolClient, tenantId: string, initiativeId: string): Promise<HandoffRecord[]> {
+	const result = await client.query<HandoffRow>(
+		`SELECT * FROM handoffs WHERE tenant_id = $1 AND initiative_id = $2 ORDER BY created_at DESC, id DESC`,
+		[tenantId, initiativeId]
+	);
+
+	return result.rows.map(mapHandoffRow);
+}
+
+// Read-only shared/initiative context lookup, scoped to exactly the two
+// keys getDatabaseSnapshot needs ("default" and an initiative's own id,
+// which is always its own context key). Deliberately does NOT implement
+// resolveContextScope's general entity-to-owning-initiative walk, term
+// definition/forgetting, or directory search - that is ISS45's full
+// context/glossary section. Falls back to the same "not configured yet"
+// default shape core's `createContextRecord` produces when no row exists,
+// so this is honest about what's actually queryable today, not a fabricated
+// placeholder.
+async function getContextDetailsForSnapshot(
+	client: PoolClient,
+	tenantId: string,
+	scope: { key: string; scopeKind: "default" | "initiative"; scopeEntityId: string | null; scopeLabel: string; defaultTitle: string; defaultSummary: string }
+): Promise<ContextDetails> {
+	const result = await client.query<{
+		key: string;
+		scope_entity_id: string | null;
+		title: string;
+		summary: string;
+		created_at: string;
+		updated_at: string;
+	}>(`SELECT * FROM contexts WHERE tenant_id = $1 AND key = $2`, [tenantId, scope.key]);
+	const row = result.rows[0];
+	const termRows = row
+		? (
+				await client.query<{ term: string; definition: string; avoid_terms: string; created_at: string; updated_at: string }>(
+					`SELECT term, definition, avoid_terms, created_at, updated_at FROM context_terms WHERE tenant_id = $1 AND context_key = $2 ORDER BY lower(term), term`,
+					[tenantId, scope.key]
+				)
+			).rows
+		: [];
+	const terms: ContextTermRecord[] = termRows.map((termRow) => ({
+		term: termRow.term,
+		definition: termRow.definition,
+		avoid: parseAvoidTerms(termRow.avoid_terms),
+		createdAt: termRow.created_at,
+		updatedAt: termRow.updated_at
+	}));
+
+	return {
+		context: row
+			? {
+					key: row.key,
+					scopeKind: scope.scopeKind,
+					scopeEntityId: row.scope_entity_id,
+					scopeLabel: scope.scopeLabel,
+					title: row.title,
+					summary: row.summary,
+					createdAt: row.created_at,
+					updatedAt: row.updated_at,
+					exists: true
+				}
+			: {
+					key: scope.key,
+					scopeKind: scope.scopeKind,
+					scopeEntityId: scope.scopeEntityId,
+					scopeLabel: scope.scopeLabel,
+					title: scope.defaultTitle,
+					summary: scope.defaultSummary,
+					createdAt: null,
+					updatedAt: null,
+					exists: false
+				},
+		terms
+	};
+}
+
+function parseAvoidTerms(value: string): string[] {
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		if (!Array.isArray(parsed)) {
+			return [];
+		}
+
+		return parsed.filter((item): item is string => typeof item === "string");
+	} catch {
+		return [];
+	}
+}
+
 /**
  * Postgres implementation of the entity-lifecycle slice of the
  * storage-driver seam (ADR11, ADR13, ISS39). Every method opens exactly one
@@ -498,13 +647,11 @@ async function getInitiativeChildStatuses(
  * always active for the query.
  *
  * This is a partial implementation: it does not yet `implements
- * StorageDriver` because the handoff, context, tenant-administration, and
- * read-aggregation (listOrphans/listProjectAdrs/getDatabaseSnapshot/
- * getInitiativeBundle) sections of that seam are unimplemented here
- * (tracked as ISS39 follow-up issues ISS43-ISS46), as is the JSON-RPC gate
- * and change/event stream (ISS47, ISS48). The mutation guards below (ISS42)
- * DO mirror `store.ts`'s full business-rule parity, unlike the earlier
- * tracer-bullet slice's placeholder note suggested.
+ * StorageDriver` because the handoff (beyond the read-only helper reused
+ * here), context/glossary (beyond the minimal shared/initiative lookup
+ * reused here), and tenant-administration sections of that seam are
+ * unimplemented (tracked as ISS39 follow-up issues ISS44-ISS46), as is the
+ * JSON-RPC gate and change/event stream (ISS47, ISS48).
  */
 export class PgStore {
 	public constructor(
@@ -855,6 +1002,157 @@ export class PgStore {
 			const result = await client.query(`DELETE FROM entities WHERE tenant_id = $1 AND id = $2`, [this.tenantId, input.entityId]);
 
 			return { entity, removed: (result.rowCount ?? 0) > 0 };
+		});
+	}
+
+	public async listOrphans(kind?: string): Promise<EntityRecord[]> {
+		if (kind && !isEntityKind(kind)) {
+			throw new Error(`Unknown entity kind: ${kind}`);
+		}
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const entities = await getAllEntities(client, this.tenantId);
+			const relations = await getAllRelations(client, this.tenantId);
+			const reachable = new Set<string>();
+
+			for (const entity of entities) {
+				if (entity.kind !== "initiative") {
+					continue;
+				}
+
+				for (const id of collectReachableIds(relations, entity.id)) {
+					reachable.add(id);
+				}
+			}
+
+			const statusMap = await getDerivedStatusMap(client, this.tenantId);
+			return entities
+				.filter((entity) => {
+					if (entity.kind === "initiative" || entity.kind === "adr" || entity.kind === "project" || entity.kind === "epic") {
+						return false;
+					}
+
+					if (kind && entity.kind !== kind) {
+						return false;
+					}
+
+					return !reachable.has(entity.id);
+				})
+				.map((entity) => applyDerivedStatus(entity, statusMap));
+		});
+	}
+
+	public async listProjectAdrs(): Promise<EntityRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const entities = await getAllEntities(client, this.tenantId);
+			const relations = await getAllRelations(client, this.tenantId);
+			const childIds = new Set(relations.filter((relation) => isStructuralRelationType(relation.type)).map((relation) => relation.toId));
+
+			return entities.filter((entity) => entity.kind === "adr" && !childIds.has(entity.id));
+		});
+	}
+
+	public async getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const initiative = await getEntityOrThrow(client, this.tenantId, initiativeId);
+			if (initiative.kind !== "initiative") {
+				throw new Error(`${initiativeId} is not an initiative.`);
+			}
+
+			const reachableResult = await client.query<{ id: string }>(
+				`WITH RECURSIVE reachable(id) AS (
+				   SELECT $1::text
+				   UNION
+				   SELECT relations.to_id
+				   FROM relations
+				   JOIN reachable ON relations.from_id = reachable.id
+				   WHERE relations.tenant_id = $2
+				 )
+				 SELECT id FROM reachable`,
+				[initiativeId, this.tenantId]
+			);
+			const reachableIds = reachableResult.rows.map((row) => row.id);
+
+			const entityRows = await client.query<EntityRow>(
+				`SELECT * FROM entities WHERE tenant_id = $1 AND id = ANY($2::text[]) ORDER BY id`,
+				[this.tenantId, reachableIds]
+			);
+			const relationRows = await client.query<RelationRow>(
+				`SELECT * FROM relations WHERE tenant_id = $1 AND from_id = ANY($2::text[]) AND to_id = ANY($2::text[])`,
+				[this.tenantId, reachableIds]
+			);
+
+			const entities = entityRows.rows.map(mapEntityRow);
+			const statusMap = await getDerivedStatusMap(client, this.tenantId);
+			const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, statusMap));
+			const entityById = new Map(derivedEntities.map((entity) => [entity.id, entity]));
+
+			return {
+				initiative: applyDerivedStatus(initiative, statusMap),
+				prds: derivedEntities.filter((entity) => entity.kind === "prd"),
+				userStories: derivedEntities.filter((entity) => entity.kind === "userStory"),
+				adrs: derivedEntities.filter((entity) => entity.kind === "adr"),
+				issues: derivedEntities.filter((entity) => entity.kind === "issue"),
+				fixLinks: relationRows.rows
+					.filter((relation) => relation.type === "fixes")
+					.map((relation) => ({ issue: entityById.get(relation.from_id)!, userStory: entityById.get(relation.to_id)! })),
+				subIssueLinks: relationRows.rows
+					.filter((relation) => relation.type === "decomposes")
+					.map((relation) => ({ parent: entityById.get(relation.from_id)!, issue: entityById.get(relation.to_id)! })),
+				blockerLinks: relationRows.rows
+					.filter((relation) => relation.type === "blocks")
+					.map((relation) => ({ source: entityById.get(relation.from_id)!, target: entityById.get(relation.to_id)! })),
+				constrainsLinks: relationRows.rows
+					.filter((relation) => relation.type === "constrains")
+					.map((relation) => ({ adr: entityById.get(relation.from_id)!, issue: entityById.get(relation.to_id)! })),
+				handoffs: await listHandoffsForInitiative(client, this.tenantId, initiative.id)
+			};
+		});
+	}
+
+	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const entities = await getAllDerivedEntities(client, this.tenantId);
+			const relations = await getAllRelations(client, this.tenantId);
+			const initiatives = entities.filter((entity) => entity.kind === "initiative");
+
+			const orphans = await this.listOrphans();
+			const projectAdrs = await this.listProjectAdrs();
+			const initiativeBundles = await Promise.all(initiatives.map((entity) => this.getInitiativeBundle(entity.id)));
+
+			const sharedContext = await getContextDetailsForSnapshot(client, this.tenantId, {
+				key: DEFAULT_CONTEXT_KEY,
+				scopeKind: "default",
+				scopeEntityId: null,
+				scopeLabel: "Shared",
+				defaultTitle: DEFAULT_CONTEXT_TITLE,
+				defaultSummary: DEFAULT_CONTEXT_SUMMARY
+			});
+			const initiativeContexts = await Promise.all(
+				initiatives.map((entity) =>
+					getContextDetailsForSnapshot(client, this.tenantId, {
+						key: entity.id,
+						scopeKind: "initiative",
+						scopeEntityId: entity.id,
+						scopeLabel: entity.title,
+						defaultTitle: `${entity.title} Context`,
+						defaultSummary: `Glossary of initiative-specific domain terms for ${entity.title}.`
+					})
+				)
+			);
+
+			return {
+				generatedAt: new Date().toISOString(),
+				entities,
+				relations,
+				orphans,
+				projectAdrs,
+				initiatives: initiativeBundles,
+				contexts: {
+					shared: sharedContext,
+					initiatives: initiativeContexts
+				}
+			};
 		});
 	}
 

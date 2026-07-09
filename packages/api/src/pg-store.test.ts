@@ -212,4 +212,75 @@ describe("PgStore entity lifecycle", () => {
 		const deleted = await store.deleteEntity({ entityId: subIssue.id });
 		expect(deleted.removed).toBe(true);
 	});
+
+	it("lists orphans, excluding initiatives/ADRs/project/epic and anything reachable from an initiative", async () => {
+		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		await store.createEntity({ kind: "issue", title: "Tracked issue", parentId: initiative.id });
+		const orphanIssue = await store.createEntity({ kind: "issue", title: "Orphan issue" });
+		const orphanAdr = await store.createEntity({ kind: "adr", title: "Project-scoped ADR" });
+
+		const orphans = await store.listOrphans();
+		expect(orphans.map((entity) => entity.id)).toContain(orphanIssue.id);
+		expect(orphans.map((entity) => entity.id)).not.toContain(orphanAdr.id);
+		expect(orphans.map((entity) => entity.id)).not.toContain(initiative.id);
+
+		const orphanIssuesOnly = await store.listOrphans("issue");
+		expect(orphanIssuesOnly.map((entity) => entity.id)).toEqual([orphanIssue.id]);
+	});
+
+	it("lists project-scoped ADRs (not linked from any initiative)", async () => {
+		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		const initiativeAdr = await store.createEntity({ kind: "adr", title: "Initiative ADR", parentId: initiative.id });
+		const projectAdr = await store.createEntity({ kind: "adr", title: "Project ADR" });
+
+		const projectAdrs = await store.listProjectAdrs();
+		expect(projectAdrs.map((entity) => entity.id)).toContain(projectAdr.id);
+		expect(projectAdrs.map((entity) => entity.id)).not.toContain(initiativeAdr.id);
+	});
+
+	it("builds an initiative bundle with prds, stories, issues, adrs, and link groups", async () => {
+		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
+		const story = await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
+		const issue = await store.createEntity({ kind: "issue", title: "Fixing issue", parentId: initiative.id });
+		const subIssue = await store.createEntity({ kind: "issue", title: "Sub issue", parentId: initiative.id });
+		const blocker = await store.createEntity({ kind: "issue", title: "Blocker", parentId: initiative.id });
+		const adr = await store.createEntity({ kind: "adr", title: "ADR", parentId: initiative.id });
+
+		await store.linkEntities({ fromId: issue.id, toId: story.id, relationType: "fixes" });
+		await store.linkEntities({ fromId: issue.id, toId: subIssue.id, relationType: "decomposes" });
+		await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
+		await store.linkEntities({ fromId: adr.id, toId: issue.id, relationType: "constrains" });
+
+		const bundle = await store.getInitiativeBundle(initiative.id);
+		expect(bundle.initiative.id).toBe(initiative.id);
+		expect(bundle.prds.map((entity) => entity.id)).toEqual([prd.id]);
+		expect(bundle.userStories.map((entity) => entity.id)).toEqual([story.id]);
+		expect(bundle.issues.map((entity) => entity.id).sort()).toEqual([blocker.id, issue.id, subIssue.id].sort());
+		expect(bundle.adrs.map((entity) => entity.id)).toEqual([adr.id]);
+		expect(bundle.fixLinks).toEqual([{ issue: expect.objectContaining({ id: issue.id }), userStory: expect.objectContaining({ id: story.id }) }]);
+		expect(bundle.subIssueLinks).toEqual([{ parent: expect.objectContaining({ id: issue.id }), issue: expect.objectContaining({ id: subIssue.id }) }]);
+		expect(bundle.blockerLinks).toEqual([{ source: expect.objectContaining({ id: blocker.id }), target: expect.objectContaining({ id: issue.id }) }]);
+		expect(bundle.constrainsLinks).toEqual([{ adr: expect.objectContaining({ id: adr.id }), issue: expect.objectContaining({ id: issue.id }) }]);
+		expect(bundle.handoffs).toEqual([]);
+
+		await expect(store.getInitiativeBundle(issue.id)).rejects.toThrow("not an initiative");
+	});
+
+	it("reads a full tenant snapshot with entities, relations, orphans, project adrs, and initiative bundles", async () => {
+		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		await store.createEntity({ kind: "issue", title: "Tracked issue", parentId: initiative.id });
+		const orphanAdr = await store.createEntity({ kind: "adr", title: "Project ADR" });
+
+		const snapshot = await store.getDatabaseSnapshot();
+		expect(snapshot.entities.map((entity) => entity.id)).toContain(initiative.id);
+		expect(snapshot.relations.length).toBeGreaterThan(0);
+		expect(snapshot.projectAdrs.map((entity) => entity.id)).toContain(orphanAdr.id);
+		expect(snapshot.initiatives.map((bundle) => bundle.initiative.id)).toContain(initiative.id);
+		expect(snapshot.contexts.shared.context.exists).toBe(false);
+	});
 });
