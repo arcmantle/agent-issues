@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
 import { ENTITY_KINDS } from "./domain.js";
+
+const MIGRATIONS_FOLDER = path.join(import.meta.dirname, "..", "drizzle");
 
 export type DatabaseHandle = Database.Database & {
 	tenantId: string;
@@ -374,14 +379,46 @@ function tenantHasAnyRows(db: Database.Database, tenantId: string): boolean {
 }
 
 function migrateDatabase(db: DatabaseHandle): void {
-	ensureMetadataTable(db);
 	if (needsTenantSchemaMigration(db)) {
 		migrateCurrentDatabaseToTenantSchema(db);
+	} else {
+		applyBaselineAndForwardMigrations(db);
 	}
-	createTenantScopedTables(db);
 	ensureEntityBodyColumn(db);
 	ensureEntityBodySourceColumn(db);
 	upsertSchemaVersion(db, "7");
+}
+
+function applyBaselineAndForwardMigrations(db: DatabaseHandle): void {
+	if (databasePredatesDrizzle(db)) {
+		seedDrizzleBaseline(db);
+	}
+
+	migrate(drizzle(db), { migrationsFolder: MIGRATIONS_FOLDER });
+}
+
+function databasePredatesDrizzle(db: DatabaseHandle): boolean {
+	return tableExists(db, "entities") && !tableExists(db, "__drizzle_migrations");
+}
+
+function seedDrizzleBaseline(db: DatabaseHandle): void {
+	const [baseline] = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER });
+	if (!baseline) {
+		throw new Error("Missing Drizzle baseline migration.");
+	}
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS __drizzle_migrations (
+			id SERIAL PRIMARY KEY,
+			hash text NOT NULL,
+			created_at numeric
+		)
+	`);
+
+	const recorded = db.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
+	if (recorded.count === 0) {
+		db.prepare(`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)`).run(baseline.hash, baseline.folderMillis);
+	}
 }
 
 function ensureEntityBodyColumn(db: DatabaseHandle): void {
@@ -394,15 +431,6 @@ function ensureEntityBodySourceColumn(db: DatabaseHandle): void {
 	if (tableExists(db, "entities") && !tableHasColumn(db, "entities", "body_source")) {
 		db.exec(`ALTER TABLE entities ADD COLUMN body_source TEXT NOT NULL DEFAULT 'authored'`);
 	}
-}
-
-function ensureMetadataTable(db: DatabaseHandle): void {
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS metadata (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)
-	`);
 }
 
 function needsTenantSchemaMigration(db: DatabaseHandle): boolean {
@@ -420,8 +448,12 @@ function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): void {
 		renameTableIfExists(db, "relations", "legacy_relations");
 		renameTableIfExists(db, "contexts", "legacy_contexts");
 		renameTableIfExists(db, "context_terms", "legacy_context_terms");
+		dropTableIfExists(db, "metadata");
+	})();
 
-		createTenantScopedTables(db);
+	applyBaselineAndForwardMigrations(db);
+
+	db.transaction(() => {
 		copyLegacyTablesIntoTenant(db, "main", db.tenantId, "legacy_");
 		dropTableIfExists(db, "legacy_context_terms");
 		dropTableIfExists(db, "legacy_contexts");
@@ -429,84 +461,6 @@ function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): void {
 		dropTableIfExists(db, "legacy_entities");
 		dropTableIfExists(db, "legacy_counters");
 	})();
-}
-
-function createTenantScopedTables(db: DatabaseHandle): void {
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS counters (
-			tenant_id TEXT NOT NULL,
-			kind TEXT NOT NULL,
-			next_value INTEGER NOT NULL,
-			PRIMARY KEY (tenant_id, kind)
-		);
-
-		CREATE TABLE IF NOT EXISTS entities (
-			tenant_id TEXT NOT NULL,
-			id TEXT NOT NULL,
-			kind TEXT NOT NULL,
-			title TEXT NOT NULL,
-			status TEXT NOT NULL,
-			body TEXT NOT NULL DEFAULT '',
-			body_source TEXT NOT NULL DEFAULT 'authored',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY (tenant_id, id)
-		);
-
-		CREATE TABLE IF NOT EXISTS relations (
-			tenant_id TEXT NOT NULL,
-			from_id TEXT NOT NULL,
-			to_id TEXT NOT NULL,
-			type TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			PRIMARY KEY (tenant_id, from_id, to_id, type),
-			FOREIGN KEY (tenant_id, from_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE,
-			FOREIGN KEY (tenant_id, to_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE
-		);
-
-		CREATE TABLE IF NOT EXISTS contexts (
-			tenant_id TEXT NOT NULL,
-			key TEXT NOT NULL,
-			scope_entity_id TEXT,
-			title TEXT NOT NULL,
-			summary TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY (tenant_id, key),
-			FOREIGN KEY (tenant_id, scope_entity_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE
-		);
-
-		CREATE TABLE IF NOT EXISTS context_terms (
-			tenant_id TEXT NOT NULL,
-			context_key TEXT NOT NULL,
-			term TEXT NOT NULL,
-			definition TEXT NOT NULL,
-			avoid_terms TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY (tenant_id, context_key, term),
-			FOREIGN KEY (tenant_id, context_key) REFERENCES contexts(tenant_id, key) ON DELETE CASCADE
-		);
-
-		CREATE TABLE IF NOT EXISTS handoffs (
-			tenant_id TEXT NOT NULL,
-			id TEXT NOT NULL,
-			entity_id TEXT NOT NULL,
-			initiative_id TEXT,
-			summary TEXT NOT NULL DEFAULT '',
-			body TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			PRIMARY KEY (tenant_id, id),
-			FOREIGN KEY (tenant_id, entity_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE,
-			FOREIGN KEY (tenant_id, initiative_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE
-		);
-
-		CREATE INDEX IF NOT EXISTS relations_tenant_to_id_idx ON relations(tenant_id, to_id);
-		CREATE INDEX IF NOT EXISTS context_terms_tenant_context_key_idx ON context_terms(tenant_id, context_key);
-		CREATE INDEX IF NOT EXISTS handoffs_tenant_initiative_id_idx ON handoffs(tenant_id, initiative_id);
-		CREATE INDEX IF NOT EXISTS handoffs_tenant_entity_id_idx ON handoffs(tenant_id, entity_id);
-		CREATE UNIQUE INDEX IF NOT EXISTS contexts_tenant_scope_entity_id_idx ON contexts(tenant_id, scope_entity_id) WHERE scope_entity_id IS NOT NULL;
-	`);
 }
 
 function ensureTenantCounters(db: DatabaseHandle): void {

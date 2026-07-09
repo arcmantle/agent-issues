@@ -8,6 +8,7 @@
 	},
 	"files": [
 		"dist",
+		"drizzle",
 		"site/dist",
 		".github/agents",
 		".github/hooks",
@@ -20,6 +21,7 @@
 		"prepare": "pnpm run build",
 		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && pnpm --dir site build && tsc -p tsconfig.json",
 		"postbuild": "node --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/cli.js', 0o755);\"",
+		"db:generate": "drizzle-kit generate",
 		"site:dev": "pnpm --dir site dev",
 		"test": "vitest run",
 		"test:watch": "vitest",
@@ -28,12 +30,14 @@
 	"devDependencies": {
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^25.9.2",
+		"drizzle-kit": "^0.31.10",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.8"
 	},
 	"dependencies": {
 		"better-sqlite3": "^12.10.0",
 		"clipanion": "4.0.0-rc.4",
+		"drizzle-orm": "^0.45.2",
 		"fuse.js": "^7.4.2"
 	}
 }
