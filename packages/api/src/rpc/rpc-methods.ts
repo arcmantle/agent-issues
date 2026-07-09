@@ -43,5 +43,16 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	queryContextDirectory: async (store, params) => store.queryContextDirectory(params as Parameters<PgStore["queryContextDirectory"]>[0]),
 	upsertContext: async (store, params) => store.upsertContext(params as Parameters<PgStore["upsertContext"]>[0]),
 	defineContextTerm: async (store, params) => store.defineContextTerm(params as Parameters<PgStore["defineContextTerm"]>[0]),
-	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<PgStore["forgetContextTerm"]>[0])
+	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<PgStore["forgetContextTerm"]>[0]),
+
+	// Tenant administration (ISS52). `PgStore`'s guard against acting on any
+	// tenant other than the auth-seam-resolved one (ISS46's requireOwnTenant)
+	// is enforced inside these methods themselves; the gate adds no
+	// additional authorization surface.
+	listTenants: async (store) => store.listTenants(),
+	deleteTenant: async (store, params) => store.deleteTenant((params as { tenantId: string }).tenantId),
+	renameTenant: async (store, params) => {
+		const { previousTenantId, newTenantId } = params as { previousTenantId: string; newTenantId: string };
+		return store.renameTenant(previousTenantId, newTenantId);
+	}
 };
