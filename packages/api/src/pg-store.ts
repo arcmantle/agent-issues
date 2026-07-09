@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import Fuse from "fuse.js";
+
 import {
 	DEFAULT_CONTEXT_KEY,
 	DEFAULT_CONTEXT_SUMMARY,
@@ -23,11 +25,21 @@ import {
 	ID_PREFIX,
 	type BodySource,
 	type ContextDetails,
+	type ContextDirectory,
+	type ContextDirectoryTerm,
+	type ContextDirectoryTermSource,
+	type ContextDirectoryView,
+	type ContextListResult,
+	type ContextRecord,
 	type ContextTermRecord,
+	type DefineContextTermResult,
 	type EntityKind,
 	type EntityRecord,
+	type ForgetContextTermResult,
 	type HandoffRecord,
 	type HistoryEntryRecord,
+	type QueryContextDirectoryInput,
+	type QueryContextDirectoryResult,
 	type RelationRecord,
 	type RelationType
 } from "@agent-issues/core";
@@ -673,70 +685,92 @@ async function listHandoffsFiltered(
 	return result.rows.map(mapHandoffRow);
 }
 
-// Read-only shared/initiative context lookup, scoped to exactly the two
-// keys getDatabaseSnapshot needs ("default" and an initiative's own id,
-// which is always its own context key). Deliberately does NOT implement
-// resolveContextScope's general entity-to-owning-initiative walk, term
-// definition/forgetting, or directory search - that is ISS45's full
-// context/glossary section. Falls back to the same "not configured yet"
-// default shape core's `createContextRecord` produces when no row exists,
-// so this is honest about what's actually queryable today, not a fabricated
-// placeholder.
-async function getContextDetailsForSnapshot(
-	client: PoolClient,
-	tenantId: string,
-	scope: { key: string; scopeKind: "default" | "initiative"; scopeEntityId: string | null; scopeLabel: string; defaultTitle: string; defaultSummary: string }
-): Promise<ContextDetails> {
-	const result = await client.query<{
-		key: string;
-		scope_entity_id: string | null;
-		title: string;
-		summary: string;
-		created_at: string;
-		updated_at: string;
-	}>(`SELECT * FROM contexts WHERE tenant_id = $1 AND key = $2`, [tenantId, scope.key]);
-	const row = result.rows[0];
-	const termRows = row
-		? (
-				await client.query<{ term: string; definition: string; avoid_terms: string; created_at: string; updated_at: string }>(
-					`SELECT term, definition, avoid_terms, created_at, updated_at FROM context_terms WHERE tenant_id = $1 AND context_key = $2 ORDER BY lower(term), term`,
-					[tenantId, scope.key]
-				)
-			).rows
-		: [];
-	const terms: ContextTermRecord[] = termRows.map((termRow) => ({
-		term: termRow.term,
-		definition: termRow.definition,
-		avoid: parseAvoidTerms(termRow.avoid_terms),
-		createdAt: termRow.created_at,
-		updatedAt: termRow.updated_at
-	}));
+type ContextRow = {
+	key: string;
+	scope_entity_id: string | null;
+	title: string;
+	summary: string;
+	created_at: string;
+	updated_at: string;
+};
 
+type ContextTermRow = {
+	term: string;
+	definition: string;
+	avoid_terms: string;
+	created_at: string;
+	updated_at: string;
+};
+
+// Mirrors context-store.ts's private ResolvedContextScope: the "default" vs.
+// "initiative" scope a context key resolves to, plus the default
+// title/summary to synthesize when no row has been saved yet.
+type ResolvedContextScope = {
+	key: string;
+	scopeKind: "default" | "initiative";
+	scopeEntityId: string | null;
+	scopeLabel: string;
+	defaultTitle: string;
+	defaultSummary: string;
+};
+
+function getDefaultContextScope(): ResolvedContextScope {
 	return {
-		context: row
-			? {
-					key: row.key,
-					scopeKind: scope.scopeKind,
-					scopeEntityId: row.scope_entity_id,
-					scopeLabel: scope.scopeLabel,
-					title: row.title,
-					summary: row.summary,
-					createdAt: row.created_at,
-					updatedAt: row.updated_at,
-					exists: true
-				}
-			: {
-					key: scope.key,
-					scopeKind: scope.scopeKind,
-					scopeEntityId: scope.scopeEntityId,
-					scopeLabel: scope.scopeLabel,
-					title: scope.defaultTitle,
-					summary: scope.defaultSummary,
-					createdAt: null,
-					updatedAt: null,
-					exists: false
-				},
-		terms
+		key: DEFAULT_CONTEXT_KEY,
+		scopeKind: "default",
+		scopeEntityId: null,
+		scopeLabel: "Shared",
+		defaultTitle: DEFAULT_CONTEXT_TITLE,
+		defaultSummary: DEFAULT_CONTEXT_SUMMARY
+	};
+}
+
+function createInitiativeScope(initiative: EntityRecord): ResolvedContextScope {
+	return {
+		key: initiative.id,
+		scopeKind: "initiative",
+		scopeEntityId: initiative.id,
+		scopeLabel: initiative.title,
+		defaultTitle: `${initiative.title} Context`,
+		defaultSummary: `Glossary of initiative-specific domain terms for ${initiative.title}.`
+	};
+}
+
+function createContextRecord(scope: ResolvedContextScope): ContextRecord {
+	return {
+		key: scope.key,
+		scopeKind: scope.scopeKind,
+		scopeEntityId: scope.scopeEntityId,
+		scopeLabel: scope.scopeLabel,
+		title: scope.defaultTitle,
+		summary: scope.defaultSummary,
+		createdAt: null,
+		updatedAt: null,
+		exists: false
+	};
+}
+
+function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRecord {
+	return {
+		key: row.key,
+		scopeKind: scope.scopeKind,
+		scopeEntityId: row.scope_entity_id,
+		scopeLabel: scope.scopeLabel,
+		title: row.title,
+		summary: row.summary,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		exists: true
+	};
+}
+
+function mapContextTermRow(row: ContextTermRow): ContextTermRecord {
+	return {
+		term: row.term,
+		definition: row.definition,
+		avoid: parseAvoidTerms(row.avoid_terms),
+		createdAt: row.created_at,
+		updatedAt: row.updated_at
 	};
 }
 
@@ -753,6 +787,328 @@ function parseAvoidTerms(value: string): string[] {
 	}
 }
 
+function normalizeAvoidTerms(avoid: string[], term: string): string[] {
+	const seen = new Set<string>();
+	const normalized: string[] = [];
+
+	for (const candidate of avoid) {
+		const cleaned = candidate.trim();
+		if (cleaned.length === 0 || cleaned.toLowerCase() === term.toLowerCase()) {
+			continue;
+		}
+
+		const key = cleaned.toLowerCase();
+		if (seen.has(key)) {
+			continue;
+		}
+
+		seen.add(key);
+		normalized.push(cleaned);
+	}
+
+	return normalized;
+}
+
+// Walks owns/records/tracks/creates relations (deliberately narrower than
+// isStructuralRelationType's full set, matching context-store.ts) from
+// `entityId` up to its owning initiative.
+async function getOwningInitiativeOrThrow(client: PoolClient, tenantId: string, entityId: string): Promise<EntityRecord> {
+	let currentId = entityId;
+	const seen = new Set<string>([entityId]);
+
+	while (true) {
+		const result = await client.query<EntityRow>(
+			`SELECT entities.*
+			 FROM relations
+			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+			 WHERE relations.tenant_id = $1
+			   AND relations.to_id = $2
+			   AND relations.type IN ('owns', 'records', 'tracks', 'creates')
+			 ORDER BY entities.id`,
+			[tenantId, currentId]
+		);
+
+		if (result.rows.length === 0) {
+			throw new Error(`No owning initiative found for ${entityId}.`);
+		}
+
+		if (result.rows.length > 1) {
+			throw new Error(`Cannot resolve owning initiative for ${entityId} because ${currentId} has multiple structural parents.`);
+		}
+
+		const parent = mapEntityRow(result.rows[0]!);
+		if (seen.has(parent.id)) {
+			throw new Error(`Cannot resolve owning initiative for ${entityId} because the structural graph contains a cycle.`);
+		}
+
+		if (parent.kind === "initiative") {
+			return parent;
+		}
+
+		seen.add(parent.id);
+		currentId = parent.id;
+	}
+}
+
+async function resolveContextScope(client: PoolClient, tenantId: string, scopeRef?: string): Promise<ResolvedContextScope> {
+	if (!scopeRef || scopeRef === DEFAULT_CONTEXT_KEY) {
+		return getDefaultContextScope();
+	}
+
+	const entity = await getEntityOrThrow(client, tenantId, scopeRef);
+	if (entity.kind === "initiative") {
+		return createInitiativeScope(entity);
+	}
+
+	const initiative = await getOwningInitiativeOrThrow(client, tenantId, entity.id);
+	return createInitiativeScope(initiative);
+}
+
+async function fetchContextRow(client: PoolClient, tenantId: string, key: string): Promise<ContextRow | undefined> {
+	const result = await client.query<ContextRow>(`SELECT * FROM contexts WHERE tenant_id = $1 AND key = $2`, [tenantId, key]);
+	return result.rows[0];
+}
+
+async function fetchContextTermRows(client: PoolClient, tenantId: string, key: string): Promise<ContextTermRow[]> {
+	const result = await client.query<ContextTermRow>(
+		`SELECT term, definition, avoid_terms, created_at, updated_at FROM context_terms WHERE tenant_id = $1 AND context_key = $2 ORDER BY lower(term), term`,
+		[tenantId, key]
+	);
+	return result.rows;
+}
+
+async function queryContextDetails(client: PoolClient, tenantId: string, scopeRef?: string): Promise<ContextDetails> {
+	const scope = await resolveContextScope(client, tenantId, scopeRef);
+	const row = await fetchContextRow(client, tenantId, scope.key);
+	const termRows = row ? await fetchContextTermRows(client, tenantId, scope.key) : [];
+
+	return {
+		context: row ? mapContextRow(row, scope) : createContextRecord(scope),
+		terms: termRows.map(mapContextTermRow)
+	};
+}
+
+async function queryContextTermCount(client: PoolClient, tenantId: string, contextKey: string): Promise<number> {
+	const result = await client.query<{ count: string }>(`SELECT COUNT(*) AS count FROM context_terms WHERE tenant_id = $1 AND context_key = $2`, [
+		tenantId,
+		contextKey
+	]);
+	return Number(result.rows[0]?.count ?? "0");
+}
+
+async function queryListContexts(client: PoolClient, tenantId: string): Promise<ContextListResult> {
+	const defaultScope = getDefaultContextScope();
+	const defaultRow = await fetchContextRow(client, tenantId, defaultScope.key);
+	const contexts = [
+		{
+			context: defaultRow ? mapContextRow(defaultRow, defaultScope) : createContextRecord(defaultScope),
+			termCount: await queryContextTermCount(client, tenantId, defaultScope.key)
+		}
+	];
+
+	const initiativeRows = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'initiative' ORDER BY id`, [
+		tenantId
+	]);
+
+	for (const initiativeRow of initiativeRows.rows) {
+		const initiative = mapEntityRow(initiativeRow);
+		const scope = createInitiativeScope(initiative);
+		const row = await fetchContextRow(client, tenantId, scope.key);
+		contexts.push({
+			context: row ? mapContextRow(row, scope) : createContextRecord(scope),
+			termCount: await queryContextTermCount(client, tenantId, scope.key)
+		});
+	}
+
+	return { contexts };
+}
+
+async function buildContextDirectory(client: PoolClient, tenantId: string): Promise<ContextDirectory> {
+	const shared = await queryContextDetails(client, tenantId);
+	const initiativeRows = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'initiative' ORDER BY id`, [
+		tenantId
+	]);
+	const initiatives = await Promise.all(initiativeRows.rows.map((row) => queryContextDetails(client, tenantId, row.id)));
+	const termsByKey = new Map<string, ContextDirectoryTerm>();
+
+	for (const details of [shared, ...initiatives]) {
+		for (const term of details.terms) {
+			const key = term.term.toLowerCase();
+			const existing = termsByKey.get(key);
+			const source: ContextDirectoryTermSource = {
+				avoid: [...term.avoid],
+				contextKey: details.context.key,
+				contextTitle: details.context.title,
+				definition: term.definition,
+				scopeEntityId: details.context.scopeEntityId,
+				scopeKind: details.context.scopeKind,
+				scopeLabel: details.context.scopeLabel,
+				updatedAt: term.updatedAt
+			};
+
+			if (!existing) {
+				termsByKey.set(key, {
+					term: term.term,
+					sources: [source],
+					hasSharedSource: details.context.scopeKind === "default",
+					hasDuplicates: false,
+					hasConflictingDefinitions: false
+				});
+				continue;
+			}
+
+			existing.sources.push(source);
+			existing.hasDuplicates = existing.sources.length > 1;
+			existing.hasSharedSource = existing.hasSharedSource || details.context.scopeKind === "default";
+			existing.hasConflictingDefinitions = hasConflictingDefinitions(existing.sources);
+			if (term.term.localeCompare(existing.term) < 0) {
+				existing.term = term.term;
+			}
+		}
+	}
+
+	const terms = [...termsByKey.values()]
+		.map((entry) => ({ ...entry, sources: entry.sources.sort(compareContextDirectorySources) }))
+		.sort((left, right) => left.term.localeCompare(right.term));
+
+	return {
+		shared,
+		initiatives,
+		terms,
+		duplicateTerms: terms.filter((entry) => entry.hasDuplicates).map((entry) => entry.term)
+	};
+}
+
+function hasConflictingDefinitions(sources: ContextDirectoryTermSource[]): boolean {
+	const normalizedDefinitions = new Set(
+		sources.map((source) => source.definition.trim().toLowerCase()).filter((definition) => definition.length > 0)
+	);
+
+	return normalizedDefinitions.size > 1;
+}
+
+function compareContextDirectorySources(left: ContextDirectoryTermSource, right: ContextDirectoryTermSource): number {
+	if (left.scopeKind !== right.scopeKind) {
+		return left.scopeKind === "default" ? -1 : 1;
+	}
+
+	if (left.scopeLabel !== right.scopeLabel) {
+		return left.scopeLabel.localeCompare(right.scopeLabel);
+	}
+
+	return left.contextKey.localeCompare(right.contextKey);
+}
+
+function tokenizeContextSearch(text: string): string[] {
+	return text
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter((token) => token.length > 0);
+}
+
+function buildContextQuery(queryTokens: string[]): { $and: Array<{ tokens: string }> } | { tokens: string } {
+	if (queryTokens.length === 1) {
+		return { tokens: `^${queryTokens[0]}` };
+	}
+
+	return { $and: queryTokens.map((token) => ({ tokens: `^${token}` })) };
+}
+
+function matchesContextQuery(text: string, normalizedQuery: string): boolean {
+	const queryTokens = tokenizeContextSearch(normalizedQuery);
+
+	if (queryTokens.length === 0) {
+		return true;
+	}
+
+	const fuse = new Fuse([{ tokens: tokenizeContextSearch(text) }], {
+		ignoreLocation: true,
+		isCaseSensitive: false,
+		keys: ["tokens"],
+		threshold: 0,
+		useExtendedSearch: true
+	});
+
+	return fuse.search(buildContextQuery(queryTokens)).length > 0;
+}
+
+function filterContextDetails(details: ContextDetails, normalizedQuery: string): ContextDetails | null {
+	if (normalizedQuery.length === 0) {
+		return details;
+	}
+
+	const contextMatches = matchesContextQuery(
+		[details.context.key, details.context.scopeLabel, details.context.summary, details.context.title].join(" "),
+		normalizedQuery
+	);
+	const terms = details.terms.filter((term) => matchesContextQuery([term.term, term.definition, ...term.avoid].join(" "), normalizedQuery));
+
+	if (!contextMatches && terms.length === 0) {
+		return null;
+	}
+
+	return {
+		context: { ...details.context, summary: contextMatches ? details.context.summary : "" },
+		terms
+	};
+}
+
+function filterContextDirectoryTerm(entry: ContextDirectoryTerm, normalizedQuery: string, view: ContextDirectoryView): ContextDirectoryTerm | null {
+	const sources = entry.sources.filter((source) => {
+		if (view === "global" && source.scopeKind !== "default") {
+			return false;
+		}
+
+		if (view === "initiatives" && source.scopeKind === "default") {
+			return false;
+		}
+
+		if (normalizedQuery.length === 0) {
+			return true;
+		}
+
+		return matchesContextQuery([entry.term, source.scopeLabel, source.contextTitle, source.definition, ...source.avoid].join(" "), normalizedQuery);
+	});
+
+	if (sources.length === 0) {
+		return null;
+	}
+
+	return {
+		term: entry.term,
+		sources,
+		hasSharedSource: sources.some((source) => source.scopeKind === "default"),
+		hasDuplicates: sources.length > 1,
+		hasConflictingDefinitions: hasConflictingDefinitions(sources)
+	};
+}
+
+async function ensureContextExists(client: PoolClient, tenantId: string, scopeRef?: string): Promise<ResolvedContextScope> {
+	const scope = await resolveContextScope(client, tenantId, scopeRef);
+	const existing = await fetchContextRow(client, tenantId, scope.key);
+	if (existing) {
+		return scope;
+	}
+
+	const now = new Date().toISOString();
+	await client.query(
+		`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+		[tenantId, scope.key, scope.scopeEntityId, scope.defaultTitle, scope.defaultSummary, now]
+	);
+
+	return scope;
+}
+
+async function getContextTermRecord(client: PoolClient, tenantId: string, contextKey: string, term: string): Promise<ContextTermRecord | null> {
+	const result = await client.query<ContextTermRow>(
+		`SELECT term, definition, avoid_terms, created_at, updated_at FROM context_terms WHERE tenant_id = $1 AND context_key = $2 AND term = $3`,
+		[tenantId, contextKey, term]
+	);
+	const row = result.rows[0];
+	return row ? mapContextTermRow(row) : null;
+}
+
 /**
  * Postgres implementation of the entity-lifecycle slice of the
  * storage-driver seam (ADR11, ADR13, ISS39). Every method opens exactly one
@@ -760,11 +1116,11 @@ function parseAvoidTerms(value: string): string[] {
  * always active for the query.
  *
  * This is a partial implementation: it does not yet `implements
- * StorageDriver` because the context/glossary (beyond the minimal
- * shared/initiative lookup reused here) and tenant-administration sections
- * of that seam are unimplemented (tracked as ISS39 follow-up issues
- * ISS45-ISS46), as is the JSON-RPC gate and change/event stream (ISS47,
- * ISS48). The handoffs section (ISS44) is fully implemented below.
+ * StorageDriver` because the tenant-administration section of that seam
+ * (listTenants/deleteTenant/renameTenant) is unimplemented (tracked as
+ * ISS39 follow-up issue ISS46), as is the JSON-RPC gate and change/event
+ * stream (ISS47, ISS48). The handoffs (ISS44) and context/glossary (ISS45)
+ * sections are fully implemented below.
  */
 export class PgStore {
 	public constructor(
@@ -1233,26 +1589,8 @@ export class PgStore {
 			const projectAdrs = await this.listProjectAdrs();
 			const initiativeBundles = await Promise.all(initiatives.map((entity) => this.getInitiativeBundle(entity.id)));
 
-			const sharedContext = await getContextDetailsForSnapshot(client, this.tenantId, {
-				key: DEFAULT_CONTEXT_KEY,
-				scopeKind: "default",
-				scopeEntityId: null,
-				scopeLabel: "Shared",
-				defaultTitle: DEFAULT_CONTEXT_TITLE,
-				defaultSummary: DEFAULT_CONTEXT_SUMMARY
-			});
-			const initiativeContexts = await Promise.all(
-				initiatives.map((entity) =>
-					getContextDetailsForSnapshot(client, this.tenantId, {
-						key: entity.id,
-						scopeKind: "initiative",
-						scopeEntityId: entity.id,
-						scopeLabel: entity.title,
-						defaultTitle: `${entity.title} Context`,
-						defaultSummary: `Glossary of initiative-specific domain terms for ${entity.title}.`
-					})
-				)
-			);
+			const sharedContext = await queryContextDetails(client, this.tenantId);
+			const initiativeContexts = await Promise.all(initiatives.map((entity) => queryContextDetails(client, this.tenantId, entity.id)));
 
 			return {
 				generatedAt: new Date().toISOString(),
@@ -1370,6 +1708,154 @@ export class PgStore {
 
 	public async listHandoffs(filter?: { initiativeId?: string; entityId?: string }): Promise<HandoffRecord[]> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => listHandoffsFiltered(client, this.tenantId, filter));
+	}
+
+	public async listContexts(): Promise<ContextListResult> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => queryListContexts(client, this.tenantId));
+	}
+
+	public async getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => queryContextDetails(client, this.tenantId, input?.scopeRef));
+	}
+
+	public async getContextDirectory(): Promise<ContextDirectory> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => buildContextDirectory(client, this.tenantId));
+	}
+
+	public async queryContextDirectory(input: QueryContextDirectoryInput = {}): Promise<QueryContextDirectoryResult> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const directory = await buildContextDirectory(client, this.tenantId);
+			const view = input.view ?? "all";
+			const query = input.query?.trim() ?? "";
+			const conflictsOnly = input.conflictsOnly ?? false;
+			const normalizedQuery = query.toLowerCase();
+
+			const shared = view === "initiatives" ? null : filterContextDetails(directory.shared, normalizedQuery);
+			const initiatives =
+				view === "global"
+					? []
+					: directory.initiatives
+							.map((details) => filterContextDetails(details, normalizedQuery))
+							.filter((details): details is ContextDetails => details !== null);
+
+			let terms = directory.terms
+				.map((entry) => filterContextDirectoryTerm(entry, normalizedQuery, view))
+				.filter((entry): entry is ContextDirectoryTerm => entry !== null);
+
+			if (conflictsOnly) {
+				terms = terms.filter((entry) => entry.hasDuplicates);
+			}
+
+			return {
+				shared,
+				initiatives,
+				terms,
+				duplicateTerms: terms.filter((entry) => entry.hasDuplicates).map((entry) => entry.term),
+				query,
+				view,
+				conflictsOnly
+			};
+		});
+	}
+
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails> {
+		const title = input.title.trim();
+		const summary = input.summary.trim();
+
+		if (title.length === 0) {
+			throw new Error("Context title must not be empty.");
+		}
+
+		if (summary.length === 0) {
+			throw new Error("Context summary must not be empty.");
+		}
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const scope = await resolveContextScope(client, this.tenantId, input.scopeRef);
+			const existing = await queryContextDetails(client, this.tenantId, input.scopeRef);
+			const now = new Date().toISOString();
+
+			await client.query(
+				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)
+				 ON CONFLICT (tenant_id, key) DO UPDATE SET
+				   scope_entity_id = excluded.scope_entity_id,
+				   title = excluded.title,
+				   summary = excluded.summary,
+				   updated_at = excluded.updated_at`,
+				[this.tenantId, scope.key, scope.scopeEntityId, title, summary, existing.context.createdAt ?? now, now]
+			);
+
+			return queryContextDetails(client, this.tenantId, input.scopeRef);
+		});
+	}
+
+	public async defineContextTerm(input: {
+		scopeRef?: string;
+		term: string;
+		definition: string;
+		avoid?: string[];
+	}): Promise<DefineContextTermResult> {
+		const term = input.term.trim();
+		const definition = input.definition.trim();
+
+		if (term.length === 0) {
+			throw new Error("Context term must not be empty.");
+		}
+
+		if (definition.length === 0) {
+			throw new Error("Context term definition must not be empty.");
+		}
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const scope = await ensureContextExists(client, this.tenantId, input.scopeRef);
+			const normalizedAvoid = normalizeAvoidTerms(input.avoid ?? [], term);
+			const existing = await getContextTermRecord(client, this.tenantId, scope.key, term);
+			const now = new Date().toISOString();
+
+			await client.query(
+				`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7)
+				 ON CONFLICT (tenant_id, context_key, term) DO UPDATE SET
+				   definition = excluded.definition,
+				   avoid_terms = excluded.avoid_terms,
+				   updated_at = excluded.updated_at`,
+				[this.tenantId, scope.key, term, definition, JSON.stringify(normalizedAvoid), existing?.createdAt ?? now, now]
+			);
+
+			const storedTerm = await getContextTermRecord(client, this.tenantId, scope.key, term);
+			if (!storedTerm) {
+				throw new Error(`Failed to persist context term: ${term}`);
+			}
+
+			return {
+				context: (await queryContextDetails(client, this.tenantId, input.scopeRef)).context,
+				term: storedTerm,
+				created: existing === null
+			};
+		});
+	}
+
+	public async forgetContextTerm(input: { scopeRef?: string; term: string }): Promise<ForgetContextTermResult> {
+		const term = input.term.trim();
+		if (term.length === 0) {
+			throw new Error("Context term must not be empty.");
+		}
+
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const scope = await resolveContextScope(client, this.tenantId, input.scopeRef);
+			const result = await client.query(`DELETE FROM context_terms WHERE tenant_id = $1 AND context_key = $2 AND term = $3`, [
+				this.tenantId,
+				scope.key,
+				term
+			]);
+
+			return {
+				context: (await queryContextDetails(client, this.tenantId, input.scopeRef)).context,
+				term,
+				removed: (result.rowCount ?? 0) > 0
+			};
+		});
 	}
 
 	public async close(): Promise<void> {

@@ -33,6 +33,7 @@
 	"dependencies": {
 		"@agent-issues/core": "workspace:*",
 		"drizzle-orm": "^0.45.2",
+		"fuse.js": "^7.4.2",
 		"jose": "^6.2.3",
 		"pg": "^8.22.0"
 	}
