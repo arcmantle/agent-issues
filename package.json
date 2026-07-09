@@ -1,43 +1,17 @@
 {
-	"name": "agent-issues",
+	"name": "agent-issues-workspace",
 	"version": "0.1.0",
-	"description": "CLI for managing initiatives, PRDs, user stories, ADRs, and issues.",
+	"description": "Workspace root for agent-issues: shared core, CLI, site, and deployable API.",
+	"private": true,
 	"type": "module",
-	"bin": {
-		"agent-issues": "./dist/cli.js"
-	},
-	"files": [
-		"dist",
-		"drizzle",
-		"site/dist",
-		".github/agents",
-		".github/hooks",
-		"skills"
-	],
 	"engines": {
 		"node": ">=24"
 	},
 	"scripts": {
-		"prepare": "pnpm run build",
-		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && pnpm --dir site build && tsc -p tsconfig.json",
-		"postbuild": "node --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/cli.js', 0o755);\"",
-		"db:generate": "drizzle-kit generate",
-		"site:dev": "pnpm --dir site dev",
-		"test": "vitest run",
-		"test:watch": "vitest",
-		"typecheck": "pnpm --dir site exec tsc -p tsconfig.json --noEmit && tsc --noEmit -p tsconfig.json"
-	},
-	"devDependencies": {
-		"@types/better-sqlite3": "^7.6.13",
-		"@types/node": "^25.9.2",
-		"drizzle-kit": "^0.31.10",
-		"typescript": "^6.0.3",
-		"vitest": "^4.1.8"
-	},
-	"dependencies": {
-		"better-sqlite3": "^12.10.0",
-		"clipanion": "4.0.0-rc.4",
-		"drizzle-orm": "^0.45.2",
-		"fuse.js": "^7.4.2"
+		"build": "pnpm --filter @agent-issues/core build && pnpm --filter @agent-issues/site build && pnpm --filter agent-issues build && pnpm --filter @agent-issues/api build",
+		"typecheck": "pnpm --filter @agent-issues/core build && pnpm -r typecheck",
+		"test": "pnpm -r test",
+		"db:generate": "pnpm --filter @agent-issues/core db:generate",
+		"site:dev": "pnpm --filter @agent-issues/site dev"
 	}
 }

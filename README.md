@@ -2,7 +2,7 @@
 
 `agent-issues` is a TypeScript ESM CLI for managing shared context, initiatives, PRDs, user stories, ADRs, and issues in a local SQLite database.
 
-The CLI implementation lives under `src/` and compiles to `dist/`. The browser viewer is a separate Lit app under `site/` that builds with Vite and is served live by the CLI. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
+The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds the shared domain (schema, database, and store layers), `agent-issues` (the CLI) compiles to `dist/` and depends on core, `@agent-issues/site` is a separate Lit app that builds with Vite and is served live by the CLI, and `@agent-issues/api` is a deployable cloud API service scaffold. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
 
 ## Requirements
 
@@ -16,7 +16,7 @@ pnpm install
 pnpm run build
 ```
 
-For frontend development, run `pnpm site:dev` from the repo root or `pnpm --dir site dev`.
+For frontend development, run `pnpm site:dev` from the repo root or `pnpm --filter @agent-issues/site dev`.
 The Vite dev server now auto-starts the live backend used for `site-config.json`, `/api/snapshot`, and `/events`.
 Set `AGENT_ISSUES_DB=/path/to/agent-issues.db` before starting the dev server if you want the browser to point at a non-default database.
 
@@ -177,8 +177,8 @@ agent-issues list issue
 - Remove it again: `agent-issues uninstall-agent`
 - Override the prompts directory: `agent-issues install-agent --target /path/to/prompts`
 - Force-refresh an existing installed copy: `agent-issues install-agent --force`
-- Workspace source agent: `.github/agents/agent-issues.agent.md`
-- Workspace source hook: `.github/hooks/agent-issues-enforcer.mjs`
+- Workspace source agent: `packages/cli/.github/agents/agent-issues.agent.md`
+- Workspace source hook: `packages/cli/.github/hooks/agent-issues-enforcer.mjs`
 - Installed user agent path (default): the VS Code user prompts directory for your OS, e.g. `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md` (macOS), `%APPDATA%\Code\User\prompts\agent-issues.agent.md` (Windows), `~/.config/Code/User/prompts/agent-issues.agent.md` (Linux)
 - Installed user hook path (default): the same prompts directory, e.g. `.../Code/User/prompts/agent-issues-enforcer.mjs`
 - Enable `chat.useCustomAgentHooks` in VS Code so the inline hooks run only while the Agent Issues custom agent is active.
@@ -189,7 +189,7 @@ agent-issues list issue
 
 ## Browser viewer
 
-The browser viewer is built from the separate Lit project in `site/`. Root `pnpm run build` builds both the CLI and the viewer.
+The browser viewer is built from the separate Lit project in `packages/site/`. Root `pnpm run build` builds both the CLI and the viewer.
 
 For local UI work, `pnpm site:dev` starts Vite on `127.0.0.1:5173` and automatically spins up the live backend on `127.0.0.1:4313` unless something is already listening there.
 Set `AGENT_ISSUES_DB` if you want the dev server to target a specific database path, or use a named tenant via the regular CLI commands when you are not overriding the DB path directly.

@@ -1,0 +1,28 @@
+{
+	"compilerOptions": {
+		"target": "ES2024",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"types": [
+			"node"
+		],
+		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
+		"rootDir": "src",
+		"outDir": "dist",
+		"strict": true,
+		"noEmitOnError": true,
+		"skipLibCheck": true,
+		"declaration": true,
+		"sourceMap": true,
+		"verbatimModuleSyntax": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true
+	},
+	"include": [
+		"src/**/*.ts"
+	],
+	"exclude": [
+		"src/**/*.test.ts"
+	]
+}

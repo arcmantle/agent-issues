@@ -1,0 +1,38 @@
+{
+	"name": "@agent-issues/core",
+	"version": "0.1.0",
+	"description": "Shared domain core for agent-issues: schema, database, and store layers.",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"drizzle"
+	],
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"db:generate": "drizzle-kit generate",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/node": "^25.9.2",
+		"drizzle-kit": "^0.31.10",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"better-sqlite3": "^12.10.0",
+		"drizzle-orm": "^0.45.2",
+		"fuse.js": "^7.4.2"
+	}
+}

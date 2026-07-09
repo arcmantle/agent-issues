@@ -1,5 +1,8 @@
 packages:
-  - site
+  - packages/core
+  - packages/cli
+  - packages/site
+  - packages/api
 
 allowBuilds:
   better-sqlite3: true
