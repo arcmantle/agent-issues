@@ -13,7 +13,7 @@ export class InitCommand extends TenantCommand {
 	public static paths = [["init"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (_store, dbPath) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (_store, dbPath) => {
 			this.print(
 				{
 					command: "init",
@@ -33,9 +33,9 @@ export class CurrentTenantCommand extends TenantCommand {
 	public async execute(): Promise<number> {
 		const result = {
 			command: "current-tenant" as const,
-			dbPath: resolveDatabasePath(this.dbPath, { tenant: this.tenant }),
+			dbPath: resolveDatabasePath(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }),
 			resolution: this.tenant ? ("explicit" as const) : ("derived" as const),
-			tenantId: resolveTenantSlug({ tenant: this.tenant }),
+			tenantId: resolveTenantSlug({ tenant: this.tenant, currentWorkingDirectory: this.context.cwd }),
 			workspaceRoot: resolveTenantRootPath(this.context.cwd)
 		};
 
@@ -52,10 +52,10 @@ export class ListTenantsCommand extends TenantCommand {
 	public static paths = [["list-tenants"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant }, async (store, dbPath) => {
+		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store, dbPath) => {
 			const result = {
 				command: "list-tenants" as const,
-				currentTenantId: resolveTenantSlug({ tenant: this.tenant }),
+				currentTenantId: resolveTenantSlug({ tenant: this.tenant, currentWorkingDirectory: this.context.cwd }),
 				dbPath,
 				tenants: await store.listTenants()
 			};
@@ -74,7 +74,7 @@ export class DeleteTenantCommand extends TenantAdminCommand {
 			throw new Error("`delete-tenant` requires `--force`.");
 		}
 
-		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant }, async (store, dbPath) => {
+		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store, dbPath) => {
 			const rawTenantId = requirePositional(this.positionals, 0, "delete-tenant <tenantId> --force");
 			const tenantId = resolveTenantSlug({ tenant: rawTenantId });
 			const result = {
@@ -97,7 +97,7 @@ export class RenameTenantCommand extends TenantAdminCommand {
 			throw new Error("`rename-tenant` requires `--force`.");
 		}
 
-		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant }, async (store, dbPath) => {
+		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store, dbPath) => {
 			const rawPreviousTenantId = requirePositional(this.positionals, 0, "rename-tenant <tenantId> <newTenantId> --force");
 			const rawNewTenantId = requirePositional(this.positionals, 1, "rename-tenant <tenantId> <newTenantId> --force");
 			const previousTenantId = resolveTenantSlug({ tenant: rawPreviousTenantId });

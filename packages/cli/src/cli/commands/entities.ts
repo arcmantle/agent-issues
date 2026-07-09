@@ -23,7 +23,7 @@ export class CreateCommand extends BodyTenantCommand {
 			throw new Error(`Unknown entity kind: ${kind}`);
 		}
 
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entity = await store.createEntity({
 				body: this.resolveBody(),
 				kind,
@@ -44,7 +44,7 @@ export class EditCommand extends BodyTenantCommand {
 	public positionals = Option.Rest();
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "edit <id> (--body <markdown> | --body-file <path|->)");
 			const entity = await store.setEntityBody({
 				body: this.requireBody("--body or --body-file is required for edit."),
@@ -61,7 +61,7 @@ export class ArchiveCommand extends PositionalsTenantCommand {
 	public static paths = [["archive"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "archive <id>");
 			const result = await store.archiveEntity({ entityId });
 
@@ -75,7 +75,7 @@ export class DeleteCommand extends PositionalsTenantCommand {
 	public static paths = [["delete"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "delete <id>");
 			const result = await store.deleteEntity({ entityId });
 
@@ -89,7 +89,7 @@ export class MoveCommand extends PositionalsTenantCommand {
 	public static paths = [["move"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "move <id> <newParentId>");
 			const newParentId = requirePositional(this.positionals, 1, "move <id> <newParentId>");
 			const result = await store.moveEntity({ entityId, newParentId });
@@ -107,7 +107,7 @@ export class LinkCommand extends PositionalsTenantCommand {
 	public static paths = [["link"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const fromId = requirePositional(this.positionals, 0, "link <fromId> <relationType> <toId>");
 			const relationType = requirePositional(this.positionals, 1, "link <fromId> <relationType> <toId>");
 			const toId = requirePositional(this.positionals, 2, "link <fromId> <relationType> <toId>");
@@ -128,7 +128,7 @@ export class UnlinkCommand extends PositionalsTenantCommand {
 	public static paths = [["unlink"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const fromId = requirePositional(this.positionals, 0, "unlink <fromId> <relationType> <toId>");
 			const relationType = requirePositional(this.positionals, 1, "unlink <fromId> <relationType> <toId>");
 			const toId = requirePositional(this.positionals, 2, "unlink <fromId> <relationType> <toId>");
@@ -149,7 +149,7 @@ export class StatusCommand extends PositionalsTenantCommand {
 	public static paths = [["status"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "status <id> <status>");
 			const status = requirePositional(this.positionals, 1, "status <id> <status>");
 			const result = await store.updateEntityStatus({ entityId, status });
@@ -164,7 +164,7 @@ export class BundleCommand extends PositionalsTenantCommand {
 	public static paths = [["bundle"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const initiativeId = requirePositional(this.positionals, 0, "bundle <initiativeId>");
 			const bundle = await store.getInitiativeBundle(initiativeId);
 
@@ -178,7 +178,7 @@ export class RelationsCommand extends PositionalsTenantCommand {
 	public static paths = [["relations"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "relations <id>");
 			const details = await store.getEntityDetails(entityId);
 
@@ -192,7 +192,7 @@ export class OrphansCommand extends PositionalsTenantCommand {
 	public static paths = [["orphans"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const kind = this.positionals[0];
 			const entities = kind ? await store.listOrphans(kind) : await store.listOrphans();
 
@@ -206,7 +206,7 @@ export class ShowCommand extends PositionalsTenantCommand {
 	public static paths = [["show"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "show <id>");
 			const details = await store.getEntityDetails(entityId);
 
@@ -226,7 +226,7 @@ export class ListCommand extends PositionalsTenantCommand {
 	public static paths = [["list"]];
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
+		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
 			const kind = requirePositional(this.positionals, 0, "list <kind>");
 			const entities = await store.listEntities(kind);
 

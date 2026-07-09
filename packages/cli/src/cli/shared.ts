@@ -3,7 +3,7 @@ import type { Writable } from "node:stream";
 
 import { Command, Option, type BaseContext } from "clipanion";
 
-import { openSqliteStore, type ContextDirectoryView, type DatabaseLocationOptions, type StorageDriver } from "@agent-issues/core";
+import { openStorageDriver, type ContextDirectoryView, type DatabaseLocationOptions, type StorageDriver } from "@agent-issues/core";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;
@@ -55,15 +55,18 @@ export abstract class TargetCommand extends BaseCommand {
 /**
  * Opens the storage-driver seam for one command invocation and closes it
  * afterwards, replacing the repeated `ensureDatabase` + try/finally pattern
- * every command used before the seam existed (ADR11, ADR13). Hands the
- * resolved `dbPath` back too, since a few commands echo it in their output.
+ * every command used before the seam existed (ADR11, ADR13). Delegates to
+ * `openStorageDriver` (ADR18) to pick `SqliteStore` or `HttpStore` per the
+ * resolved backend, so commands never branch on backend themselves. Hands
+ * the resolved `dbPath` back too, since a few commands echo it in their
+ * output (the cloud API URL in cloud mode, per `OpenStorageDriverResult`).
  */
 export async function withStore<T>(
 	dbPath: string | undefined,
 	options: DatabaseLocationOptions | undefined,
 	fn: (store: StorageDriver, dbPath: string) => Promise<T>
 ): Promise<T> {
-	const { store, dbPath: resolvedDbPath } = openSqliteStore(dbPath, options);
+	const { store, dbPath: resolvedDbPath } = await openStorageDriver({ dbPath, databaseOptions: options });
 
 	try {
 		return await fn(store, resolvedDbPath);

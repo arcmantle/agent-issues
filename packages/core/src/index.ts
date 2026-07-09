@@ -8,5 +8,6 @@ export * from "./sqlite-store.js";
 export * from "./http-store.js";
 export * from "./cloud-binding.js";
 export * from "./backend-selection.js";
+export * from "./open-storage-driver.js";
 export * from "./project-identity.js";
 export * from "./auth-session.js";
