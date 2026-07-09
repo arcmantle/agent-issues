@@ -105,7 +105,7 @@ describe("tenant resolution", () => {
 					handoffs: 1,
 					relations: 3
 				},
-				counters: 8,
+				counters: 9,
 				displayName: "Alpha Team",
 				removed: true,
 				tenantId: "alpha-team"
@@ -159,7 +159,7 @@ describe("tenant resolution", () => {
 					handoffs: 1,
 					relations: 3
 				},
-				counters: 8,
+				counters: 9,
 				newDisplayName: "Renamed Team",
 				newTenantId: "renamed-team",
 				previousDisplayName: "Source Team",

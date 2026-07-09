@@ -55,13 +55,18 @@ describe("golden-fixture migration wall", () => {
 			expect(after[table]).toEqual(before[table]);
 		}
 
-		// counters/entities/relations gain the synthesized default project+epic (and
-		// the "fixture" tenant's one pre-existing initiative gaining a valid parent),
+		// entities/relations gain the synthesized default project+epic (and the
+		// "fixture" tenant's one pre-existing initiative gaining a valid parent),
 		// but every original row survives unchanged.
-		for (const table of ["counters", "entities", "relations"] as const) {
+		for (const table of ["entities", "relations"] as const) {
 			expect(after[table]).toEqual(expect.arrayContaining(before[table]));
 			expect(after[table]).toHaveLength(before[table].length + 2);
 		}
+
+		// counters gains one row per newly-recognized entity kind (project, epic,
+		// version - ISS38) that this pre-existing tenant didn't have before.
+		expect(after.counters).toEqual(expect.arrayContaining(before.counters));
+		expect(after.counters).toHaveLength(before.counters.length + 3);
 
 		expect(after.entities).toEqual(
 			expect.arrayContaining([
@@ -78,7 +83,8 @@ describe("golden-fixture migration wall", () => {
 		expect(after.counters).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ tenant_id: "fixture", kind: "project", next_value: 1 }),
-				expect.objectContaining({ tenant_id: "fixture", kind: "epic", next_value: 1 })
+				expect.objectContaining({ tenant_id: "fixture", kind: "epic", next_value: 1 }),
+				expect.objectContaining({ tenant_id: "fixture", kind: "version", next_value: 1 })
 			])
 		);
 	});

@@ -1,10 +1,11 @@
-export const ENTITY_KINDS = ["project", "epic", "initiative", "prd", "userStory", "adr", "issue"] as const;
+export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue"] as const;
 
 export const BODY_SOURCES = ["authored", "generated"] as const;
 
 export const STATUS_FLOW = {
 	project: ["draft", "active", "paused", "done"],
 	epic: ["draft", "active", "paused", "done"],
+	version: ["draft", "active", "paused", "done"],
 	initiative: ["draft", "active", "paused", "done"],
 	prd: ["draft", "in-progress", "approved"],
 	userStory: ["draft", "ready", "in-progress", "done"],
@@ -15,6 +16,7 @@ export const STATUS_FLOW = {
 export const ID_PREFIX = {
 	project: "PROJ",
 	epic: "EPIC",
+	version: "VER",
 	initiative: "INIT",
 	prd: "PRD",
 	userStory: "US",
@@ -25,6 +27,10 @@ export const ID_PREFIX = {
 export const ALLOWED_RELATIONS = [
 	{ fromKind: "project", toKind: "epic", type: "contains" },
 	{ fromKind: "epic", toKind: "initiative", type: "contains" },
+	{ fromKind: "project", toKind: "version", type: "owns" },
+	{ fromKind: "initiative", toKind: "version", type: "taggedWith" },
+	{ fromKind: "issue", toKind: "version", type: "taggedWith" },
+	{ fromKind: "initiative", toKind: "initiative", type: "supersedes" },
 	{ fromKind: "initiative", toKind: "prd", type: "owns" },
 	{ fromKind: "initiative", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "issue", type: "tracks" },
@@ -110,6 +116,8 @@ export function getArchiveStatus(kind: EntityKind): EntityStatus {
 		case "project":
 			return "done";
 		case "epic":
+			return "done";
+		case "version":
 			return "done";
 		case "initiative":
 			return "done";

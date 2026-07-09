@@ -624,3 +624,87 @@ describe("project and epic tiers", () => {
 	});
 });
 
+describe("version as first-class entity", () => {
+	it("creates a version entity with its own id prefix and status flow", () => {
+		const db = openTestDatabase();
+		const version = createEntity(db, { kind: "version", title: "2.0" });
+
+		expect(version.id).toMatch(/^VER\d+$/);
+		expect(version.kind).toBe("version");
+		expect(version.status).toBe("draft");
+	});
+
+	it("scopes a version under a project via the owns relation, and can move it to another project", () => {
+		const db = openTestDatabase();
+		const project = createEntity(db, { kind: "project", title: "Platform" });
+		const otherProject = createEntity(db, { kind: "project", title: "Other platform" });
+		const version = createEntity(db, { kind: "version", title: "2.0", parentId: project.id });
+
+		const versionDetails = getEntityDetails(db, version.id);
+		const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
+		expect(projectParent?.entity.id).toBe(project.id);
+
+		const moveResult = moveEntity(db, { entityId: version.id, newParentId: otherProject.id });
+		expect(moveResult.previousParentId).toBe(project.id);
+		expect(moveResult.newParentId).toBe(otherProject.id);
+		expect(moveResult.relationType).toBe("owns");
+	});
+
+	it("tags an initiative with a version, and allows multiple initiatives to tag the same version", () => {
+		const db = openTestDatabase();
+		const version = createEntity(db, { kind: "version", title: "2.0" });
+		const initiativeA = createEntity(db, { kind: "initiative", title: "Payments" });
+		const initiativeB = createEntity(db, { kind: "initiative", title: "Billing" });
+
+		linkEntities(db, { fromId: initiativeA.id, toId: version.id, relationType: "taggedWith" });
+		linkEntities(db, { fromId: initiativeB.id, toId: version.id, relationType: "taggedWith" });
+
+		const versionDetails = getEntityDetails(db, version.id);
+		const taggers = versionDetails.incoming
+			.filter((entry) => entry.relationType === "taggedWith")
+			.map((entry) => entry.entity.id);
+		expect(taggers.sort()).toEqual([initiativeA.id, initiativeB.id].sort());
+	});
+
+	it("tags an issue with a version", () => {
+		const db = openTestDatabase();
+		const version = createEntity(db, { kind: "version", title: "2.0" });
+		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
+		const issue = createEntity(db, { kind: "issue", title: "Fix bug", parentId: initiative.id });
+
+		linkEntities(db, { fromId: issue.id, toId: version.id, relationType: "taggedWith" });
+
+		const versionDetails = getEntityDetails(db, version.id);
+		const tagger = versionDetails.incoming.find((entry) => entry.relationType === "taggedWith");
+		expect(tagger?.entity.id).toBe(issue.id);
+	});
+
+	it("allows cross-version supersedes between initiatives, and rejects a cycle", () => {
+		const db = openTestDatabase();
+		const initiativeA = createEntity(db, { kind: "initiative", title: "Payments v1" });
+		const initiativeB = createEntity(db, { kind: "initiative", title: "Payments v2" });
+
+		linkEntities(db, { fromId: initiativeB.id, toId: initiativeA.id, relationType: "supersedes" });
+
+		expect(() => linkEntities(db, { fromId: initiativeA.id, toId: initiativeB.id, relationType: "supersedes" })).toThrow(
+			"would create a cycle"
+		);
+	});
+
+	it("surfaces an untagged version as an orphan, but excludes versions reachable via tagging", () => {
+		const db = openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
+		const issue = createEntity(db, { kind: "issue", title: "Fix bug", parentId: initiative.id });
+
+		const untaggedVersion = createEntity(db, { kind: "version", title: "Untagged" });
+		const versionTaggedToInitiative = createEntity(db, { kind: "version", title: "Tagged to initiative" });
+		const versionTaggedToIssue = createEntity(db, { kind: "version", title: "Tagged to issue" });
+
+		linkEntities(db, { fromId: initiative.id, toId: versionTaggedToInitiative.id, relationType: "taggedWith" });
+		linkEntities(db, { fromId: issue.id, toId: versionTaggedToIssue.id, relationType: "taggedWith" });
+
+		const orphanVersionIds = listOrphans(db, "version").map((entity) => entity.id);
+		expect(orphanVersionIds).toEqual([untaggedVersion.id]);
+	});
+});
+

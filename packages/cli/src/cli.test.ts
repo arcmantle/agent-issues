@@ -243,6 +243,53 @@ describe("cli", () => {
 		}
 	});
 
+	it("creates a version under a project and tags it to an initiative through the create and link commands", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+
+		const { db: seedDb } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const project = createEntity(seedDb, { kind: "project", title: "Platform" });
+		const initiative = createEntity(seedDb, { kind: "initiative", title: "Checkout redesign" });
+		seedDb.close();
+
+		const versionOut = createCapture();
+		const versionErr = createCapture();
+		const versionExitCode = await runCli(
+			["create", "version", "--title", "2.0", "--parent", project.id, "--db", dbPath, "--tenant", "test-tenant"],
+			{ cwd: root, stderr: versionErr.stream, stdout: versionOut.stream }
+		);
+		expect(versionExitCode).toBe(0);
+		expect(versionErr.read()).toBe("");
+		expect(versionOut.read()).toContain("version");
+
+		const { db: afterVersion } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const version = listEntities(afterVersion, "version").find((entity) => entity.title === "2.0");
+		afterVersion.close();
+		expect(version).toBeDefined();
+
+		const linkOut = createCapture();
+		const linkErr = createCapture();
+		const linkExitCode = await runCli(
+			["link", initiative.id, "taggedWith", version!.id, "--db", dbPath, "--tenant", "test-tenant"],
+			{ cwd: root, stderr: linkErr.stream, stdout: linkOut.stream }
+		);
+		expect(linkExitCode).toBe(0);
+		expect(linkErr.read()).toBe("");
+		expect(linkOut.read()).toContain("taggedWith");
+
+		const { db: afterLink } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		try {
+			const versionDetails = getEntityDetails(afterLink, version!.id);
+			const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
+			expect(projectParent?.entity.id).toBe(project.id);
+
+			const tagger = versionDetails.incoming.find((entry) => entry.relationType === "taggedWith");
+			expect(tagger?.entity.id).toBe(initiative.id);
+		} finally {
+			afterLink.close();
+		}
+	});
+
 	it("creates sub-issues through the existing create command and shows them in the bundle", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
