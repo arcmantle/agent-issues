@@ -3,13 +3,10 @@ import path from "node:path";
 
 import { Option } from "clipanion";
 
-import { getContextDetails } from "@agent-issues/core";
-import { ensureDatabase } from "@agent-issues/core";
 import { writeInitiativeDirectoryExport, writeProjectDirectoryExport } from "../../export-files.js";
 import { renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "../../export-markdown.js";
-import { getDatabaseSnapshot, getInitiativeBundle, listHandoffs } from "@agent-issues/core";
 
-import { requirePositional } from "../shared.js";
+import { requirePositional, withStore } from "../shared.js";
 import { MutableTenantCommand } from "../shared.js";
 
 export class ExportCommand extends MutableTenantCommand {
@@ -20,14 +17,12 @@ export class ExportCommand extends MutableTenantCommand {
 	public singleFile = Option.Boolean("--single-file", false);
 
 	public async execute(): Promise<number> {
-		const { db } = ensureDatabase(this.dbPath, { tenant: this.tenant });
-
-		try {
+		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
 			const target = requirePositional(this.positionals, 0, "export <initiativeId|project>");
-			const snapshot = getDatabaseSnapshot(db);
+			const snapshot = await store.getDatabaseSnapshot();
 
 			if (target === "project") {
-				const handoffs = listHandoffs(db);
+				const handoffs = await store.listHandoffs();
 				const markdown = renderProjectMarkdownExport({ handoffs, snapshot });
 
 				if (this.singleFile) {
@@ -57,9 +52,9 @@ export class ExportCommand extends MutableTenantCommand {
 				return 0;
 			}
 
-			const bundle = getInitiativeBundle(db, target);
+			const bundle = await store.getInitiativeBundle(target);
 			const relations = snapshot.relations;
-			const context = getContextDetails(db, { scopeRef: target });
+			const context = await store.getContextDetails({ scopeRef: target });
 			const markdown = renderInitiativeMarkdownExport({ bundle, context, relations });
 
 			if (this.singleFile) {
@@ -88,9 +83,7 @@ export class ExportCommand extends MutableTenantCommand {
 				renderDirectorySummary(result)
 			);
 			return 0;
-		} finally {
-			db.close();
-		}
+		});
 	}
 
 	protected emitSingleFileExport(input: {

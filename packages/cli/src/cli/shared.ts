@@ -3,7 +3,7 @@ import type { Writable } from "node:stream";
 
 import { Command, Option, type BaseContext } from "clipanion";
 
-import type { ContextDirectoryView } from "@agent-issues/core";
+import { openSqliteStore, type ContextDirectoryView, type DatabaseLocationOptions, type StorageDriver } from "@agent-issues/core";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;
@@ -50,6 +50,26 @@ export abstract class BodyTenantCommand extends TenantCommand {
 export abstract class TargetCommand extends BaseCommand {
 	public force = Option.Boolean("--force", false);
 	public target = Option.String("--target");
+}
+
+/**
+ * Opens the storage-driver seam for one command invocation and closes it
+ * afterwards, replacing the repeated `ensureDatabase` + try/finally pattern
+ * every command used before the seam existed (ADR11, ADR13). Hands the
+ * resolved `dbPath` back too, since a few commands echo it in their output.
+ */
+export async function withStore<T>(
+	dbPath: string | undefined,
+	options: DatabaseLocationOptions | undefined,
+	fn: (store: StorageDriver, dbPath: string) => Promise<T>
+): Promise<T> {
+	const { store, dbPath: resolvedDbPath } = openSqliteStore(dbPath, options);
+
+	try {
+		return await fn(store, resolvedDbPath);
+	} finally {
+		await store.close();
+	}
 }
 
 export function parseContextView(value: string | undefined): ContextDirectoryView {

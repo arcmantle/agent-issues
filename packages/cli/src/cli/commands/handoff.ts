@@ -1,15 +1,12 @@
 import { Option } from "clipanion";
 
-import { ensureDatabase } from "@agent-issues/core";
-import { createHandoff, deleteHandoff, getHandoffDetails, updateHandoff } from "@agent-issues/core";
-
 import {
 	renderHandoffCreateResult,
 	renderHandoffDeleteResult,
 	renderHandoffDetails,
 	renderHandoffEditResult
 } from "../renderers.js";
-import { BodyTenantCommand, requirePositional } from "../shared.js";
+import { BodyTenantCommand, requirePositional, withStore } from "../shared.js";
 
 export class HandoffCommand extends BodyTenantCommand {
 	public static paths = [["handoff"]];
@@ -18,14 +15,12 @@ export class HandoffCommand extends BodyTenantCommand {
 	public summary = Option.String("--summary");
 
 	public async execute(): Promise<number> {
-		const { db } = ensureDatabase(this.dbPath, { tenant: this.tenant });
-
-		try {
+		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
 			const firstPositional = this.positionals[0];
 
 			if (firstPositional === "create" || firstPositional === "write") {
 				const entityId = requirePositional(this.positionals, 1, "handoff create <id> (--body <markdown> | --body-file <path|->) [--summary <text>]");
-				const handoff = createHandoff(db, {
+				const handoff = await store.createHandoff({
 					body: this.requireBody("--body or --body-file is required for handoff create."),
 					entityId,
 					summary: this.summary
@@ -43,7 +38,7 @@ export class HandoffCommand extends BodyTenantCommand {
 					throw new Error("--summary, --body, or --body-file is required for handoff edit.");
 				}
 
-				const handoff = updateHandoff(db, {
+				const handoff = await store.updateHandoff({
 					body,
 					handoffId,
 					summary: this.summary
@@ -55,7 +50,7 @@ export class HandoffCommand extends BodyTenantCommand {
 
 			if (firstPositional === "delete") {
 				const handoffId = requirePositional(this.positionals, 1, "handoff delete <handoffId>");
-				const result = deleteHandoff(db, { handoffId });
+				const result = await store.deleteHandoff({ handoffId });
 
 				this.print(result, renderHandoffDeleteResult(result));
 				return 0;
@@ -63,19 +58,17 @@ export class HandoffCommand extends BodyTenantCommand {
 
 			if (firstPositional === "show") {
 				const entityId = requirePositional(this.positionals, 1, "handoff show <id>");
-				const handoff = getHandoffDetails(db, entityId);
+				const handoff = await store.getHandoffDetails(entityId);
 
 				this.print(handoff, renderHandoffDetails(handoff));
 				return 0;
 			}
 
 			const entityId = requirePositional(this.positionals, 0, "handoff <id>");
-			const handoff = getHandoffDetails(db, entityId);
+			const handoff = await store.getHandoffDetails(entityId);
 
 			this.print(handoff, renderHandoffDetails(handoff));
 			return 0;
-		} finally {
-			db.close();
-		}
+		});
 	}
 }

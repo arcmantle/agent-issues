@@ -346,6 +346,45 @@ describe("cli", () => {
 		expect(stdout.read()).toContain(`Stopped live site at http://127.0.0.1:${port}`);
 	});
 
+	it("serves site config and a database snapshot through the seam", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const port = await getAvailablePort();
+		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		db.close();
+
+		const handle = startLiveSite({ dbPath, port, tenant: "test-tenant" });
+		liveSiteClosers.add(() => {
+			if (handle.server.listening) {
+				handle.close();
+			}
+		});
+
+		await new Promise<void>((resolve) => {
+			handle.server.once("listening", () => resolve());
+		});
+
+		try {
+			const configResponse = await fetch(`http://127.0.0.1:${port}/site-config.json`);
+			const config = await configResponse.json();
+			expect(config.currentTenant).toBe("test-tenant");
+			expect(config.dbPath).toBe(dbPath);
+			expect(config.availableTenants.map((tenant: { id: string }) => tenant.id)).toContain("test-tenant");
+
+			const snapshotResponse = await fetch(`http://127.0.0.1:${port}/api/snapshot?tenant=test-tenant`);
+			const snapshot = await snapshotResponse.json();
+			expect(snapshot.entities.map((entity: { id: string }) => entity.id)).toContain(initiative.id);
+		} finally {
+			const closePromise = new Promise<void>((resolve) => {
+				handle.server.once("close", () => resolve());
+			});
+			handle.close();
+			await closePromise;
+			liveSiteClosers.delete(handle.close);
+		}
+	});
+
 	it("reports when no live site is running on the selected port", async () => {
 		const stdout = createCapture();
 		const stderr = createCapture();

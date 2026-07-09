@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { ensureDatabase, listTenants, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/core";
-import { getDatabaseSnapshot } from "@agent-issues/core";
+import { resolveDatabasePath, resolveTenantSlug } from "@agent-issues/core";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
+import { withStore } from "../cli/shared.js";
 
 export type LiveSiteInfo = {
 	dbPath: string;
@@ -54,7 +54,7 @@ export function startLiveSite(input: {
 	let databaseSignature = getDatabaseSignature(dbPath);
 
 	const server = createServer((request, response) => {
-		handleRequest({ request, response, dbPath, clients, defaultTenant, server });
+		void handleRequest({ request, response, dbPath, clients, defaultTenant, server });
 	});
 
 	const interval = setInterval(() => {
@@ -146,7 +146,7 @@ export async function stopLiveSite(input: { host?: string; port?: number }): Pro
 	});
 }
 
-function handleRequest(input: {
+async function handleRequest(input: {
 	request: IncomingMessage;
 	response: ServerResponse;
 	dbPath: string;
@@ -176,12 +176,12 @@ function handleRequest(input: {
 	}
 
 	if (requestUrl.pathname === "/site-config.json") {
-		writeJson(input.response, readSiteConfig(input.dbPath, input.defaultTenant));
+		writeJson(input.response, await readSiteConfig(input.dbPath, input.defaultTenant));
 		return;
 	}
 
 	if (requestUrl.pathname === "/api/snapshot") {
-		writeJson(input.response, readSnapshot(input.dbPath, requestedTenant));
+		writeJson(input.response, await readSnapshot(input.dbPath, requestedTenant));
 		return;
 	}
 
@@ -214,10 +214,9 @@ function handleRequest(input: {
 	writeText(input.response, 404, "Not Found");
 }
 
-function readSiteConfig(dbPath: string, defaultTenant: string) {
-	const { db } = ensureDatabase(dbPath, { tenant: defaultTenant });
-	try {
-		const availableTenants = listTenants(db);
+async function readSiteConfig(dbPath: string, defaultTenant: string) {
+	return withStore(dbPath, { tenant: defaultTenant }, async (store) => {
+		const availableTenants = await store.listTenants();
 		const currentTenant = availableTenants.some((tenant) => tenant.id === defaultTenant)
 			? defaultTenant
 			: (availableTenants[0]?.id ?? defaultTenant);
@@ -227,18 +226,11 @@ function readSiteConfig(dbPath: string, defaultTenant: string) {
 			currentTenant,
 			dbPath
 		};
-	} finally {
-		db.close();
-	}
+	});
 }
 
-function readSnapshot(dbPath: string, tenant: string) {
-	const { db } = ensureDatabase(dbPath, { tenant });
-	try {
-		return getDatabaseSnapshot(db);
-	} finally {
-		db.close();
-	}
+async function readSnapshot(dbPath: string, tenant: string) {
+	return withStore(dbPath, { tenant }, (store) => store.getDatabaseSnapshot());
 }
 
 function getDatabaseSignature(dbPath: string): string {

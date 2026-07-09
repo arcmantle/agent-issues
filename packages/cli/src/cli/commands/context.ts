@@ -9,15 +9,6 @@ import {
 	renderContextTermResult,
 	toContextSearchTermsOnly
 } from "../../context-cli.js";
-import {
-	defineContextTerm,
-	forgetContextTerm,
-	getContextDetails,
-	listContexts,
-	queryContextDirectory,
-	upsertContext
-} from "@agent-issues/core";
-import { ensureDatabase } from "@agent-issues/core";
 
 import {
 	CONTEXT_SUBCOMMANDS,
@@ -25,7 +16,8 @@ import {
 	parseContextView,
 	parseCsvOption,
 	requireOption,
-	requirePositional
+	requirePositional,
+	withStore
 } from "../shared.js";
 
 export class ContextCommand extends TenantCommand {
@@ -42,9 +34,7 @@ export class ContextCommand extends TenantCommand {
 	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const { db } = ensureDatabase(this.dbPath, { tenant: this.tenant });
-
-		try {
+		return withStore(this.dbPath, { tenant: this.tenant }, async (store) => {
 			const firstPositional = this.positionals[0];
 			const subcommand = !firstPositional || CONTEXT_SUBCOMMANDS.has(firstPositional) ? firstPositional ?? "show" : "show";
 			const showScopeRef = subcommand === "show"
@@ -53,7 +43,7 @@ export class ContextCommand extends TenantCommand {
 			const contextView = parseContextView(this.view);
 
 			if (subcommand === "list") {
-				const result = listContexts(db);
+				const result = await store.listContexts();
 				this.print(result, renderContextList(result));
 				return 0;
 			}
@@ -64,8 +54,8 @@ export class ContextCommand extends TenantCommand {
 				}
 
 				const context = showScopeRef
-					? getContextDetails(db, { scopeRef: showScopeRef })
-					: queryContextDirectory(db, { query: this.query, view: contextView });
+					? await store.getContextDetails({ scopeRef: showScopeRef })
+					: await store.queryContextDirectory({ query: this.query, view: contextView });
 				this.print(context, renderContextOutput(context));
 				return 0;
 			}
@@ -76,7 +66,7 @@ export class ContextCommand extends TenantCommand {
 					throw new Error("Missing argument. Usage: context search <query> [--view <all|global|initiatives>]");
 				}
 
-				const result = queryContextDirectory(db, { query, view: contextView });
+				const result = await store.queryContextDirectory({ query, view: contextView });
 				if (this.termsOnly) {
 					const compactResult = toContextSearchTermsOnly(result);
 					this.print(compactResult, renderContextSearchTermsOnly(compactResult));
@@ -96,7 +86,7 @@ export class ContextCommand extends TenantCommand {
 					throw new Error("`context conflicts` does not support --view global because shared-only context cannot conflict across scopes.");
 				}
 
-				const result = queryContextDirectory(db, {
+				const result = await store.queryContextDirectory({
 					conflictsOnly: true,
 					query: this.query ?? this.positionals[1],
 					view: contextView
@@ -106,7 +96,7 @@ export class ContextCommand extends TenantCommand {
 			}
 
 			if (subcommand === "set") {
-				const result = upsertContext(db, {
+				const result = await store.upsertContext({
 					scopeRef: this.scope,
 					title: requireOption(this.title, "--title is required for context set."),
 					summary: requireOption(this.summary, "--summary is required for context set.")
@@ -118,7 +108,7 @@ export class ContextCommand extends TenantCommand {
 
 			if (subcommand === "define") {
 				const term = requirePositional(this.positionals, 1, "context define <term> --definition <definition> [--avoid <comma-separated terms>]");
-				const result = defineContextTerm(db, {
+				const result = await store.defineContextTerm({
 					scopeRef: this.scope,
 					term,
 					definition: requireOption(this.definition, "--definition is required for context define."),
@@ -131,15 +121,13 @@ export class ContextCommand extends TenantCommand {
 
 			if (subcommand === "forget") {
 				const term = requirePositional(this.positionals, 1, "context forget <term>");
-				const result = forgetContextTerm(db, { scopeRef: this.scope, term });
+				const result = await store.forgetContextTerm({ scopeRef: this.scope, term });
 
 				this.print(result, renderContextForgetResult(result));
 				return 0;
 			}
 
 			throw new Error(`Unknown context subcommand: ${subcommand}`);
-		} finally {
-			db.close();
-		}
+		});
 	}
 }

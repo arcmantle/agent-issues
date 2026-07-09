@@ -1,6 +1,4 @@
-import type { DatabaseHandle } from "@agent-issues/core";
-import type { EntityRecord, RelationRecord } from "@agent-issues/core";
-import { getDatabaseSnapshot, setEntityBody } from "@agent-issues/core";
+import type { EntityRecord, RelationRecord, StorageDriver } from "@agent-issues/core";
 
 export const BACKFILLABLE_BODY_KINDS = ["initiative", "issue", "prd", "userStory", "adr"] as const;
 
@@ -62,11 +60,11 @@ export function parseBackfillableBodyKinds(values: string[]): BackfillableBodyKi
 	return kinds;
 }
 
-export function backfillBodies(
-	db: DatabaseHandle,
+export async function backfillBodies(
+	store: StorageDriver,
 	input: { dryRun?: boolean; force?: boolean; kinds?: BackfillableBodyKind[] } = {}
-): BackfillBodiesResult {
-	const snapshot = getDatabaseSnapshot(db);
+): Promise<BackfillBodiesResult> {
+	const snapshot = await store.getDatabaseSnapshot();
 	const indexes = buildSnapshotIndexes(snapshot.entities, snapshot.relations);
 	const kinds = input.kinds ?? [...BACKFILLABLE_BODY_KINDS];
 	const byKind: BackfillBodiesKindResult[] = [];
@@ -97,7 +95,7 @@ export function backfillBodies(
 			}
 
 			if (!input.dryRun) {
-				setEntityBody(db, { entityId: entity.id, body, bodySource: "generated" });
+				await store.setEntityBody({ entityId: entity.id, body, bodySource: "generated" });
 			}
 			updated += 1;
 		}
@@ -111,7 +109,7 @@ export function backfillBodies(
 	}
 
 	return {
-		tenantId: db.tenantId,
+		tenantId: store.tenantId,
 		dryRun: input.dryRun ?? false,
 		force: input.force ?? false,
 		kinds,
