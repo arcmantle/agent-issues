@@ -312,7 +312,7 @@ export function resolveTenantRootPath(currentWorkingDirectory: string): string {
 	}
 }
 
-function sanitizePathSegment(value: string): string {
+export function sanitizePathSegment(value: string): string {
 	return value
 		.trim()
 		.toLowerCase()
