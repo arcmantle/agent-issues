@@ -764,6 +764,49 @@ export function listEntityHistory(db: DatabaseHandle, entityId: string): History
 	return rows.map(mapHistoryEntryRow);
 }
 
+// Every history entry for the tenant, across every entity (ISS57/ADR16):
+// the read half of synchronize's merge substrate. No entity filter and no
+// ordering guarantee beyond "everything" - the merge algorithm (slice 2)
+// groups/orders per entity itself.
+export function listAllHistoryEntries(db: DatabaseHandle): HistoryEntryRecord[] {
+	const rows = db.prepare(`SELECT * FROM history_entries WHERE tenant_id = ?`).all(db.tenantId) as HistoryEntryRow[];
+
+	return rows.map(mapHistoryEntryRow);
+}
+
+// The write half of synchronize's merge substrate (ISS57/ADR16): inserts
+// only the entries this tenant doesn't already have, keyed by the entry's
+// own globally-unique `id` - so re-applying the same (or a superset) batch
+// is a true no-op. Deliberately does not touch the live-cache `entities`
+// table; recomputing "resolve latest" from the merged log and updating the
+// live cache is the merge algorithm/synchronize command's job (slices 2/3),
+// not this seam primitive's.
+export function applyHistoryEntries(db: DatabaseHandle, entries: HistoryEntryRecord[]): { inserted: number } {
+	const insert = db.prepare(
+		`INSERT OR IGNORE INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+		 VALUES (@id, @tenantId, @entityId, @version, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
+	);
+
+	let inserted = 0;
+	for (const entry of entries) {
+		const result = insert.run(tenantParams(db, {
+			id: entry.id,
+			entityId: entry.entityId,
+			version: entry.version,
+			author: entry.author,
+			title: entry.title,
+			body: entry.body,
+			bodySource: entry.bodySource,
+			status: entry.status,
+			parentId: entry.parentId,
+			createdAt: entry.createdAt
+		}));
+		inserted += result.changes;
+	}
+
+	return { inserted };
+}
+
 export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);

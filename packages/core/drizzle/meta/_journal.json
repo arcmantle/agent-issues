@@ -15,6 +15,13 @@
       "when": 1783591897330,
       "tag": "0001_history_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1783633048603,
+      "tag": "0002_history_version_index_non_unique",
+      "breakpoints": true
     }
   ]
 }

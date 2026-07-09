@@ -145,7 +145,12 @@ export const historyEntries = sqliteTable(
 		parentId: text("parent_id"),
 		createdAt: text("created_at").notNull()
 	},
-	(table) => [uniqueIndex("history_entries_tenant_entity_version_idx").on(table.tenantId, table.entityId, table.version)]
+	// Not unique (ISS57/ADR16): a synchronize merge can legitimately union two
+	// history entries for the same entity at the same version number - the
+	// concurrent-edit case, where both sides independently produced their own
+	// next version with no shared latest. Both entries must remain queryable
+	// (the losing one stays in history); only the entry's own `id` is unique.
+	(table) => [index("history_entries_tenant_entity_version_idx").on(table.tenantId, table.entityId, table.version)]
 );
 
 export const schema = {

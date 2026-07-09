@@ -130,7 +130,7 @@ describe("golden-fixture migration wall", () => {
 			expect(hasMigrationsTable).toBeTruthy();
 
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(2);
+			expect(applied.count).toBe(3);
 		} finally {
 			db2.close();
 		}
@@ -238,7 +238,7 @@ describe("fresh install schema parity", () => {
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(2);
+			expect(applied.count).toBe(3);
 		} finally {
 			db2.close();
 		}
@@ -338,7 +338,7 @@ describe("legacy pre-tenant migration through Drizzle", () => {
 			expect(terms).toEqual([{ tenant_id: "legacy", context_key: "INIT1", term: "Widget" }]);
 
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(2);
+			expect(applied.count).toBe(3);
 
 			const legacyTables = db2
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_%'`)

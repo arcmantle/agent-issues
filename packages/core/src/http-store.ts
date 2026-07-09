@@ -111,6 +111,14 @@ export class HttpStore implements StorageDriver {
 		return this.call("listEntityHistory", { entityId });
 	}
 
+	public listAllHistoryEntries(): Promise<HistoryEntryRecord[]> {
+		return this.call("listAllHistoryEntries");
+	}
+
+	public applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }> {
+		return this.call("applyHistoryEntries", { entries });
+	}
+
 	public listOrphans(kind?: string): Promise<EntityRecord[]> {
 		return this.call("listOrphans", kind ? { kind } : undefined);
 	}

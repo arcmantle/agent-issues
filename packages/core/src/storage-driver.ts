@@ -37,6 +37,8 @@ export interface StorageDriver {
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
 	listEntities(kind: string): Promise<EntityRecord[]>;
 	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
+	listAllHistoryEntries(): Promise<HistoryEntryRecord[]>;
+	applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }>;
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
 	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;

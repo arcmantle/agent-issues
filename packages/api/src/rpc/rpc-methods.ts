@@ -18,6 +18,11 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	getEntityDetails: async (store, params) => store.getEntityDetails((params as { entityId: string }).entityId),
 	listEntities: async (store, params) => store.listEntities((params as { kind: string }).kind),
 	listEntityHistory: async (store, params) => store.listEntityHistory((params as { entityId: string }).entityId),
+	listAllHistoryEntries: async (store) => store.listAllHistoryEntries(),
+	// Deliberately absent from `writeMethods` below: it only appends rows to
+	// `history_entries`, which `getDatabaseSnapshot` never reads (ISS57) - so
+	// it can never change what a `snapshot-changed` broadcast would report.
+	applyHistoryEntries: async (store, params) => store.applyHistoryEntries((params as { entries: Parameters<PgStore["applyHistoryEntries"]>[0] }).entries),
 	listOrphans: async (store, params) => store.listOrphans((params as { kind?: string } | undefined)?.kind),
 	listProjectAdrs: async (store) => store.listProjectAdrs(),
 	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<PgStore["updateEntityStatus"]>[0]),

@@ -10,9 +10,10 @@ import {
 } from "./context-store.js";
 import type { DatabaseHandle, DatabaseLocationOptions } from "./database.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./database.js";
-import type { BodySource } from "./domain.js";
+import type { BodySource, HistoryEntryRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
 import {
+	applyHistoryEntries,
 	archiveEntity,
 	createEntity,
 	createHandoff,
@@ -23,6 +24,7 @@ import {
 	getHandoffDetails,
 	getInitiativeBundle,
 	linkEntities,
+	listAllHistoryEntries,
 	listEntities,
 	listEntityHistory,
 	listHandoffs,
@@ -68,6 +70,14 @@ export class SqliteStore implements StorageDriver {
 
 	public async listEntityHistory(entityId: string) {
 		return listEntityHistory(this.db, entityId);
+	}
+
+	public async listAllHistoryEntries() {
+		return listAllHistoryEntries(this.db);
+	}
+
+	public async applyHistoryEntries(entries: HistoryEntryRecord[]) {
+		return applyHistoryEntries(this.db, entries);
 	}
 
 	public async listOrphans(kind?: string) {

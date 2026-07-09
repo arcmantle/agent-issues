@@ -1344,6 +1344,46 @@ export class PgStore implements StorageDriver {
 		});
 	}
 
+	// Every history entry for the tenant, across every entity (ISS57/ADR16):
+	// the read half of synchronize's merge substrate.
+	public async listAllHistoryEntries(): Promise<HistoryEntryRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const result = await client.query<HistoryEntryRow>(`SELECT * FROM history_entries WHERE tenant_id = $1`, [this.tenantId]);
+			return result.rows.map(mapHistoryEntryRow);
+		});
+	}
+
+	// The write half of synchronize's merge substrate (ISS57/ADR16):
+	// idempotent by the entry's own globally-unique `id`, so re-applying the
+	// same (or a superset) batch is a true no-op.
+	public async applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			let inserted = 0;
+			for (const entry of entries) {
+				const result = await client.query(
+					`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+					 ON CONFLICT (id) DO NOTHING`,
+					[
+						entry.id,
+						this.tenantId,
+						entry.entityId,
+						entry.version,
+						entry.author,
+						entry.title,
+						entry.body,
+						entry.bodySource,
+						entry.status,
+						entry.parentId,
+						entry.createdAt
+					]
+				);
+				inserted += result.rowCount ?? 0;
+			}
+			return { inserted };
+		});
+	}
+
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
 		if (input.fromId === input.toId) {
 			throw new Error("Cannot create a relation from an entity to itself.");

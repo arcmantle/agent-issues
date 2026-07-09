@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
+import type { HistoryEntryRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
 
 export type StorageDriverContractOptions = {
@@ -182,6 +185,45 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			await store.close();
 
 			await expect(store.listEntities("initiative")).rejects.toThrow();
+		});
+	});
+
+	describe(`storage-driver seam: bulk history log (${label})`, () => {
+		it("lists every tenant history entry and idempotently applies a batch (ISS57/ADR16)", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+				await store.updateEntityStatus({ entityId: initiative.id, status: "active" });
+
+				const allEntries = await store.listAllHistoryEntries();
+				expect(allEntries.map((entry) => entry.entityId)).toContain(initiative.id);
+				expect(allEntries.length).toBeGreaterThanOrEqual(2);
+
+				const reapplied = await store.applyHistoryEntries(allEntries);
+				expect(reapplied.inserted).toBe(0);
+
+				const foreignEntry: HistoryEntryRecord = {
+					id: randomUUID(),
+					entityId: initiative.id,
+					version: 99,
+					author: "system",
+					title: "Imported from the other side",
+					body: "",
+					bodySource: "authored",
+					status: "active",
+					parentId: null,
+					createdAt: new Date().toISOString()
+				};
+
+				const appliedForeign = await store.applyHistoryEntries([foreignEntry, ...allEntries]);
+				expect(appliedForeign.inserted).toBe(1);
+
+				const afterApply = await store.listAllHistoryEntries();
+				expect(afterApply.map((entry) => entry.id)).toContain(foreignEntry.id);
+			} finally {
+				await store.close();
+			}
 		});
 	});
 }
