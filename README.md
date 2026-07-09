@@ -103,6 +103,10 @@ agent-issues link ISS1 fixes US1
 agent-issues unlink ISS1 fixes US1
 agent-issues show INIT1 --json
 agent-issues list issue
+agent-issues auth login --tenant-id <entra-tenant-guid> --client-id <entra-app-client-guid>
+agent-issues auth status
+agent-issues auth switch <tenantId>
+agent-issues auth logout
 ```
 
 ## Current relation model
@@ -128,6 +132,23 @@ agent-issues list issue
 - `list-tenants` shows all tenant namespaces currently present in the selected database.
 - `delete-tenant <tenantId> --force` removes one tenant and all of its rows.
 - `rename-tenant <tenantId> <newTenantId> --force` renames one tenant namespace across all stored rows.
+
+## Auth (Entra ID)
+
+The cloud API (`@agent-issues/api`) validates requests through a swappable `AuthProvider` seam, with Entra ID (Azure AD) as the first concrete provider. The CLI ships matching `auth login`/`auth logout`/`auth status`/`auth switch` commands:
+
+```bash
+agent-issues auth login --tenant-id <entra-tenant-guid> --client-id <entra-app-client-guid>
+agent-issues auth status
+agent-issues auth switch <tenantId>
+agent-issues auth logout
+```
+
+- `auth login` runs Entra's interactive device-code flow: it prints a verification URL and code, then waits for you to complete sign-in in a browser.
+- `--tenant-id`/`--client-id` can also be set via the `AGENT_ISSUES_ENTRA_TENANT_ID`/`AGENT_ISSUES_ENTRA_CLIENT_ID` environment variables.
+- Sessions are cached user-locally under `~/.agent-issues/auth.json`; `auth switch` moves between already-cached tenants without re-authenticating.
+- `auth status` never prints the raw access token.
+- You need a real Entra ID app registration before `auth login` will work. See [`docs/auth-entra-id-setup.md`](docs/auth-entra-id-setup.md) for a step-by-step guide to creating one.
 
 ## Discovery
 

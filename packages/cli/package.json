@@ -30,6 +30,7 @@
 	},
 	"dependencies": {
 		"@agent-issues/core": "workspace:*",
+		"@azure/msal-node": "^5.4.0",
 		"clipanion": "4.0.0-rc.4"
 	}
 }

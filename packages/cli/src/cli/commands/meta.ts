@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { getCapabilitiesPayload, getHelpPayload, getSchemaPayload, renderHelp, renderSchema } from "../../help.js";
+import { getCapabilitiesPayload, getHelpPayload, getSchemaPayload, renderHelp, renderSchema, resolveHelpCommandName } from "../../help.js";
 import { listSkills } from "../../skill-installer.js";
 
 import { renderListSkills } from "../renderers.js";
@@ -12,7 +12,8 @@ export class HelpCommand extends BaseCommand {
 	public positionals = Option.Rest();
 
 	public async execute(): Promise<number> {
-		const payload = getHelpPayload(this.positionals[0]);
+		const commandName = this.positionals.length > 0 ? resolveHelpCommandName(this.positionals) : undefined;
+		const payload = getHelpPayload(commandName);
 		this.print(payload, renderHelp(payload));
 		return 0;
 	}

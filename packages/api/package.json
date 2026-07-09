@@ -19,10 +19,16 @@
 	},
 	"scripts": {
 		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.2",
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"jose": "^6.2.3"
 	}
 }

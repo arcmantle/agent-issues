@@ -302,6 +302,72 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
+		name: "auth login",
+		summary: "Sign in with Entra ID via the interactive device-code flow and cache the resulting session.",
+		usage: ["agent-issues auth login --tenant-id <guid> --client-id <guid>"],
+		options: [
+			{
+				name: "--tenant-id <guid>",
+				description: "Entra ID (Azure AD) tenant GUID. Falls back to AGENT_ISSUES_ENTRA_TENANT_ID.",
+				required: true
+			},
+			{
+				name: "--client-id <guid>",
+				description: "Entra ID app registration's client (application) GUID. Falls back to AGENT_ISSUES_ENTRA_CLIENT_ID.",
+				required: true
+			}
+		],
+		examples: ["agent-issues auth login --tenant-id 11111111-1111-1111-1111-111111111111 --client-id 22222222-2222-2222-2222-222222222222"],
+		notes: [
+			"Prints a verification URL and device code; open the URL in a browser and enter the code to complete sign-in.",
+			"See docs/auth-entra-id-setup.md for how to create the Azure app registration this needs.",
+			"On success, replaces any previously cached session for the same tenant and makes it current."
+		],
+		output: {
+			human: ["Signed-in identity, tenant, and session expiry"],
+			json: ["command", "session"]
+		}
+	},
+	{
+		name: "auth logout",
+		summary: "Remove a cached Entra ID session.",
+		usage: ["agent-issues auth logout", "agent-issues auth logout --tenant-id <guid>"],
+		options: [
+			{
+				name: "--tenant-id <guid>",
+				description: "Tenant to log out of. Defaults to the current tenant."
+			}
+		],
+		examples: ["agent-issues auth logout", "agent-issues auth logout --tenant-id 11111111-1111-1111-1111-111111111111 --json"],
+		output: {
+			human: ["Confirmation of which tenant was logged out, or a not-logged-in message"],
+			json: ["command", "loggedOut", "tenantId"]
+		}
+	},
+	{
+		name: "auth status",
+		summary: "Show the current Entra ID session, if any.",
+		usage: ["agent-issues auth status"],
+		examples: ["agent-issues auth status", "agent-issues auth status --json"],
+		notes: ["Never prints the raw access token, in either human or --json output."],
+		output: {
+			human: ["Signed-in identity, tenant, and session expiry, or a not-logged-in message"],
+			json: ["command", "loggedIn", "session"]
+		}
+	},
+	{
+		name: "auth switch",
+		summary: "Switch the current tenant to an already-cached Entra ID session, without re-authenticating.",
+		usage: ["agent-issues auth switch <tenantId>"],
+		positionals: [{ name: "tenantId", description: "Tenant to switch to. Must already have a cached session.", required: true }],
+		examples: ["agent-issues auth switch 11111111-1111-1111-1111-111111111111"],
+		notes: ["Run `agent-issues auth login --tenant-id <id> --client-id <id>` first if the tenant has no cached session."],
+		output: {
+			human: ["Confirmation of the tenant switched to"],
+			json: ["command", "session"]
+		}
+	},
+	{
 		name: "backfill-bodies",
 		summary: "Generate metadata-derived bodies for initiatives, issues, PRDs, user stories, and ADRs when authored bodies are missing.",
 		usage: [
@@ -1049,6 +1115,22 @@ const COMMAND_SPEC_BY_NAME = new Map(COMMAND_SPECS.map((spec) => [spec.name, spe
 
 export function isKnownCommand(commandName: string): boolean {
 	return COMMAND_SPEC_BY_NAME.has(commandName);
+}
+
+/**
+ * Resolves a help lookup from raw positionals to a command spec name,
+ * preferring the longest match so multi-word commands (e.g. "auth login")
+ * are found before falling back to their first word alone.
+ */
+export function resolveHelpCommandName(positionals: string[]): string | undefined {
+	for (let length = positionals.length; length > 0; length--) {
+		const candidate = positionals.slice(0, length).join(" ");
+		if (isKnownCommand(candidate)) {
+			return candidate;
+		}
+	}
+
+	return positionals[0];
 }
 
 export function getHelpPayload(commandName?: string): HelpPayload {

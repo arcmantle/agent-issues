@@ -91,6 +91,29 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues create <kind>");
 	});
 
+	it("resolves help for a multi-word command like 'auth login' by its full name, not just its first word", async () => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli(["help", "auth", "login", "--json"], { stderr: stderr.stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(stderr.read()).toBe("");
+		const payload = JSON.parse(stdout.read());
+		expect(payload.command.name).toBe("auth login");
+	});
+
+	it("routes '--help' appended to a multi-word command through the help renderer", async () => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli(["auth", "login", "--help"], { stderr: stderr.stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(stderr.read()).toBe("");
+		expect(stdout.read()).toContain("agent-issues auth login --tenant-id");
+	});
+
 	it("prints compact json by default and pretty json when requested", async () => {
 		const compactStdout = createCapture();
 		const compactStderr = createCapture();

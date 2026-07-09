@@ -1,5 +1,6 @@
 import { Cli } from "clipanion";
 
+import { AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
 import { BackfillBodiesCommand } from "./commands/backfill.js";
 import { ContextCommand } from "./commands/context.js";
 import {
@@ -81,6 +82,10 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(OrphansCommand);
 	cli.register(ShowCommand);
 	cli.register(ListCommand);
+	cli.register(AuthLoginCommand);
+	cli.register(AuthLogoutCommand);
+	cli.register(AuthStatusCommand);
+	cli.register(AuthSwitchCommand);
 	cli.register(FallbackCommand);
 
 	return cli;

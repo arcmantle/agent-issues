@@ -1,6 +1,6 @@
 import type { installAgent, listAgent, uninstallAgent } from "../agent-installer.js";
 import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
-import type { listTenants } from "@agent-issues/core";
+import type { AuthSessionView, listTenants } from "@agent-issues/core";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
 import type { createHandoff, deleteHandoff, getHandoffDetails, updateHandoff } from "@agent-issues/core";
@@ -362,4 +362,26 @@ function indentBlock(text: string): string {
 		.split("\n")
 		.map((line) => `  ${line}`)
 		.join("\n");
+}
+
+export function renderAuthLogin(session: AuthSessionView): string {
+	return [
+		`Logged in as ${session.displayName ?? session.userId} (tenant ${session.tenantId})`,
+		`Session expires: ${session.expiresAt}`
+	].join("\n");
+}
+
+export function renderAuthLogout(tenantId: string): string {
+	return `Logged out of tenant ${tenantId}.`;
+}
+
+export function renderAuthStatus(session: AuthSessionView): string {
+	return [
+		`Logged in as ${session.displayName ?? session.userId} (tenant ${session.tenantId})`,
+		`Session expires: ${session.expiresAt}`
+	].join("\n");
+}
+
+export function renderAuthSwitch(session: AuthSessionView): string {
+	return `Switched to tenant ${session.tenantId} (${session.displayName ?? session.userId}).`;
 }
