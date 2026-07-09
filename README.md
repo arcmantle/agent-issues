@@ -150,6 +150,20 @@ agent-issues auth logout
 - `auth status` never prints the raw access token.
 - You need a real Entra ID app registration before `auth login` will work. See [`docs/auth-entra-id-setup.md`](docs/auth-entra-id-setup.md) for a step-by-step guide to creating one.
 
+### Local dev auth (no Azure required)
+
+For local development and AFK testing of the auth seam and cloud path, `LocalAuthProvider` (`@agent-issues/api`) issues and validates a locally-signed dev credential with no network call and no Azure tenant:
+
+```bash
+agent-issues auth login --local --secret <any-shared-secret>
+agent-issues auth status
+```
+
+- `--local` skips the Entra device-code flow entirely; nothing leaves your machine.
+- `--secret` is required (also settable via `AGENT_ISSUES_LOCAL_AUTH_SECRET`) so this path can never be reached by accident.
+- `--tenant-id` defaults to `local-dev`; `--user-id` defaults to your OS username.
+- This is dev-only tooling, never a production auth path. See [`docs/local-dev-setup.md`](docs/local-dev-setup.md).
+
 ## Discovery
 
 - `context` exposes database-backed glossary records, primarily scoped per initiative.

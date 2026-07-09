@@ -26,6 +26,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@agent-issues/api':
+        specifier: workspace:*
+        version: link:../api
       '@agent-issues/core':
         specifier: workspace:*
         version: link:../core

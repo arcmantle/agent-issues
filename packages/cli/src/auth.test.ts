@@ -165,4 +165,25 @@ describe("auth CLI commands", () => {
 		await expect(runCli(["auth", "login"], {})).rejects.toThrow(/--tenant-id/);
 		await expect(runCli(["auth", "login", "--tenant-id", "tenant-a"], {})).rejects.toThrow(/--client-id/);
 	});
+
+	it("logs in locally with --local, issuing and caching a real dev session without any Azure tenant", async () => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli(["auth", "login", "--local", "--user-id", "dev-user", "--secret", "test-secret"], {
+			stdout: stdout.stream,
+			stderr: stderr.stream
+		});
+
+		expect(exitCode).toBe(0);
+		expect(stdout.read()).toContain("local-dev");
+		const current = getCurrentAuthSession();
+		expect(current?.tenantId).toBe("local-dev");
+		expect(current?.userId).toBe("dev-user");
+		expect(typeof current?.accessToken).toBe("string");
+	});
+
+	it("requires --secret before attempting a local dev login", async () => {
+		await expect(runCli(["auth", "login", "--local"], {})).rejects.toThrow(/--secret/);
+	});
 });

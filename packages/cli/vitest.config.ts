@@ -9,7 +9,8 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@agent-issues/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url))
+			"@agent-issues/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url)),
+			"@agent-issues/api": fileURLToPath(new URL("../api/src/index.ts", import.meta.url))
 		}
 	}
 });

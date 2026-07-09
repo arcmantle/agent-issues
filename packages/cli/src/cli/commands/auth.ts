@@ -1,3 +1,5 @@
+import { userInfo } from "node:os";
+
 import { Option } from "clipanion";
 
 import {
@@ -65,10 +67,21 @@ export async function performLogin(
 export class AuthLoginCommand extends BaseCommand {
 	public static paths = [["auth", "login"]];
 
+	public local = Option.Boolean("--local", false);
 	public tenantId = Option.String("--tenant-id");
 	public clientId = Option.String("--client-id");
+	public userId = Option.String("--user-id");
+	public secret = Option.String("--secret");
 
 	public async execute(): Promise<number> {
+		const session = this.local ? await this.loginLocal() : await this.loginEntra();
+
+		const view = toAuthSessionView(session);
+		this.print({ command: "auth-login" as const, session: view }, renderAuthLogin(view));
+		return 0;
+	}
+
+	private async loginEntra(): Promise<AuthSession> {
 		const tenantId = requireOption(
 			this.tenantId ?? process.env.AGENT_ISSUES_ENTRA_TENANT_ID,
 			"`auth login` requires --tenant-id (or AGENT_ISSUES_ENTRA_TENANT_ID). See docs/auth-entra-id-setup.md."
@@ -80,13 +93,25 @@ export class AuthLoginCommand extends BaseCommand {
 
 		const { acquireEntraDeviceCodeSession } = await import("../../entra-device-login.js");
 
-		const session = await performLogin({ tenantId, clientId }, acquireEntraDeviceCodeSession, (message) => {
+		return performLogin({ tenantId, clientId }, acquireEntraDeviceCodeSession, (message) => {
 			this.context.stdout.write(`${message}\n`);
 		});
+	}
 
-		const view = toAuthSessionView(session);
-		this.print({ command: "auth-login" as const, session: view }, renderAuthLogin(view));
-		return 0;
+	private async loginLocal(): Promise<AuthSession> {
+		const tenantId = this.tenantId ?? process.env.AGENT_ISSUES_LOCAL_AUTH_TENANT_ID ?? "local-dev";
+		const userId = this.userId ?? process.env.AGENT_ISSUES_LOCAL_AUTH_USER_ID ?? userInfo().username;
+		const secret = requireOption(
+			this.secret ?? process.env.AGENT_ISSUES_LOCAL_AUTH_SECRET,
+			"`auth login --local` requires --secret (or AGENT_ISSUES_LOCAL_AUTH_SECRET). See docs/local-dev-setup.md."
+		);
+
+		const { issueLocalDevSession } = await import("../../local-dev-login.js");
+
+		const localDevLogin: DeviceCodeLoginFn = ({ tenantId: sessionTenantId }) =>
+			issueLocalDevSession({ tenantId: sessionTenantId, userId, secret });
+
+		return performLogin({ tenantId, clientId: "local" }, localDevLogin, () => {});
 	}
 }
 

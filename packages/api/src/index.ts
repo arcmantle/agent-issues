@@ -1,5 +1,9 @@
 import { createServer, type Server } from "node:http";
 
+export type { AuthIdentity, AuthProvider } from "./auth/auth-provider.js";
+export { EntraIdAuthProvider, type EntraIdAuthProviderOptions } from "./auth/entra-id-auth-provider.js";
+export { LocalAuthProvider, type LocalAuthProviderOptions } from "./auth/local-auth-provider.js";
+
 /**
  * Configuration for the agent-issues cloud API host.
  *

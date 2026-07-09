@@ -303,24 +303,38 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "auth login",
-		summary: "Sign in with Entra ID via the interactive device-code flow and cache the resulting session.",
-		usage: ["agent-issues auth login --tenant-id <guid> --client-id <guid>"],
+		summary: "Sign in with Entra ID via the interactive device-code flow, or issue a local dev session with --local, and cache the resulting session.",
+		usage: ["agent-issues auth login --tenant-id <guid> --client-id <guid>", "agent-issues auth login --local --secret <secret>"],
 		options: [
 			{
 				name: "--tenant-id <guid>",
-				description: "Entra ID (Azure AD) tenant GUID. Falls back to AGENT_ISSUES_ENTRA_TENANT_ID.",
-				required: true
+				description: "Entra ID (Azure AD) tenant GUID. Falls back to AGENT_ISSUES_ENTRA_TENANT_ID. With --local, the local dev tenant id (defaults to \"local-dev\", or AGENT_ISSUES_LOCAL_AUTH_TENANT_ID)."
 			},
 			{
 				name: "--client-id <guid>",
-				description: "Entra ID app registration's client (application) GUID. Falls back to AGENT_ISSUES_ENTRA_CLIENT_ID.",
+				description: "Entra ID app registration's client (application) GUID. Falls back to AGENT_ISSUES_ENTRA_CLIENT_ID. Ignored with --local."
+			},
+			{
+				name: "--local",
+				description: "Skip the Entra device-code flow and issue a locally-signed dev session instead (ADR21). For local development and AFK testing only; never a production auth path."
+			},
+			{
+				name: "--user-id <id>",
+				description: "With --local, the dev identity to issue a session for. Defaults to the current OS username, or AGENT_ISSUES_LOCAL_AUTH_USER_ID."
+			},
+			{
+				name: "--secret <secret>",
+				description: "With --local, the shared secret used to sign/validate local dev sessions. Required, with no default. Falls back to AGENT_ISSUES_LOCAL_AUTH_SECRET.",
 				required: true
 			}
 		],
-		examples: ["agent-issues auth login --tenant-id 11111111-1111-1111-1111-111111111111 --client-id 22222222-2222-2222-2222-222222222222"],
+		examples: [
+			"agent-issues auth login --tenant-id 11111111-1111-1111-1111-111111111111 --client-id 22222222-2222-2222-2222-222222222222",
+			"agent-issues auth login --local --secret dev-only-secret"
+		],
 		notes: [
-			"Prints a verification URL and device code; open the URL in a browser and enter the code to complete sign-in.",
-			"See docs/auth-entra-id-setup.md for how to create the Azure app registration this needs.",
+			"Without --local: prints a verification URL and device code; open the URL in a browser and enter the code to complete sign-in. See docs/auth-entra-id-setup.md for how to create the Azure app registration this needs.",
+			"With --local: no browser step, no Azure tenant, no network call - see docs/local-dev-setup.md.",
 			"On success, replaces any previously cached session for the same tenant and makes it current."
 		],
 		output: {
