@@ -32,6 +32,7 @@ import {
 } from "./commands/installers.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
 import { OpenSiteCommand, ServeSiteCommand, StopSiteCommand } from "./commands/site.js";
+import { SynchronizeCommand } from "./commands/synchronize.js";
 import {
 	CurrentTenantCommand,
 	DeleteTenantCommand,
@@ -90,6 +91,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(CloudBindCommand);
 	cli.register(CloudUnbindCommand);
 	cli.register(CloudStatusCommand);
+	cli.register(SynchronizeCommand);
 	cli.register(FallbackCommand);
 
 	return cli;

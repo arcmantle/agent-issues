@@ -23,6 +23,8 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	// `history_entries`, which `getDatabaseSnapshot` never reads (ISS57) - so
 	// it can never change what a `snapshot-changed` broadcast would report.
 	applyHistoryEntries: async (store, params) => store.applyHistoryEntries((params as { entries: Parameters<PgStore["applyHistoryEntries"]>[0] }).entries),
+	applyResolvedFacts: async (store, params) =>
+		store.applyResolvedFacts((params as { resolvedEntries: Parameters<PgStore["applyResolvedFacts"]>[0] }).resolvedEntries),
 	listOrphans: async (store, params) => store.listOrphans((params as { kind?: string } | undefined)?.kind),
 	listProjectAdrs: async (store) => store.listProjectAdrs(),
 	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<PgStore["updateEntityStatus"]>[0]),
@@ -83,5 +85,10 @@ export const writeMethods = new Set<string>([
 	"defineContextTerm",
 	"forgetContextTerm",
 	"deleteTenant",
-	"renameTenant"
+	"renameTenant",
+	// Unlike `applyHistoryEntries` (history-only), `applyResolvedFacts` can
+	// create/update `entities` rows directly, which is exactly what
+	// `getDatabaseSnapshot` reads - so synchronizing does need to broadcast
+	// a `snapshot-changed` event when it changes anything (ISS59).
+	"applyResolvedFacts"
 ]);

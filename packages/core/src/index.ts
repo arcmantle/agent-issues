@@ -12,3 +12,5 @@ export * from "./open-storage-driver.js";
 export * from "./project-identity.js";
 export * from "./auth-session.js";
 export * from "./history-merge.js";
+export * from "./open-synchronize-stores.js";
+export * from "./synchronize.js";

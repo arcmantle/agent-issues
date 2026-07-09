@@ -14,6 +14,7 @@ import type { BodySource, HistoryEntryRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
 import {
 	applyHistoryEntries,
+	applyResolvedFacts,
 	archiveEntity,
 	createEntity,
 	createHandoff,
@@ -78,6 +79,10 @@ export class SqliteStore implements StorageDriver {
 
 	public async applyHistoryEntries(entries: HistoryEntryRecord[]) {
 		return applyHistoryEntries(this.db, entries);
+	}
+
+	public async applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]) {
+		return applyResolvedFacts(this.db, resolvedEntries);
 	}
 
 	public async listOrphans(kind?: string) {

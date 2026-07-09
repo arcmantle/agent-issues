@@ -33,7 +33,8 @@ export type OpenStorageDriverResult = {
 	cloudConnection?: { baseUrl: string; bearerToken: string; tenantId: string };
 };
 
-function isSessionExpired(expiresAt: string): boolean {
+/** Exported for `openSynchronizeStores` (ISS59), which enforces the same cloud-session precondition on both stores it opens. */
+export function isSessionExpired(expiresAt: string): boolean {
 	return Date.parse(expiresAt) <= Date.now();
 }
 

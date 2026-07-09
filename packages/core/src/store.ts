@@ -807,6 +807,180 @@ export function applyHistoryEntries(db: DatabaseHandle, entries: HistoryEntryRec
 	return { inserted };
 }
 
+// Derives an entity's kind from its own id prefix (ADR7's per-kind `ID_PREFIX`,
+// e.g. "ISS57" -> issue). `HistoryEntryRecord` carries no `kind` field, so this
+// is what lets `applyResolvedFacts` create a live-cache row for an entity this
+// side has never seen, purely from a merged history entry (ISS59).
+function deriveEntityKindFromId(entityId: string): EntityKind {
+	const prefix = /^([A-Za-z]+)\d+$/.exec(entityId)?.[1];
+	const found = prefix
+		? (Object.entries(ID_PREFIX) as Array<[EntityKind, string]>).find(([, candidatePrefix]) => candidatePrefix === prefix)
+		: undefined;
+
+	if (!found) {
+		throw new Error(`Cannot derive entity kind from id: ${entityId}`);
+	}
+
+	return found[0];
+}
+
+function factsMatchEntity(entity: EntityRecord, resolved: HistoryEntryRecord): boolean {
+	return (
+		entity.title === resolved.title &&
+		entity.body === resolved.body &&
+		entity.bodySource === resolved.bodySource &&
+		entity.status === resolved.status
+	);
+}
+
+// Bumps `kind`'s id counter past `entityId`'s numeric suffix if needed, so a
+// later local `createEntity` of that kind can never collide with an id that
+// arrived via synchronize instead of this side's own counter (ISS59).
+function bumpCounterPast(db: DatabaseHandle, kind: EntityKind, entityId: string): void {
+	const numericSuffix = Number(entityId.slice(ID_PREFIX[kind].length));
+	if (!Number.isFinite(numericSuffix)) {
+		return;
+	}
+
+	db.prepare(`UPDATE counters SET next_value = max(next_value, @next) WHERE tenant_id = @tenantId AND kind = @kind`).run(
+		tenantParams(db, { kind, next: numericSuffix + 1 })
+	);
+}
+
+// Reconciles `entityId`'s structural parent relation to `newParentId`,
+// bypassing `getAllowedRelationType`'s usual "does this pairing make sense"
+// guard only on the DELETE side, since a resolved history entry's parent is
+// already an accepted fact from whichever side authored it. The parent MUST
+// already exist locally by the time this runs (`applyResolvedFacts` ensures
+// parents before children), so its real kind is available for the INSERT
+// side's relation-type lookup.
+function reconcileStructuralParent(db: DatabaseHandle, entityId: string, kind: EntityKind, newParentId: string | null): void {
+	const currentParents = getStructuralParentRelations(db, entityId);
+	const currentParentId = currentParents[0]?.fromId ?? null;
+
+	if (currentParentId === newParentId) {
+		return;
+	}
+
+	for (const relation of currentParents) {
+		db.prepare(
+			`DELETE FROM relations WHERE tenant_id = @tenantId AND from_id = @fromId AND to_id = @toId AND type = @type`
+		).run(tenantParams(db, { fromId: relation.fromId, toId: entityId, type: relation.type }));
+	}
+
+	if (!newParentId) {
+		return;
+	}
+
+	const parent = getEntityOrThrow(db, newParentId);
+	const relationType = getAllowedRelationType(parent.kind, kind);
+	if (!relationType) {
+		throw new Error(`Cannot resolve ${entityId} under ${parent.kind} via synchronize: no allowed relation from ${parent.kind} to ${kind}.`);
+	}
+
+	insertRelation(db, { fromId: parent.id, toId: entityId, type: relationType, createdAt: new Date().toISOString() });
+}
+
+// The live-cache write half of synchronize's merge (ISS59/ADR16): given the
+// merge algorithm's per-entity resolved-latest entries, brings this side's
+// `entities` table (and structural parent relation) in line with each one,
+// WITHOUT appending a new history entry - the entry already exists (or was
+// just applied via `applyHistoryEntries`); this only updates the cache
+// "maintained in code" alongside it. An entity whose current facts already
+// match its resolved entry is left untouched, which is what makes a
+// synchronize with nothing new to converge report zero updates. An entity
+// with no live-cache row on this side yet (introduced by the other side) is
+// created outright, deriving its kind from its id and its structural parent
+// from `resolved.parentId` - parents are always resolved before children so
+// the parent's real kind is available.
+export function applyResolvedFacts(
+	db: DatabaseHandle,
+	resolvedEntries: HistoryEntryRecord[]
+): { created: string[]; updated: string[] } {
+	const resolvedByEntity = new Map(resolvedEntries.map((entry) => [entry.entityId, entry]));
+	const created: string[] = [];
+	const updated: string[] = [];
+	const settled = new Set<string>();
+
+	function ensureEntity(entityId: string, visiting: Set<string>): void {
+		if (settled.has(entityId)) {
+			return;
+		}
+
+		const resolved = resolvedByEntity.get(entityId);
+		if (!resolved) {
+			// Not part of this merge batch; assumed already correct on this side.
+			settled.add(entityId);
+			return;
+		}
+
+		if (visiting.has(entityId)) {
+			throw new Error(`Cycle detected while resolving structural parent chain for ${entityId}.`);
+		}
+
+		if (resolved.parentId) {
+			visiting.add(entityId);
+			ensureEntity(resolved.parentId, visiting);
+			visiting.delete(entityId);
+		}
+
+		const existingRow = db.prepare(`SELECT * FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) as
+			| EntityRow
+			| undefined;
+
+		if (existingRow) {
+			const existing = mapEntityRow(existingRow);
+			if (!factsMatchEntity(existing, resolved)) {
+				db.prepare(
+					`UPDATE entities
+					 SET title = @title, status = @status, body = @body, body_source = @bodySource, updated_at = @updatedAt
+					 WHERE tenant_id = @tenantId AND id = @entityId`
+				).run(tenantParams(db, {
+					entityId,
+					title: resolved.title,
+					status: resolved.status,
+					body: resolved.body,
+					bodySource: resolved.bodySource,
+					updatedAt: resolved.createdAt
+				}));
+				reconcileStructuralParent(db, entityId, existing.kind, resolved.parentId);
+				updated.push(entityId);
+			}
+		} else {
+			const kind = deriveEntityKindFromId(entityId);
+			db.prepare(
+				`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+				 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @createdAt, @updatedAt)`
+			).run(tenantParams(db, {
+				id: entityId,
+				kind,
+				title: resolved.title,
+				status: resolved.status,
+				body: resolved.body,
+				bodySource: resolved.bodySource,
+				createdAt: resolved.createdAt,
+				updatedAt: resolved.createdAt
+			}));
+
+			bumpCounterPast(db, kind, entityId);
+
+			if (resolved.parentId) {
+				reconcileStructuralParent(db, entityId, kind, resolved.parentId);
+			}
+
+			created.push(entityId);
+		}
+
+		settled.add(entityId);
+	}
+
+	for (const entityId of resolvedByEntity.keys()) {
+		ensureEntity(entityId, new Set());
+	}
+
+	return { created, updated };
+}
+
 export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);

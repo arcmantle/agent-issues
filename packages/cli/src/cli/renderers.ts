@@ -1,6 +1,6 @@
 import type { installAgent, listAgent, uninstallAgent } from "../agent-installer.js";
 import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
-import type { AuthSessionView, listTenants } from "@agent-issues/core";
+import type { AuthSessionView, listTenants, SynchronizeSummary } from "@agent-issues/core";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
 import type { createHandoff, deleteHandoff, getHandoffDetails, updateHandoff } from "@agent-issues/core";
@@ -404,4 +404,33 @@ export function renderCloudStatus(status: {
 	}
 
 	return `Project "${status.projectIdentity}" is cloud-bound to ${status.binding?.cloudApiUrl} (tenant ${status.binding?.tenantId}).`;
+}
+
+export function renderSynchronize(result: {
+	command: "synchronize";
+	cloudApiUrl: string;
+	tenantId: string;
+	summary: SynchronizeSummary;
+}): string {
+	const { summary } = result;
+	const appliedTotal = summary.entriesAppliedToLocal + summary.entriesAppliedToCloud;
+	const createdTotal = summary.entitiesCreatedLocal.length + summary.entitiesCreatedCloud.length;
+	const updatedTotal = summary.entitiesUpdatedLocal.length + summary.entitiesUpdatedCloud.length;
+
+	if (appliedTotal === 0 && createdTotal === 0 && updatedTotal === 0 && summary.concurrentEditConflicts === 0) {
+		return `Already in sync with ${result.cloudApiUrl} (tenant ${result.tenantId}).`;
+	}
+
+	const lines = [
+		`Synchronized with ${result.cloudApiUrl} (tenant ${result.tenantId}).`,
+		`History entries applied: ${summary.entriesAppliedToLocal} to local, ${summary.entriesAppliedToCloud} to cloud`,
+		`Entities created: ${summary.entitiesCreatedLocal.length} local, ${summary.entitiesCreatedCloud.length} cloud`,
+		`Entities updated: ${summary.entitiesUpdatedLocal.length} local, ${summary.entitiesUpdatedCloud.length} cloud`
+	];
+
+	if (summary.concurrentEditConflicts > 0) {
+		lines.push(`Concurrent-edit conflicts resolved by last-writer-wins: ${summary.concurrentEditConflicts}`);
+	}
+
+	return lines.join("\n");
 }

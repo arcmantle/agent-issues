@@ -226,4 +226,79 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 	});
+
+	describe(`storage-driver seam: resolved-facts apply (${label})`, () => {
+		it("overwrites an existing entity's facts to match a resolved entry, without appending a new history entry", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+				const historyBefore = await store.listEntityHistory(initiative.id);
+
+				const resolved: HistoryEntryRecord = {
+					id: randomUUID(),
+					entityId: initiative.id,
+					version: 99,
+					author: "system",
+					title: "Resolved from the other side",
+					body: "merged body",
+					bodySource: "authored",
+					status: "active",
+					parentId: null,
+					createdAt: new Date().toISOString()
+				};
+
+				const result = await store.applyResolvedFacts([resolved]);
+				expect(result.updated).toEqual([initiative.id]);
+				expect(result.created).toEqual([]);
+
+				const { entity } = await store.getEntityDetails(initiative.id);
+				expect(entity.title).toBe("Resolved from the other side");
+				expect(entity.body).toBe("merged body");
+				expect(entity.status).toBe("active");
+
+				const historyAfter = await store.listEntityHistory(initiative.id);
+				expect(historyAfter).toHaveLength(historyBefore.length);
+
+				// Re-applying the same resolved facts is a no-op (idempotent).
+				const reapplied = await store.applyResolvedFacts([resolved]);
+				expect(reapplied.updated).toEqual([]);
+				expect(reapplied.created).toEqual([]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("creates a live-cache row for an entity this side has never seen, deriving its kind from its id prefix", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+
+				const newIssueId = "ISS999999";
+				const resolved: HistoryEntryRecord = {
+					id: randomUUID(),
+					entityId: newIssueId,
+					version: 1,
+					author: "system",
+					title: "Introduced by the other side",
+					body: "",
+					bodySource: "authored",
+					status: "todo",
+					parentId: initiative.id,
+					createdAt: new Date().toISOString()
+				};
+
+				const result = await store.applyResolvedFacts([resolved]);
+				expect(result.created).toEqual([newIssueId]);
+
+				const { entity, incoming } = await store.getEntityDetails(newIssueId);
+				expect(entity.kind).toBe("issue");
+				expect(entity.title).toBe("Introduced by the other side");
+				expect(incoming.some((relation) => relation.entity.id === initiative.id && relation.relationType === "tracks")).toBe(true);
+			} finally {
+				await store.close();
+			}
+		});
+	});
 }

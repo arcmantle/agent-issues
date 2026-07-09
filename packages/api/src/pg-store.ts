@@ -405,6 +405,89 @@ async function insertRelation(client: PoolClient, tenantId: string, relation: Re
 	return { inserted: (result.rowCount ?? 0) > 0 };
 }
 
+// Derives an entity's kind from its own id prefix (ADR7's per-kind `ID_PREFIX`,
+// e.g. "ISS57" -> issue), mirroring core's `deriveEntityKindFromId`.
+// `HistoryEntryRecord` carries no `kind` field, so this is what lets
+// `applyResolvedFacts` create a live-cache row for an entity this side has
+// never seen, purely from a merged history entry (ISS59).
+function deriveEntityKindFromId(entityId: string): EntityKind {
+	const prefix = /^([A-Za-z]+)\d+$/.exec(entityId)?.[1];
+	const found = prefix
+		? (Object.entries(ID_PREFIX) as Array<[EntityKind, string]>).find(([, candidatePrefix]) => candidatePrefix === prefix)
+		: undefined;
+
+	if (!found) {
+		throw new Error(`Cannot derive entity kind from id: ${entityId}`);
+	}
+
+	return found[0];
+}
+
+function factsMatchEntity(entity: EntityRecord, resolved: HistoryEntryRecord): boolean {
+	return (
+		entity.title === resolved.title &&
+		entity.body === resolved.body &&
+		entity.bodySource === resolved.bodySource &&
+		entity.status === resolved.status
+	);
+}
+
+// Bumps `kind`'s id counter past `entityId`'s numeric suffix if needed, so a
+// later local `createEntity` of that kind can never collide with an id that
+// arrived via synchronize instead of this side's own counter (ISS59).
+async function bumpCounterPast(client: PoolClient, tenantId: string, kind: EntityKind, entityId: string): Promise<void> {
+	const numericSuffix = Number(entityId.slice(ID_PREFIX[kind].length));
+	if (!Number.isFinite(numericSuffix)) {
+		return;
+	}
+
+	await client.query(`UPDATE counters SET next_value = GREATEST(next_value, $1) WHERE tenant_id = $2 AND kind = $3`, [
+		numericSuffix + 1,
+		tenantId,
+		kind
+	]);
+}
+
+// Reconciles `entityId`'s structural parent relation to `newParentId` (see
+// core's `reconcileStructuralParent` for the full rationale). The parent
+// must already exist locally by the time this runs - `applyResolvedFacts`
+// ensures parents before children.
+async function reconcileStructuralParent(
+	client: PoolClient,
+	tenantId: string,
+	entityId: string,
+	kind: EntityKind,
+	newParentId: string | null
+): Promise<void> {
+	const currentParents = await getStructuralParentRelations(client, tenantId, entityId);
+	const currentParentId = currentParents[0]?.fromId ?? null;
+
+	if (currentParentId === newParentId) {
+		return;
+	}
+
+	for (const relation of currentParents) {
+		await client.query(`DELETE FROM relations WHERE tenant_id = $1 AND from_id = $2 AND to_id = $3 AND type = $4`, [
+			tenantId,
+			relation.fromId,
+			entityId,
+			relation.type
+		]);
+	}
+
+	if (!newParentId) {
+		return;
+	}
+
+	const parent = await getEntityOrThrow(client, tenantId, newParentId);
+	const relationType = getAllowedRelationType(parent.kind, kind);
+	if (!relationType) {
+		throw new Error(`Cannot resolve ${entityId} under ${parent.kind} via synchronize: no allowed relation from ${parent.kind} to ${kind}.`);
+	}
+
+	await insertRelation(client, tenantId, { fromId: parent.id, toId: entityId, type: relationType, createdAt: new Date().toISOString() });
+}
+
 function collectReachableIds(relations: RelationRecord[], startId: string): Set<string> {
 	const seen = new Set<string>([startId]);
 	const queue = [startId];
@@ -1381,6 +1464,82 @@ export class PgStore implements StorageDriver {
 				inserted += result.rowCount ?? 0;
 			}
 			return { inserted };
+		});
+	}
+
+	// The live-cache write half of synchronize's merge (ISS59/ADR16): see
+	// core's `applyResolvedFacts` for the full rationale (no new history
+	// entry, idempotent no-op when facts already match, create-on-first-sight
+	// with kind derived from id, parents resolved before children).
+	public async applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const resolvedByEntity = new Map(resolvedEntries.map((entry) => [entry.entityId, entry]));
+			const created: string[] = [];
+			const updated: string[] = [];
+			const settled = new Set<string>();
+
+			const ensureEntity = async (entityId: string, visiting: Set<string>): Promise<void> => {
+				if (settled.has(entityId)) {
+					return;
+				}
+
+				const resolved = resolvedByEntity.get(entityId);
+				if (!resolved) {
+					settled.add(entityId);
+					return;
+				}
+
+				if (visiting.has(entityId)) {
+					throw new Error(`Cycle detected while resolving structural parent chain for ${entityId}.`);
+				}
+
+				if (resolved.parentId) {
+					visiting.add(entityId);
+					await ensureEntity(resolved.parentId, visiting);
+					visiting.delete(entityId);
+				}
+
+				const existingResult = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND id = $2`, [
+					this.tenantId,
+					entityId
+				]);
+				const existingRow = existingResult.rows[0];
+
+				if (existingRow) {
+					const existing = mapEntityRow(existingRow);
+					if (!factsMatchEntity(existing, resolved)) {
+						await client.query(
+							`UPDATE entities SET title = $1, status = $2, body = $3, body_source = $4, updated_at = $5 WHERE tenant_id = $6 AND id = $7`,
+							[resolved.title, resolved.status, resolved.body, resolved.bodySource, resolved.createdAt, this.tenantId, entityId]
+						);
+						await reconcileStructuralParent(client, this.tenantId, entityId, existing.kind, resolved.parentId);
+						updated.push(entityId);
+					}
+				} else {
+					const kind = deriveEntityKindFromId(entityId);
+					await client.query(
+						`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+						 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+						[this.tenantId, entityId, kind, resolved.title, resolved.status, resolved.body, resolved.bodySource, resolved.createdAt]
+					);
+
+					await bumpCounterPast(client, this.tenantId, kind, entityId);
+
+					if (resolved.parentId) {
+						await reconcileStructuralParent(client, this.tenantId, entityId, kind, resolved.parentId);
+					}
+
+					created.push(entityId);
+				}
+
+				settled.add(entityId);
+			};
+
+			for (const entityId of resolvedByEntity.keys()) {
+				await ensureEntity(entityId, new Set());
+			}
+
+			return { created, updated };
 		});
 	}
 
