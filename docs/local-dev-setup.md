@@ -58,8 +58,44 @@ Session expires: 2026-07-09T13:22:21.198Z
 Running the cloud API and Postgres locally (so the whole dual-mode cloud
 path - not just the auth seam - runs without any Azure dependency) is
 separate, larger scope tracked under ISS39 (cloud API single Postgres gate)
-and ISS40 (HttpStore/backend switch). ADR21 already commits ISS39's
-`PgStore` to accepting a plain connection string (for a local docker-compose
-Postgres instance) alongside the Azure Managed Identity production path, so
-that work will slot in without changing how `LocalAuthProvider` is used.
-This guide will grow a "local Postgres" section once that lands.
+and ISS40 (HttpStore/backend switch). A first vertical slice of ISS39 -
+Postgres, RLS, and a `PgStore` covering the core entity-create/read path -
+is now in place; see "Local Postgres" below. The Express JSON-RPC gate,
+change/event stream, and the handoff/context/tenant-administration methods
+are still unstarted.
+
+## Local Postgres (ISS39, partial)
+
+```bash
+docker compose up -d
+```
+
+This starts a single Postgres 16 container (`agent-issues-local-postgres`,
+port 5433, named volume `agent-issues-postgres-data`) with two roles,
+created by `docker/postgres-init/01-app-role.sql` the first time the
+container initializes its data volume:
+
+- `agent_issues` / `agent_issues_dev_only` - a Postgres **superuser**
+  (created automatically by the official image's `POSTGRES_USER`). Used
+  only to run migrations (`migratePgDatabase`). **Never use this role for
+  application queries** - Postgres superusers bypass row-level security
+  unconditionally, even with `FORCE ROW LEVEL SECURITY` set, so RLS
+  (ADR9) would silently do nothing.
+- `agent_issues_app` / `agent_issues_app_dev_only` - an ordinary,
+  non-superuser role with table-level `SELECT`/`INSERT`/`UPDATE`/`DELETE`
+  grants (via `ALTER DEFAULT PRIVILEGES`, so future migrations don't need
+  this script updated). `PgStore` always connects as this role, so RLS
+  actually applies in local dev the same way it will for the real Azure
+  Managed Identity role in production.
+
+Connection strings (plain connection string, matching ADR21's commitment -
+no code branching vs. the Azure Managed Identity path):
+
+```
+postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues       # migrations only
+postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues  # PgStore
+```
+
+If you already had a container from before this role was introduced, the
+init script won't retroactively run - reset the volume once:
+`docker compose down -v && docker compose up -d`.

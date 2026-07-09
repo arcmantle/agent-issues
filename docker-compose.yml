@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent-issues-local-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agent_issues
+      POSTGRES_PASSWORD: agent_issues_dev_only
+      POSTGRES_DB: agent_issues
+    ports:
+      - "5433:5432"
+    volumes:
+      - agent-issues-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  agent-issues-postgres-data:
