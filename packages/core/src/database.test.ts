@@ -401,6 +401,57 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		}
 	});
 
+	it("keeps the migrated project's own history in sync with its renamed title when the legacy tenant already had ISS34's PROJ0/EPIC0 sentinel with its own seeded history", () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-sentinel-history-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+
+		// A legacy tenant that already ran ISS34's own bootstrap (normal
+		// `ensureDatabase`, not `skipTenantBootstrap`) has its own PROJ0/EPIC0
+		// sentinel AND ensureHistorySeed's version-1 history for them, titled
+		// generically "Default Project"/"Default Epic" - exactly the real
+		// production shape this regression is about (confirmed for real:
+		// `agent-issues-de3fbe614e21` and `eye-share-devops-net-9999b3e54780`
+		// both had this shape).
+		const legacyDb = ensureDatabase(dbPath, { tenant: "legacy-with-sentinel" }).db;
+		createEntity(legacyDb, { kind: "initiative", title: "Legacy initiative under sentinel" });
+		legacyDb.close();
+
+		const targetDb = openTestDatabase(dbPath, "well-known-tenant");
+		try {
+			const result = consolidateTenantIntoProject(targetDb, dbPath, "legacy-with-sentinel");
+
+			const project = targetDb.prepare(`SELECT title FROM entities WHERE tenant_id = 'well-known-tenant' AND id = ?`).get(
+				result.projectId
+			) as { title: string };
+			expect(project.title).toBe("Legacy With Sentinel");
+
+			// The bug this regression guards: relocating the legacy PROJ0's own
+			// stale "Default Project" history onto the new project id, with no
+			// further history entry recording the migration's own rename, left
+			// entities.title and the project's LATEST history version
+			// disagreeing - invisible until `synchronize`'s history-is-truth
+			// reconciliation (`applyResolvedFacts`) recomputed and overwrote the
+			// correct entities.title right back to the stale "Default Project".
+			const latestHistoryTitle = targetDb
+				.prepare(
+					`SELECT title FROM history_entries WHERE tenant_id = 'well-known-tenant' AND entity_id = ?
+					 ORDER BY version DESC LIMIT 1`
+				)
+				.get(result.projectId) as { title: string };
+			expect(latestHistoryTitle.title).toBe("Legacy With Sentinel");
+
+			// The relocated stale version-1 entry itself must still be present
+			// (no data loss) - just no longer the winning/latest version.
+			const historyTitles = targetDb
+				.prepare(`SELECT title FROM history_entries WHERE tenant_id = 'well-known-tenant' AND entity_id = ? ORDER BY version ASC`)
+				.all(result.projectId) as Array<{ title: string }>;
+			expect(historyTitles.map((entry) => entry.title)).toEqual(["Default Project", "Legacy With Sentinel"]);
+		} finally {
+			targetDb.close();
+		}
+	});
+
 	it("is idempotent: a second call for the same legacy tenant is a no-op that returns the existing project id", () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-idempotent-"));
 		tempDirs.push(tempDir);

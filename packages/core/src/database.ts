@@ -931,6 +931,39 @@ function migrateLegacyTenantIntoProject(db: DatabaseHandle, dbPath: string, lega
 				});
 			}
 
+			// A legacy tenant that already had its own PROJ0/EPIC0 sentinel
+			// (predates ISS63, but not ISS34) relocates that sentinel's OWN
+			// history above - stale content from when it was still generically
+			// titled "Default Project"/"Default Epic", now attached to this
+			// project/epic's freshly-minted id. Left alone, that stale relocated
+			// entry would be the ONLY history this project/epic has, so
+			// `synchronize`'s history-is-truth reconciliation (`applyResolvedFacts`)
+			// would recompute and overwrite the entities table's correct,
+			// freshly-minted title right back to the old generic one on the very
+			// first sync. Appending one more version, unconditionally, recording
+			// the migration's own final facts keeps entities and history
+			// consistent regardless of whether the legacy tenant had a sentinel
+			// (with stale history to relocate) or not (nothing to relocate,
+			// `ensureHistorySeed` already covers that case correctly on its own).
+			appendMigratedSentinelHistoryEntry(db, {
+				id: projectId,
+				title: projectTitle,
+				body: "",
+				bodySource: "generated",
+				status: "active",
+				parentId: null,
+				createdAt: now
+			});
+			appendMigratedSentinelHistoryEntry(db, {
+				id: epicId,
+				title: DEFAULT_EPIC_TITLE,
+				body: "",
+				bodySource: "generated",
+				status: "active",
+				parentId: projectId,
+				createdAt: now
+			});
+
 			// Contexts: an initiative-scoped context's key is that initiative's
 			// own id (remapped like any other entity reference); the tenant-wide
 			// "default"/shared context has no entity to key off, so it is
@@ -1083,6 +1116,51 @@ function insertMigratedRelation(db: DatabaseHandle, fromId: string, toId: string
 		`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
 		 VALUES (@tenantId, @fromId, @toId, @type, @createdAt)`
 	).run({ tenantId: db.tenantId, fromId, toId, type, createdAt });
+}
+
+/**
+ * Appends one more history version (next after whatever version, if any,
+ * `entityId` already has - including a legacy sentinel's own history just
+ * relocated onto this same id) recording the migration's own final facts.
+ * Mirrors `store.ts`'s `appendHistoryEntry` (ADR8's "full snapshot per
+ * version" contract), duplicated here rather than imported since that
+ * function reads its facts from a live `EntityRecord` object, not the fixed
+ * values a migration already knows.
+ */
+function appendMigratedSentinelHistoryEntry(
+	db: DatabaseHandle,
+	entity: {
+		id: string;
+		title: string;
+		body: string;
+		bodySource: string;
+		status: string;
+		parentId: string | null;
+		createdAt: string;
+	}
+): void {
+	const row = db.prepare(`SELECT MAX(version) AS max_version FROM history_entries WHERE tenant_id = ? AND entity_id = ?`).get(
+		db.tenantId,
+		entity.id
+	) as { max_version: number | null };
+	const version = (row.max_version ?? 0) + 1;
+
+	db.prepare(
+		`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+		 VALUES (@id, @tenantId, @entityId, @version, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
+	).run({
+		id: randomUUID(),
+		tenantId: db.tenantId,
+		entityId: entity.id,
+		version,
+		author: RESERVED_SYSTEM_AUTHOR,
+		title: entity.title,
+		body: entity.body,
+		bodySource: entity.bodySource,
+		status: entity.status,
+		parentId: entity.parentId,
+		createdAt: entity.createdAt
+	});
 }
 
 function backupDatabaseFile(db: DatabaseHandle, dbPath: string): void {
