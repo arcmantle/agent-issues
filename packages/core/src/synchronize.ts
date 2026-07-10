@@ -1,4 +1,4 @@
-import type { HistoryEntryRecord } from "./domain.js";
+import type { HistoryEntryRecord, RelationRecord } from "./domain.js";
 import { mergeHistoryLogs } from "./history-merge.js";
 import type { StorageDriver } from "./storage-driver.js";
 
@@ -11,7 +11,26 @@ export type SynchronizeSummary = {
 	entitiesUpdatedCloud: string[];
 	/** Entities whose history contains two entries tied at the winning version that genuinely disagree on facts - the concurrent-edit case last-writer-wins resolves (ADR16). Identical-content ties (e.g. independently-seeded sentinel history) are not counted. Reports every such entity known to the converged history, not just ones newly discovered by this run. */
 	concurrentEditConflicts: number;
+	/** Non-structural relations (e.g. "blocks", "fixes") newly inserted on each side (ISS60/ADR16). Structural relations aren't counted here - they're already reconstructed by applyResolvedFacts. */
+	relationsAppliedToLocal: number;
+	relationsAppliedToCloud: number;
 };
+
+// Relations have no append-only log of their own to merge against, so
+// converging both sides is a plain union keyed by the table's own primary
+// key (fromId, toId, type) rather than a version-aware resolve-latest.
+function unionRelations(a: RelationRecord[], b: RelationRecord[]): RelationRecord[] {
+	const byKey = new Map<string, RelationRecord>();
+
+	for (const relation of [...a, ...b]) {
+		const key = `${relation.fromId}\u0000${relation.toId}\u0000${relation.type}`;
+		if (!byKey.has(key)) {
+			byKey.set(key, relation);
+		}
+	}
+
+	return [...byKey.values()];
+}
 
 // A tie at the winning version only counts as a genuine concurrent-edit
 // conflict if the tied entries actually disagree on facts. Identical-content
@@ -54,10 +73,13 @@ function countConcurrentEditConflicts(union: HistoryEntryRecord[], latestByEntit
  * union (`mergeHistoryLogs`, ISS58), applies whatever entries each side is
  * missing (`applyHistoryEntries`, ISS57), then converges both sides'
  * live-cache facts to the resolved-latest entry per entity
- * (`applyResolvedFacts`, ISS59). Operates on two already-open
- * `StorageDriver`s - opening them (requiring a cloud binding and a valid
- * session) is `openSynchronizeStores`'s job, not this function's, so this
- * stays pure orchestration with no filesystem/auth concerns of its own.
+ * (`applyResolvedFacts`, ISS59), and finally converges non-structural
+ * relations (`applyRelations`, ISS60) - which must run last, after every
+ * entity a relation could reference already exists on both sides. Operates
+ * on two already-open `StorageDriver`s - opening them (requiring a cloud
+ * binding and a valid session) is `openSynchronizeStores`'s job, not this
+ * function's, so this stays pure orchestration with no filesystem/auth
+ * concerns of its own.
  */
 export async function synchronizeStores(local: StorageDriver, cloud: StorageDriver): Promise<SynchronizeSummary> {
 	const [localEntries, cloudEntries] = await Promise.all([local.listAllHistoryEntries(), cloud.listAllHistoryEntries()]);
@@ -67,9 +89,18 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 	const [appliedToLocal, appliedToCloud] = await Promise.all([local.applyHistoryEntries(union), cloud.applyHistoryEntries(union)]);
 	const [localFacts, cloudFacts] = await Promise.all([local.applyResolvedFacts(resolvedEntries), cloud.applyResolvedFacts(resolvedEntries)]);
 
+	const [localRelations, cloudRelations] = await Promise.all([local.listAllRelations(), cloud.listAllRelations()]);
+	const relationUnion = unionRelations(localRelations, cloudRelations);
+	const [localRelationsApplied, cloudRelationsApplied] = await Promise.all([
+		local.applyRelations(relationUnion),
+		cloud.applyRelations(relationUnion)
+	]);
+
 	return {
 		entriesAppliedToLocal: appliedToLocal.inserted,
 		entriesAppliedToCloud: appliedToCloud.inserted,
+		relationsAppliedToLocal: localRelationsApplied.inserted,
+		relationsAppliedToCloud: cloudRelationsApplied.inserted,
 		entitiesCreatedLocal: localFacts.created,
 		entitiesUpdatedLocal: localFacts.updated,
 		entitiesCreatedCloud: cloudFacts.created,

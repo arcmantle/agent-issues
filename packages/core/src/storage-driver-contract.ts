@@ -301,4 +301,60 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 	});
+
+	describe(`storage-driver seam: bulk relations (${label})`, () => {
+		it("lists only non-structural relations and idempotently applies a batch (ISS60/ADR16)", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+				const blocker = await store.createEntity({ kind: "issue", title: "Blocker issue", parentId: initiative.id });
+				const blocked = await store.createEntity({ kind: "issue", title: "Blocked issue", parentId: initiative.id });
+				await store.linkEntities({ fromId: blocker.id, toId: blocked.id, relationType: "blocks" });
+
+				const relations = await store.listAllRelations();
+				// The "tracks" relations created by parentId above are structural
+				// and must be excluded - only the explicit "blocks" link should
+				// show up here.
+				expect(relations.some((relation) => relation.type === "tracks")).toBe(false);
+				expect(relations).toContainEqual(expect.objectContaining({ fromId: blocker.id, toId: blocked.id, type: "blocks" }));
+
+				const reapplied = await store.applyRelations(relations);
+				expect(reapplied.inserted).toBe(0);
+
+				const foreignRelation = { fromId: blocked.id, toId: blocker.id, type: "blocks" as const, createdAt: new Date().toISOString() };
+				const appliedForeign = await store.applyRelations([foreignRelation, ...relations]);
+				expect(appliedForeign.inserted).toBe(1);
+
+				const afterApply = await store.listAllRelations();
+				expect(afterApply).toContainEqual(expect.objectContaining({ fromId: blocked.id, toId: blocker.id, type: "blocks" }));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("still lists a structural-type relation manually linked alongside an entity's real structural parent", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+				const issueA = await store.createEntity({ kind: "issue", title: "Issue A", parentId: initiative.id });
+				const issueB = await store.createEntity({ kind: "issue", title: "Issue B", parentId: initiative.id });
+
+				// A "decomposes" edge is structural (usually auto-derived from
+				// `parentId`), but the `link` command lets it be created as a
+				// plain manual annotation too, coexisting with issueB's real
+				// structural parent (the initiative, via "tracks") -
+				// `reconcileStructuralParent` tolerates this extra row but never
+				// reconstructs it, so `listAllRelations` must not drop it either.
+				await store.linkEntities({ fromId: issueA.id, toId: issueB.id, relationType: "decomposes" });
+
+				const relations = await store.listAllRelations();
+				expect(relations.some((relation) => relation.type === "tracks")).toBe(false);
+				expect(relations).toContainEqual(expect.objectContaining({ fromId: issueA.id, toId: issueB.id, type: "decomposes" }));
+			} finally {
+				await store.close();
+			}
+		});
+	});
 }

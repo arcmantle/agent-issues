@@ -10,7 +10,7 @@ import type {
 	QueryContextDirectoryResult
 } from "./context-store.js";
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
-import type { BodySource, EntityRecord, HistoryEntryRecord } from "./domain.js";
+import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
 import type {
 	DatabaseSnapshot,
@@ -121,6 +121,14 @@ export class HttpStore implements StorageDriver {
 
 	public applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }> {
 		return this.call("applyResolvedFacts", { resolvedEntries });
+	}
+
+	public listAllRelations(): Promise<RelationRecord[]> {
+		return this.call("listAllRelations");
+	}
+
+	public applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
+		return this.call("applyRelations", { relations });
 	}
 
 	public listOrphans(kind?: string): Promise<EntityRecord[]> {

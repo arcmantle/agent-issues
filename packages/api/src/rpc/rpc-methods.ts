@@ -25,6 +25,8 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	applyHistoryEntries: async (store, params) => store.applyHistoryEntries((params as { entries: Parameters<PgStore["applyHistoryEntries"]>[0] }).entries),
 	applyResolvedFacts: async (store, params) =>
 		store.applyResolvedFacts((params as { resolvedEntries: Parameters<PgStore["applyResolvedFacts"]>[0] }).resolvedEntries),
+	listAllRelations: async (store) => store.listAllRelations(),
+	applyRelations: async (store, params) => store.applyRelations((params as { relations: Parameters<PgStore["applyRelations"]>[0] }).relations),
 	listOrphans: async (store, params) => store.listOrphans((params as { kind?: string } | undefined)?.kind),
 	listProjectAdrs: async (store) => store.listProjectAdrs(),
 	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<PgStore["updateEntityStatus"]>[0]),
@@ -90,5 +92,9 @@ export const writeMethods = new Set<string>([
 	// create/update `entities` rows directly, which is exactly what
 	// `getDatabaseSnapshot` reads - so synchronizing does need to broadcast
 	// a `snapshot-changed` event when it changes anything (ISS59).
-	"applyResolvedFacts"
+	"applyResolvedFacts",
+	// Same reasoning as `applyResolvedFacts` above: `getDatabaseSnapshot`
+	// reads the `relations` table directly, so bulk-applying relations
+	// (ISS60) must broadcast too.
+	"applyRelations"
 ]);

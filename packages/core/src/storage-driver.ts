@@ -8,7 +8,7 @@ import type {
 	QueryContextDirectoryResult
 } from "./context-store.js";
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
-import type { BodySource, EntityRecord, HistoryEntryRecord } from "./domain.js";
+import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "./domain.js";
 import type {
 	DatabaseSnapshot,
 	DeleteResult,
@@ -40,6 +40,9 @@ export interface StorageDriver {
 	listAllHistoryEntries(): Promise<HistoryEntryRecord[]>;
 	applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }>;
 	applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }>;
+	/** Non-structural relations only (ISS60/ADR16) - structural relations are reconstructed from `applyResolvedFacts`'s `parentId` handling. */
+	listAllRelations(): Promise<RelationRecord[]>;
+	applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }>;
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
 	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;

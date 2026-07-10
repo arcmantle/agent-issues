@@ -23,6 +23,7 @@ import {
 	isValidStatus,
 	RESERVED_SYSTEM_AUTHOR,
 	ID_PREFIX,
+	STRUCTURAL_RELATION_TYPES,
 	type BodySource,
 	type ContextDetails,
 	type ContextDirectory,
@@ -1540,6 +1541,52 @@ export class PgStore implements StorageDriver {
 			}
 
 			return { created, updated };
+		});
+	}
+
+	// Excludes only the ONE relation row each entity's `reconcileStructuralParent`
+	// will already reconstruct from its resolved `parentId` - i.e. a
+	// structural-type row whose `from_id` equals `to_id`'s own latest
+	// `parent_id`. Everything else is included, even a row of a
+	// nominally-structural type: a structural type like "decomposes" can also
+	// be created directly via `link` as a plain annotation alongside an
+	// entity's real structural parent (e.g. an issue tracked by an initiative
+	// that's *also* manually linked as "decomposed by" another issue) -
+	// `reconcileStructuralParent` tolerates that extra row but never
+	// reconstructs it, so it needs its own sync primitive just like
+	// "blocks"/"fixes" do (see core's `listAllRelations` for the identical
+	// SQLite-side logic).
+	public async listAllRelations(): Promise<RelationRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const result = await client.query<RelationRow>(
+				`SELECT r.* FROM relations r WHERE r.tenant_id = $1
+				 AND NOT (
+				   r.type = ANY($2::text[])
+				   AND r.from_id = (
+				     SELECT h.parent_id FROM history_entries h
+				     WHERE h.tenant_id = r.tenant_id AND h.entity_id = r.to_id
+				     ORDER BY h.version DESC LIMIT 1
+				   )
+				 )`,
+				[this.tenantId, STRUCTURAL_RELATION_TYPES]
+			);
+			return result.rows.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
+		});
+	}
+
+	// The write half of the relations sync seam (ISS60/ADR16): idempotent
+	// via `insertRelation`'s own `ON CONFLICT DO NOTHING`, keyed on the
+	// table's primary key (tenant_id, from_id, to_id, type).
+	public async applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			let inserted = 0;
+			for (const relation of relations) {
+				const { inserted: wasInserted } = await insertRelation(client, this.tenantId, relation);
+				if (wasInserted) {
+					inserted += 1;
+				}
+			}
+			return { inserted };
 		});
 	}
 

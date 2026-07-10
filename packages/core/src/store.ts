@@ -16,6 +16,7 @@ import {
 	isValidStatus,
 	ID_PREFIX,
 	RESERVED_SYSTEM_AUTHOR,
+	STRUCTURAL_RELATION_TYPES,
 	type BodySource,
 	type EntityKind,
 	type EntityRecord,
@@ -979,6 +980,60 @@ export function applyResolvedFacts(
 	}
 
 	return { created, updated };
+}
+
+// The read half of synchronize's relation sync (ISS60/ADR16). Excludes only
+// the ONE relation row each entity's `reconcileStructuralParent` will
+// already reconstruct from its resolved `parentId` - i.e. a structural-type
+// row whose `fromId` equals `toId`'s own latest `parentId`. Everything else
+// is included, even a row of a nominally-structural type: a structural type
+// like "decomposes" can also be created directly via `link` as a plain
+// annotation alongside an entity's real structural parent (e.g. an issue
+// tracked by an initiative that's *also* manually linked as "decomposed by"
+// another issue) - `reconcileStructuralParent` tolerates that extra row but
+// never reconstructs it, so it needs its own sync primitive just like
+// "blocks"/"fixes" do. `relations` has no append-only log of its own to
+// merge against like `history_entries` does, so this is a plain "list
+// everything [not already covered], apply what's missing" pair rather than
+// a version-aware merge.
+export function listAllRelations(db: DatabaseHandle): RelationRecord[] {
+	const structuralPlaceholders = STRUCTURAL_RELATION_TYPES.map(() => "?").join(", ");
+	const rows = db
+		.prepare(
+			`SELECT r.* FROM relations r WHERE r.tenant_id = ?
+			 AND NOT (
+			   r.type IN (${structuralPlaceholders})
+			   AND r.from_id = (
+			     SELECT h.parent_id FROM history_entries h
+			     WHERE h.tenant_id = r.tenant_id AND h.entity_id = r.to_id
+			     ORDER BY h.version DESC LIMIT 1
+			   )
+			 )`
+		)
+		.all(db.tenantId, ...STRUCTURAL_RELATION_TYPES) as RelationRow[];
+
+	return rows.map((row) => ({
+		fromId: row.from_id,
+		toId: row.to_id,
+		type: row.type as RelationType,
+		createdAt: row.created_at
+	}));
+}
+
+// The write half (ISS60/ADR16): idempotently inserts whatever relations this
+// tenant doesn't already have, keyed by the table's own primary key
+// (tenantId, fromId, toId, type).  Must run after `applyResolvedFacts` in
+// synchronize's orchestration, so both endpoints of every relation already
+// exist as entities on this side (`relations` has FK constraints on both
+// from_id and to_id).
+export function applyRelations(db: DatabaseHandle, relations: RelationRecord[]): { inserted: number } {
+	let inserted = 0;
+	for (const relation of relations) {
+		const result = insertRelation(db, relation);
+		inserted += result.changes;
+	}
+
+	return { inserted };
 }
 
 export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {

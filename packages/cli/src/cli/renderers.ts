@@ -416,8 +416,9 @@ export function renderSynchronize(result: {
 	const appliedTotal = summary.entriesAppliedToLocal + summary.entriesAppliedToCloud;
 	const createdTotal = summary.entitiesCreatedLocal.length + summary.entitiesCreatedCloud.length;
 	const updatedTotal = summary.entitiesUpdatedLocal.length + summary.entitiesUpdatedCloud.length;
+	const relationsTotal = summary.relationsAppliedToLocal + summary.relationsAppliedToCloud;
 
-	if (appliedTotal === 0 && createdTotal === 0 && updatedTotal === 0 && summary.concurrentEditConflicts === 0) {
+	if (appliedTotal === 0 && createdTotal === 0 && updatedTotal === 0 && relationsTotal === 0 && summary.concurrentEditConflicts === 0) {
 		return `Already in sync with ${result.cloudApiUrl} (tenant ${result.tenantId}).`;
 	}
 
@@ -425,7 +426,8 @@ export function renderSynchronize(result: {
 		`Synchronized with ${result.cloudApiUrl} (tenant ${result.tenantId}).`,
 		`History entries applied: ${summary.entriesAppliedToLocal} to local, ${summary.entriesAppliedToCloud} to cloud`,
 		`Entities created: ${summary.entitiesCreatedLocal.length} local, ${summary.entitiesCreatedCloud.length} cloud`,
-		`Entities updated: ${summary.entitiesUpdatedLocal.length} local, ${summary.entitiesUpdatedCloud.length} cloud`
+		`Entities updated: ${summary.entitiesUpdatedLocal.length} local, ${summary.entitiesUpdatedCloud.length} cloud`,
+		`Relations applied: ${summary.relationsAppliedToLocal} to local, ${summary.relationsAppliedToCloud} to cloud`
 	];
 
 	if (summary.concurrentEditConflicts > 0) {

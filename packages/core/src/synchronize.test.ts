@@ -50,7 +50,9 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 			entitiesUpdatedLocal: [],
 			entitiesCreatedCloud: [],
 			entitiesUpdatedCloud: [],
-			concurrentEditConflicts: 0
+			concurrentEditConflicts: 0,
+			relationsAppliedToLocal: 0,
+			relationsAppliedToCloud: 0
 		});
 	});
 
@@ -73,6 +75,26 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 			return entity && { title: entity.title, body: entity.body, status: entity.status };
 		};
 		expect(factsOf(cloudSnapshot.entities, issue.id)).toEqual(factsOf(localSnapshot.entities, issue.id));
+	});
+
+	it("propagates a non-structural relation (e.g. 'blocks') created on one side to the other, without duplicating it on repeated runs", async () => {
+		const initiative = await local.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		const blocker = await local.createEntity({ kind: "issue", title: "Blocker issue", parentId: initiative.id });
+		const blocked = await local.createEntity({ kind: "issue", title: "Blocked issue", parentId: initiative.id });
+		await synchronizeStores(local, cloud);
+
+		await local.linkEntities({ fromId: blocker.id, toId: blocked.id, relationType: "blocks" });
+
+		const summary = await synchronizeStores(local, cloud);
+		expect(summary.relationsAppliedToCloud).toBe(1);
+		expect(summary.relationsAppliedToLocal).toBe(0);
+
+		const cloudRelations = await cloud.listAllRelations();
+		expect(cloudRelations).toContainEqual(expect.objectContaining({ fromId: blocker.id, toId: blocked.id, type: "blocks" }));
+
+		const repeatSummary = await synchronizeStores(local, cloud);
+		expect(repeatSummary.relationsAppliedToLocal).toBe(0);
+		expect(repeatSummary.relationsAppliedToCloud).toBe(0);
 	});
 
 	it("resolves a concurrent same-record edit deterministically and preserves the losing edit in history on both sides", async () => {

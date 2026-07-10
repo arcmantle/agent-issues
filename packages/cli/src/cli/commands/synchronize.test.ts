@@ -63,6 +63,10 @@ async function dispatch(store: SqliteStore, method: string, params: unknown): Pr
 			return store.applyHistoryEntries(args.entries as Parameters<SqliteStore["applyHistoryEntries"]>[0]);
 		case "applyResolvedFacts":
 			return store.applyResolvedFacts(args.resolvedEntries as Parameters<SqliteStore["applyResolvedFacts"]>[0]);
+		case "listAllRelations":
+			return store.listAllRelations();
+		case "applyRelations":
+			return store.applyRelations(args.relations as Parameters<SqliteStore["applyRelations"]>[0]);
 		case "getEntityDetails":
 			return store.getEntityDetails(args.entityId as string);
 		case "getDatabaseSnapshot":
