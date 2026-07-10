@@ -25,6 +25,7 @@ import {
 	ID_PREFIX,
 	STRUCTURAL_RELATION_TYPES,
 	type BodySource,
+	type ConsolidateTenantResult,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextDirectoryTerm,
@@ -2510,6 +2511,13 @@ export class PgStore implements StorageDriver {
 				renamed: true
 			};
 		});
+	}
+
+	public consolidateTenant(_legacyTenantId: string): Promise<ConsolidateTenantResult> {
+		// ISS63 is local-only (ADR7): RLS scopes every PgStore instance to
+		// exactly its own tenant (see the class doc comment above), so there
+		// is never another tenant's rows for a Postgres tenant to fold in.
+		throw new Error("consolidateTenant is a local-only operation (ISS63) and is not supported for Postgres tenants.");
 	}
 
 	public async close(): Promise<void> {

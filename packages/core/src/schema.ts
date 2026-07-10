@@ -153,6 +153,23 @@ export const historyEntries = sqliteTable(
 	(table) => [index("history_entries_tenant_entity_version_idx").on(table.tenantId, table.entityId, table.version)]
 );
 
+// Records that a legacy per-folder tenant (the old one-tenant-per-workspace
+// scheme, ADR7) has already been folded into a `project` entity under a
+// shared tenant (ISS63, correcting ISS34's incomplete migration). Keyed by
+// the legacy tenant's own id so re-opening the same workspace - or re-running
+// the explicit admin command against the same stray tenant id - is a no-op
+// rather than creating a duplicate project.
+export const projectMigrations = sqliteTable(
+	"project_migrations",
+	{
+		tenantId: text("tenant_id").notNull(),
+		legacyTenantId: text("legacy_tenant_id").notNull(),
+		projectId: text("project_id").notNull(),
+		createdAt: text("created_at").notNull()
+	},
+	(table) => [primaryKey({ columns: [table.tenantId, table.legacyTenantId] })]
+);
+
 export const schema = {
 	metadata,
 	counters,
@@ -161,7 +178,8 @@ export const schema = {
 	contexts,
 	contextTerms,
 	handoffs,
-	historyEntries
+	historyEntries,
+	projectMigrations
 };
 
 export type EntityRow = typeof entities.$inferSelect;
@@ -172,3 +190,4 @@ export type HandoffRow = typeof handoffs.$inferSelect;
 export type CounterRow = typeof counters.$inferSelect;
 export type MetadataRow = typeof metadata.$inferSelect;
 export type HistoryEntryRow = typeof historyEntries.$inferSelect;
+export type ProjectMigrationRow = typeof projectMigrations.$inferSelect;

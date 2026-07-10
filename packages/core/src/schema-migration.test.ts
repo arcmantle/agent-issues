@@ -116,7 +116,7 @@ describe("golden-fixture migration wall", () => {
 		}
 	});
 
-	it("marks the Drizzle 0000 and 0001 migrations as applied without re-running them", () => {
+	it("marks the Drizzle migrations as applied without re-running them", () => {
 		const staged = stageFixture();
 
 		const { db } = ensureDatabase(staged, { tenant: "fixture" });
@@ -130,7 +130,7 @@ describe("golden-fixture migration wall", () => {
 			expect(hasMigrationsTable).toBeTruthy();
 
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(3);
+			expect(applied.count).toBe(4);
 		} finally {
 			db2.close();
 		}
@@ -193,7 +193,18 @@ describe("fresh install schema parity", () => {
 		).map((row) => row.name);
 
 		expect(tables).toEqual(
-			["__drizzle_migrations", "context_terms", "contexts", "counters", "entities", "handoffs", "history_entries", "metadata", "relations"].sort()
+			[
+				"__drizzle_migrations",
+				"context_terms",
+				"contexts",
+				"counters",
+				"entities",
+				"handoffs",
+				"history_entries",
+				"metadata",
+				"project_migrations",
+				"relations"
+			].sort()
 		);
 	});
 
@@ -230,7 +241,7 @@ describe("fresh install schema parity", () => {
 		]);
 	});
 
-	it("records the 0000 and 0001 migrations so future forward migrations are tracked", () => {
+	it("records all baseline migrations so future forward migrations are tracked", () => {
 		const dbPath = freshDatabasePath();
 		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
@@ -238,7 +249,7 @@ describe("fresh install schema parity", () => {
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(3);
+			expect(applied.count).toBe(4);
 		} finally {
 			db2.close();
 		}
@@ -338,7 +349,7 @@ describe("legacy pre-tenant migration through Drizzle", () => {
 			expect(terms).toEqual([{ tenant_id: "legacy", context_key: "INIT1", term: "Widget" }]);
 
 			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(3);
+			expect(applied.count).toBe(4);
 
 			const legacyTables = db2
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_%'`)

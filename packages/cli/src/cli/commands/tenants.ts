@@ -6,7 +6,7 @@ import {
 	resolveTenantSlug
 } from "@agent-issues/core";
 
-import { renderCurrentTenant, renderDeleteTenant, renderRenameTenant, renderTenantList } from "../renderers.js";
+import { renderConsolidateTenant, renderCurrentTenant, renderDeleteTenant, renderRenameTenant, renderTenantList } from "../renderers.js";
 import { MutableTenantCommand, TenantCommand, requirePositional, withStore } from "../shared.js";
 
 export class InitCommand extends TenantCommand {
@@ -109,6 +109,34 @@ export class RenameTenantCommand extends TenantAdminCommand {
 			};
 
 			this.print(result, renderRenameTenant(result));
+			return 0;
+		});
+	}
+}
+
+export class ConsolidateTenantCommand extends TenantAdminCommand {
+	public static paths = [["consolidate-tenant"]];
+
+	public async execute(): Promise<number> {
+		if (!this.force) {
+			throw new Error("`consolidate-tenant` requires `--force`.");
+		}
+
+		// `--tenant` (if given) selects the *target* tenant to consolidate
+		// into, same as every other admin command below - defaults to the
+		// well-known local tenant (ISS63) when omitted, since that's the
+		// normal case: folding a legacy tenant this machine can no longer
+		// `cd` into back under the one shared tenant.
+		return withStore(this.dbPath, { skipTenantBootstrap: true, tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store, dbPath) => {
+			const rawLegacyTenantId = requirePositional(this.positionals, 0, "consolidate-tenant <tenantId> --force");
+			const legacyTenantId = resolveTenantSlug({ tenant: rawLegacyTenantId });
+			const result = {
+				command: "consolidate-tenant" as const,
+				dbPath,
+				...(await store.consolidateTenant(legacyTenantId))
+			};
+
+			this.print(result, renderConsolidateTenant(result));
 			return 0;
 		});
 	}

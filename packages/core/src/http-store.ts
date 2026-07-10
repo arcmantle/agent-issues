@@ -11,7 +11,7 @@ import type {
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult
 } from "./context-store.js";
-import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
+import type { ConsolidateTenantResult, DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
 import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
 import type {
@@ -262,6 +262,13 @@ export class HttpStore implements StorageDriver {
 
 	public renameTenant(previousTenantId: string, newTenantId: string): Promise<RenameTenantResult> {
 		return this.call("renameTenant", { previousTenantId, newTenantId });
+	}
+
+	public consolidateTenant(_legacyTenantId: string): Promise<ConsolidateTenantResult> {
+		// ISS63 is scoped to the well-known LOCAL tenant only (ADR7) - a cloud
+		// tenant id is always an explicit, user-chosen value at `cloud bind`
+		// time, so there is no per-folder legacy tenant to consolidate here.
+		throw new Error("consolidate-tenant is a local-only operation and is not supported for cloud-bound tenants.");
 	}
 
 	public async close(): Promise<void> {

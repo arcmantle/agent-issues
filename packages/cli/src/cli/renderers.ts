@@ -285,6 +285,24 @@ export function renderRenameTenant(result: {
 	].join("\n");
 }
 
+export function renderConsolidateTenant(result: {
+	command: "consolidate-tenant";
+	dbPath: string;
+	legacyTenantId: string;
+	projectId: string;
+	projectTitle: string;
+	consolidated: boolean;
+}): string {
+	if (!result.consolidated) {
+		return `Tenant ${result.legacyTenantId} was already consolidated into project ${result.projectId} (${result.projectTitle}).`;
+	}
+
+	return [
+		`Consolidated tenant ${result.legacyTenantId} into project ${result.projectId} (${result.projectTitle})`,
+		`Database: ${result.dbPath}`
+	].join("\n");
+}
+
 export function renderLiveSite(result: Awaited<ReturnType<typeof startLiveSite>>["info"], opened: boolean): string {
 	return [
 		`${opened ? "Opened" : "Serving"} live site at ${result.url}`,

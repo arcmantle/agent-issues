@@ -20,7 +20,7 @@ import {
 	upsertContext
 } from "./context-store.js";
 import type { DatabaseHandle, DatabaseLocationOptions } from "./database.js";
-import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./database.js";
+import { consolidateTenantIntoProject, deleteTenant, ensureDatabase, listTenants, renameTenant } from "./database.js";
 import type { BodySource, HistoryEntryRecord, RelationRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
 import type { HandoffRecord } from "./store.js";
@@ -67,7 +67,15 @@ export type OpenSqliteStoreResult = {
  * can slot in without callers branching on backend.
  */
 export class SqliteStore implements StorageDriver {
-	public constructor(private readonly db: DatabaseHandle) {}
+	// Optional so existing direct-construction call sites (tests that only
+	// ever exercise entity/handoff/context operations) keep working -
+	// `consolidateTenant` is the only method that needs it, and throws its
+	// own clear error if it's missing rather than making every other caller
+	// thread a path through.
+	public constructor(
+		private readonly db: DatabaseHandle,
+		private readonly dbPath?: string
+	) {}
 
 	public get tenantId(): string {
 		return this.db.tenantId;
@@ -237,6 +245,14 @@ export class SqliteStore implements StorageDriver {
 		return renameTenant(this.db, previousTenantId, newTenantId);
 	}
 
+	public async consolidateTenant(legacyTenantId: string) {
+		if (!this.dbPath) {
+			throw new Error("consolidateTenant requires a dbPath - this SqliteStore was constructed without one.");
+		}
+
+		return consolidateTenantIntoProject(this.db, this.dbPath, legacyTenantId);
+	}
+
 	public async close(): Promise<void> {
 		this.db.close();
 	}
@@ -244,5 +260,5 @@ export class SqliteStore implements StorageDriver {
 
 export function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): OpenSqliteStoreResult {
 	const { db, dbPath } = ensureDatabase(inputPath, options);
-	return { store: new SqliteStore(db), dbPath };
+	return { store: new SqliteStore(db, dbPath), dbPath };
 }

@@ -302,6 +302,34 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
+		name: "consolidate-tenant",
+		summary: "Fold a legacy per-folder tenant into a project under the well-known local tenant (ISS63).",
+		usage: ["agent-issues consolidate-tenant <tenantId> --force"],
+		positionals: [{ name: "tenantId", description: "Legacy tenant ID to fold in.", required: true }],
+		options: [
+			{
+				name: "--force",
+				description: "Required safety flag for whole-tenant consolidation."
+			}
+		],
+		examples: [
+			"agent-issues consolidate-tenant content-hub-5ab5819bb0a8 --force",
+			"agent-issues consolidate-tenant weave-e2d77991499a --force --json"
+		],
+		notes: [
+			"Local only (ADR7): this folds a pre-ISS63 per-folder tenant into a project under the well-known local tenant (`local-<os-username>`), the target every workspace now defaults into with no explicit --tenant.",
+			"Running any command against the default local database already sweeps in every outstanding legacy tenant automatically on open - not just one matching the current folder. Use this command to force it right now instead of waiting for the next open, or to target a custom `--db` path (the automatic sweep only runs for the real default db file).",
+			"Every entity, relation, context, context term, and handoff moves across with freshly-minted ids under the target tenant's own counters - the legacy tenant's ids are never reused verbatim, since two independent legacy tenants can each have had their own INIT1/ISS1/etc.",
+			"Idempotent: consolidating the same tenant id twice is a no-op the second time, reporting the existing project id rather than erroring or duplicating data.",
+			"Not supported against a cloud-bound tenant - cloud tenant ids are always an explicit, user-chosen value at `cloud bind` time, so there is no per-folder legacy tenant to fold in.",
+			"Run `list-tenants` first if you are not sure which tenant id to consolidate."
+		],
+		output: {
+			human: ["Consolidated tenant summary naming the new project, or an already-consolidated message"],
+			json: ["command", "dbPath", "legacyTenantId", "projectId", "projectTitle", "consolidated"]
+		}
+	},
+	{
 		name: "auth login",
 		summary: "Sign in with Entra ID via the interactive device-code flow, or issue a local dev session with --local, and cache the resulting session.",
 		usage: ["agent-issues auth login --tenant-id <guid> --client-id <guid>", "agent-issues auth login --local --secret <secret>"],

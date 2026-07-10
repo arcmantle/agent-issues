@@ -9,7 +9,7 @@ import type {
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult
 } from "./context-store.js";
-import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
+import type { ConsolidateTenantResult, DeleteTenantResult, RenameTenantResult, TenantSummary } from "./database.js";
 import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "./domain.js";
 import type {
 	DatabaseSnapshot,
@@ -85,6 +85,15 @@ export interface StorageDriver {
 	listTenants(): Promise<TenantSummary[]>;
 	deleteTenant(tenantId: string): Promise<DeleteTenantResult>;
 	renameTenant(previousTenantId: string, newTenantId: string): Promise<RenameTenantResult>;
+	/**
+	 * Folds a legacy per-folder tenant into a `project` under the well-known
+	 * local tenant (ISS63, correcting ADR7/ISS34's incomplete migration).
+	 * Local-only (ADR7's decision text is explicit about "well-known
+	 * user-specific LOCAL tenant") - a cloud-backed driver rejects this
+	 * rather than attempting it, since cloud tenant ids are always an
+	 * explicit, user-chosen value at `cloud bind` time, never auto-derived.
+	 */
+	consolidateTenant(legacyTenantId: string): Promise<ConsolidateTenantResult>;
 
 	close(): Promise<void>;
 }
