@@ -357,4 +357,84 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 	});
+
+	describe(`storage-driver seam: bulk handoffs (${label})`, () => {
+		it("lists every handoff and idempotently applies a batch (ISS62/ADR16)", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+				const handoff = await store.createHandoff({ entityId: initiative.id, body: "Picking up from here." });
+
+				const handoffs = await store.listAllHandoffs();
+				expect(handoffs).toContainEqual(expect.objectContaining({ id: handoff.id, entityId: initiative.id, body: "Picking up from here." }));
+
+				const reapplied = await store.applyHandoffs(handoffs);
+				expect(reapplied.inserted).toBe(0);
+
+				const foreignHandoff = {
+					id: `HANDOFF-${randomUUID()}`,
+					entityId: initiative.id,
+					initiativeId: initiative.id,
+					summary: "",
+					body: "A handoff synced in from another store.",
+					createdAt: new Date().toISOString()
+				};
+				const appliedForeign = await store.applyHandoffs([foreignHandoff, ...handoffs]);
+				expect(appliedForeign.inserted).toBe(1);
+
+				const afterApply = await store.listAllHandoffs();
+				expect(afterApply).toContainEqual(expect.objectContaining({ id: foreignHandoff.id, body: "A handoff synced in from another store." }));
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: bulk contexts (${label})`, () => {
+		it("lists every context/term and idempotently applies a batch (ISS62/ADR16)", async () => {
+			const store = await openStore();
+
+			try {
+				await store.defineContextTerm({ term: "tenant", definition: "A workspace's isolated slice of data." });
+
+				const contexts = await store.listAllContexts();
+				const terms = await store.listAllContextTerms();
+				expect(contexts).toContainEqual(expect.objectContaining({ key: "default" }));
+				expect(terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "A workspace's isolated slice of data." }));
+
+				const reappliedContexts = await store.applyContexts(contexts);
+				const reappliedTerms = await store.applyContextTerms(terms);
+				expect(reappliedContexts.applied).toBe(0);
+				expect(reappliedTerms.applied).toBe(0);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("converges on whichever side's context/term edit is strictly newer (ISS62/ADR16)", async () => {
+			const store = await openStore();
+
+			try {
+				await store.defineContextTerm({ term: "tenant", definition: "Original definition." });
+				const [original] = await store.listAllContextTerms();
+
+				const staleEdit = { ...original, definition: "A stale edit from before the winning one.", updatedAt: original.createdAt };
+				const applyStale = await store.applyContextTerms([staleEdit]);
+				expect(applyStale.applied).toBe(0);
+
+				const detailsAfterStale = await store.getContextDetails();
+				expect(detailsAfterStale.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Original definition." }));
+
+				const newerEdit = { ...original, definition: "A newer, winning edit.", updatedAt: new Date(Date.now() + 60_000).toISOString() };
+				const applyNewer = await store.applyContextTerms([newerEdit]);
+				expect(applyNewer.applied).toBe(1);
+
+				const detailsAfterNewer = await store.getContextDetails();
+				expect(detailsAfterNewer.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "A newer, winning edit." }));
+			} finally {
+				await store.close();
+			}
+		});
+	});
 }

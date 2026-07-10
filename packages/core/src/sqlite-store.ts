@@ -1,9 +1,20 @@
-import type { ContextDetails, ContextDirectory, ContextListResult, QueryContextDirectoryInput } from "./context-store.js";
+import type {
+	ContextDetails,
+	ContextDirectory,
+	ContextListResult,
+	ContextSyncRecord,
+	ContextTermSyncRecord,
+	QueryContextDirectoryInput
+} from "./context-store.js";
 import {
+	applyContextTerms,
+	applyContexts,
 	defineContextTerm,
 	forgetContextTerm,
 	getContextDetails,
 	getContextDirectory,
+	listAllContextTerms,
+	listAllContexts,
 	listContexts,
 	queryContextDirectory,
 	upsertContext
@@ -12,7 +23,9 @@ import type { DatabaseHandle, DatabaseLocationOptions } from "./database.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./database.js";
 import type { BodySource, HistoryEntryRecord, RelationRecord } from "./domain.js";
 import type { StorageDriver } from "./storage-driver.js";
+import type { HandoffRecord } from "./store.js";
 import {
+	applyHandoffs,
 	applyHistoryEntries,
 	applyRelations,
 	applyResolvedFacts,
@@ -26,6 +39,7 @@ import {
 	getHandoffDetails,
 	getInitiativeBundle,
 	linkEntities,
+	listAllHandoffs,
 	listAllHistoryEntries,
 	listAllRelations,
 	listEntities,
@@ -93,6 +107,30 @@ export class SqliteStore implements StorageDriver {
 
 	public async applyRelations(relations: RelationRecord[]) {
 		return applyRelations(this.db, relations);
+	}
+
+	public async listAllContexts() {
+		return listAllContexts(this.db);
+	}
+
+	public async applyContexts(contexts: ContextSyncRecord[]) {
+		return applyContexts(this.db, contexts);
+	}
+
+	public async listAllContextTerms() {
+		return listAllContextTerms(this.db);
+	}
+
+	public async applyContextTerms(terms: ContextTermSyncRecord[]) {
+		return applyContextTerms(this.db, terms);
+	}
+
+	public async listAllHandoffs() {
+		return listAllHandoffs(this.db);
+	}
+
+	public async applyHandoffs(handoffs: HandoffRecord[]) {
+		return applyHandoffs(this.db, handoffs);
 	}
 
 	public async listOrphans(kind?: string) {

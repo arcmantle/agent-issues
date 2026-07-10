@@ -45,6 +45,8 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	deleteHandoff: async (store, params) => store.deleteHandoff(params as Parameters<PgStore["deleteHandoff"]>[0]),
 	getHandoffDetails: async (store, params) => store.getHandoffDetails((params as { entityId: string }).entityId),
 	listHandoffs: async (store, params) => store.listHandoffs(params as Parameters<PgStore["listHandoffs"]>[0]),
+	listAllHandoffs: async (store) => store.listAllHandoffs(),
+	applyHandoffs: async (store, params) => store.applyHandoffs((params as { handoffs: Parameters<PgStore["applyHandoffs"]>[0] }).handoffs),
 
 	listContexts: async (store) => store.listContexts(),
 	getContextDetails: async (store, params) => store.getContextDetails(params as Parameters<PgStore["getContextDetails"]>[0]),
@@ -53,6 +55,10 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	upsertContext: async (store, params) => store.upsertContext(params as Parameters<PgStore["upsertContext"]>[0]),
 	defineContextTerm: async (store, params) => store.defineContextTerm(params as Parameters<PgStore["defineContextTerm"]>[0]),
 	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<PgStore["forgetContextTerm"]>[0]),
+	listAllContexts: async (store) => store.listAllContexts(),
+	applyContexts: async (store, params) => store.applyContexts((params as { contexts: Parameters<PgStore["applyContexts"]>[0] }).contexts),
+	listAllContextTerms: async (store) => store.listAllContextTerms(),
+	applyContextTerms: async (store, params) => store.applyContextTerms((params as { terms: Parameters<PgStore["applyContextTerms"]>[0] }).terms),
 
 	// Tenant administration (ISS52). `PgStore`'s guard against acting on any
 	// tenant other than the auth-seam-resolved one (ISS46's requireOwnTenant)
@@ -96,5 +102,12 @@ export const writeMethods = new Set<string>([
 	// Same reasoning as `applyResolvedFacts` above: `getDatabaseSnapshot`
 	// reads the `relations` table directly, so bulk-applying relations
 	// (ISS60) must broadcast too.
-	"applyRelations"
+	"applyRelations",
+	// `getDatabaseSnapshot`'s per-initiative `InitiativeBundle` includes
+	// `handoffs`, and its top-level `contexts` field is built straight from
+	// the `contexts`/`context_terms` tables - so bulk-applying any of these
+	// (ISS62) must broadcast too, same as `applyRelations` above.
+	"applyHandoffs",
+	"applyContexts",
+	"applyContextTerms"
 ]);

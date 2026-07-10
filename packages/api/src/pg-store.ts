@@ -32,7 +32,9 @@ import {
 	type ContextDirectoryView,
 	type ContextListResult,
 	type ContextRecord,
+	type ContextSyncRecord,
 	type ContextTermRecord,
+	type ContextTermSyncRecord,
 	type DefineContextTermResult,
 	type DeleteTenantResult,
 	type EntityKind,
@@ -2054,6 +2056,38 @@ export class PgStore implements StorageDriver {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => listHandoffsFiltered(client, this.tenantId, filter));
 	}
 
+	// The read half of synchronize's handoff sync (ISS62/ADR16): every
+	// handoff this tenant has, with no filter. Same "no version log, plain
+	// union" rationale as `listAllRelations` - see core's identical
+	// SQLite-side logic.
+	public async listAllHandoffs(): Promise<HandoffRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const result = await client.query<HandoffRow>(`SELECT * FROM handoffs WHERE tenant_id = $1`, [this.tenantId]);
+			return result.rows.map(mapHandoffRow);
+		});
+	}
+
+	// The write half (ISS62/ADR16): idempotently inserts whatever handoffs
+	// this tenant doesn't already have, keyed by the table's own primary key
+	// (tenant_id, id). Must run after `applyResolvedFacts` in synchronize's
+	// orchestration, so both `entity_id`/`initiative_id` FK targets already
+	// exist as entities on this side.
+	public async applyHandoffs(handoffs: HandoffRecord[]): Promise<{ inserted: number }> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			let inserted = 0;
+			for (const handoff of handoffs) {
+				const result = await client.query(
+					`INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)
+					 ON CONFLICT DO NOTHING`,
+					[this.tenantId, handoff.id, handoff.entityId, handoff.initiativeId, handoff.summary, handoff.body, handoff.createdAt]
+				);
+				inserted += result.rowCount ?? 0;
+			}
+			return { inserted };
+		});
+	}
+
 	public async listContexts(): Promise<ContextListResult> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => queryListContexts(client, this.tenantId));
 	}
@@ -2199,6 +2233,96 @@ export class PgStore implements StorageDriver {
 				term,
 				removed: (result.rowCount ?? 0) > 0
 			};
+		});
+	}
+
+	// The read half of synchronize's context sync (ISS62/ADR16): every
+	// context row this tenant has, for a last-writer-wins merge keyed on
+	// `key` and driven by `updatedAt` - see core's identical SQLite-side
+	// `listAllContexts` for the rationale (contexts are actively re-edited
+	// via `upsertContext`, unlike relations/handoffs).
+	public async listAllContexts(): Promise<ContextSyncRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const result = await client.query<ContextRow>(`SELECT * FROM contexts WHERE tenant_id = $1`, [this.tenantId]);
+			return result.rows.map((row) => ({
+				key: row.key,
+				scopeEntityId: row.scope_entity_id,
+				title: row.title,
+				summary: row.summary,
+				createdAt: row.created_at,
+				updatedAt: row.updated_at
+			}));
+		});
+	}
+
+	// The write half: upserts the already-resolved (last-writer-wins) set of
+	// contexts by their primary key (tenant_id, key), only overwriting a row
+	// that already exists here if the incoming one is strictly newer. Must
+	// run after `applyResolvedFacts` in synchronize's orchestration, so an
+	// initiative-scoped context's `scope_entity_id` FK target already exists
+	// as an entity on this side.
+	public async applyContexts(contexts: ContextSyncRecord[]): Promise<{ applied: number }> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			let applied = 0;
+			for (const context of contexts) {
+				const result = await client.query(
+					`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)
+					 ON CONFLICT (tenant_id, key) DO UPDATE SET
+					   scope_entity_id = excluded.scope_entity_id,
+					   title = excluded.title,
+					   summary = excluded.summary,
+					   updated_at = excluded.updated_at
+					 WHERE excluded.updated_at > contexts.updated_at`,
+					[this.tenantId, context.key, context.scopeEntityId, context.title, context.summary, context.createdAt, context.updatedAt]
+				);
+				applied += result.rowCount ?? 0;
+			}
+			return { applied };
+		});
+	}
+
+	// The read half for context terms (ISS62/ADR16), same last-writer-wins
+	// merge rationale as `listAllContexts`.
+	public async listAllContextTerms(): Promise<ContextTermSyncRecord[]> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const result = await client.query<ContextTermRow & { context_key: string }>(
+				`SELECT * FROM context_terms WHERE tenant_id = $1`,
+				[this.tenantId]
+			);
+			return result.rows.map((row) => ({
+				contextKey: row.context_key,
+				term: row.term,
+				definition: row.definition,
+				avoid: parseAvoidTerms(row.avoid_terms),
+				createdAt: row.created_at,
+				updatedAt: row.updated_at
+			}));
+		});
+	}
+
+	// The write half: upserts by primary key (tenant_id, context_key, term),
+	// only overwriting an existing row if the incoming one is strictly
+	// newer. Must run after `applyContexts` in synchronize's orchestration,
+	// so each term's `context_key` FK target already exists as a context on
+	// this side.
+	public async applyContextTerms(terms: ContextTermSyncRecord[]): Promise<{ applied: number }> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			let applied = 0;
+			for (const term of terms) {
+				const result = await client.query(
+					`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7)
+					 ON CONFLICT (tenant_id, context_key, term) DO UPDATE SET
+					   definition = excluded.definition,
+					   avoid_terms = excluded.avoid_terms,
+					   updated_at = excluded.updated_at
+					 WHERE excluded.updated_at > context_terms.updated_at`,
+					[this.tenantId, term.contextKey, term.term, term.definition, JSON.stringify(term.avoid), term.createdAt, term.updatedAt]
+				);
+				applied += result.rowCount ?? 0;
+			}
+			return { applied };
 		});
 	}
 

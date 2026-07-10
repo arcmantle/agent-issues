@@ -1036,6 +1036,38 @@ export function applyRelations(db: DatabaseHandle, relations: RelationRecord[]):
 	return { inserted };
 }
 
+// The read half of synchronize's handoff sync (ISS62/ADR16): every handoff
+// this tenant has, with no filter. Handoffs have no append-only log or
+// updated_at column of their own to merge against, so - like relations -
+// this is a plain "list everything, apply what's missing" pair rather than
+// a version-aware merge. `updateHandoff`'s in-place edits made on one side
+// after a handoff has already synced to the other won't propagate on a
+// later sync; only brand-new handoffs (and deletes never propagate either).
+export function listAllHandoffs(db: DatabaseHandle): HandoffRecord[] {
+	const rows = db.prepare(`SELECT * FROM handoffs WHERE tenant_id = ?`).all(db.tenantId) as HandoffRow[];
+	return rows.map(mapHandoffRow);
+}
+
+// The write half (ISS62/ADR16): idempotently inserts whatever handoffs this
+// tenant doesn't already have, keyed by the table's own primary key
+// (tenantId, id). Must run after `applyResolvedFacts` in synchronize's
+// orchestration, so both `entity_id`/`initiative_id` FK targets already
+// exist as entities on this side.
+export function applyHandoffs(db: DatabaseHandle, handoffs: HandoffRecord[]): { inserted: number } {
+	let inserted = 0;
+	for (const handoff of handoffs) {
+		const result = db
+			.prepare(
+				`INSERT OR IGNORE INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
+				 VALUES (@tenantId, @id, @entityId, @initiativeId, @summary, @body, @createdAt)`
+			)
+			.run(tenantParams(db, handoff));
+		inserted += result.changes;
+	}
+
+	return { inserted };
+}
+
 export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);

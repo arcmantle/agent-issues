@@ -34,6 +34,9 @@ type ContextTermRow = {
 	updated_at: string;
 };
 
+/** Row shape for the bulk sync read path, which unlike `ContextTermRow` isn't scoped to a single already-known context and so needs `context_key` in the projection. */
+type ContextTermSyncRow = ContextTermRow & { context_key: string };
+
 export type ContextRecord = {
 	key: string;
 	scopeKind: "default" | "initiative";
@@ -131,6 +134,26 @@ export type ForgetContextTermResult = {
 	context: ContextRecord;
 	term: string;
 	removed: boolean;
+};
+
+/** Sync-only shape for a context row (ISS62/ADR16), independent of any particular scope resolution. */
+export type ContextSyncRecord = {
+	key: string;
+	scopeEntityId: string | null;
+	title: string;
+	summary: string;
+	createdAt: string;
+	updatedAt: string;
+};
+
+/** Sync-only shape for a context term row (ISS62/ADR16), carrying its owning context's key explicitly. */
+export type ContextTermSyncRecord = {
+	contextKey: string;
+	term: string;
+	definition: string;
+	avoid: string[];
+	createdAt: string;
+	updatedAt: string;
 };
 
 export function listContexts(db: DatabaseHandle): ContextListResult {
@@ -378,6 +401,100 @@ export function forgetContextTerm(db: DatabaseHandle, input: { scopeRef?: string
 		term,
 		removed: result.changes > 0
 	};
+}
+
+// The read half of synchronize's context sync (ISS62/ADR16): every context
+// row this tenant has, for a last-writer-wins merge keyed on `key` and
+// driven by `updatedAt` (see synchronize.ts's `unionByLastWriter`). Unlike
+// relations/handoffs, a context's title/summary are actively re-edited over
+// its lifetime via `upsertContext`, so a plain "insert what's missing"
+// union would stop propagating edits made after a context's first sync;
+// comparing `updatedAt` keeps both sides converging on whichever side has
+// the more recent edit instead.
+export function listAllContexts(db: DatabaseHandle): ContextSyncRecord[] {
+	const rows = db.prepare(`SELECT * FROM contexts WHERE tenant_id = ?`).all(db.tenantId) as ContextRow[];
+	return rows.map((row) => ({
+		key: row.key,
+		scopeEntityId: row.scope_entity_id,
+		title: row.title,
+		summary: row.summary,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at
+	}));
+}
+
+// The write half: upserts the already-resolved (last-writer-wins) set of
+// contexts by their primary key (tenantId, key), only overwriting a row
+// that already exists here if the incoming one is strictly newer - the
+// resolved set can include this side's own current row unchanged, and
+// re-applying it must be a no-op. Must run after `applyResolvedFacts` in
+// synchronize's orchestration, so an initiative-scoped context's
+// `scope_entity_id` FK target already exists as an entity on this side.
+export function applyContexts(db: DatabaseHandle, contexts: ContextSyncRecord[]): { applied: number } {
+	let applied = 0;
+	for (const context of contexts) {
+		const result = db
+			.prepare(
+				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+				 VALUES (@tenantId, @key, @scopeEntityId, @title, @summary, @createdAt, @updatedAt)
+				 ON CONFLICT(tenant_id, key) DO UPDATE SET
+				   scope_entity_id = excluded.scope_entity_id,
+				   title = excluded.title,
+				   summary = excluded.summary,
+				   updated_at = excluded.updated_at
+				 WHERE excluded.updated_at > contexts.updated_at`
+			)
+			.run(tenantParams(db, context));
+		applied += result.changes;
+	}
+
+	return { applied };
+}
+
+// The read half for context terms (ISS62/ADR16), same last-writer-wins
+// merge rationale as `listAllContexts`: term definitions are actively
+// re-edited via `defineContextTerm`.
+export function listAllContextTerms(db: DatabaseHandle): ContextTermSyncRecord[] {
+	const rows = db.prepare(`SELECT * FROM context_terms WHERE tenant_id = ?`).all(db.tenantId) as ContextTermSyncRow[];
+	return rows.map((row) => ({
+		contextKey: row.context_key,
+		term: row.term,
+		definition: row.definition,
+		avoid: parseAvoidTerms(row.avoid_terms),
+		createdAt: row.created_at,
+		updatedAt: row.updated_at
+	}));
+}
+
+// The write half: upserts by primary key (tenantId, contextKey, term), only
+// overwriting an existing row if the incoming one is strictly newer. Must
+// run after `applyContexts` in synchronize's orchestration, so each term's
+// `context_key` FK target already exists as a context on this side.
+export function applyContextTerms(db: DatabaseHandle, terms: ContextTermSyncRecord[]): { applied: number } {
+	let applied = 0;
+	for (const term of terms) {
+		const result = db
+			.prepare(
+				`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+				 VALUES (@tenantId, @contextKey, @term, @definition, @avoidTerms, @createdAt, @updatedAt)
+				 ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
+				   definition = excluded.definition,
+				   avoid_terms = excluded.avoid_terms,
+				   updated_at = excluded.updated_at
+				 WHERE excluded.updated_at > context_terms.updated_at`
+			)
+			.run(tenantParams(db, {
+				contextKey: term.contextKey,
+				term: term.term,
+				definition: term.definition,
+				avoidTerms: JSON.stringify(term.avoid),
+				createdAt: term.createdAt,
+				updatedAt: term.updatedAt
+			}));
+		applied += result.changes;
+	}
+
+	return { applied };
 }
 
 function ensureContextExists(db: DatabaseHandle, scopeRef?: string): ResolvedContextScope {

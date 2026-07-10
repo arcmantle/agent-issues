@@ -4,6 +4,8 @@ import type {
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
+	ContextSyncRecord,
+	ContextTermSyncRecord,
 	DefineContextTermResult,
 	ForgetContextTermResult,
 	QueryContextDirectoryInput,
@@ -196,6 +198,14 @@ export class HttpStore implements StorageDriver {
 		return this.call("listHandoffs", filter);
 	}
 
+	public listAllHandoffs(): Promise<HandoffRecord[]> {
+		return this.call("listAllHandoffs");
+	}
+
+	public applyHandoffs(handoffs: HandoffRecord[]): Promise<{ inserted: number }> {
+		return this.call("applyHandoffs", { handoffs });
+	}
+
 	// Context / glossary
 	public listContexts(): Promise<ContextListResult> {
 		return this.call("listContexts");
@@ -223,6 +233,22 @@ export class HttpStore implements StorageDriver {
 
 	public forgetContextTerm(input: { scopeRef?: string; term: string }): Promise<ForgetContextTermResult> {
 		return this.call("forgetContextTerm", input);
+	}
+
+	public listAllContexts(): Promise<ContextSyncRecord[]> {
+		return this.call("listAllContexts");
+	}
+
+	public applyContexts(contexts: ContextSyncRecord[]): Promise<{ applied: number }> {
+		return this.call("applyContexts", { contexts });
+	}
+
+	public listAllContextTerms(): Promise<ContextTermSyncRecord[]> {
+		return this.call("listAllContextTerms");
+	}
+
+	public applyContextTerms(terms: ContextTermSyncRecord[]): Promise<{ applied: number }> {
+		return this.call("applyContextTerms", { terms });
 	}
 
 	// Tenant administration

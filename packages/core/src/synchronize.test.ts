@@ -52,7 +52,13 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 			entitiesUpdatedCloud: [],
 			concurrentEditConflicts: 0,
 			relationsAppliedToLocal: 0,
-			relationsAppliedToCloud: 0
+			relationsAppliedToCloud: 0,
+			handoffsAppliedToLocal: 0,
+			handoffsAppliedToCloud: 0,
+			contextsAppliedToLocal: 0,
+			contextsAppliedToCloud: 0,
+			contextTermsAppliedToLocal: 0,
+			contextTermsAppliedToCloud: 0
 		});
 	});
 
@@ -134,5 +140,52 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 		expect(summary.entriesAppliedToCloud).toBe(0);
 		expect(summary.entitiesUpdatedLocal).toEqual([]);
 		expect(summary.entitiesUpdatedCloud).toEqual([]);
+	});
+
+	it("propagates a handoff created on one side to the other, without duplicating it on repeated runs (ISS62)", async () => {
+		const initiative = await local.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		await synchronizeStores(local, cloud);
+
+		const handoff = await local.createHandoff({ entityId: initiative.id, body: "Picking up from here." });
+
+		const summary = await synchronizeStores(local, cloud);
+		expect(summary.handoffsAppliedToCloud).toBe(1);
+		expect(summary.handoffsAppliedToLocal).toBe(0);
+
+		const cloudHandoffs = await cloud.listAllHandoffs();
+		expect(cloudHandoffs).toContainEqual(expect.objectContaining({ id: handoff.id, entityId: initiative.id, body: "Picking up from here." }));
+
+		const repeatSummary = await synchronizeStores(local, cloud);
+		expect(repeatSummary.handoffsAppliedToLocal).toBe(0);
+		expect(repeatSummary.handoffsAppliedToCloud).toBe(0);
+	});
+
+	it("propagates a context/term created on one side and converges on whichever side's edit is newer (ISS62)", async () => {
+		await local.defineContextTerm({ term: "tenant", definition: "A workspace's isolated slice of data." });
+		await synchronizeStores(local, cloud);
+
+		const cloudTermsAfterFirstSync = await cloud.getContextDetails();
+		expect(cloudTermsAfterFirstSync.terms).toContainEqual(
+			expect.objectContaining({ term: "tenant", definition: "A workspace's isolated slice of data." })
+		);
+
+		// Edit the same term on the cloud side, strictly later, so its
+		// `updatedAt` wins the next sync's last-writer-wins merge.
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		await cloud.defineContextTerm({ term: "tenant", definition: "Cloud's newer definition." });
+
+		const summary = await synchronizeStores(local, cloud);
+		expect(summary.contextTermsAppliedToLocal).toBeGreaterThan(0);
+
+		const localDetails = await local.getContextDetails();
+		const cloudDetails = await cloud.getContextDetails();
+		expect(localDetails.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Cloud's newer definition." }));
+		expect(cloudDetails.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Cloud's newer definition." }));
+
+		const repeatSummary = await synchronizeStores(local, cloud);
+		expect(repeatSummary.contextsAppliedToLocal).toBe(0);
+		expect(repeatSummary.contextsAppliedToCloud).toBe(0);
+		expect(repeatSummary.contextTermsAppliedToLocal).toBe(0);
+		expect(repeatSummary.contextTermsAppliedToCloud).toBe(0);
 	});
 });

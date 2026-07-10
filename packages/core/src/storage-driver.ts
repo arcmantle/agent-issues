@@ -2,6 +2,8 @@ import type {
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
+	ContextSyncRecord,
+	ContextTermSyncRecord,
 	DefineContextTermResult,
 	ForgetContextTermResult,
 	QueryContextDirectoryInput,
@@ -61,6 +63,9 @@ export interface StorageDriver {
 	deleteHandoff(input: { handoffId: string }): Promise<HandoffDeleteResult>;
 	getHandoffDetails(entityId: string): Promise<HandoffDetails>;
 	listHandoffs(filter?: { initiativeId?: string; entityId?: string }): Promise<HandoffRecord[]>;
+	/** All handoffs, unfiltered (ISS62/ADR16) - the read half of synchronize's handoff sync. */
+	listAllHandoffs(): Promise<HandoffRecord[]>;
+	applyHandoffs(handoffs: HandoffRecord[]): Promise<{ inserted: number }>;
 
 	// Context / glossary
 	listContexts(): Promise<ContextListResult>;
@@ -70,6 +75,11 @@ export interface StorageDriver {
 	upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails>;
 	defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }): Promise<DefineContextTermResult>;
 	forgetContextTerm(input: { scopeRef?: string; term: string }): Promise<ForgetContextTermResult>;
+	/** All contexts/terms, unfiltered (ISS62/ADR16) - the read/write halves of synchronize's context sync. */
+	listAllContexts(): Promise<ContextSyncRecord[]>;
+	applyContexts(contexts: ContextSyncRecord[]): Promise<{ applied: number }>;
+	listAllContextTerms(): Promise<ContextTermSyncRecord[]>;
+	applyContextTerms(terms: ContextTermSyncRecord[]): Promise<{ applied: number }>;
 
 	// Tenant administration
 	listTenants(): Promise<TenantSummary[]>;

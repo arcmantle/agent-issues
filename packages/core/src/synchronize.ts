@@ -1,6 +1,8 @@
+import type { ContextSyncRecord, ContextTermSyncRecord } from "./context-store.js";
 import type { HistoryEntryRecord, RelationRecord } from "./domain.js";
 import { mergeHistoryLogs } from "./history-merge.js";
 import type { StorageDriver } from "./storage-driver.js";
+import type { HandoffRecord } from "./store.js";
 
 export type SynchronizeSummary = {
 	entriesAppliedToLocal: number;
@@ -14,22 +16,66 @@ export type SynchronizeSummary = {
 	/** Non-structural relations (e.g. "blocks", "fixes") newly inserted on each side (ISS60/ADR16). Structural relations aren't counted here - they're already reconstructed by applyResolvedFacts. */
 	relationsAppliedToLocal: number;
 	relationsAppliedToCloud: number;
+	/** Handoffs newly inserted on each side (ISS62/ADR16). Edits to an already-synced handoff don't propagate - see `listAllHandoffs`. */
+	handoffsAppliedToLocal: number;
+	handoffsAppliedToCloud: number;
+	/** Contexts/terms upserted on each side via last-writer-wins by `updatedAt` (ISS62/ADR16). Counts every context/term applied, including no-op re-applies of a side's own already-current row. */
+	contextsAppliedToLocal: number;
+	contextsAppliedToCloud: number;
+	contextTermsAppliedToLocal: number;
+	contextTermsAppliedToCloud: number;
 };
 
-// Relations have no append-only log of their own to merge against, so
-// converging both sides is a plain union keyed by the table's own primary
-// key (fromId, toId, type) rather than a version-aware resolve-latest.
-function unionRelations(a: RelationRecord[], b: RelationRecord[]): RelationRecord[] {
-	const byKey = new Map<string, RelationRecord>();
+// Relations and handoffs have no append-only log of their own to merge
+// against, so converging both sides is a plain union keyed by the table's
+// own primary key rather than a version-aware resolve-latest.
+function unionByKey<T>(a: T[], b: T[], keyOf: (item: T) => string): T[] {
+	const byKey = new Map<string, T>();
 
-	for (const relation of [...a, ...b]) {
-		const key = `${relation.fromId}\u0000${relation.toId}\u0000${relation.type}`;
+	for (const item of [...a, ...b]) {
+		const key = keyOf(item);
 		if (!byKey.has(key)) {
-			byKey.set(key, relation);
+			byKey.set(key, item);
 		}
 	}
 
 	return [...byKey.values()];
+}
+
+function unionRelations(a: RelationRecord[], b: RelationRecord[]): RelationRecord[] {
+	return unionByKey(a, b, (relation) => `${relation.fromId}\u0000${relation.toId}\u0000${relation.type}`);
+}
+
+function unionHandoffs(a: HandoffRecord[], b: HandoffRecord[]): HandoffRecord[] {
+	return unionByKey(a, b, (handoff) => handoff.id);
+}
+
+// Unlike relations/handoffs, contexts and their terms are actively
+// re-edited over their lifetime (title/summary/definitions), so a plain
+// "first occurrence wins" union would stop propagating edits made after a
+// context's first sync. Instead this keeps whichever side's row has the
+// more recent `updatedAt` per key, so both sides converge on the latest
+// edit regardless of which side made it.
+function unionByLastWriter<T extends { updatedAt: string }>(a: T[], b: T[], keyOf: (item: T) => string): T[] {
+	const byKey = new Map<string, T>();
+
+	for (const item of [...a, ...b]) {
+		const key = keyOf(item);
+		const existing = byKey.get(key);
+		if (!existing || item.updatedAt > existing.updatedAt) {
+			byKey.set(key, item);
+		}
+	}
+
+	return [...byKey.values()];
+}
+
+function unionContexts(a: ContextSyncRecord[], b: ContextSyncRecord[]): ContextSyncRecord[] {
+	return unionByLastWriter(a, b, (context) => context.key);
+}
+
+function unionContextTerms(a: ContextTermSyncRecord[], b: ContextTermSyncRecord[]): ContextTermSyncRecord[] {
+	return unionByLastWriter(a, b, (term) => `${term.contextKey}\u0000${term.term}`);
 }
 
 // A tie at the winning version only counts as a genuine concurrent-edit
@@ -74,10 +120,13 @@ function countConcurrentEditConflicts(union: HistoryEntryRecord[], latestByEntit
  * missing (`applyHistoryEntries`, ISS57), then converges both sides'
  * live-cache facts to the resolved-latest entry per entity
  * (`applyResolvedFacts`, ISS59), and finally converges non-structural
- * relations (`applyRelations`, ISS60) - which must run last, after every
- * entity a relation could reference already exists on both sides. Operates
- * on two already-open `StorageDriver`s - opening them (requiring a cloud
- * binding and a valid session) is `openSynchronizeStores`'s job, not this
+ * relations, handoffs, and contexts/terms (`applyRelations`/`applyHandoffs`/
+ * `applyContexts`/`applyContextTerms`, ISS60/ISS62) - which must run last,
+ * after every entity a relation/handoff/context could reference already
+ * exists on both sides. Contexts are applied before their terms so each
+ * term's `context_key` FK target already exists. Operates on two
+ * already-open `StorageDriver`s - opening them (requiring a cloud binding
+ * and a valid session) is `openSynchronizeStores`'s job, not this
  * function's, so this stays pure orchestration with no filesystem/auth
  * concerns of its own.
  */
@@ -96,11 +145,38 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 		cloud.applyRelations(relationUnion)
 	]);
 
+	const [localHandoffs, cloudHandoffs] = await Promise.all([local.listAllHandoffs(), cloud.listAllHandoffs()]);
+	const handoffUnion = unionHandoffs(localHandoffs, cloudHandoffs);
+	const [localHandoffsApplied, cloudHandoffsApplied] = await Promise.all([
+		local.applyHandoffs(handoffUnion),
+		cloud.applyHandoffs(handoffUnion)
+	]);
+
+	const [localContexts, cloudContexts] = await Promise.all([local.listAllContexts(), cloud.listAllContexts()]);
+	const contextUnion = unionContexts(localContexts, cloudContexts);
+	const [localContextsApplied, cloudContextsApplied] = await Promise.all([
+		local.applyContexts(contextUnion),
+		cloud.applyContexts(contextUnion)
+	]);
+
+	const [localContextTerms, cloudContextTerms] = await Promise.all([local.listAllContextTerms(), cloud.listAllContextTerms()]);
+	const contextTermUnion = unionContextTerms(localContextTerms, cloudContextTerms);
+	const [localContextTermsApplied, cloudContextTermsApplied] = await Promise.all([
+		local.applyContextTerms(contextTermUnion),
+		cloud.applyContextTerms(contextTermUnion)
+	]);
+
 	return {
 		entriesAppliedToLocal: appliedToLocal.inserted,
 		entriesAppliedToCloud: appliedToCloud.inserted,
 		relationsAppliedToLocal: localRelationsApplied.inserted,
 		relationsAppliedToCloud: cloudRelationsApplied.inserted,
+		handoffsAppliedToLocal: localHandoffsApplied.inserted,
+		handoffsAppliedToCloud: cloudHandoffsApplied.inserted,
+		contextsAppliedToLocal: localContextsApplied.applied,
+		contextsAppliedToCloud: cloudContextsApplied.applied,
+		contextTermsAppliedToLocal: localContextTermsApplied.applied,
+		contextTermsAppliedToCloud: cloudContextTermsApplied.applied,
 		entitiesCreatedLocal: localFacts.created,
 		entitiesUpdatedLocal: localFacts.updated,
 		entitiesCreatedCloud: cloudFacts.created,
