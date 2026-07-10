@@ -12,14 +12,23 @@ import { SqliteStore } from "./sqlite-store.js";
 
 describe("openSynchronizeStores (ISS59/ADR13, ADR18)", () => {
 	let homeDirectory: string;
+	let originalHome: string | undefined;
 	let projectDirectory: string;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-sync-stores-home-"));
+		// See the identical comment in open-storage-driver.test.ts: the local
+		// backend's SQLite db path only respects HOME, not
+		// cloudBindingOptions/authSessionOptions, so it must be redirected here
+		// too or the "opens a local SqliteStore..." case below pollutes the
+		// developer's real ~/.agent-issues/agent-issues.db.
+		originalHome = process.env.HOME;
+		process.env.HOME = homeDirectory;
 		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-sync-stores-project-"));
 	});
 
 	afterEach(() => {
+		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { recursive: true, force: true });
 		rmSync(projectDirectory, { recursive: true, force: true });
 	});

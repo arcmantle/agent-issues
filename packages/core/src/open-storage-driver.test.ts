@@ -12,14 +12,24 @@ import { SqliteStore } from "./sqlite-store.js";
 
 describe("openStorageDriver (ADR13, ADR18)", () => {
 	let homeDirectory: string;
+	let originalHome: string | undefined;
 	let projectDirectory: string;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-storage-driver-home-"));
+		// The local backend resolves its SQLite db path from the real OS home
+		// directory (`resolveAgentIssuesHomeDirectory`), which only reads
+		// `homedir()` - unlike cloudBindingOptions/authSessionOptions below, it
+		// has no options-based override. Redirecting HOME is the only way to
+		// keep the "local backend" cases in this file from writing real
+		// entities into the developer's actual ~/.agent-issues/agent-issues.db.
+		originalHome = process.env.HOME;
+		process.env.HOME = homeDirectory;
 		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-storage-driver-project-"));
 	});
 
 	afterEach(() => {
+		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { recursive: true, force: true });
 		rmSync(projectDirectory, { recursive: true, force: true });
 	});
