@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "./db/test-tenant-cleanup.js";
 import { createApiServer, LocalAuthProvider, type ApiServerHandle } from "./index.js";
 
 const ADMIN_CONNECTION_STRING =
@@ -29,6 +28,7 @@ describe("createApiServer", () => {
 	});
 
 	afterAll(async () => {
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
@@ -38,7 +38,7 @@ describe("createApiServer", () => {
 		handle = createApiServer({ authProvider, pool: appPool, port: 4491 });
 		await new Promise<void>((resolve) => handle!.server.once("listening", resolve));
 
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const response = await fetch(`${handle.url}/rpc`, {

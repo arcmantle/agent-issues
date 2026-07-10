@@ -1,10 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import request from "supertest";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
 import { LocalAuthProvider } from "../auth/local-auth-provider.js";
 import { PgStore } from "../pg-store.js";
 import { createJsonRpcApp } from "./create-json-rpc-app.js";
@@ -33,6 +32,7 @@ describe("JSON-RPC gate", () => {
 	});
 
 	afterAll(async () => {
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
@@ -59,7 +59,7 @@ describe("JSON-RPC gate", () => {
 	});
 
 	it("creates an entity through the seam, scoped to the auth-seam-resolved tenant", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const response = await request(app())
@@ -78,8 +78,8 @@ describe("JSON-RPC gate", () => {
 	});
 
 	it("never lets a caller-supplied tenantId override the auth-seam-resolved one", async () => {
-		const realTenantId = `tenant-${randomUUID()}`;
-		const spoofedTenantId = `tenant-${randomUUID()}`;
+		const realTenantId = createTestTenantId();
+		const spoofedTenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId: realTenantId });
 
 		const response = await request(app())
@@ -102,7 +102,7 @@ describe("JSON-RPC gate", () => {
 	});
 
 	it("returns a JSON-RPC error response, not an HTTP failure, when the underlying method throws", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const response = await request(app())
@@ -116,7 +116,7 @@ describe("JSON-RPC gate", () => {
 	});
 
 	it("rejects an unknown JSON-RPC method", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const response = await request(app())
@@ -129,7 +129,7 @@ describe("JSON-RPC gate", () => {
 	});
 
 	it("rejects a malformed JSON-RPC envelope", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const response = await request(app())

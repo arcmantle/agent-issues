@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -6,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
 import { LocalAuthProvider } from "../auth/local-auth-provider.js";
 import { createJsonRpcApp } from "./create-json-rpc-app.js";
 
@@ -48,6 +48,7 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 
 	afterAll(async () => {
 		server.close();
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
@@ -127,7 +128,7 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 	}
 
 	it("subscribes over SSE and receives the initial connected event", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const { response, waitForCount } = await subscribe(token);
@@ -139,7 +140,7 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 	});
 
 	it("broadcasts a snapshot-changed event to the subscribing tenant after a write through the gate", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
 		const { waitForCount } = await subscribe(token);
@@ -152,8 +153,8 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 	});
 
 	it("never broadcasts a write to a different tenant's subscriber", async () => {
-		const tenantId = `tenant-${randomUUID()}`;
-		const otherTenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
+		const otherTenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 		const otherToken = await authProvider.issueToken({ userId: "user-2", tenantId: otherTenantId });
 

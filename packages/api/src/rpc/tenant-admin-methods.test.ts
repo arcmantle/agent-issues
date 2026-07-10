@@ -1,10 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import request from "supertest";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
 import { LocalAuthProvider } from "../auth/local-auth-provider.js";
 import { PgStore } from "../pg-store.js";
 import { createJsonRpcApp } from "./create-json-rpc-app.js";
@@ -38,6 +37,7 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 	});
 
 	afterAll(async () => {
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
@@ -47,7 +47,7 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 	}
 
 	async function tenantAndToken() {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 		return { tenantId, token };
 	}
@@ -83,7 +83,7 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 
 	it("rejects a request attempting to delete a tenant other than the auth-seam-resolved one", async () => {
 		const { token } = await tenantAndToken();
-		const otherTenantId = `tenant-${randomUUID()}`;
+		const otherTenantId = createTestTenantId();
 
 		const body = await call(token, "deleteTenant", { tenantId: otherTenantId });
 		expect(body.error).toMatchObject({ code: expect.any(Number), message: expect.stringMatching(/own tenant/) });
@@ -91,7 +91,7 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 
 	it("renameTenant moves the auth-seam-resolved tenant's own data to the new id", async () => {
 		const { tenantId: previousTenantId, token } = await tenantAndToken();
-		const newTenantId = `tenant-${randomUUID()}`;
+		const newTenantId = createTestTenantId();
 		const store = new PgStore(appPool, previousTenantId);
 		await store.createEntity({ kind: "initiative", title: "Payments" });
 
@@ -106,8 +106,8 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 
 	it("rejects a request attempting to rename a tenant other than the auth-seam-resolved one", async () => {
 		const { token } = await tenantAndToken();
-		const otherTenantId = `tenant-${randomUUID()}`;
-		const newTenantId = `tenant-${randomUUID()}`;
+		const otherTenantId = createTestTenantId();
+		const newTenantId = createTestTenantId();
 
 		const body = await call(token, "renameTenant", { previousTenantId: otherTenantId, newTenantId });
 		expect(body.error).toMatchObject({ code: expect.any(Number), message: expect.stringMatching(/own tenant/) });

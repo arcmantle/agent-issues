@@ -1,10 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import request from "supertest";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
 import { LocalAuthProvider } from "../auth/local-auth-provider.js";
 import { PgStore } from "../pg-store.js";
 import { createJsonRpcApp } from "./create-json-rpc-app.js";
@@ -38,6 +37,7 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 	});
 
 	afterAll(async () => {
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
@@ -47,7 +47,7 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 	}
 
 	async function tenantAndToken() {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 		return { tenantId, token };
 	}

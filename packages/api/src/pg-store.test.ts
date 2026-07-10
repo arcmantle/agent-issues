@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "./db/test-tenant-cleanup.js";
 import { PgStore } from "./pg-store.js";
 
 const ADMIN_CONNECTION_STRING =
@@ -26,12 +25,13 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	afterAll(async () => {
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
 
 	it("creates a parent-less initiative under the auto-bootstrapped EPIC0 sentinel", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 
 		const entity = await store.createEntity({ kind: "initiative", title: "Ship the Postgres gate" });
 
@@ -55,7 +55,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("lists entities of a kind and records an explicit author on the history entry", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 
 		await store.createEntity({ kind: "initiative", title: "First", author: "alice" });
 		await store.createEntity({ kind: "initiative", title: "Second" });
@@ -68,8 +68,8 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("keeps tenants isolated even for a query the app layer forgets to filter by tenant_id", async () => {
-		const tenantA = `tenant-${randomUUID()}`;
-		const tenantB = `tenant-${randomUUID()}`;
+		const tenantA = createTestTenantId();
+		const tenantB = createTestTenantId();
 		const storeA = new PgStore(appPool, tenantA);
 		const storeB = new PgStore(appPool, tenantB);
 
@@ -92,7 +92,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("links and unlinks two entities", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await store.createEntity({ kind: "issue", title: "Ship the seam", parentId: initiative.id });
 		const blocker = await store.createEntity({ kind: "issue", title: "Blocking issue", parentId: initiative.id });
@@ -109,7 +109,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("rejects a self-relation and a disallowed relation type", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await store.createEntity({ kind: "issue", title: "Ship the seam", parentId: initiative.id });
 
@@ -122,7 +122,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("rejects a blocks link that would create a cycle", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issueA = await store.createEntity({ kind: "issue", title: "A", parentId: initiative.id });
 		const issueB = await store.createEntity({ kind: "issue", title: "B", parentId: initiative.id });
@@ -135,7 +135,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("updates status, sets body, and archives an entity", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await store.createEntity({ kind: "issue", title: "Ship the seam", parentId: initiative.id });
 
@@ -154,7 +154,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("rejects setting a userStory's status directly once it has a fixing issue", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
 		const story = await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
@@ -165,7 +165,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("rejects setting an issue to in-progress while an open sub-issue remains", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const parentIssue = await store.createEntity({ kind: "issue", title: "Parent", parentId: initiative.id });
 		const subIssue = await store.createEntity({ kind: "issue", title: "Sub", parentId: initiative.id });
@@ -177,7 +177,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("rejects setting an issue to in-progress while an active blocker remains", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await store.createEntity({ kind: "issue", title: "Blocked", parentId: initiative.id });
 		const blocker = await store.createEntity({ kind: "issue", title: "Blocker", parentId: initiative.id });
@@ -187,7 +187,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("moves an entity to a new structural parent and rejects a cycle", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiativeA = await store.createEntity({ kind: "initiative", title: "A" });
 		const initiativeB = await store.createEntity({ kind: "initiative", title: "B" });
 		const issue = await store.createEntity({ kind: "issue", title: "Movable", parentId: initiativeA.id });
@@ -201,7 +201,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("rejects deleting an entity that still has outgoing relations", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await store.createEntity({ kind: "issue", title: "Has children", parentId: initiative.id });
 		const subIssue = await store.createEntity({ kind: "issue", title: "Sub", parentId: initiative.id });
@@ -214,7 +214,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("lists orphans, excluding initiatives/ADRs/project/epic and anything reachable from an initiative", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		await store.createEntity({ kind: "issue", title: "Tracked issue", parentId: initiative.id });
 		const orphanIssue = await store.createEntity({ kind: "issue", title: "Orphan issue" });
@@ -230,7 +230,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("lists project-scoped ADRs (not linked from any initiative)", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const initiativeAdr = await store.createEntity({ kind: "adr", title: "Initiative ADR", parentId: initiative.id });
 		const projectAdr = await store.createEntity({ kind: "adr", title: "Project ADR" });
@@ -241,7 +241,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("builds an initiative bundle with prds, stories, issues, adrs, and link groups", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
 		const story = await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
@@ -271,7 +271,7 @@ describe("PgStore entity lifecycle", () => {
 	});
 
 	it("reads a full tenant snapshot with entities, relations, orphans, project adrs, and initiative bundles", async () => {
-		const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		await store.createEntity({ kind: "issue", title: "Tracked issue", parentId: initiative.id });
 		const orphanAdr = await store.createEntity({ kind: "adr", title: "Project ADR" });
@@ -286,7 +286,7 @@ describe("PgStore entity lifecycle", () => {
 
 	describe("handoffs", () => {
 		it("persists a handoff anchored to the focus entity and its owning initiative", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Add handoff persistence" });
 
@@ -304,7 +304,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("resolves the owning initiative when the focus is the initiative itself", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 
 			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Initiative-level handoff." });
@@ -313,14 +313,14 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("rejects an empty handoff body", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 
 			await expect(store.createHandoff({ entityId: initiative.id, body: "   " })).rejects.toThrow(/body/i);
 		});
 
 		it("lists handoffs for an initiative newest first", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const first = await store.createHandoff({ entityId: initiative.id, body: "First handoff." });
 			const second = await store.createHandoff({ entityId: initiative.id, body: "Second handoff." });
@@ -331,7 +331,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("updates an existing handoff body and summary", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const handoff = await store.createHandoff({ entityId: initiative.id, summary: "Paused mid-refactor", body: "Initial draft." });
 
@@ -343,7 +343,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("allows clearing a handoff summary while preserving the current body", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const handoff = await store.createHandoff({ entityId: initiative.id, summary: "Temporary summary", body: "Resume here." });
 
@@ -354,7 +354,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("rejects handoff updates that do not supply any mutable fields", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
 
@@ -362,7 +362,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("deletes a handoff by id", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
 
@@ -374,7 +374,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("exposes handoffs in the initiative bundle and snapshot", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
 			const handoff = await store.createHandoff({ entityId: issue.id, body: "Resume from the failing test." });
@@ -388,7 +388,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("returns saved handoffs, the owning initiative bundle, and active blockers from getHandoffDetails", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
 			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
 			const blocker = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Blocker" });
@@ -404,8 +404,8 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("keeps handoffs isolated per tenant even for an unfiltered listHandoffs call", async () => {
-			const tenantA = `tenant-${randomUUID()}`;
-			const tenantB = `tenant-${randomUUID()}`;
+			const tenantA = createTestTenantId();
+			const tenantB = createTestTenantId();
 			const storeA = new PgStore(appPool, tenantA);
 			const storeB = new PgStore(appPool, tenantB);
 
@@ -420,7 +420,7 @@ describe("PgStore entity lifecycle", () => {
 
 	describe("context and glossary", () => {
 		it("upserts a context's title and summary, defaulting when not yet configured", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 
 			const beforeUpsert = await store.getContextDetails({ scopeRef: initiative.id });
@@ -436,7 +436,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("defines a context term, auto-creating the context, and reports created vs. updated", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 
 			const created = await store.defineContextTerm({
@@ -460,7 +460,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("rejects an empty term or definition", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 
 			await expect(store.defineContextTerm({ scopeRef: initiative.id, term: "  ", definition: "x" })).rejects.toThrow(/term/i);
@@ -468,7 +468,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("forgets a context term", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 			await store.defineContextTerm({ scopeRef: initiative.id, term: "Settlement", definition: "Captured funds." });
 
@@ -483,7 +483,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("resolves a non-initiative scopeRef to its owning initiative's context", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
 
@@ -494,7 +494,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("lists contexts with term counts for shared and each initiative", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 			await store.defineContextTerm({ scopeRef: "default", term: "Order", definition: "Canonical order." });
 			await store.defineContextTerm({ scopeRef: initiative.id, term: "Settlement", definition: "Captured funds." });
@@ -508,7 +508,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("builds a context directory with duplicate and conflicting-definition detection", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 
 			await store.defineContextTerm({ scopeRef: "default", term: "Order", definition: "Canonical order." });
@@ -533,7 +533,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("supports global-only and initiative-only directory search views", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 
 			await store.defineContextTerm({ scopeRef: "default", term: "Administration", definition: "Shared admin surface." });
@@ -551,7 +551,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("supports conflicts-only queries", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const payments = await store.createEntity({ kind: "initiative", title: "Payments" });
 			const shipping = await store.createEntity({ kind: "initiative", title: "Shipping" });
 
@@ -568,7 +568,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("exposes real context data in the database snapshot", async () => {
-			const store = new PgStore(appPool, `tenant-${randomUUID()}`);
+			const store = new PgStore(appPool, createTestTenantId());
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 			await store.defineContextTerm({ scopeRef: initiative.id, term: "Settlement", definition: "Captured funds." });
 
@@ -579,8 +579,8 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("keeps context data isolated per tenant", async () => {
-			const tenantA = `tenant-${randomUUID()}`;
-			const tenantB = `tenant-${randomUUID()}`;
+			const tenantA = createTestTenantId();
+			const tenantB = createTestTenantId();
 			const storeA = new PgStore(appPool, tenantA);
 			const storeB = new PgStore(appPool, tenantB);
 
@@ -599,7 +599,7 @@ describe("PgStore entity lifecycle", () => {
 	// admin view - these methods only ever report on or act on `this.tenantId`.
 	describe("tenant administration", () => {
 		it("reports no tenants until the tenant has rows, then its own summary", async () => {
-			const tenantId = `tenant-${randomUUID()}`;
+			const tenantId = createTestTenantId();
 			const store = new PgStore(appPool, tenantId);
 
 			expect(await store.listTenants()).toEqual([]);
@@ -613,8 +613,8 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("never lists a sibling tenant's summary", async () => {
-			const tenantA = `tenant-${randomUUID()}`;
-			const tenantB = `tenant-${randomUUID()}`;
+			const tenantA = createTestTenantId();
+			const tenantB = createTestTenantId();
 			const storeA = new PgStore(appPool, tenantA);
 			const storeB = new PgStore(appPool, tenantB);
 
@@ -626,7 +626,7 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("deletes the tenant's own data and reports what was removed", async () => {
-			const tenantId = `tenant-${randomUUID()}`;
+			const tenantId = createTestTenantId();
 			const store = new PgStore(appPool, tenantId);
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 			await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Canonical order." });
@@ -643,16 +643,16 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("rejects deleting a different tenant", async () => {
-			const tenantId = `tenant-${randomUUID()}`;
-			const otherTenantId = `tenant-${randomUUID()}`;
+			const tenantId = createTestTenantId();
+			const otherTenantId = createTestTenantId();
 			const store = new PgStore(appPool, tenantId);
 
 			await expect(store.deleteTenant(otherTenantId)).rejects.toThrow(/own tenant/);
 		});
 
 		it("renames the tenant, moving entities, contexts, and handoffs to the new id", async () => {
-			const previousTenantId = `tenant-${randomUUID()}`;
-			const newTenantId = `tenant-${randomUUID()}`;
+			const previousTenantId = createTestTenantId();
+			const newTenantId = createTestTenantId();
 			const store = new PgStore(appPool, previousTenantId);
 			const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 			await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Canonical order." });
@@ -676,8 +676,8 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("returns renamed:false without changing anything when the tenant has no rows", async () => {
-			const previousTenantId = `tenant-${randomUUID()}`;
-			const newTenantId = `tenant-${randomUUID()}`;
+			const previousTenantId = createTestTenantId();
+			const newTenantId = createTestTenantId();
 			const store = new PgStore(appPool, previousTenantId);
 
 			const result = await store.renameTenant(previousTenantId, newTenantId);
@@ -687,24 +687,24 @@ describe("PgStore entity lifecycle", () => {
 		});
 
 		it("rejects renaming a different tenant", async () => {
-			const tenantId = `tenant-${randomUUID()}`;
-			const otherTenantId = `tenant-${randomUUID()}`;
-			const newTenantId = `tenant-${randomUUID()}`;
+			const tenantId = createTestTenantId();
+			const otherTenantId = createTestTenantId();
+			const newTenantId = createTestTenantId();
 			const store = new PgStore(appPool, tenantId);
 
 			await expect(store.renameTenant(otherTenantId, newTenantId)).rejects.toThrow(/own tenant/);
 		});
 
 		it("rejects renaming a tenant onto itself", async () => {
-			const tenantId = `tenant-${randomUUID()}`;
+			const tenantId = createTestTenantId();
 			const store = new PgStore(appPool, tenantId);
 
 			await expect(store.renameTenant(tenantId, tenantId)).rejects.toThrow(/same/);
 		});
 
 		it("rejects renaming onto a tenant that already has rows", async () => {
-			const previousTenantId = `tenant-${randomUUID()}`;
-			const newTenantId = `tenant-${randomUUID()}`;
+			const previousTenantId = createTestTenantId();
+			const newTenantId = createTestTenantId();
 			const store = new PgStore(appPool, previousTenantId);
 			await store.createEntity({ kind: "initiative", title: "Payments" });
 			const targetStore = new PgStore(appPool, newTenantId);

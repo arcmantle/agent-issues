@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { HttpStore, type StorageDriver } from "@agent-issues/core";
 import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -7,6 +5,7 @@ import type { Pool } from "pg";
 
 import { LocalAuthProvider } from "./auth/local-auth-provider.js";
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "./db/test-tenant-cleanup.js";
 import { createApiServer, type ApiServerHandle } from "./index.js";
 
 const ADMIN_CONNECTION_STRING =
@@ -39,12 +38,13 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 
 	afterAll(async () => {
 		handle.server.close();
+		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
 	});
 
 	async function openHttpTestStore(): Promise<StorageDriver> {
-		const tenantId = `tenant-${randomUUID()}`;
+		const tenantId = createTestTenantId();
 		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId });
 		return new HttpStore({ baseUrl: handle.url, bearerToken, tenantId });
 	}
@@ -73,7 +73,7 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 
 		it("rejects deleting a different tenant, surfacing the gate's error message", async () => {
 			const store = await openHttpTestStore();
-			const otherTenantId = `tenant-${randomUUID()}`;
+			const otherTenantId = createTestTenantId();
 			try {
 				await expect(store.deleteTenant(otherTenantId)).rejects.toThrow(/own tenant/);
 			} finally {
@@ -83,7 +83,7 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 
 		it("renames its own tenant, moving its entities to the new id", async () => {
 			const store = await openHttpTestStore();
-			const newTenantId = `tenant-${randomUUID()}`;
+			const newTenantId = createTestTenantId();
 			try {
 				const previousTenantId = store.tenantId;
 				const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
@@ -106,7 +106,7 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 	});
 
 	it("rejects an unauthenticated request with a thrown error", async () => {
-		const store = new HttpStore({ baseUrl: handle.url, bearerToken: "not-a-real-token", tenantId: `tenant-${randomUUID()}` });
+		const store = new HttpStore({ baseUrl: handle.url, bearerToken: "not-a-real-token", tenantId: createTestTenantId() });
 
 		await expect(store.listEntities("initiative")).rejects.toThrow();
 	});

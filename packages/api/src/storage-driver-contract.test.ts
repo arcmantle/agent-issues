@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import type { StorageDriver } from "@agent-issues/core";
 import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
+import { afterAll } from "vitest";
 
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
+import { cleanupTestTenants, createTestTenantId } from "./db/test-tenant-cleanup.js";
 import { PgStore } from "./pg-store.js";
 
 const ADMIN_CONNECTION_STRING =
@@ -32,6 +32,15 @@ function ensureMigrated(): Promise<void> {
 	return migrationsApplied;
 }
 
+afterAll(async () => {
+	const adminPool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
+	try {
+		await cleanupTestTenants(adminPool);
+	} finally {
+		await adminPool.end();
+	}
+});
+
 // Every store in this suite gets its own dedicated pool (rather than the
 // single shared `appPool` `pg-store.test.ts` uses) because `PgStore.close()`
 // ends the whole pool it was given, and the shared contract's lifecycle
@@ -41,7 +50,7 @@ function ensureMigrated(): Promise<void> {
 async function openPgTestStore(): Promise<StorageDriver> {
 	await ensureMigrated();
 	const pool = createPgPool({ connectionString: APP_CONNECTION_STRING });
-	return new PgStore(pool, `tenant-${randomUUID()}`);
+	return new PgStore(pool, createTestTenantId());
 }
 
 runStorageDriverContractSuite({ label: "PgStore (Postgres)", openStore: openPgTestStore });
