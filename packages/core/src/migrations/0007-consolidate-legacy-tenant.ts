@@ -150,223 +150,236 @@ async function appendMigratedSentinelHistoryEntry(
 }
 
 /**
- * Builds a `Migration` (ISS180) that folds one legacy per-folder tenant's
- * full data set into a freshly-minted `project` entity under `targetTenantId`
- * - the actual copy/remap step ported line-for-line from the pre-ISS180
- * `migrateLegacyTenantIntoProject` (a raw `better-sqlite3` function gated
- * from the outside by the bespoke `project_migrations` ledger) into this
- * package's shared `MigrationConn`/ledger machinery (ADR43).
- *
- * Unlike the fixed migrations in `./index.ts` (schema-shape and one-time
- * global backfills, always run in the same static order for every database),
- * this one is dynamically parameterized: `database.ts`'s
- * `consolidateAllLegacyTenants` discovers which legacy tenant ids are still
- * outstanding on every open (a brand-new `--tenant <name>` can appear at any
- * time - it is a real, exposed CLI flag) and builds one of these per
- * discovered id, embedding that id into the migration's own `id` so the
- * SAME `schema_migrations` ledger the rest of the runner already uses
- * naturally makes each legacy tenant's consolidation run at most once ever,
- * without a second, bespoke ledger table.
+ * Folds one legacy per-folder tenant's full data set into a freshly-minted
+ * `project` entity under `targetTenantId` - the actual copy/remap step
+ * ported line-for-line from the pre-ISS180 `migrateLegacyTenantIntoProject`
+ * (a raw `better-sqlite3` function gated from the outside by the bespoke
+ * `project_migrations` ledger) onto this package's shared
+ * `MigrationConn`/ledger machinery (ADR43). Exported as a plain function
+ * (not only wrapped in a `Migration`) so both
+ * `buildConsolidateLegacyTenantMigration` (the explicit, on-demand
+ * `consolidate-tenant` admin path, ISS180) and
+ * `migrations/0008-consolidate-legacy-tenants-backfill.ts` (the one-time,
+ * ledgered historical sweep across every legacy tenant present when it
+ * first runs, ISS181) can reuse the identical body without duplicating it.
+ */
+export async function consolidateLegacyTenantData(
+	conn: MigrationConn,
+	params: { legacyTenantId: string; targetTenantId: string; projectTitle: string }
+): Promise<void> {
+	const { legacyTenantId, targetTenantId, projectTitle } = params;
+
+	// Mirrors the pre-ISS180 function's own `defer_foreign_keys = ON`:
+	// automatically turned back off by SQLite at this migration's own
+	// COMMIT (issued by the runner's transaction boundary), so it only
+	// ever applies to this one migration - safe to set repeatedly if this
+	// same connection folds in several legacy tenants inside one
+	// transaction (0008's bulk sweep).
+	await conn.run(sql`PRAGMA defer_foreign_keys = ON`);
+	await ensureTargetTenantCounters(conn, targetTenantId);
+
+	const now = new Date().toISOString();
+	const idMap = new Map<string, string>();
+	const projectId = await mintEntityId(conn, targetTenantId, "project");
+	const epicId = await mintEntityId(conn, targetTenantId, "epic");
+	idMap.set(DEFAULT_PROJECT_ID, projectId);
+	idMap.set(DEFAULT_EPIC_ID, epicId);
+
+	const legacyEntities = await conn.all<LegacyEntityRow>(sql`SELECT * FROM entities WHERE tenant_id = ${legacyTenantId}`);
+	for (const entity of legacyEntities) {
+		if (entity.id === DEFAULT_PROJECT_ID || entity.id === DEFAULT_EPIC_ID) {
+			continue;
+		}
+
+		idMap.set(entity.id, await mintEntityId(conn, targetTenantId, entity.kind));
+	}
+
+	await insertMigratedEntity(conn, targetTenantId, {
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		id: projectId,
+		kind: "project",
+		status: "active",
+		title: projectTitle,
+		updatedAt: now
+	});
+	await insertMigratedEntity(conn, targetTenantId, {
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		id: epicId,
+		kind: "epic",
+		status: "active",
+		title: DEFAULT_EPIC_TITLE,
+		updatedAt: now
+	});
+	await insertMigratedRelation(conn, targetTenantId, projectId, epicId, "contains", now);
+
+	for (const entity of legacyEntities) {
+		if (entity.id === DEFAULT_PROJECT_ID || entity.id === DEFAULT_EPIC_ID) {
+			continue;
+		}
+
+		await insertMigratedEntity(conn, targetTenantId, {
+			body: entity.body,
+			bodySource: entity.body_source,
+			createdAt: entity.created_at,
+			id: idMap.get(entity.id) as string,
+			kind: entity.kind,
+			status: entity.status,
+			title: entity.title,
+			updatedAt: entity.updated_at
+		});
+	}
+
+	const legacyRelations = await conn.all<LegacyRelationRow>(sql`SELECT * FROM relations WHERE tenant_id = ${legacyTenantId}`);
+	for (const relation of legacyRelations) {
+		const fromId = idMap.get(relation.from_id);
+		const toId = idMap.get(relation.to_id);
+		if (!fromId || !toId) {
+			continue;
+		}
+
+		await insertMigratedRelation(conn, targetTenantId, fromId, toId, relation.type, relation.created_at);
+	}
+
+	// Any initiative that had no incoming 'contains' relation in the
+	// legacy tenant (predates ISS34, or was created before its own
+	// EPIC0 existed) attaches to this project's freshly-minted epic.
+	for (const entity of legacyEntities) {
+		if (entity.kind !== "initiative") {
+			continue;
+		}
+
+		const newId = idMap.get(entity.id) as string;
+		const hasIncomingContains = await conn.all(sql`
+			SELECT 1 FROM relations WHERE tenant_id = ${targetTenantId} AND to_id = ${newId} AND type = 'contains'
+		`);
+		if (hasIncomingContains.length === 0) {
+			await insertMigratedRelation(conn, targetTenantId, epicId, newId, "contains", now);
+		}
+	}
+
+	// history_entries.id is a global PK (not tenant-scoped, ISS57/ADR16),
+	// so these rows are relocated in place via UPDATE rather than copied
+	// via INSERT: an INSERT with the same id would collide with the
+	// still-present original row (not yet removed - that happens via
+	// the DELETEs at the end of this migration).
+	const legacyHistory = await conn.all<LegacyHistoryRow>(sql`
+		SELECT id, entity_id, parent_id FROM history_entries WHERE tenant_id = ${legacyTenantId}
+	`);
+	for (const entry of legacyHistory) {
+		const newEntityId = idMap.get(entry.entity_id) ?? entry.entity_id;
+		const newParentId = entry.parent_id ? (idMap.get(entry.parent_id) ?? null) : null;
+		await conn.run(sql`
+			UPDATE history_entries SET tenant_id = ${targetTenantId}, entity_id = ${newEntityId}, parent_id = ${newParentId}
+			WHERE id = ${entry.id}
+		`);
+	}
+
+	// A legacy tenant that already had its own PROJ0/EPIC0 sentinel
+	// relocates that sentinel's OWN history above - stale content from
+	// when it was still generically titled "Default Project"/"Default
+	// Epic". Appending one more version, unconditionally, keeps
+	// entities and history consistent regardless of whether the legacy
+	// tenant had a sentinel (with stale history to relocate) or not.
+	await appendMigratedSentinelHistoryEntry(conn, targetTenantId, {
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		id: projectId,
+		parentId: null,
+		status: "active",
+		title: projectTitle
+	});
+	await appendMigratedSentinelHistoryEntry(conn, targetTenantId, {
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		id: epicId,
+		parentId: projectId,
+		status: "active",
+		title: DEFAULT_EPIC_TITLE
+	});
+
+	// Contexts: an initiative-scoped context's key is that initiative's
+	// own id (remapped like any other entity reference); the tenant-wide
+	// "default"/shared context has no entity to key off, so it is
+	// namespaced by the new project id instead - each project keeps its
+	// own shared glossary rather than colliding on the literal "default"
+	// key with every other project now sharing this tenant.
+	const legacyContexts = await conn.all<LegacyContextRow>(sql`SELECT * FROM contexts WHERE tenant_id = ${legacyTenantId}`);
+	const contextKeyMap = new Map<string, string>();
+	for (const context of legacyContexts) {
+		const isDefaultContext = context.scope_entity_id === null;
+		const newScopeEntityId = isDefaultContext ? null : (idMap.get(context.scope_entity_id as string) ?? null);
+		const newKey = isDefaultContext ? `default:${projectId}` : (newScopeEntityId ?? context.key);
+		contextKeyMap.set(context.key, newKey);
+
+		await conn.run(sql`
+			INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+			VALUES (${targetTenantId}, ${newKey}, ${newScopeEntityId}, ${context.title}, ${context.summary}, ${context.created_at}, ${context.updated_at})
+		`);
+	}
+
+	const legacyTerms = await conn.all<LegacyContextTermRow>(sql`SELECT * FROM context_terms WHERE tenant_id = ${legacyTenantId}`);
+	for (const term of legacyTerms) {
+		await conn.run(sql`
+			INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+			VALUES (${targetTenantId}, ${contextKeyMap.get(term.context_key) ?? term.context_key}, ${term.term}, ${term.definition}, ${term.avoid_terms}, ${term.created_at}, ${term.updated_at})
+		`);
+	}
+
+	const legacyHandoffs = await conn.all<LegacyHandoffRow>(sql`SELECT * FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
+	for (const handoff of legacyHandoffs) {
+		const newHandoffId = await mintHandoffId(conn, targetTenantId);
+		await conn.run(sql`
+			INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
+			VALUES (
+				${targetTenantId}, ${newHandoffId}, ${idMap.get(handoff.entity_id) ?? handoff.entity_id},
+				${handoff.initiative_id ? (idMap.get(handoff.initiative_id) ?? null) : null},
+				${handoff.summary}, ${handoff.body}, ${handoff.created_at}
+			)
+		`);
+	}
+
+	await conn.run(sql`
+		INSERT INTO project_migrations (tenant_id, legacy_tenant_id, project_id, created_at)
+		VALUES (${targetTenantId}, ${legacyTenantId}, ${projectId}, ${now})
+	`);
+
+	// Wipe the legacy tenant's now-emptied-of-meaning rows, in FK-safe
+	// order (mirrors `database.ts`'s `deleteTenant`). History was
+	// already relocated above (its rows now carry `targetTenantId`), so
+	// this DELETE cannot touch them.
+	await conn.run(sql`DELETE FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
+	await conn.run(sql`DELETE FROM history_entries WHERE tenant_id = ${legacyTenantId}`);
+	await conn.run(sql`DELETE FROM context_terms WHERE tenant_id = ${legacyTenantId}`);
+	await conn.run(sql`DELETE FROM relations WHERE tenant_id = ${legacyTenantId}`);
+	await conn.run(sql`DELETE FROM contexts WHERE tenant_id = ${legacyTenantId}`);
+	await conn.run(sql`DELETE FROM entities WHERE tenant_id = ${legacyTenantId}`);
+	await conn.run(sql`DELETE FROM counters WHERE tenant_id = ${legacyTenantId}`);
+}
+
+/**
+ * Builds a `Migration` (ISS180) wrapping `consolidateLegacyTenantData` for
+ * one specific, already-known legacy tenant, dynamically parameterized so
+ * the SAME `schema_migrations` ledger every other migration uses records
+ * this exact tenant id as done, forever, without a second bespoke ledger.
+ * Used only by the explicit, on-demand `consolidate-tenant` admin CLI
+ * command (`database.ts`'s `consolidateTenantIntoProject`) - the automatic
+ * historical sweep instead runs every outstanding legacy tenant through
+ * `consolidateLegacyTenantData` directly inside one fixed-id migration
+ * (`migrations/0008-consolidate-legacy-tenants-backfill.ts`, ISS181).
  */
 export function buildConsolidateLegacyTenantMigration(params: {
 	legacyTenantId: string;
 	targetTenantId: string;
 	projectTitle: string;
 }): Migration {
-	const { legacyTenantId, targetTenantId, projectTitle } = params;
-
 	return {
-		id: `consolidate-legacy-tenant:${legacyTenantId}`,
-		up: async (conn) => {
-			// Mirrors the pre-ISS180 function's own `defer_foreign_keys = ON`:
-			// automatically turned back off by SQLite at this migration's own
-			// COMMIT (issued by the runner's transaction boundary), so it only
-			// ever applies to this one migration.
-			await conn.run(sql`PRAGMA defer_foreign_keys = ON`);
-			await ensureTargetTenantCounters(conn, targetTenantId);
-
-			const now = new Date().toISOString();
-			const idMap = new Map<string, string>();
-			const projectId = await mintEntityId(conn, targetTenantId, "project");
-			const epicId = await mintEntityId(conn, targetTenantId, "epic");
-			idMap.set(DEFAULT_PROJECT_ID, projectId);
-			idMap.set(DEFAULT_EPIC_ID, epicId);
-
-			const legacyEntities = await conn.all<LegacyEntityRow>(sql`SELECT * FROM entities WHERE tenant_id = ${legacyTenantId}`);
-			for (const entity of legacyEntities) {
-				if (entity.id === DEFAULT_PROJECT_ID || entity.id === DEFAULT_EPIC_ID) {
-					continue;
-				}
-
-				idMap.set(entity.id, await mintEntityId(conn, targetTenantId, entity.kind));
-			}
-
-			await insertMigratedEntity(conn, targetTenantId, {
-				body: "",
-				bodySource: "generated",
-				createdAt: now,
-				id: projectId,
-				kind: "project",
-				status: "active",
-				title: projectTitle,
-				updatedAt: now
-			});
-			await insertMigratedEntity(conn, targetTenantId, {
-				body: "",
-				bodySource: "generated",
-				createdAt: now,
-				id: epicId,
-				kind: "epic",
-				status: "active",
-				title: DEFAULT_EPIC_TITLE,
-				updatedAt: now
-			});
-			await insertMigratedRelation(conn, targetTenantId, projectId, epicId, "contains", now);
-
-			for (const entity of legacyEntities) {
-				if (entity.id === DEFAULT_PROJECT_ID || entity.id === DEFAULT_EPIC_ID) {
-					continue;
-				}
-
-				await insertMigratedEntity(conn, targetTenantId, {
-					body: entity.body,
-					bodySource: entity.body_source,
-					createdAt: entity.created_at,
-					id: idMap.get(entity.id) as string,
-					kind: entity.kind,
-					status: entity.status,
-					title: entity.title,
-					updatedAt: entity.updated_at
-				});
-			}
-
-			const legacyRelations = await conn.all<LegacyRelationRow>(sql`SELECT * FROM relations WHERE tenant_id = ${legacyTenantId}`);
-			for (const relation of legacyRelations) {
-				const fromId = idMap.get(relation.from_id);
-				const toId = idMap.get(relation.to_id);
-				if (!fromId || !toId) {
-					continue;
-				}
-
-				await insertMigratedRelation(conn, targetTenantId, fromId, toId, relation.type, relation.created_at);
-			}
-
-			// Any initiative that had no incoming 'contains' relation in the
-			// legacy tenant (predates ISS34, or was created before its own
-			// EPIC0 existed) attaches to this project's freshly-minted epic.
-			for (const entity of legacyEntities) {
-				if (entity.kind !== "initiative") {
-					continue;
-				}
-
-				const newId = idMap.get(entity.id) as string;
-				const hasIncomingContains = await conn.all(sql`
-					SELECT 1 FROM relations WHERE tenant_id = ${targetTenantId} AND to_id = ${newId} AND type = 'contains'
-				`);
-				if (hasIncomingContains.length === 0) {
-					await insertMigratedRelation(conn, targetTenantId, epicId, newId, "contains", now);
-				}
-			}
-
-			// history_entries.id is a global PK (not tenant-scoped, ISS57/ADR16),
-			// so these rows are relocated in place via UPDATE rather than copied
-			// via INSERT: an INSERT with the same id would collide with the
-			// still-present original row (not yet removed - that happens via
-			// the DELETEs at the end of this migration).
-			const legacyHistory = await conn.all<LegacyHistoryRow>(sql`
-				SELECT id, entity_id, parent_id FROM history_entries WHERE tenant_id = ${legacyTenantId}
-			`);
-			for (const entry of legacyHistory) {
-				const newEntityId = idMap.get(entry.entity_id) ?? entry.entity_id;
-				const newParentId = entry.parent_id ? (idMap.get(entry.parent_id) ?? null) : null;
-				await conn.run(sql`
-					UPDATE history_entries SET tenant_id = ${targetTenantId}, entity_id = ${newEntityId}, parent_id = ${newParentId}
-					WHERE id = ${entry.id}
-				`);
-			}
-
-			// A legacy tenant that already had its own PROJ0/EPIC0 sentinel
-			// relocates that sentinel's OWN history above - stale content from
-			// when it was still generically titled "Default Project"/"Default
-			// Epic". Appending one more version, unconditionally, keeps
-			// entities and history consistent regardless of whether the legacy
-			// tenant had a sentinel (with stale history to relocate) or not.
-			await appendMigratedSentinelHistoryEntry(conn, targetTenantId, {
-				body: "",
-				bodySource: "generated",
-				createdAt: now,
-				id: projectId,
-				parentId: null,
-				status: "active",
-				title: projectTitle
-			});
-			await appendMigratedSentinelHistoryEntry(conn, targetTenantId, {
-				body: "",
-				bodySource: "generated",
-				createdAt: now,
-				id: epicId,
-				parentId: projectId,
-				status: "active",
-				title: DEFAULT_EPIC_TITLE
-			});
-
-			// Contexts: an initiative-scoped context's key is that initiative's
-			// own id (remapped like any other entity reference); the tenant-wide
-			// "default"/shared context has no entity to key off, so it is
-			// namespaced by the new project id instead - each project keeps its
-			// own shared glossary rather than colliding on the literal "default"
-			// key with every other project now sharing this tenant.
-			const legacyContexts = await conn.all<LegacyContextRow>(sql`SELECT * FROM contexts WHERE tenant_id = ${legacyTenantId}`);
-			const contextKeyMap = new Map<string, string>();
-			for (const context of legacyContexts) {
-				const isDefaultContext = context.scope_entity_id === null;
-				const newScopeEntityId = isDefaultContext ? null : (idMap.get(context.scope_entity_id as string) ?? null);
-				const newKey = isDefaultContext ? `default:${projectId}` : (newScopeEntityId ?? context.key);
-				contextKeyMap.set(context.key, newKey);
-
-				await conn.run(sql`
-					INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-					VALUES (${targetTenantId}, ${newKey}, ${newScopeEntityId}, ${context.title}, ${context.summary}, ${context.created_at}, ${context.updated_at})
-				`);
-			}
-
-			const legacyTerms = await conn.all<LegacyContextTermRow>(sql`SELECT * FROM context_terms WHERE tenant_id = ${legacyTenantId}`);
-			for (const term of legacyTerms) {
-				await conn.run(sql`
-					INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-					VALUES (${targetTenantId}, ${contextKeyMap.get(term.context_key) ?? term.context_key}, ${term.term}, ${term.definition}, ${term.avoid_terms}, ${term.created_at}, ${term.updated_at})
-				`);
-			}
-
-			const legacyHandoffs = await conn.all<LegacyHandoffRow>(sql`SELECT * FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
-			for (const handoff of legacyHandoffs) {
-				const newHandoffId = await mintHandoffId(conn, targetTenantId);
-				await conn.run(sql`
-					INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
-					VALUES (
-						${targetTenantId}, ${newHandoffId}, ${idMap.get(handoff.entity_id) ?? handoff.entity_id},
-						${handoff.initiative_id ? (idMap.get(handoff.initiative_id) ?? null) : null},
-						${handoff.summary}, ${handoff.body}, ${handoff.created_at}
-					)
-				`);
-			}
-
-			await conn.run(sql`
-				INSERT INTO project_migrations (tenant_id, legacy_tenant_id, project_id, created_at)
-				VALUES (${targetTenantId}, ${legacyTenantId}, ${projectId}, ${now})
-			`);
-
-			// Wipe the legacy tenant's now-emptied-of-meaning rows, in FK-safe
-			// order (mirrors `database.ts`'s `deleteTenant`). History was
-			// already relocated above (its rows now carry `targetTenantId`), so
-			// this DELETE cannot touch them.
-			await conn.run(sql`DELETE FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
-			await conn.run(sql`DELETE FROM history_entries WHERE tenant_id = ${legacyTenantId}`);
-			await conn.run(sql`DELETE FROM context_terms WHERE tenant_id = ${legacyTenantId}`);
-			await conn.run(sql`DELETE FROM relations WHERE tenant_id = ${legacyTenantId}`);
-			await conn.run(sql`DELETE FROM contexts WHERE tenant_id = ${legacyTenantId}`);
-			await conn.run(sql`DELETE FROM entities WHERE tenant_id = ${legacyTenantId}`);
-			await conn.run(sql`DELETE FROM counters WHERE tenant_id = ${legacyTenantId}`);
-		}
+		id: `consolidate-legacy-tenant:${params.legacyTenantId}`,
+		up: (conn) => consolidateLegacyTenantData(conn, params)
 	};
 }

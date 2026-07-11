@@ -19,7 +19,8 @@ const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context
 // hand-written `schema-v7.db` fixture above: four real legacy per-folder
 // tenants (ADR7's original, pre-ISS63 model), each with real entities,
 // relations, contexts, context terms, and (for two of them) handoffs -
-// exercising the full `consolidateAllLegacyTenants` sweep against real
+// exercising the full one-time legacy-tenant backfill migration
+// (`buildConsolidateLegacyTenantsBackfillMigration`, ISS181) against real
 // data shapes rather than a single minimal tenant.
 const REAL_WORLD_FIXTURE = path.join(here, "__fixtures__", "real-world-multi-tenant-v7.db");
 const REAL_WORLD_LEGACY_TENANT_IDS = [
@@ -150,7 +151,8 @@ describe("golden-fixture migration wall", () => {
 				{ id: "0003-project-migrations" },
 				{ id: "0004-backfill-tenant-counters" },
 				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" }
+				{ id: "0006-backfill-history-seed" },
+				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 		} finally {
 			db2.close();
@@ -222,7 +224,7 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 		}
 	});
 
-	it("records the full baseline+backfill migration ledger for the real-world fixture, plus one consolidate-legacy-tenant entry per legacy tenant (ISS180)", async () => {
+	it("records the full baseline+backfill migration ledger for the real-world fixture, plus the one-time legacy-tenant backfill migration (ISS181)", async () => {
 		const { db } = await ensureDatabase(undefined, {});
 		try {
 			const applied = db.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
@@ -234,9 +236,7 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 				{ id: "0004-backfill-tenant-counters" },
 				{ id: "0005-backfill-full-chain-invariant" },
 				{ id: "0006-backfill-history-seed" },
-				...[...REAL_WORLD_LEGACY_TENANT_IDS]
-					.sort()
-					.map((legacyTenantId) => ({ id: `consolidate-legacy-tenant:${legacyTenantId}` }))
+				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 		} finally {
 			db.close();
@@ -366,7 +366,8 @@ describe("fresh install schema parity", () => {
 				{ id: "0003-project-migrations" },
 				{ id: "0004-backfill-tenant-counters" },
 				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" }
+				{ id: "0006-backfill-history-seed" },
+				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 		} finally {
 			db2.close();
@@ -474,7 +475,8 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 				{ id: "0003-project-migrations" },
 				{ id: "0004-backfill-tenant-counters" },
 				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" }
+				{ id: "0006-backfill-history-seed" },
+				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 
 			const legacyTables = db2

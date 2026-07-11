@@ -650,7 +650,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 	});
 });
 
-describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
+describe("one-time legacy-tenant backfill migration on default-tenant open (ISS63/ISS181)", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
 
@@ -674,8 +674,13 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 
 		// Seed the legacy tenant directly into the real (HOME-redirected)
 		// default db path, simulating data left behind by the pre-ISS63
-		// per-folder tenant model.
-		const seeding = (await ensureDatabase(undefined, { tenant: legacyTenantId, currentWorkingDirectory: workspaceDirectory })).db;
+		// per-folder tenant model - `skipTenantConsolidation` keeps this
+		// seeding open from burning the one-time backfill migration's only
+		// run against itself (a real pre-existing legacy tenant was never
+		// written through this modern bootstrap sequence at all).
+		const seeding = (
+			await ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory, skipTenantConsolidation: true, tenant: legacyTenantId })
+		).db;
 		createEntity(seeding, { kind: "initiative", title: "Pre-existing workspace initiative" });
 		seeding.close();
 
@@ -715,7 +720,7 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 		}
 	});
 
-	it("folds in every outstanding legacy tenant on open, not only the one matching the current workspace's cwd", async () => {
+	it("folds in every outstanding legacy tenant on the first ordinary open, not only the one matching the current workspace's cwd", async () => {
 		const currentWorkspace = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-current-"));
 		const otherWorkspaceA = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-other-a-"));
 		const otherWorkspaceB = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-other-b-"));
@@ -729,13 +734,17 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 		// Seed three independent legacy tenants into the same shared default
 		// db - simulating a user who has opened three different folders with
 		// the pre-ISS63 CLI over time, none of which is the folder they
-		// happen to be standing in right now.
+		// happen to be standing in right now. `skipTenantConsolidation` on
+		// every seeding open keeps the one-time backfill migration
+		// unconsumed until the real "first ordinary open" below.
 		for (const [tenantId, workspace] of [
 			[currentLegacyTenantId, currentWorkspace],
 			[otherLegacyTenantIdA, otherWorkspaceA],
 			[otherLegacyTenantIdB, otherWorkspaceB]
 		] as const) {
-			const seeding = (await ensureDatabase(undefined, { tenant: tenantId, currentWorkingDirectory: workspace })).db;
+			const seeding = (
+				await ensureDatabase(undefined, { currentWorkingDirectory: workspace, skipTenantConsolidation: true, tenant: tenantId })
+			).db;
 			createEntity(seeding, { kind: "initiative", title: `Initiative for ${tenantId}` });
 			seeding.close();
 		}
@@ -759,4 +768,37 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 			opened.db.close();
 		}
 	});
+
+	it("never sweeps a --tenant created AFTER the one-time backfill migration has already run (ISS181)", async () => {
+		const workspaceDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-workspace-"));
+		tempDirs.push(workspaceDirectory);
+
+		const wellKnownTenantId = resolveWellKnownLocalTenantId();
+
+		// The very first ordinary open consumes the one-time backfill
+		// migration's only run (nothing to fold in yet - a brand-new
+		// install).
+		const bootstrapOpen = await ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory });
+		bootstrapOpen.db.close();
+
+		// A brand-new, explicitly-named tenant created AFTER that point is a
+		// real, durable tenant from here on - it must never be automatically
+		// folded into the well-known tenant's projects by any LATER plain
+		// open, unlike the pre-ISS181 sweep which re-checked on every open.
+		const tenantOpen = (await ensureDatabase(undefined, { tenant: "durable-team", currentWorkingDirectory: workspaceDirectory })).db;
+		createEntity(tenantOpen, { kind: "initiative", title: "Durable team's own initiative" });
+		tenantOpen.close();
+
+		const laterPlainOpen = await ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory });
+		try {
+			expect(listTenants(laterPlainOpen.db).map((tenant) => tenant.id).sort()).toEqual(["durable-team", wellKnownTenantId].sort());
+			const stillPresent = laterPlainOpen.db
+				.prepare(`SELECT title FROM entities WHERE tenant_id = 'durable-team' AND title = 'Durable team''s own initiative'`)
+				.get();
+			expect(stillPresent).toBeTruthy();
+		} finally {
+			laterPlainOpen.db.close();
+		}
+	});
 });
+
