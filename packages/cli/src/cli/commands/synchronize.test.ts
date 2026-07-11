@@ -95,13 +95,13 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	let cloudDirectory: string;
 	let cloudStore: SqliteStore;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-home-"));
 		originalHome = process.env.HOME;
 		process.env.HOME = homeDirectory;
 		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-project-"));
 		cloudDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-cloud-"));
-		cloudStore = openSqliteStore(path.join(cloudDirectory, "cloud.db"), { tenant: "tenant-a" }).store;
+		cloudStore = (await openSqliteStore(path.join(cloudDirectory, "cloud.db"), { tenant: "tenant-a" })).store;
 	});
 
 	afterEach(async () => {
@@ -161,7 +161,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 			expect(exitCode).toBe(0);
 			expect(stdout.read()).toContain("Synchronized with");
 
-			const { store: localStore } = openSqliteStore(undefined, { currentWorkingDirectory: projectDirectory });
+			const { store: localStore } = await openSqliteStore(undefined, { currentWorkingDirectory: projectDirectory });
 			try {
 				const localDetails = await localStore.getEntityDetails(created.id);
 				expect(localDetails.entity.title).toBe("Ship synchronize");

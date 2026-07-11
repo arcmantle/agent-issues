@@ -1,15 +1,33 @@
 import Database from "better-sqlite3";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ensureDatabase } from "./database.js";
+import { ensureDatabase, resolveWellKnownLocalTenantId } from "./database.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN_FIXTURE = path.join(here, "__fixtures__", "schema-v7.db");
 const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "handoffs", "metadata"] as const;
+
+// A real (not synthetic) pre-ADR43 backup of a personal `agent-issues.db`,
+// scrubbed of the counters-only ghost tenants left behind by an unrelated,
+// already-resolved test-isolation bug (ISS167) before being adopted here
+// (ISS177) - see this fixture's provenance in ISS177's body for the full
+// story of how it was captured and cleaned. Genuinely messier than the
+// hand-written `schema-v7.db` fixture above: four real legacy per-folder
+// tenants (ADR7's original, pre-ISS63 model), each with real entities,
+// relations, contexts, context terms, and (for two of them) handoffs -
+// exercising the full `consolidateAllLegacyTenants` sweep against real
+// data shapes rather than a single minimal tenant.
+const REAL_WORLD_FIXTURE = path.join(here, "__fixtures__", "real-world-multi-tenant-v7.db");
+const REAL_WORLD_LEGACY_TENANT_IDS = [
+	"agent-issues-de3fbe614e21",
+	"content-hub-5ab5819bb0a8",
+	"eye-share-devops-net-9999b3e54780",
+	"weave-e2d77991499a"
+] as const;
 
 const tempDirs: string[] = [];
 
@@ -41,11 +59,11 @@ afterEach(() => {
 });
 
 describe("golden-fixture migration wall", () => {
-	it("preserves every record when a pre-Drizzle v7 database is opened", () => {
+	it("preserves every record when a pre-Drizzle v7 database is opened", async () => {
 		const staged = stageFixture();
 		const before = snapshotTables(staged);
 
-		const { db } = ensureDatabase(staged, { tenant: "fixture" });
+		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
 		db.close();
 
 		const after = snapshotTables(staged);
@@ -89,11 +107,11 @@ describe("golden-fixture migration wall", () => {
 		);
 	});
 
-	it("backfills a synthetic version-1 history entry for every pre-existing record and the new sentinels", () => {
+	it("backfills a synthetic version-1 history entry for every pre-existing record and the new sentinels", async () => {
 		const staged = stageFixture();
 		const before = snapshotTables(staged);
 
-		const { db } = ensureDatabase(staged, { tenant: "fixture" });
+		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
 		db.close();
 
 		const db2 = new Database(staged, { readonly: true, fileMustExist: true });
@@ -116,23 +134,109 @@ describe("golden-fixture migration wall", () => {
 		}
 	});
 
-	it("marks the Drizzle migrations as applied without re-running them", () => {
+	it("marks the baseline migrations as applied without re-running them", async () => {
 		const staged = stageFixture();
 
-		const { db } = ensureDatabase(staged, { tenant: "fixture" });
+		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
 		db.close();
 
 		const db2 = new Database(staged, { readonly: true, fileMustExist: true });
 		try {
-			const hasMigrationsTable = db2
-				.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'`)
-				.get();
-			expect(hasMigrationsTable).toBeTruthy();
-
-			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(4);
+			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
+			expect(applied).toEqual([
+				{ id: "0000-baseline-v7" },
+				{ id: "0001-history-entries" },
+				{ id: "0002-history-version-index-non-unique" },
+				{ id: "0003-project-migrations" },
+				{ id: "0004-backfill-tenant-counters" },
+				{ id: "0005-backfill-full-chain-invariant" },
+				{ id: "0006-backfill-history-seed" }
+			]);
 		} finally {
 			db2.close();
+		}
+	});
+});
+
+describe("real-world multi-tenant migration (ISS177 regression fixture)", () => {
+	let homeDirectory: string;
+	let originalHome: string | undefined;
+	let dbPath: string;
+
+	beforeEach(() => {
+		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-real-world-home-"));
+		originalHome = process.env.HOME;
+		process.env.HOME = homeDirectory;
+		mkdirSync(path.join(homeDirectory, ".agent-issues"), { recursive: true });
+		dbPath = path.join(homeDirectory, ".agent-issues", "agent-issues.db");
+		copyFileSync(REAL_WORLD_FIXTURE, dbPath);
+	});
+
+	afterEach(() => {
+		process.env.HOME = originalHome;
+		rmSync(homeDirectory, { recursive: true, force: true });
+	});
+
+	it("consolidates every genuine legacy tenant into its own project, manufacturing no phantom projects", async () => {
+		const before = new Database(dbPath, { readonly: true, fileMustExist: true });
+		const entityCountBefore = REAL_WORLD_LEGACY_TENANT_IDS.reduce((sum, tenantId) => {
+			const row = before.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(tenantId) as { count: number };
+			return sum + row.count;
+		}, 0);
+		before.close();
+
+		const { db } = await ensureDatabase(undefined, {});
+		try {
+			const wellKnownTenantId = resolveWellKnownLocalTenantId();
+			expect(db.tenantId).toBe(wellKnownTenantId);
+
+			const projectMigrations = db
+				.prepare(`SELECT legacy_tenant_id FROM project_migrations ORDER BY legacy_tenant_id`)
+				.all() as Array<{ legacy_tenant_id: string }>;
+			expect(projectMigrations.map((row) => row.legacy_tenant_id)).toEqual([...REAL_WORLD_LEGACY_TENANT_IDS].sort());
+
+			// Exactly one freshly-minted project per real legacy tenant, plus the
+			// well-known tenant's own PROJ0 sentinel - no ghost project should be
+			// manufactured for a counter-only tenant with no real content (ISS177).
+			const projectCount = (
+				db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ? AND kind = 'project'`).get(wellKnownTenantId) as {
+					count: number;
+				}
+			).count;
+			expect(projectCount).toBe(REAL_WORLD_LEGACY_TENANT_IDS.length + 1);
+
+			// Every real entity from every legacy tenant survives the fold-in,
+			// remapped under the well-known tenant, plus one fresh project+epic
+			// pair per legacy tenant and the well-known tenant's own pair.
+			const entityCountAfter = (
+				db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(wellKnownTenantId) as { count: number }
+			).count;
+			expect(entityCountAfter).toBe(entityCountBefore + (REAL_WORLD_LEGACY_TENANT_IDS.length + 1) * 2);
+
+			// No tenant id survives outside the well-known tenant - full
+			// consolidation, no residue left behind.
+			const remainingForeignTenants = db.prepare(`SELECT DISTINCT tenant_id FROM entities WHERE tenant_id != ?`).all(wellKnownTenantId);
+			expect(remainingForeignTenants).toEqual([]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("records the full baseline+backfill migration ledger for the real-world fixture", async () => {
+		const { db } = await ensureDatabase(undefined, {});
+		try {
+			const applied = db.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
+			expect(applied).toEqual([
+				{ id: "0000-baseline-v7" },
+				{ id: "0001-history-entries" },
+				{ id: "0002-history-version-index-non-unique" },
+				{ id: "0003-project-migrations" },
+				{ id: "0004-backfill-tenant-counters" },
+				{ id: "0005-backfill-full-chain-invariant" },
+				{ id: "0006-backfill-history-seed" }
+			]);
+		} finally {
+			db.close();
 		}
 	});
 });
@@ -181,9 +285,9 @@ function indexNames(dbPath: string): string[] {
 }
 
 describe("fresh install schema parity", () => {
-	it("creates the full current table set via Drizzle migrations", () => {
+	it("creates the full current table set via the ADR43 runner", async () => {
 		const dbPath = freshDatabasePath();
-		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
 
 		const tables = (
@@ -194,7 +298,6 @@ describe("fresh install schema parity", () => {
 
 		expect(tables).toEqual(
 			[
-				"__drizzle_migrations",
 				"context_terms",
 				"contexts",
 				"counters",
@@ -203,14 +306,18 @@ describe("fresh install schema parity", () => {
 				"history_entries",
 				"metadata",
 				"project_migrations",
-				"relations"
+				"relations",
+				// ADR43's ledgered migration runner's ledger table - created on
+				// every open via runMigrations, now that the all-tenants
+				// bootstrap-backfill sweep (ISS170) is wired into ensureDatabase.
+				"schema_migrations"
 			].sort()
 		);
 	});
 
-	it("reproduces the v7 entities columns with defaults and composite primary key", () => {
+	it("reproduces the v7 entities columns with defaults and composite primary key", async () => {
 		const dbPath = freshDatabasePath();
-		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
 
 		expect(describeTable(dbPath, "entities")).toEqual([
@@ -226,9 +333,9 @@ describe("fresh install schema parity", () => {
 		]);
 	});
 
-	it("reproduces the v7 named indexes plus the new history_entries index", () => {
+	it("reproduces the v7 named indexes plus the new history_entries index", async () => {
 		const dbPath = freshDatabasePath();
-		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
 
 		expect(indexNames(dbPath)).toEqual([
@@ -241,22 +348,30 @@ describe("fresh install schema parity", () => {
 		]);
 	});
 
-	it("records all baseline migrations so future forward migrations are tracked", () => {
+	it("records all baseline migrations so future forward migrations are tracked", async () => {
 		const dbPath = freshDatabasePath();
-		const { db } = ensureDatabase(dbPath, { tenant: "fresh" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
 
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
-			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(4);
+			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
+			expect(applied).toEqual([
+				{ id: "0000-baseline-v7" },
+				{ id: "0001-history-entries" },
+				{ id: "0002-history-version-index-non-unique" },
+				{ id: "0003-project-migrations" },
+				{ id: "0004-backfill-tenant-counters" },
+				{ id: "0005-backfill-full-chain-invariant" },
+				{ id: "0006-backfill-history-seed" }
+			]);
 		} finally {
 			db2.close();
 		}
 	});
 });
 
-describe("legacy pre-tenant migration through Drizzle", () => {
+describe("legacy pre-tenant migration through the ADR43 runner", () => {
 	function writePreTenantDatabase(dbPath: string): void {
 		const db = new Database(dbPath);
 		try {
@@ -321,11 +436,11 @@ describe("legacy pre-tenant migration through Drizzle", () => {
 		}
 	}
 
-	it("moves legacy data into the tenant schema and records the baseline", () => {
+	it("moves legacy data into the tenant schema and records the baseline", async () => {
 		const dbPath = freshDatabasePath();
 		writePreTenantDatabase(dbPath);
 
-		const { db } = ensureDatabase(dbPath, { tenant: "legacy" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "legacy" });
 		db.close();
 
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
@@ -348,8 +463,16 @@ describe("legacy pre-tenant migration through Drizzle", () => {
 			const terms = db2.prepare(`SELECT tenant_id, context_key, term FROM context_terms`).all();
 			expect(terms).toEqual([{ tenant_id: "legacy", context_key: "INIT1", term: "Widget" }]);
 
-			const applied = db2.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-			expect(applied.count).toBe(4);
+			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
+			expect(applied).toEqual([
+				{ id: "0000-baseline-v7" },
+				{ id: "0001-history-entries" },
+				{ id: "0002-history-version-index-non-unique" },
+				{ id: "0003-project-migrations" },
+				{ id: "0004-backfill-tenant-counters" },
+				{ id: "0005-backfill-full-chain-invariant" },
+				{ id: "0006-backfill-history-seed" }
+			]);
 
 			const legacyTables = db2
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_%'`)

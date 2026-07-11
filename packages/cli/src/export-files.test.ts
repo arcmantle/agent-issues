@@ -10,9 +10,9 @@ import { createEntity, createHandoff, getDatabaseSnapshot, getInitiativeBundle, 
 
 let tempDir: string | null = null;
 
-function openTestDatabase() {
+async function openTestDatabase() {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-export-files-"));
-	return ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" }).db;
+	return (await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" })).db;
 }
 
 afterEach(() => {
@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 describe("directory export", () => {
-	it("writes an initiative folder grouped by entity kinds and relation types", () => {
-		const db = openTestDatabase();
+	it("writes an initiative folder grouped by entity kinds and relation types", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse Records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "Inspect Record" });
@@ -56,8 +56,8 @@ describe("directory export", () => {
 		expect(readFileSync(path.join(outputPath, "issues", `${issue.id}.md`), "utf8")).toContain("outgoingConnections:");
 	});
 
-	it("writes a project folder with nested initiative exports and project groupings", () => {
-		const db = openTestDatabase();
+	it("writes a project folder with nested initiative exports and project groupings", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view" });
 		const adr = createEntity(db, { kind: "adr", title: "Use SVG graphs" });
@@ -85,8 +85,8 @@ describe("directory export", () => {
 		expect(readFileSync(path.join(outputPath, "project.md"), "utf8")).toContain("type: \"project-export\"");
 	});
 
-	it("rejects overwriting an existing export directory without force", () => {
-		const db = openTestDatabase();
+	it("rejects overwriting an existing export directory without force", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const snapshot = getDatabaseSnapshot(db);
 		const context = snapshot.contexts.initiatives.find((details) => details.context.scopeEntityId === initiative.id)!;

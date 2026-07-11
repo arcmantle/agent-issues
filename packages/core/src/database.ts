@@ -1,8 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { readMigrationFiles } from "drizzle-orm/migrator";
 import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import path from "node:path";
@@ -18,11 +15,44 @@ import {
 	STRUCTURAL_RELATION_TYPES,
 	type EntityKind
 } from "./domain.js";
+import { runMigrations } from "./migration-runner.js";
+import { baselineV7Migration } from "./migrations/0000-baseline-v7.js";
+import { historyEntriesMigration } from "./migrations/0001-history-entries.js";
+import { historyVersionIndexNonUniqueMigration } from "./migrations/0002-history-version-index-non-unique.js";
+import { projectMigrationsMigration } from "./migrations/0003-project-migrations.js";
+import { backfillFullChainInvariantMigration } from "./migrations/0005-backfill-full-chain-invariant.js";
+import { backfillHistorySeedMigration } from "./migrations/0006-backfill-history-seed.js";
+import { backfillTenantCountersMigration } from "./migrations/0004-backfill-tenant-counters.js";
 
-const MIGRATIONS_FOLDER = path.join(import.meta.dirname, "..", "drizzle");
+/**
+ * The schema-shape migrations (ADR43) applied on every open, before any
+ * tenant is resolved - baseline table creation plus the two forward DDL
+ * tweaks and `project_migrations`' own table. Every statement is `IF NOT
+ * EXISTS`-guarded, so re-running this list against an already-shaped
+ * database (including ones that pre-date this runner and only have plain
+ * tables, no ledger at all) is a safe no-op that just gets recorded, rather
+ * than needing a separate "does this predate the old tool" detection
+ * (ISS172 removed drizzle-kit and its `__drizzle_migrations` ledger
+ * entirely - one ledgered runner is now the only migration mechanism).
+ */
+const BASELINE_MIGRATIONS = [
+	baselineV7Migration,
+	historyEntriesMigration,
+	historyVersionIndexNonUniqueMigration,
+	projectMigrationsMigration
+];
 
 export type DatabaseHandle = Database.Database & {
 	tenantId: string;
+	/**
+	 * Which `project` entity this open belongs to (ISS166), for the
+	 * well-known shared local tenant where one tenant can hold many
+	 * projects (ISS63). Resolved once per open from
+	 * `DatabaseLocationOptions.currentWorkingDirectory` via
+	 * `resolveCurrentProjectId` - never re-resolved mid-session, matching
+	 * `tenantId`'s own once-per-open lifetime.
+	 */
+	currentProjectId: string;
 };
 
 export type OpenDatabaseResult = {
@@ -34,6 +64,17 @@ export type DatabaseLocationOptions = {
 	tenant?: string;
 	currentWorkingDirectory?: string;
 	skipTenantBootstrap?: boolean;
+	/**
+	 * Opts this one open out of `consolidateAllLegacyTenants` only, while
+	 * still running every other bootstrap step (`ensureTenantCounters`,
+	 * `ensureFullChainInvariant`, etc). Every non-well-known tenant is
+	 * ordinary legacy debris under the current architecture (ISS63/ISS178) -
+	 * this exists purely for tests that deliberately construct two or more
+	 * named tenants coexisting in one shared db file to exercise admin
+	 * operations (`listTenants`/`renameTenant`/`deleteTenant`) against that
+	 * still-unmerged state. No production code path needs this.
+	 */
+	skipTenantConsolidation?: boolean;
 };
 
 export type TenantRecordCounts = {
@@ -73,6 +114,22 @@ const AGENT_ISSUES_DIRECTORY = ".agent-issues";
 const LEGACY_TENANTS_DIRECTORY = "tenants";
 const DATABASE_FILENAME = "agent-issues.db";
 
+/**
+ * The one-time, all-tenants sweep migrations (ADR43) that retroactively fix
+ * every tenant already present in the database file for the historical gap
+ * left by `ensureFullChainInvariant`/`ensureTenantCounters`/`ensureHistorySeed`
+ * only ever running for whichever tenant happened to be open. Ledgered via
+ * `schema_migrations`, so this only ever runs once per database file. The
+ * ongoing per-current-tenant calls to those three functions below are a
+ * distinct, unaffected concern (bootstrapping brand-new tenants going
+ * forward) and are not part of this list.
+ */
+const BOOTSTRAP_BACKFILL_MIGRATIONS = [
+	backfillTenantCountersMigration,
+	backfillFullChainInvariantMigration,
+	backfillHistorySeedMigration
+];
+
 export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocationOptions): string {
 	if (inputPath) {
 		return path.resolve(inputPath);
@@ -81,7 +138,7 @@ export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocati
 	return path.join(resolveAgentIssuesHomeDirectory(), DATABASE_FILENAME);
 }
 
-export function ensureDatabase(inputPath?: string, options?: DatabaseLocationOptions): OpenDatabaseResult {
+export async function ensureDatabase(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenDatabaseResult> {
 	const dbPath = resolveDatabasePath(inputPath, options);
 	mkdirSync(path.dirname(dbPath), { recursive: true });
 
@@ -89,35 +146,60 @@ export function ensureDatabase(inputPath?: string, options?: DatabaseLocationOpt
 	db.tenantId = resolveTenantSlug(options);
 	db.pragma("journal_mode = WAL");
 	db.pragma("foreign_keys = ON");
-	migrateDatabase(db);
+	await migrateDatabase(db);
 	if (!inputPath && !options?.skipTenantBootstrap) {
 		importLegacyTenantDataIfNeeded(db, options);
 	}
 	if (!options?.skipTenantBootstrap) {
-		// Runs before ensureTenantCounters so its "does this tenant already have
-		// data" backup check (tenantHasAnyRows) sees the tenant's true pre-bootstrap
-		// state, not counter rows that ensureTenantCounters is about to seed.
-		ensureFullChainInvariant(db, dbPath);
-		ensureTenantCounters(db);
-		// Runs after ensureTenantCounters (needs its per-kind counters to mint
-		// fresh ids) and only for the real default db file resolved with no
-		// explicit --tenant (ISS63) - never for a custom --db path or an
-		// explicitly-named tenant (tests, cloud-scoped tenants, fixtures).
-		// Sweeps EVERY not-yet-migrated tenant left in the shared db file, not
-		// just the one matching the current cwd - a plug-and-play upgrade for
-		// anyone already using the system needs to fold in every workspace
-		// they've ever opened here, on the very next open of any of them, not
-		// only the one they happen to be standing in right now.
-		if (!inputPath && !options?.tenant) {
+		// Runs first, before any tenant becomes "current", so its "is there
+		// any pre-existing data anywhere in this file" backup check sees the
+		// database's true pre-sweep state (ADR43). A one-time, ledgered,
+		// all-tenants fix for the historical gap left by the per-current-tenant
+		// checks below only ever running for whichever tenant happened to be
+		// open - never re-runs once applied.
+		await runBootstrapBackfillMigrations(db, dbPath);
+		// `ensureFullChainInvariant`/`ensureTenantCounters`/`ensureHistorySeed`
+		// are onboarding logic for a tenant that has never been opened before -
+		// not a migration, since a brand-new tenant created tomorrow still
+		// needs this the moment it first appears. Gated behind one indexed
+		// lookup (ISS179) so an already-bootstrapped tenant - every open after
+		// its first - pays for none of these checks' underlying queries
+		// (including `ensureHistorySeed`'s full entities/history_entries scan),
+		// rather than re-deriving "has this already happened?" from live data
+		// on every single CLI invocation forever.
+		if (!isTenantBootstrapped(db)) {
+			// Runs before ensureTenantCounters so its "does this tenant already
+			// have data" backup check (tenantHasAnyRows) sees the tenant's true
+			// pre-bootstrap state, not counter rows ensureTenantCounters is
+			// about to seed.
+			ensureFullChainInvariant(db, dbPath);
+			ensureTenantCounters(db);
+			// Runs after ensureFullChainInvariant so the PROJ0/EPIC0 sentinels
+			// and any orphan-initiative attachment already exist and get
+			// swept up as ordinary "entities lacking history" - no
+			// special-casing needed.
+			ensureHistorySeed(db);
+		}
+		// A brand-new `--tenant <name>` can appear at any later open (it's a
+		// real, exposed CLI flag - see database.test.ts's "folds in every
+		// outstanding legacy tenant" case), so this can never become a
+		// once-ever migration without silently losing detection of it.
+		// What made it slow wasn't running every open, though - it was
+		// `findUnmigratedLegacyTenantIds` scanning a UNION across all six
+		// potentially-large tenant-scoped tables just to answer "which
+		// tenant ids exist?". Every tenant that has ever been onboarded
+		// (this open's trio above, or the one-time historical backfill)
+		// always has `counters` rows, and `counters` only ever grows with
+		// tenant count (bounded, ~9 rows/tenant) - never with tracked-issue
+		// volume - so `findUnmigratedLegacyTenantIds` now reads from
+		// `counters` instead (ISS179), keeping this check cheap forever
+		// regardless of how large entities/history/relations grow.
+		if (!options?.skipTenantConsolidation) {
 			consolidateAllLegacyTenants(db, dbPath);
 		}
-		// Runs after ensureFullChainInvariant (and consolidation) so the
-		// PROJ0/EPIC0 sentinels, any orphan-initiative attachment, and any
-		// freshly-minted per-workspace project/epic already exist and get
-		// swept up as ordinary "entities lacking history" - no special-casing
-		// needed.
-		ensureHistorySeed(db);
 	}
+
+	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory);
 
 	return { db, dbPath };
 }
@@ -468,47 +550,56 @@ function tenantHasAnyRows(db: Database.Database, tenantId: string): boolean {
 	return row.has_rows === 1;
 }
 
-function migrateDatabase(db: DatabaseHandle): void {
+/**
+ * Whether the database file has any pre-existing rows at all, across every
+ * tenant - used to decide whether the one-time bootstrap-backfill sweep
+ * needs a pre-migration backup (ADR13/ADR20). A brand-new, genuinely empty
+ * database has nothing worth protecting, mirroring `tenantHasAnyRows`'s same
+ * "don't back up an empty tenant" reasoning but across the whole file.
+ */
+function databaseHasAnyData(db: DatabaseHandle): boolean {
+	const row = db
+		.prepare(
+			`SELECT EXISTS(
+				SELECT 1 FROM counters
+				UNION SELECT 1 FROM entities
+				UNION SELECT 1 FROM relations
+				UNION SELECT 1 FROM contexts
+				UNION SELECT 1 FROM context_terms
+				UNION SELECT 1 FROM handoffs
+				UNION SELECT 1 FROM history_entries
+			) AS has_rows`
+		)
+		.get() as { has_rows: number };
+
+	return row.has_rows === 1;
+}
+
+/**
+ * Runs the one-time, ledgered, all-tenants bootstrap-backfill sweep
+ * (ADR43). Only passes `dbPath` (triggering the runner's generic
+ * pre-migration file backup) when the database already has real
+ * pre-existing data to protect - a brand-new, empty database has nothing
+ * worth backing up, matching the existing per-tenant backup behavior in
+ * `ensureFullChainInvariant`.
+ */
+function runBootstrapBackfillMigrations(db: DatabaseHandle, dbPath: string): Promise<void> {
+	return runMigrations(db, BOOTSTRAP_BACKFILL_MIGRATIONS, databaseHasAnyData(db) ? { dbPath } : undefined);
+}
+
+async function migrateDatabase(db: DatabaseHandle): Promise<void> {
 	if (needsTenantSchemaMigration(db)) {
-		migrateCurrentDatabaseToTenantSchema(db);
+		await migrateCurrentDatabaseToTenantSchema(db);
 	} else {
-		applyBaselineAndForwardMigrations(db);
+		await applyBaselineAndForwardMigrations(db);
 	}
 	ensureEntityBodyColumn(db);
 	ensureEntityBodySourceColumn(db);
 	upsertSchemaVersion(db, "7");
 }
 
-function applyBaselineAndForwardMigrations(db: DatabaseHandle): void {
-	if (databasePredatesDrizzle(db)) {
-		seedDrizzleBaseline(db);
-	}
-
-	migrate(drizzle(db), { migrationsFolder: MIGRATIONS_FOLDER });
-}
-
-function databasePredatesDrizzle(db: DatabaseHandle): boolean {
-	return tableExists(db, "entities") && !tableExists(db, "__drizzle_migrations");
-}
-
-function seedDrizzleBaseline(db: DatabaseHandle): void {
-	const [baseline] = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER });
-	if (!baseline) {
-		throw new Error("Missing Drizzle baseline migration.");
-	}
-
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS __drizzle_migrations (
-			id SERIAL PRIMARY KEY,
-			hash text NOT NULL,
-			created_at numeric
-		)
-	`);
-
-	const recorded = db.prepare(`SELECT COUNT(*) AS count FROM __drizzle_migrations`).get() as { count: number };
-	if (recorded.count === 0) {
-		db.prepare(`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)`).run(baseline.hash, baseline.folderMillis);
-	}
+function applyBaselineAndForwardMigrations(db: DatabaseHandle): Promise<void> {
+	return runMigrations(db, BASELINE_MIGRATIONS);
 }
 
 function ensureEntityBodyColumn(db: DatabaseHandle): void {
@@ -531,7 +622,7 @@ function needsTenantSchemaMigration(db: DatabaseHandle): boolean {
 	return !tableHasColumn(db, "entities", "tenant_id");
 }
 
-function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): void {
+async function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): Promise<void> {
 	db.transaction(() => {
 		renameTableIfExists(db, "counters", "legacy_counters");
 		renameTableIfExists(db, "entities", "legacy_entities");
@@ -541,7 +632,7 @@ function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): void {
 		dropTableIfExists(db, "metadata");
 	})();
 
-	applyBaselineAndForwardMigrations(db);
+	await applyBaselineAndForwardMigrations(db);
 
 	db.transaction(() => {
 		copyLegacyTablesIntoTenant(db, "main", db.tenantId, "legacy_");
@@ -551,6 +642,23 @@ function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): void {
 		dropTableIfExists(db, "legacy_entities");
 		dropTableIfExists(db, "legacy_counters");
 	})();
+}
+
+/**
+ * Whether the current tenant (`db.tenantId`) has already been through the
+ * onboarding trio below at least once. `counters` is seeded the moment a
+ * tenant is first onboarded (or retroactively by the one-time historical
+ * backfill migration) and never removed while the tenant exists, so an
+ * indexed prefix lookup on its `(tenant_id, kind)` primary key answers this
+ * in O(1) - unlike `ensureFullChainInvariant`/`ensureHistorySeed`, which
+ * would otherwise have to re-inspect this tenant's live entities/history
+ * rows on every single open just to re-derive "has this already happened?"
+ * (ISS179). A tenant, once bootstrapped, stays bootstrapped forever - this
+ * is safe to treat as a permanent fact about `db.tenantId`, unlike the
+ * legacy-tenant sweep below (a brand-new `--tenant` can still appear later).
+ */
+function isTenantBootstrapped(db: DatabaseHandle): boolean {
+	return db.prepare(`SELECT 1 FROM counters WHERE tenant_id = ? LIMIT 1`).get(db.tenantId) !== undefined;
 }
 
 function ensureTenantCounters(db: DatabaseHandle): void {
@@ -696,13 +804,17 @@ export type ConsolidateTenantResult = {
 
 /**
  * Explicit admin path for folding a specific, already-known legacy tenant
- * into a `project` under the well-known local tenant (ISS63). The automatic
- * sweep (`consolidateAllLegacyTenants`, run on every default-tenant open)
- * already folds in every outstanding legacy tenant in the shared db file
- * without needing this command - it exists for the remaining cases the
- * sweep can't reach on its own: a custom `--db` path (bypasses the sweep
- * entirely, since it only runs for the real default db file), or wanting
- * the migration to happen right now rather than on the next ordinary open.
+ * into a `project` under the currently-open tenant (ISS63). The automatic
+ * sweep (`consolidateAllLegacyTenants`, run on every db file - custom
+ * `--db` path included - whenever the open resolves to the well-known
+ * tenant) already folds in every outstanding legacy tenant without needing
+ * this command - it exists for the cases the sweep can't reach on its own:
+ * an admin open with `skipTenantBootstrap: true` (every CLI admin command
+ * uses this, to avoid racing the automatic sweep mid-command), an explicit
+ * `--tenant` target other than the well-known tenant (the sweep never
+ * merges into an arbitrary one-off tenant, only into the well-known one),
+ * or wanting the
+ * migration to happen right now rather than on the next ordinary open.
  * Idempotent: a `legacyTenantId` already folded in returns
  * `consolidated: false` with its existing project id rather than erroring
  * or duplicating work.
@@ -728,55 +840,81 @@ export function consolidateTenantIntoProject(db: DatabaseHandle, dbPath: string,
 /**
  * Folds every pre-existing per-folder tenant left in this database file
  * (ADR7's original, incomplete migration - see ISS63) into its own
- * `project` entity under the shared well-known local tenant, so "one tenant
- * per folder" becomes "one project per folder, many projects per tenant" as
- * ADR7 always intended. Runs on EVERY not-yet-migrated tenant found in the
- * file, not only the one matching the current workspace's cwd - a user
- * upgrading from before ISS63 may have accumulated many per-folder tenants
- * over time, and should not have to `cd` into each one in turn to have them
- * folded in; the very next `agent-issues` invocation from anywhere finishes
- * the job for all of them. Idempotent via `project_migrations`: a tenant
- * already folded in is skipped on every later open. A database with no
- * outstanding legacy tenants (a genuinely new install, or one fully
- * migrated already) is a no-op - there is nothing left to fold in.
+ * `project` entity under the well-known local tenant, so "one tenant per
+ * folder" becomes "one project per folder, many projects per tenant" as
+ * ADR7 always intended. Called by `ensureDatabase` on every open (custom
+ * `--db` path or explicit `--tenant` included, ISS178) - the merge target
+ * is always the well-known local tenant, never whichever tenant id this
+ * particular open happened to request, so `db.tenantId` is temporarily
+ * swapped to the well-known tenant for the duration of this sweep and
+ * restored immediately after (the rest of THIS open still operates as
+ * whatever tenant was actually requested). The tenant this open actually
+ * requested is itself excluded from being swept - folding it away mid-open
+ * would pull the ground out from under whatever this same command is about
+ * to do with it; it becomes eligible on some LATER open instead, exactly
+ * like any other not-yet-migrated tenant. Runs on EVERY OTHER not-yet-
+ * migrated tenant found in the file, not only the one matching the current
+ * workspace's cwd - a user upgrading from before ISS63 may have accumulated
+ * many per-folder tenants over time, and should not have to `cd` into each
+ * one in turn to have them folded in; the very next `agent-issues`
+ * invocation from anywhere finishes the job for all of them. Idempotent via
+ * `project_migrations`: a tenant already folded in is skipped on every
+ * later open. A database with no outstanding legacy tenants (a genuinely
+ * new install, or one fully migrated already) is a no-op - there is nothing
+ * left to fold in.
  */
 function consolidateAllLegacyTenants(db: DatabaseHandle, dbPath: string): void {
-	for (const legacyTenantId of findUnmigratedLegacyTenantIds(db)) {
-		migrateLegacyTenantIntoProject(db, dbPath, legacyTenantId);
+	const requestedTenantId = db.tenantId;
+	const wellKnownTenantId = resolveWellKnownLocalTenantId();
+	const legacyTenantIds = findUnmigratedLegacyTenantIds(db, wellKnownTenantId, requestedTenantId);
+
+	db.tenantId = wellKnownTenantId;
+	try {
+		for (const legacyTenantId of legacyTenantIds) {
+			migrateLegacyTenantIntoProject(db, dbPath, legacyTenantId);
+		}
+	} finally {
+		db.tenantId = requestedTenantId;
 	}
 }
 
 /**
- * Every tenant id present in the shared db file other than the well-known
- * tenant itself, excluding ones `project_migrations` already recorded as
- * folded in. This local db file only ever receives locally-originated
- * tenant ids - sync with the cloud API is push-only (see `pg-store.ts`),
- * nothing pulls a foreign tenant id back in - so any other tenant id found
- * here is, by construction, a legacy per-folder tenant left over from
- * before ISS63.
+ * Every tenant id present in the shared db file other than the merge
+ * target (`targetTenantId`, always the well-known tenant) and the tenant
+ * this open actually requested (`excludeTenantId`, left untouched for the
+ * duration of this open - see `consolidateAllLegacyTenants`), excluding
+ * ones `project_migrations` already recorded as folded in. This local db
+ * file only ever receives locally-originated tenant ids - sync with the
+ * cloud API is push-only (see `pg-store.ts`), nothing pulls a foreign
+ * tenant id back in - so any other tenant id found here is, by
+ * construction, a legacy tenant left over from before ISS63 (a per-folder
+ * tenant, or a previously-used `--tenant` name).
+ *
+ * Reads distinct tenant ids from `counters` rather than a UNION across
+ * `entities`/`relations`/`contexts`/`context_terms`/`handoffs`/
+ * `history_entries` (ISS179): every tenant that has ever had data written
+ * under it also has `counters` rows (seeded by `ensureTenantCounters` the
+ * moment it's first onboarded, or retroactively by the one-time historical
+ * backfill migration for anything left behind before that check existed),
+ * and `counters` only ever grows with tenant count, not with total tracked
+ * data volume - keeping this check cheap regardless of how large this
+ * database file's real content grows.
  */
-function findUnmigratedLegacyTenantIds(db: DatabaseHandle): string[] {
+function findUnmigratedLegacyTenantIds(db: DatabaseHandle, targetTenantId: string, excludeTenantId: string): string[] {
 	const rows = db
 		.prepare(
-			`WITH tenant_ids AS (
-				SELECT tenant_id FROM entities
-				UNION SELECT tenant_id FROM relations
-				UNION SELECT tenant_id FROM contexts
-				UNION SELECT tenant_id FROM context_terms
-				UNION SELECT tenant_id FROM handoffs
-				UNION SELECT tenant_id FROM history_entries
-			)
-			SELECT tenant_ids.tenant_id AS tenantId
-			FROM tenant_ids
-			WHERE tenant_ids.tenant_id != @wellKnownTenantId
+			`SELECT DISTINCT counters.tenant_id AS tenantId
+			FROM counters
+			WHERE counters.tenant_id != @targetTenantId
+			AND counters.tenant_id != @excludeTenantId
 			AND NOT EXISTS (
 				SELECT 1 FROM project_migrations
-				WHERE project_migrations.tenant_id = @wellKnownTenantId
-				AND project_migrations.legacy_tenant_id = tenant_ids.tenant_id
+				WHERE project_migrations.tenant_id = @targetTenantId
+				AND project_migrations.legacy_tenant_id = counters.tenant_id
 			)
-			ORDER BY tenant_ids.tenant_id`
+			ORDER BY counters.tenant_id`
 		)
-		.all({ wellKnownTenantId: db.tenantId }) as Array<{ tenantId: string }>;
+		.all({ excludeTenantId, targetTenantId }) as Array<{ tenantId: string }>;
 
 	return rows.map((row) => row.tenantId);
 }
@@ -785,6 +923,23 @@ function getProjectMigration(db: DatabaseHandle, legacyTenantId: string): { proj
 	return db
 		.prepare(`SELECT project_id AS projectId FROM project_migrations WHERE tenant_id = ? AND legacy_tenant_id = ?`)
 		.get(db.tenantId, legacyTenantId) as { projectId: string } | undefined;
+}
+
+/**
+ * Resolves which `project` entity the current invocation belongs to
+ * (ISS166), so `context-store.ts`'s bare (no `--scope`) resolution can mean
+ * "this workspace's own project" instead of always the tenant's one
+ * literal "default". Looks up this workspace's legacy per-folder tenant id
+ * (the exact same deterministic formula `consolidateAllLegacyTenants` used
+ * to fold it in) in `project_migrations`; falls back to the tenant's
+ * sentinel `DEFAULT_PROJECT_ID` when this workspace was never consolidated
+ * - a fresh single-project tenant, or a workspace not yet folded in -
+ * keeping that common case resolving exactly as before ISS166.
+ */
+export function resolveCurrentProjectId(db: DatabaseHandle, currentWorkingDirectory: string = process.cwd()): string {
+	const legacyTenantId = resolveLegacyWorkspaceTenantId(currentWorkingDirectory);
+	const migration = getProjectMigration(db, legacyTenantId);
+	return migration?.projectId ?? DEFAULT_PROJECT_ID;
 }
 
 type LegacyEntityRow = {
@@ -815,6 +970,13 @@ type LegacyEntityRow = {
  * `getProjectMigration` first.
  */
 function migrateLegacyTenantIntoProject(db: DatabaseHandle, dbPath: string, legacyTenantId: string): ConsolidateTenantResult {
+	// The explicit `consolidate-tenant` command opens with
+	// skipTenantBootstrap: true (ISS175), so the target tenant's own
+	// counters may never have been seeded yet - mintEntityId below needs
+	// them to already exist. Idempotent and cheap, so always safe to call
+	// here regardless of which caller (automatic sweep or explicit command)
+	// got us here.
+	ensureTenantCounters(db);
 	backupDatabaseFile(db, dbPath);
 
 	const now = new Date().toISOString();

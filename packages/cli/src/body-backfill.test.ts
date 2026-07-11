@@ -9,9 +9,9 @@ import { createEntity, getDatabaseSnapshot, linkEntities } from "@agent-issues/c
 
 let tempDir: string | null = null;
 
-function openTestDatabase(): DatabaseHandle {
+async function openTestDatabase(): Promise<DatabaseHandle> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backfill-"));
-	const { db } = ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
 	return db;
 }
 
@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe("body backfill", () => {
 	it("fills empty initiative, issue, PRD, and user story bodies from tracker metadata", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
@@ -56,7 +56,7 @@ describe("body backfill", () => {
 	});
 
 	it("does not overwrite existing bodies unless force is enabled", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const issue = createEntity(db, {
 			kind: "issue",
@@ -79,7 +79,7 @@ describe("body backfill", () => {
 	});
 
 	it("reclassifies legacy generated bodies without overwriting authored prose", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail pane" });
 
@@ -102,7 +102,7 @@ describe("body backfill", () => {
 	});
 
 	it("supports filtering by kind", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
@@ -120,7 +120,7 @@ describe("body backfill", () => {
 	});
 
 	it("supports filtering initiative backfills by kind", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail pane" });
@@ -138,7 +138,7 @@ describe("body backfill", () => {
 	});
 
 	it("backfills ADR bodies from constrained work and supersession links", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const olderAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Use HTML templates" });
 		const adr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Use deterministic SVG graphs" });
@@ -158,7 +158,7 @@ describe("body backfill", () => {
 	});
 
 	it("reports updates during dry-run without mutating stored bodies", async () => {
-		const db = openTestDatabase();
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });

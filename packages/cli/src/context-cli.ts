@@ -164,7 +164,7 @@ function renderContextTermEntry(entry: ContextDirectoryTerm): string[] {
 
 	const lines = [`- ${entry.term}${warnings.length > 0 ? ` [${warnings.join("; ")}]` : ""}`];
 	for (const source of entry.sources) {
-		lines.push(`  - ${source.scopeKind === "default" ? "Shared" : source.scopeLabel}: ${source.definition}`);
+		lines.push(`  - ${source.scopeLabel}: ${source.definition}`);
 		if (source.avoid.length > 0) {
 			lines.push(`    Avoid: ${source.avoid.join(", ")}`);
 		}

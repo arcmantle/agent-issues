@@ -258,7 +258,7 @@ export class SqliteStore implements StorageDriver {
 	}
 }
 
-export function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): OpenSqliteStoreResult {
-	const { db, dbPath } = ensureDatabase(inputPath, options);
+export async function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenSqliteStoreResult> {
+	const { db, dbPath } = await ensureDatabase(inputPath, options);
 	return { store: new SqliteStore(db, dbPath), dbPath };
 }

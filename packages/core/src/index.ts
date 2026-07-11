@@ -14,3 +14,6 @@ export * from "./auth-session.js";
 export * from "./history-merge.js";
 export * from "./open-synchronize-stores.js";
 export * from "./synchronize.js";
+export * from "./migration-engine.js";
+export { historyVersionIndexNonUniqueMigration } from "./migrations/0002-history-version-index-non-unique.js";
+export * from "./migrations/schema-fragments.js";

@@ -170,7 +170,7 @@ describe("cli", () => {
 		}
 	});
 
-	it("treats a symlinked argv path as a direct invocation", () => {
+	it("treats a symlinked argv path as a direct invocation", async () => {
 		const root = createTempDir();
 		const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
 		const linkedPath = path.join(root, "agent-issues");
@@ -195,7 +195,7 @@ describe("cli", () => {
 		expect(stderr.read()).toBe("");
 		expect(stdout.read()).toContain("initiative");
 
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		try {
 			const initiatives = listEntities(db, "initiative");
 			expect(initiatives).toHaveLength(1);
@@ -219,7 +219,7 @@ describe("cli", () => {
 		expect(projectErr.read()).toBe("");
 		expect(projectOut.read()).toContain("project");
 
-		const { db: afterProject } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterProject } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const project = listEntities(afterProject, "project").find((entity) => entity.title === "Platform");
 		afterProject.close();
 		expect(project).toBeDefined();
@@ -234,7 +234,7 @@ describe("cli", () => {
 		expect(epicErr.read()).toBe("");
 		expect(epicOut.read()).toContain("epic");
 
-		const { db: afterEpic } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterEpic } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const epic = listEntities(afterEpic, "epic").find((entity) => entity.title === "Checkout revamp");
 		afterEpic.close();
 		expect(epic).toBeDefined();
@@ -249,7 +249,7 @@ describe("cli", () => {
 		expect(initiativeErr.read()).toBe("");
 		expect(initiativeOut.read()).toContain("Checkout redesign");
 
-		const { db: afterInitiative } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterInitiative } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		try {
 			const initiative = listEntities(afterInitiative, "initiative").find((entity) => entity.title === "Checkout redesign");
 			expect(initiative).toBeDefined();
@@ -270,7 +270,7 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 
-		const { db: seedDb } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: seedDb } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const project = createEntity(seedDb, { kind: "project", title: "Platform" });
 		const initiative = createEntity(seedDb, { kind: "initiative", title: "Checkout redesign" });
 		seedDb.close();
@@ -285,7 +285,7 @@ describe("cli", () => {
 		expect(versionErr.read()).toBe("");
 		expect(versionOut.read()).toContain("version");
 
-		const { db: afterVersion } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterVersion } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const version = listEntities(afterVersion, "version").find((entity) => entity.title === "2.0");
 		afterVersion.close();
 		expect(version).toBeDefined();
@@ -300,7 +300,7 @@ describe("cli", () => {
 		expect(linkErr.read()).toBe("");
 		expect(linkOut.read()).toContain("taggedWith");
 
-		const { db: afterLink } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterLink } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		try {
 			const versionDetails = getEntityDetails(afterLink, version!.id);
 			const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
@@ -318,7 +318,7 @@ describe("cli", () => {
 		const dbPath = path.join(root, "agent-issues.db");
 		const stdout = createCapture();
 		const stderr = createCapture();
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Parent issue" });
 		db.close();
@@ -349,7 +349,7 @@ describe("cli", () => {
 	it("exports one initiative to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view", body: "Issue body" });
 		db.close();
@@ -372,7 +372,7 @@ describe("cli", () => {
 	it("exports the whole project to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		createEntity(db, { kind: "adr", title: "Use SVG graphs" });
 		db.close();
@@ -395,7 +395,7 @@ describe("cli", () => {
 	it("emits single-file markdown when requested", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		db.close();
 
@@ -417,7 +417,7 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const outputPath = path.join(root, "exports", "initiative.md");
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		db.close();
 
@@ -444,7 +444,7 @@ describe("cli", () => {
 		const stdout = createCapture();
 		const stderr = createCapture();
 		const port = await getAvailablePort();
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		db.close();
 
 		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
@@ -480,7 +480,7 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const port = await getAvailablePort();
-		const { db } = ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		db.close();
 

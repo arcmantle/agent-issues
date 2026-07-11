@@ -4,14 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineContextTerm, getContextDetails, getContextDirectory, queryContextDirectory } from "./context-store.js";
-import { ensureDatabase, type DatabaseHandle } from "./database.js";
+import { consolidateTenantIntoProject, ensureDatabase, resolveLegacyWorkspaceTenantId, type DatabaseHandle } from "./database.js";
 import { createEntity } from "./store.js";
 
 let tempDir: string | null = null;
 
-function openTestDatabase(): DatabaseHandle {
+async function openTestDatabase(): Promise<DatabaseHandle> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-"));
-	const { db } = ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
 	return db;
 }
 
@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 describe("context directory", () => {
-	it("includes the shared glossary and initiative-scoped discovery with duplicate detection", () => {
-		const db = openTestDatabase();
+	it("includes the shared glossary and initiative-scoped discovery with duplicate detection", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
 
 		defineContextTerm(db, {
@@ -61,8 +61,8 @@ describe("context directory", () => {
 		expect(settlement?.sources[0]?.avoid).toEqual(["queued run"]);
 	});
 
-	it("keeps scoped context reads precise for initiative lookups", () => {
-		const db = openTestDatabase();
+	it("keeps scoped context reads precise for initiative lookups", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Semantic Review" });
 
 		defineContextTerm(db, {
@@ -78,8 +78,8 @@ describe("context directory", () => {
 		expect(details.terms.map((term) => term.term)).toEqual(["Review Snapshot"]);
 	});
 
-	it("supports global-only search against shared context", () => {
-		const db = openTestDatabase();
+	it("supports global-only search against shared context", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
 
 		defineContextTerm(db, {
@@ -100,8 +100,8 @@ describe("context directory", () => {
 		expect(result.terms.map((term) => term.term)).toEqual(["Administration"]);
 	});
 
-	it("supports initiative-only search without returning shared matches", () => {
-		const db = openTestDatabase();
+	it("supports initiative-only search without returning shared matches", async () => {
+		const db = await openTestDatabase();
 		const payments = createEntity(db, { kind: "initiative", title: "Payments" });
 		const shipping = createEntity(db, { kind: "initiative", title: "Shipping" });
 
@@ -128,8 +128,8 @@ describe("context directory", () => {
 		expect(result.terms.map((term) => term.term)).toEqual(["Settlement"]);
 	});
 
-	it("supports conflicts-only queries", () => {
-		const db = openTestDatabase();
+	it("supports conflicts-only queries", async () => {
+		const db = await openTestDatabase();
 		const payments = createEntity(db, { kind: "initiative", title: "Payments" });
 		const shipping = createEntity(db, { kind: "initiative", title: "Shipping" });
 
@@ -161,8 +161,8 @@ describe("context directory", () => {
 		expect(result.terms[0]?.sources).toHaveLength(3);
 	});
 
-	it("avoids substring-only false positives during search", () => {
-		const db = openTestDatabase();
+	it("avoids substring-only false positives during search", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
 
 		defineContextTerm(db, {
@@ -179,5 +179,81 @@ describe("context directory", () => {
 		const result = queryContextDirectory(db, { query: "review", view: "initiatives" });
 
 		expect(result.terms.map((term) => term.term)).toEqual(["Review Snapshot"]);
+	});
+});
+
+describe("project-aware default context (ISS166)", () => {
+	it("resolves bare context scope to the current workspace's own project once the tenant holds many projects", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const workspaceA = mkdtempSync(path.join(tmpdir(), "agent-issues-workspace-a-"));
+
+		try {
+			// Seed a legacy per-folder tenant (pre-ISS63) with its own data,
+			// keyed by workspaceA's deterministic legacy tenant id.
+			const legacyTenantId = resolveLegacyWorkspaceTenantId(workspaceA);
+			const { db: legacyDb } = await ensureDatabase(dbPath, { tenant: legacyTenantId });
+			defineContextTerm(legacyDb, {
+				term: "Widget",
+				definition: "Workspace A's own widget.",
+				scopeRef: "default"
+			});
+			legacyDb.close();
+
+			// Fold workspaceA's legacy tenant into a `project` under the shared
+			// "test" tenant (ISS63), the same way `consolidateAllLegacyTenants`
+			// would on the next default-tenant open. skipTenantConsolidation
+			// keeps the legacy tenant available for this explicit call - the
+			// automatic sweep now also runs on every open (ISS178) and would
+			// otherwise fold it into the (different) well-known tenant first.
+			const { db: sharedDb } = await ensureDatabase(dbPath, { skipTenantConsolidation: true, tenant: "test" });
+			const { projectId, projectTitle } = consolidateTenantIntoProject(sharedDb, dbPath, legacyTenantId);
+			sharedDb.close();
+
+			// Re-opening as if standing in workspaceA should resolve the bare
+			// (no --scope) context straight to that project's own migrated
+			// `default:<projectId>` row, not the tenant-wide literal "default".
+			const { db: dbFromWorkspaceA } = await ensureDatabase(dbPath, { tenant: "test", currentWorkingDirectory: workspaceA });
+			const details = getContextDetails(dbFromWorkspaceA, {});
+
+			expect(details.context.key).toBe(`default:${projectId}`);
+			expect(details.context.scopeLabel).toBe(projectTitle);
+			expect(details.terms.map((term) => term.term)).toEqual(["Widget"]);
+			dbFromWorkspaceA.close();
+
+			// Standing anywhere else in this tenant (never consolidated) still
+			// resolves the tenant's own sentinel default - no regression for the
+			// common single-project case.
+			const { db: dbElsewhere } = await ensureDatabase(dbPath, { tenant: "test" });
+			const elsewhereDetails = getContextDetails(dbElsewhere, {});
+			expect(elsewhereDetails.context.key).toBe("default");
+			expect(elsewhereDetails.context.scopeLabel).toBe("Shared");
+			dbElsewhere.close();
+		} finally {
+			rmSync(workspaceA, { force: true, recursive: true });
+		}
+	});
+
+	it("resolves a project entity id passed as --scope to that project's own default context", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const workspaceB = mkdtempSync(path.join(tmpdir(), "agent-issues-workspace-b-"));
+
+		try {
+			const legacyTenantId = resolveLegacyWorkspaceTenantId(workspaceB);
+			const { db: legacyDb } = await ensureDatabase(dbPath, { tenant: legacyTenantId });
+			legacyDb.close();
+
+			const { db: sharedDb } = await ensureDatabase(dbPath, { skipTenantConsolidation: true, tenant: "test" });
+			const { projectId, projectTitle } = consolidateTenantIntoProject(sharedDb, dbPath, legacyTenantId);
+
+			const details = getContextDetails(sharedDb, { scopeRef: projectId });
+
+			expect(details.context.key).toBe(`default:${projectId}`);
+			expect(details.context.scopeLabel).toBe(projectTitle);
+			sharedDb.close();
+		} finally {
+			rmSync(workspaceB, { force: true, recursive: true });
+		}
 	});
 });

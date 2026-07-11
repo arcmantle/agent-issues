@@ -1,6 +1,6 @@
 import Fuse from "fuse.js";
 import type { DatabaseHandle } from "./database.js";
-import { isEntityKind, type EntityKind } from "./domain.js";
+import { DEFAULT_PROJECT_ID, isEntityKind, type EntityKind } from "./domain.js";
 
 export const DEFAULT_CONTEXT_KEY = "default";
 export const DEFAULT_CONTEXT_TITLE = "Shared Context";
@@ -159,21 +159,18 @@ export type ContextTermSyncRecord = {
 export function listContexts(db: DatabaseHandle): ContextListResult {
 	const rows = db.prepare(`SELECT * FROM contexts WHERE tenant_id = ? ORDER BY key`).all(db.tenantId) as ContextRow[];
 	const rowByScopeEntityId = new Map<string, ContextRow>();
-	let defaultRow: ContextRow | undefined;
+	const rowByKey = new Map<string, ContextRow>();
 
 	for (const row of rows) {
+		rowByKey.set(row.key, row);
 		if (row.scope_entity_id) {
 			rowByScopeEntityId.set(row.scope_entity_id, row);
-			continue;
-		}
-
-		if (row.key === DEFAULT_CONTEXT_KEY) {
-			defaultRow = row;
 		}
 	}
 
+	const defaultScope = getDefaultContextScope(db);
 	const contexts: ContextListItem[] = [
-		createContextListItem(getDefaultContextScope(), defaultRow, getContextTermCount(db, defaultRow?.key ?? DEFAULT_CONTEXT_KEY))
+		createContextListItem(defaultScope, rowByKey.get(defaultScope.key), getContextTermCount(db, defaultScope.key))
 	];
 
 	const initiativeRows = db
@@ -720,7 +717,7 @@ function compareContextDirectorySources(left: ContextDirectoryTermSource, right:
 
 function resolveContextScope(db: DatabaseHandle, scopeRef?: string): ResolvedContextScope {
 	if (!scopeRef || scopeRef === DEFAULT_CONTEXT_KEY) {
-		return getDefaultContextScope();
+		return getDefaultContextScope(db);
 	}
 
 	const entity = getEntityOrThrow(db, scopeRef);
@@ -728,11 +725,21 @@ function resolveContextScope(db: DatabaseHandle, scopeRef?: string): ResolvedCon
 		return createInitiativeScope(entity);
 	}
 
+	if (entity.kind === "project") {
+		return createProjectScope(entity);
+	}
+
 	const initiative = getOwningInitiativeOrThrow(db, entity.id);
 	return createInitiativeScope(initiative);
 }
 
-function getDefaultContextScope(): ResolvedContextScope {
+/**
+ * The tenant's sentinel default scope (`DEFAULT_PROJECT_ID`/"PROJ0"), used
+ * both when a workspace's own project IS that sentinel (the common
+ * single-project-tenant case, unchanged since before ISS166) and when an
+ * explicit `--scope` names that project directly.
+ */
+function createSentinelDefaultScope(): ResolvedContextScope {
 	return {
 		key: DEFAULT_CONTEXT_KEY,
 		scopeKind: "default",
@@ -741,6 +748,43 @@ function getDefaultContextScope(): ResolvedContextScope {
 		defaultTitle: DEFAULT_CONTEXT_TITLE,
 		defaultSummary: DEFAULT_CONTEXT_SUMMARY
 	};
+}
+
+/**
+ * A specific project's own shared/default context scope (ISS166). Keyed
+ * `default:<projectId>` to match exactly what ISS60's tenant-to-project
+ * migration already wrote when it namespaced a folded-in legacy tenant's
+ * "default" context row to avoid colliding with every other project now
+ * sharing this tenant - so those rows become reachable again once
+ * `resolveContextScope` resolves this same key.
+ */
+function createProjectScope(project: EntityRecord): ResolvedContextScope {
+	if (project.id === DEFAULT_PROJECT_ID) {
+		return createSentinelDefaultScope();
+	}
+
+	return {
+		key: `${DEFAULT_CONTEXT_KEY}:${project.id}`,
+		scopeKind: "default",
+		scopeEntityId: null,
+		scopeLabel: project.title,
+		defaultTitle: `${project.title} Context`,
+		defaultSummary: `Shared glossary of project-specific domain terms and preferred language for ${project.title}.`
+	};
+}
+
+/**
+ * Bare (no `--scope`) context resolution (ISS166): resolves to the CURRENT
+ * workspace's own project's shared glossary - `db.currentProjectId`,
+ * resolved once per open from `currentWorkingDirectory` - instead of the
+ * one tenant-wide literal "default" every project used to collide on.
+ */
+function getDefaultContextScope(db: DatabaseHandle): ResolvedContextScope {
+	if (db.currentProjectId === DEFAULT_PROJECT_ID) {
+		return createSentinelDefaultScope();
+	}
+
+	return createProjectScope(getEntityOrThrow(db, db.currentProjectId));
 }
 
 function createInitiativeScope(initiative: EntityRecord): ResolvedContextScope {

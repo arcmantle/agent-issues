@@ -56,7 +56,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 	});
 
 	if (selection.backend === "local") {
-		const { store, dbPath } = openSqliteStore(options.dbPath, options.databaseOptions);
+		const { store, dbPath } = await openSqliteStore(options.dbPath, options.databaseOptions);
 		return { store, backend: "local", dbPath };
 	}
 

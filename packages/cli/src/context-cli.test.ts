@@ -14,9 +14,9 @@ import { createEntity } from "@agent-issues/core";
 
 let tempDir: string | null = null;
 
-function openTestDatabase(): DatabaseHandle {
+async function openTestDatabase(): Promise<DatabaseHandle> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-cli-"));
-	const { db } = ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
 	return db;
 }
 
@@ -28,8 +28,8 @@ afterEach(() => {
 });
 
 describe("context cli rendering", () => {
-	it("renders project context search output consistently", () => {
-		const db = openTestDatabase();
+	it("renders project context search output consistently", async () => {
+		const db = await openTestDatabase();
 		const payments = createEntity(db, { kind: "initiative", title: "Payments" });
 
 		defineContextTerm(db, {
@@ -71,8 +71,8 @@ Discovered terms:
 `);
 	});
 
-	it("renders compact terms-only output consistently", () => {
-		const db = openTestDatabase();
+	it("renders compact terms-only output consistently", async () => {
+		const db = await openTestDatabase();
 		const payments = createEntity(db, { kind: "initiative", title: "Payments" });
 		const shipping = createEntity(db, { kind: "initiative", title: "Shipping" });
 

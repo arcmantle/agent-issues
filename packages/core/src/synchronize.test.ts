@@ -20,15 +20,15 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 	let local: SqliteStore;
 	let cloud: SqliteStore;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		localDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-local-"));
 		cloudDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cloud-"));
 		// Explicit, distinct `dbPath`s: `openSqliteStore(undefined, ...)` always
 		// resolves to the one shared per-user db file (only the tenant slug
 		// varies by cwd) - two real backends never share physical storage like
 		// that, so the test doubles must not either.
-		local = openSqliteStore(path.join(localDirectory, "local.db"), { currentWorkingDirectory: localDirectory }).store;
-		cloud = openSqliteStore(path.join(cloudDirectory, "cloud.db"), { currentWorkingDirectory: cloudDirectory }).store;
+		local = (await openSqliteStore(path.join(localDirectory, "local.db"), { currentWorkingDirectory: localDirectory })).store;
+		cloud = (await openSqliteStore(path.join(cloudDirectory, "cloud.db"), { currentWorkingDirectory: cloudDirectory })).store;
 	});
 
 	afterEach(async () => {

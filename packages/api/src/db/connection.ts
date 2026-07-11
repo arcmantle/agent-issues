@@ -1,10 +1,6 @@
-import path from "node:path";
-
-import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { migrations } from "../migrations/index.js";
+import { runMigrations } from "./migration-runner.js";
 import { Pool, type PoolClient } from "pg";
-
-const MIGRATIONS_FOLDER = path.join(import.meta.dirname, "..", "..", "drizzle");
 
 export type PgConnectionOptions = {
 	/**
@@ -21,10 +17,9 @@ export function createPgPool(options: PgConnectionOptions): Pool {
 	return new Pool({ connectionString: options.connectionString });
 }
 
-/** Runs pending Drizzle migrations (schema + RLS policies) against the pool's target database. */
+/** Runs pending ADR43-runner migrations (schema + RLS policies) against the pool's target database. */
 export async function migratePgDatabase(pool: Pool): Promise<void> {
-	const db = drizzle(pool);
-	await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+	await runMigrations(pool, migrations);
 }
 
 /**

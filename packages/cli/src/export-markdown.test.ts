@@ -10,9 +10,9 @@ import path from "node:path";
 
 let tempDir: string | null = null;
 
-function openTestDatabase() {
+async function openTestDatabase() {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-export-"));
-	return ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" }).db;
+	return (await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" })).db;
 }
 
 afterEach(() => {
@@ -23,8 +23,8 @@ afterEach(() => {
 });
 
 describe("markdown export", () => {
-	it("renders initiative export with frontmatter connections and sections", () => {
-		const db = openTestDatabase();
+	it("renders initiative export with frontmatter connections and sections", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse Records", body: "PRD body" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "Inspect Record", body: "Story body" });
@@ -54,8 +54,8 @@ describe("markdown export", () => {
 		expect(markdown).toContain("Continue from the failing test.");
 	});
 
-	it("renders project export with project frontmatter and nested initiative exports", () => {
-		const db = openTestDatabase();
+	it("renders project export with project frontmatter and nested initiative exports", async () => {
+		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view" });
 		const adr = createEntity(db, { kind: "adr", title: "Use SVG graphs" });

@@ -21,8 +21,8 @@ import { createEntity, createHandoff } from "./store.js";
 
 const tempDirs: string[] = [];
 
-function openTestDatabase(dbPath: string, tenant: string): DatabaseHandle {
-	return ensureDatabase(dbPath, { tenant }).db;
+async function openTestDatabase(dbPath: string, tenant: string, options?: { skipTenantConsolidation?: boolean }): Promise<DatabaseHandle> {
+	return (await ensureDatabase(dbPath, { skipTenantConsolidation: options?.skipTenantConsolidation, tenant })).db;
 }
 
 function backupsDirectoryFor(dbPath: string): string {
@@ -34,6 +34,16 @@ function listBackupFiles(dbPath: string): string[] {
 	return existsSync(backupsDirectory) ? readdirSync(backupsDirectory) : [];
 }
 
+// The ADR43 migration runner's own generic pre-migration backup writes
+// `<dbPath>.<timestamp>.bak` alongside the db file itself, a different
+// convention from `ensureFullChainInvariant`'s `backups/` subdirectory
+// (co-existing, pre-existing mechanism).
+function listRunnerBackupFiles(dbPath: string): string[] {
+	const directory = path.dirname(dbPath);
+	const basename = path.basename(dbPath);
+	return existsSync(directory) ? readdirSync(directory).filter((name) => name.startsWith(`${basename}.`) && name.endsWith(".bak")) : [];
+}
+
 afterEach(() => {
 	for (const tempDir of tempDirs.splice(0)) {
 		rmSync(tempDir, { force: true, recursive: true });
@@ -41,7 +51,7 @@ afterEach(() => {
 });
 
 describe("tenant resolution", () => {
-	it("defaults to the well-known local tenant regardless of the workspace root path (ISS63)", () => {
+	it("defaults to the well-known local tenant regardless of the workspace root path (ISS63)", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-tenant-"));
 		tempDirs.push(tempDir);
 
@@ -55,11 +65,11 @@ describe("tenant resolution", () => {
 		expect(resolveTenantSlug({ currentWorkingDirectory: nestedDir })).toBe(resolveWellKnownLocalTenantId());
 	});
 
-	it("uses an explicit tenant when provided", () => {
+	it("uses an explicit tenant when provided", async () => {
 		expect(resolveTenantSlug({ tenant: " Payments Sandbox " })).toBe("payments-sandbox");
 	});
 
-	it("derives the legacy per-workspace tenant from the workspace root path (pre-ISS63 formula, kept for migration lookups)", () => {
+	it("derives the legacy per-workspace tenant from the workspace root path (pre-ISS63 formula, kept for migration lookups)", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-tenant-"));
 		tempDirs.push(tempDir);
 
@@ -74,13 +84,18 @@ describe("tenant resolution", () => {
 		);
 	});
 
-	it("lists tenants with per-table counts and deletes one tenant cleanly", () => {
+	it("lists tenants with per-table counts and deletes one tenant cleanly", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-tenants-"));
 		tempDirs.push(tempDir);
 
 		const dbPath = path.join(tempDir, "test.db");
-		const alphaDb = openTestDatabase(dbPath, "alpha-team");
-		const betaDb = openTestDatabase(dbPath, "beta-team");
+		// Both opens deliberately keep "alpha-team"/"beta-team" un-migrated
+		// (skipTenantConsolidation) - the automatic sweep now runs on every
+		// open (ISS178), and this test's whole point is exercising
+		// listTenants/deleteTenant against two genuinely-separate,
+		// still-unmerged tenants coexisting in one file.
+		const alphaDb = await openTestDatabase(dbPath, "alpha-team", { skipTenantConsolidation: true });
+		const betaDb = await openTestDatabase(dbPath, "beta-team", { skipTenantConsolidation: true });
 
 		try {
 			const alphaInitiative = createEntity(alphaDb, { kind: "initiative", title: "Alpha" });
@@ -158,13 +173,16 @@ describe("tenant resolution", () => {
 		}
 	});
 
-	it("renames one tenant across all tenant-scoped tables", () => {
+	it("renames one tenant across all tenant-scoped tables", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-tenant-rename-"));
 		tempDirs.push(tempDir);
 
 		const dbPath = path.join(tempDir, "test.db");
-		const sourceDb = openTestDatabase(dbPath, "source-team");
-		const otherDb = openTestDatabase(dbPath, "other-team");
+		// Both opens deliberately keep "source-team"/"other-team" un-migrated
+		// (skipTenantConsolidation) - see the identical note on
+		// "lists tenants...".
+		const sourceDb = await openTestDatabase(dbPath, "source-team", { skipTenantConsolidation: true });
+		const otherDb = await openTestDatabase(dbPath, "other-team", { skipTenantConsolidation: true });
 
 		try {
 			const initiative = createEntity(sourceDb, { kind: "initiative", title: "Source initiative" });
@@ -235,14 +253,29 @@ describe("tenant resolution", () => {
 });
 
 describe("full-chain invariant backup", () => {
-	it("backs up a pre-existing populated tenant exactly once, not again on a later open", () => {
+	it("backs up a pre-existing populated tenant exactly once, not again on a later open", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backup-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
 
-		// Simulate a tenant that predates the full-chain invariant (ISS34): schema
-		// exists and has real data, but no PROJ0/EPIC0 yet.
-		const bootstrapping = ensureDatabase(dbPath, { tenant: "legacy-tenant", skipTenantBootstrap: true }).db;
+		// Establish the ADR43 all-tenants sweep's ledger first (any ordinary
+		// open does this) via the well-known tenant itself, so it's already
+		// applied and a no-op by the time "legacy-tenant" appears below -
+		// otherwise the sweep would fix this tenant before
+		// ensureFullChainInvariant's own per-tenant backup guard ever got a
+		// chance to see it missing PROJ0. Using the well-known tenant here
+		// (rather than some other made-up name) also means this warm-up open
+		// never lingers as a legacy-tenant candidate of its own - the
+		// automatic consolidation sweep now runs on every open (ISS178), and
+		// a throwaway non-well-known warm-up tenant would otherwise get
+		// folded away the moment "legacy-tenant" is opened below, producing
+		// an unrelated extra backup this test isn't about.
+		(await ensureDatabase(dbPath, { tenant: resolveWellKnownLocalTenantId() })).db.close();
+
+		// Simulate a tenant that predates the full-chain invariant (ISS34) and
+		// appears only after the sweep already ran: schema exists and has real
+		// data, but no PROJ0/EPIC0 yet.
+		const bootstrapping = (await ensureDatabase(dbPath, { tenant: "legacy-tenant", skipTenantBootstrap: true })).db;
 		const now = new Date().toISOString();
 		bootstrapping.prepare(
 			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
@@ -252,29 +285,124 @@ describe("full-chain invariant backup", () => {
 
 		expect(listBackupFiles(dbPath)).toEqual([]);
 
-		const firstOpen = ensureDatabase(dbPath, { tenant: "legacy-tenant" }).db;
+		const firstOpen = (await ensureDatabase(dbPath, { tenant: "legacy-tenant" })).db;
 		firstOpen.close();
 		expect(listBackupFiles(dbPath)).toHaveLength(1);
 
-		const secondOpen = ensureDatabase(dbPath, { tenant: "legacy-tenant" }).db;
+		const secondOpen = (await ensureDatabase(dbPath, { tenant: "legacy-tenant" })).db;
 		secondOpen.close();
 		expect(listBackupFiles(dbPath)).toHaveLength(1);
 	});
 
-	it("never backs up a brand-new tenant that has no pre-existing data", () => {
+	it("never backs up a brand-new tenant that has no pre-existing data", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backup-fresh-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
 
-		const db = openTestDatabase(dbPath, "fresh-tenant");
+		const db = await openTestDatabase(dbPath, "fresh-tenant");
 		db.close();
 
 		expect(listBackupFiles(dbPath)).toEqual([]);
 	});
 });
 
+describe("all-tenants bootstrap backfill sweep (ADR43)", () => {
+	it("fixes a tenant left behind pre-invariant even though only a different tenant is opened", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-sweep-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+
+		// Simulate a tenant that predates the full-chain invariant (ISS34) and
+		// tenant counters, left behind with no sentinels/counters/history -
+		// exactly as if this tenant was never re-opened since before those
+		// bootstrap checks existed.
+		const bootstrapping = (await ensureDatabase(dbPath, { tenant: "left-behind-tenant", skipTenantBootstrap: true })).db;
+		const now = new Date().toISOString();
+		bootstrapping.prepare(
+			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+			 VALUES ('left-behind-tenant', 'INIT1', 'initiative', 'Left behind initiative', 'active', '', 'authored', ?, ?)`
+		).run(now, now);
+		bootstrapping.close();
+
+		// Open a completely different, currently-active tenant on the same
+		// shared db file - "left-behind-tenant" is never the current tenant.
+		// skipTenantConsolidation keeps this test isolated to the ADR43
+		// bootstrap-backfill sweep alone: without it, the automatic
+		// consolidation sweep (which now also runs on every open, ISS178)
+		// would immediately fold "left-behind-tenant" into a project under
+		// the well-known tenant in this same open, before the assertions
+		// below get a chance to see its fixed-in-place sentinels/counters/
+		// history still living under its own tenant_id.
+		const opened = await ensureDatabase(dbPath, { skipTenantConsolidation: true, tenant: "active-tenant" });
+		try {
+			const project = opened.db
+				.prepare(`SELECT id FROM entities WHERE tenant_id = 'left-behind-tenant' AND id = 'PROJ0'`)
+				.get();
+			const epic = opened.db.prepare(`SELECT id FROM entities WHERE tenant_id = 'left-behind-tenant' AND id = 'EPIC0'`).get();
+			expect(project).toBeTruthy();
+			expect(epic).toBeTruthy();
+
+			const counterKinds = (
+				opened.db
+					.prepare(`SELECT kind FROM counters WHERE tenant_id = 'left-behind-tenant' ORDER BY kind`)
+					.all() as Array<{ kind: string }>
+			).map((row) => row.kind);
+			expect(counterKinds.length).toBeGreaterThan(0);
+
+			const history = opened.db
+				.prepare(`SELECT entity_id FROM history_entries WHERE tenant_id = 'left-behind-tenant' AND entity_id = 'INIT1'`)
+				.all();
+			expect(history).toHaveLength(1);
+		} finally {
+			opened.db.close();
+		}
+	});
+
+	it("still never backs up a brand-new database with no pre-existing data at all", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-sweep-fresh-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+
+		const db = await openTestDatabase(dbPath, "fresh-tenant");
+		db.close();
+
+		expect(listBackupFiles(dbPath)).toEqual([]);
+		expect(listRunnerBackupFiles(dbPath)).toEqual([]);
+	});
+
+	it("backs up real pre-existing data left behind before fixing it, but never again once already fixed", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-sweep-backup-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+
+		const bootstrapping = (await ensureDatabase(dbPath, { tenant: "left-behind-tenant", skipTenantBootstrap: true })).db;
+		const now = new Date().toISOString();
+		bootstrapping.prepare(
+			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+			 VALUES ('left-behind-tenant', 'INIT1', 'initiative', 'Left behind initiative', 'active', '', 'authored', ?, ?)`
+		).run(now, now);
+		bootstrapping.close();
+		expect(listRunnerBackupFiles(dbPath)).toEqual([]);
+
+		const firstOpen = await ensureDatabase(dbPath, { tenant: "active-tenant" });
+		firstOpen.db.close();
+		// The runner backs up once per not-yet-applied migration it runs
+		// (established by ISS168), so a sweep with several pending migrations
+		// may produce more than one file - what matters is that at least one
+		// backup exists before this real, pre-existing data gets rewritten.
+		const backupsAfterFirstOpen = listRunnerBackupFiles(dbPath).length;
+		expect(backupsAfterFirstOpen).toBeGreaterThan(0);
+
+		const secondOpen = await ensureDatabase(dbPath, { tenant: "active-tenant" });
+		secondOpen.db.close();
+		// The sweep is fully applied and ledgered now, so re-opening never
+		// backs up again.
+		expect(listRunnerBackupFiles(dbPath)).toHaveLength(backupsAfterFirstOpen);
+	});
+});
+
 describe("consolidateTenantIntoProject (ISS63)", () => {
-	it("folds a legacy tenant's full data set into a freshly-minted project under the target tenant, remapping every id", () => {
+	it("folds a legacy tenant's full data set into a freshly-minted project under the target tenant, remapping every id", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
@@ -284,7 +412,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		// on top of which we seed a second initiative/issue chain plus a
 		// glossary term, a shared "default" context, and a handoff - the full
 		// set of tenant-scoped tables the migration must remap.
-		const legacyDb = openTestDatabase(dbPath, "legacy-team");
+		const legacyDb = await openTestDatabase(dbPath, "legacy-team");
 		const initiative = createEntity(legacyDb, { kind: "initiative", title: "Legacy initiative" });
 		const issue = createEntity(legacyDb, { kind: "issue", parentId: initiative.id, title: "Legacy issue" });
 		defineContextTerm(legacyDb, { definition: "Legacy glossary term.", scopeRef: initiative.id, term: "Legacy term" });
@@ -292,7 +420,12 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		createHandoff(legacyDb, { body: "Legacy handoff body.", entityId: initiative.id, summary: "Legacy handoff" });
 		legacyDb.close();
 
-		const targetDb = openTestDatabase(dbPath, "well-known-tenant");
+		// skipTenantConsolidation keeps "legacy-team" available for the
+		// explicit consolidateTenantIntoProject call below - the automatic
+		// sweep now also runs on every open (ISS178), and would otherwise
+		// fold "legacy-team" away on its own before this test gets a chance
+		// to drive the consolidation explicitly.
+		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
 			// Seed the target tenant with its own pre-existing initiative first,
 			// so its per-kind counters have already advanced past 1 - proving
@@ -360,7 +493,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		}
 	});
 
-	it("attaches an orphan initiative (no pre-existing epic) directly to the newly-minted project epic", () => {
+	it("attaches an orphan initiative (no pre-existing epic) directly to the newly-minted project epic", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-orphan-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
@@ -369,7 +502,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		// sentinel entirely (confirmed to exist for real in production - see
 		// ISS63): schema exists, but the only row is a bare, parentless
 		// initiative with no 'contains' relation pointing at it.
-		const legacyDb = ensureDatabase(dbPath, { tenant: "orphan-legacy", skipTenantBootstrap: true }).db;
+		const legacyDb = (await ensureDatabase(dbPath, { tenant: "orphan-legacy", skipTenantBootstrap: true })).db;
 		const now = new Date().toISOString();
 		legacyDb.prepare(
 			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
@@ -377,7 +510,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		).run(now, now);
 		legacyDb.close();
 
-		const targetDb = openTestDatabase(dbPath, "well-known-tenant");
+		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
 			const result = consolidateTenantIntoProject(targetDb, dbPath, "orphan-legacy");
 
@@ -401,7 +534,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		}
 	});
 
-	it("keeps the migrated project's own history in sync with its renamed title when the legacy tenant already had ISS34's PROJ0/EPIC0 sentinel with its own seeded history", () => {
+	it("keeps the migrated project's own history in sync with its renamed title when the legacy tenant already had ISS34's PROJ0/EPIC0 sentinel with its own seeded history", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-sentinel-history-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
@@ -413,11 +546,11 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		// production shape this regression is about (confirmed for real:
 		// `agent-issues-de3fbe614e21` and `eye-share-devops-net-9999b3e54780`
 		// both had this shape).
-		const legacyDb = ensureDatabase(dbPath, { tenant: "legacy-with-sentinel" }).db;
+		const legacyDb = (await ensureDatabase(dbPath, { tenant: "legacy-with-sentinel" })).db;
 		createEntity(legacyDb, { kind: "initiative", title: "Legacy initiative under sentinel" });
 		legacyDb.close();
 
-		const targetDb = openTestDatabase(dbPath, "well-known-tenant");
+		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
 			const result = consolidateTenantIntoProject(targetDb, dbPath, "legacy-with-sentinel");
 
@@ -452,16 +585,16 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		}
 	});
 
-	it("is idempotent: a second call for the same legacy tenant is a no-op that returns the existing project id", () => {
+	it("is idempotent: a second call for the same legacy tenant is a no-op that returns the existing project id", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-idempotent-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
 
-		const legacyDb = openTestDatabase(dbPath, "legacy-team");
+		const legacyDb = await openTestDatabase(dbPath, "legacy-team");
 		createEntity(legacyDb, { kind: "initiative", title: "Legacy initiative" });
 		legacyDb.close();
 
-		const targetDb = openTestDatabase(dbPath, "well-known-tenant");
+		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
 			const first = consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
 			expect(first.consolidated).toBe(true);
@@ -486,12 +619,12 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		}
 	});
 
-	it("throws when asked to consolidate a tenant into itself", () => {
+	it("throws when asked to consolidate a tenant into itself", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-self-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
 
-		const db = openTestDatabase(dbPath, "solo-tenant");
+		const db = await openTestDatabase(dbPath, "solo-tenant");
 		try {
 			expect(() => consolidateTenantIntoProject(db, dbPath, "solo-tenant")).toThrow(
 				"Cannot consolidate a tenant into itself: solo-tenant"
@@ -501,12 +634,12 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 		}
 	});
 
-	it("throws when the legacy tenant has no data to consolidate", () => {
+	it("throws when the legacy tenant has no data to consolidate", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-consolidate-missing-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
 
-		const db = openTestDatabase(dbPath, "well-known-tenant");
+		const db = await openTestDatabase(dbPath, "well-known-tenant");
 		try {
 			expect(() => consolidateTenantIntoProject(db, dbPath, "never-existed")).toThrow(
 				"Tenant not found or has no data to consolidate: never-existed"
@@ -532,7 +665,7 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 		rmSync(homeDirectory, { recursive: true, force: true });
 	});
 
-	it("folds a workspace's pre-existing legacy tenant into a project on the first default-tenant open, and never again", () => {
+	it("folds a workspace's pre-existing legacy tenant into a project on the first default-tenant open, and never again", async () => {
 		const workspaceDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-workspace-"));
 		tempDirs.push(workspaceDirectory);
 
@@ -542,11 +675,11 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 		// Seed the legacy tenant directly into the real (HOME-redirected)
 		// default db path, simulating data left behind by the pre-ISS63
 		// per-folder tenant model.
-		const seeding = ensureDatabase(undefined, { tenant: legacyTenantId, currentWorkingDirectory: workspaceDirectory }).db;
+		const seeding = (await ensureDatabase(undefined, { tenant: legacyTenantId, currentWorkingDirectory: workspaceDirectory })).db;
 		createEntity(seeding, { kind: "initiative", title: "Pre-existing workspace initiative" });
 		seeding.close();
 
-		const firstOpen = ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory });
+		const firstOpen = await ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory });
 		try {
 			expect(firstOpen.db.tenantId).toBe(wellKnownTenantId);
 			const migratedInitiative = firstOpen.db
@@ -558,8 +691,8 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 			firstOpen.db.close();
 		}
 
-		const entityCountAfterFirstOpen = (() => {
-			const db = ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory }).db;
+		const entityCountAfterFirstOpen = await (async () => {
+			const db = (await ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory })).db;
 			try {
 				return (db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(wellKnownTenantId) as {
 					count: number;
@@ -569,7 +702,7 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 			}
 		})();
 
-		const secondOpen = ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory });
+		const secondOpen = await ensureDatabase(undefined, { currentWorkingDirectory: workspaceDirectory });
 		try {
 			const entityCountAfterSecondOpen = (
 				secondOpen.db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(wellKnownTenantId) as {
@@ -582,7 +715,7 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 		}
 	});
 
-	it("folds in every outstanding legacy tenant on open, not only the one matching the current workspace's cwd", () => {
+	it("folds in every outstanding legacy tenant on open, not only the one matching the current workspace's cwd", async () => {
 		const currentWorkspace = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-current-"));
 		const otherWorkspaceA = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-other-a-"));
 		const otherWorkspaceB = mkdtempSync(path.join(tmpdir(), "agent-issues-auto-consolidate-other-b-"));
@@ -602,14 +735,14 @@ describe("automatic legacy-tenant sweep on default-tenant open (ISS63)", () => {
 			[otherLegacyTenantIdA, otherWorkspaceA],
 			[otherLegacyTenantIdB, otherWorkspaceB]
 		] as const) {
-			const seeding = ensureDatabase(undefined, { tenant: tenantId, currentWorkingDirectory: workspace }).db;
+			const seeding = (await ensureDatabase(undefined, { tenant: tenantId, currentWorkingDirectory: workspace })).db;
 			createEntity(seeding, { kind: "initiative", title: `Initiative for ${tenantId}` });
 			seeding.close();
 		}
 
 		// Open from currentWorkspace only - the other two tenants' folders
 		// are never visited in this test.
-		const opened = ensureDatabase(undefined, { currentWorkingDirectory: currentWorkspace });
+		const opened = await ensureDatabase(undefined, { currentWorkingDirectory: currentWorkspace });
 		try {
 			expect(opened.db.tenantId).toBe(wellKnownTenantId);
 			expect(listTenants(opened.db).map((tenant) => tenant.id)).toEqual([wellKnownTenantId]);
