@@ -222,7 +222,7 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 		}
 	});
 
-	it("records the full baseline+backfill migration ledger for the real-world fixture", async () => {
+	it("records the full baseline+backfill migration ledger for the real-world fixture, plus one consolidate-legacy-tenant entry per legacy tenant (ISS180)", async () => {
 		const { db } = await ensureDatabase(undefined, {});
 		try {
 			const applied = db.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
@@ -233,7 +233,10 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 				{ id: "0003-project-migrations" },
 				{ id: "0004-backfill-tenant-counters" },
 				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" }
+				{ id: "0006-backfill-history-seed" },
+				...[...REAL_WORLD_LEGACY_TENANT_IDS]
+					.sort()
+					.map((legacyTenantId) => ({ id: `consolidate-legacy-tenant:${legacyTenantId}` }))
 			]);
 		} finally {
 			db.close();

@@ -10,10 +10,9 @@ import {
 	DEFAULT_PROJECT_ID,
 	DEFAULT_PROJECT_TITLE,
 	ENTITY_KINDS,
-	ID_PREFIX,
+	formatTenantDisplayName,
 	RESERVED_SYSTEM_AUTHOR,
-	STRUCTURAL_RELATION_TYPES,
-	type EntityKind
+	STRUCTURAL_RELATION_TYPES
 } from "./domain.js";
 import { runMigrations } from "./migration-runner.js";
 import { baselineV7Migration } from "./migrations/0000-baseline-v7.js";
@@ -23,6 +22,7 @@ import { projectMigrationsMigration } from "./migrations/0003-project-migrations
 import { backfillFullChainInvariantMigration } from "./migrations/0005-backfill-full-chain-invariant.js";
 import { backfillHistorySeedMigration } from "./migrations/0006-backfill-history-seed.js";
 import { backfillTenantCountersMigration } from "./migrations/0004-backfill-tenant-counters.js";
+import { buildConsolidateLegacyTenantMigration } from "./migrations/0007-consolidate-legacy-tenant.js";
 
 /**
  * The schema-shape migrations (ADR43) applied on every open, before any
@@ -195,7 +195,7 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 		// `counters` instead (ISS179), keeping this check cheap forever
 		// regardless of how large entities/history/relations grow.
 		if (!options?.skipTenantConsolidation) {
-			consolidateAllLegacyTenants(db, dbPath);
+			await consolidateAllLegacyTenants(db, dbPath);
 		}
 	}
 
@@ -484,15 +484,6 @@ export function sanitizePathSegment(value: string): string {
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "")
 		.replace(/-{2,}/g, "-");
-}
-
-function formatTenantDisplayName(tenantId: string): string {
-	const withoutHashSuffix = tenantId.replace(/-[0-9a-f]{12}$/i, "");
-	return withoutHashSuffix
-		.split(/[-_]+/)
-		.filter((segment) => segment.length > 0)
-		.map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
-		.join(" ");
 }
 
 function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantRecordCounts {
@@ -819,7 +810,11 @@ export type ConsolidateTenantResult = {
  * `consolidated: false` with its existing project id rather than erroring
  * or duplicating work.
  */
-export function consolidateTenantIntoProject(db: DatabaseHandle, dbPath: string, legacyTenantId: string): ConsolidateTenantResult {
+export async function consolidateTenantIntoProject(
+	db: DatabaseHandle,
+	dbPath: string,
+	legacyTenantId: string
+): Promise<ConsolidateTenantResult> {
 	if (legacyTenantId === db.tenantId) {
 		throw new Error(`Cannot consolidate a tenant into itself: ${legacyTenantId}`);
 	}
@@ -833,7 +828,7 @@ export function consolidateTenantIntoProject(db: DatabaseHandle, dbPath: string,
 		throw new Error(`Tenant not found or has no data to consolidate: ${legacyTenantId}`);
 	}
 
-	const outcome = migrateLegacyTenantIntoProject(db, dbPath, legacyTenantId);
+	const outcome = await migrateLegacyTenantIntoProject(db, dbPath, legacyTenantId);
 	return { ...outcome, consolidated: true };
 }
 
@@ -863,7 +858,7 @@ export function consolidateTenantIntoProject(db: DatabaseHandle, dbPath: string,
  * new install, or one fully migrated already) is a no-op - there is nothing
  * left to fold in.
  */
-function consolidateAllLegacyTenants(db: DatabaseHandle, dbPath: string): void {
+async function consolidateAllLegacyTenants(db: DatabaseHandle, dbPath: string): Promise<void> {
 	const requestedTenantId = db.tenantId;
 	const wellKnownTenantId = resolveWellKnownLocalTenantId();
 	const legacyTenantIds = findUnmigratedLegacyTenantIds(db, wellKnownTenantId, requestedTenantId);
@@ -871,7 +866,7 @@ function consolidateAllLegacyTenants(db: DatabaseHandle, dbPath: string): void {
 	db.tenantId = wellKnownTenantId;
 	try {
 		for (const legacyTenantId of legacyTenantIds) {
-			migrateLegacyTenantIntoProject(db, dbPath, legacyTenantId);
+			await migrateLegacyTenantIntoProject(db, dbPath, legacyTenantId);
 		}
 	} finally {
 		db.tenantId = requestedTenantId;
@@ -942,387 +937,36 @@ export function resolveCurrentProjectId(db: DatabaseHandle, currentWorkingDirect
 	return migration?.projectId ?? DEFAULT_PROJECT_ID;
 }
 
-type LegacyEntityRow = {
-	id: string;
-	kind: EntityKind;
-	title: string;
-	status: string;
-	body: string;
-	body_source: string;
-	created_at: string;
-	updated_at: string;
-};
-
 /**
- * The actual copy-and-remap step, shared by the automatic sweep
- * (`consolidateAllLegacyTenants`) and the explicit `consolidate-tenant`
- * admin command. Every entity/relation/context/context-term/handoff from
- * `legacyTenantId` is copied in with a freshly-minted id under the
- * well-known tenant's own per-kind counters — ids are unique only within a
- * tenant, so two independent legacy tenants can both have had their own
- * INIT1/ISS1/etc, and would collide if copied verbatim. History entries
- * keep their existing id (already a random UUID, globally unique) with
- * only their entity_id/parent_id remapped. The legacy tenant's own
- * PROJ0/EPIC0 sentinel (if it has one — older data predating ISS34 may
- * not) is replaced by a freshly-minted project/epic pair titled from the
- * legacy tenant id, rather than carried over as another generic "Default
- * Project". NOT idempotent on its own; callers must check
- * `getProjectMigration` first.
+ * Thin async wrapper (ISS180) delegating the actual copy-and-remap work to
+ * `buildConsolidateLegacyTenantMigration`
+ * (packages/core/src/migrations/0007-consolidate-legacy-tenant.ts), run
+ * through the same ADR43 migration-runner every other migration in this
+ * package uses, instead of a bespoke raw-`better-sqlite3` transaction. Its
+ * ledger entry (`consolidate-legacy-tenant:<legacyTenantId>`, in the shared
+ * `schema_migrations` table) makes re-running this for the same
+ * `legacyTenantId` a no-op forever after the first successful run -
+ * `consolidateTenantIntoProject`/`consolidateAllLegacyTenants` still also
+ * check `getProjectMigration` first, purely to short-circuit before even
+ * attempting a migration run and to report `consolidated: false` on repeat
+ * calls, not because the migration itself needs that extra guard.
  */
-function migrateLegacyTenantIntoProject(db: DatabaseHandle, dbPath: string, legacyTenantId: string): ConsolidateTenantResult {
-	// The explicit `consolidate-tenant` command opens with
-	// skipTenantBootstrap: true (ISS175), so the target tenant's own
-	// counters may never have been seeded yet - mintEntityId below needs
-	// them to already exist. Idempotent and cheap, so always safe to call
-	// here regardless of which caller (automatic sweep or explicit command)
-	// got us here.
-	ensureTenantCounters(db);
-	backupDatabaseFile(db, dbPath);
-
-	const now = new Date().toISOString();
+async function migrateLegacyTenantIntoProject(
+	db: DatabaseHandle,
+	dbPath: string,
+	legacyTenantId: string
+): Promise<ConsolidateTenantResult> {
+	const targetTenantId = db.tenantId;
 	const projectTitle = formatTenantDisplayName(legacyTenantId) || legacyTenantId;
-	let projectId = "";
 
-	db.pragma("defer_foreign_keys = ON");
-	try {
-		db.transaction(() => {
-			const idMap = new Map<string, string>();
-			projectId = mintEntityId(db, "project");
-			const epicId = mintEntityId(db, "epic");
-			idMap.set(DEFAULT_PROJECT_ID, projectId);
-			idMap.set(DEFAULT_EPIC_ID, epicId);
+	await runMigrations(db, [buildConsolidateLegacyTenantMigration({ legacyTenantId, projectTitle, targetTenantId })], { dbPath });
 
-			const legacyEntities = db.prepare(`SELECT * FROM entities WHERE tenant_id = ?`).all(legacyTenantId) as LegacyEntityRow[];
-			for (const entity of legacyEntities) {
-				if (entity.id === DEFAULT_PROJECT_ID || entity.id === DEFAULT_EPIC_ID) {
-					continue;
-				}
-				idMap.set(entity.id, mintEntityId(db, entity.kind));
-			}
-
-			insertMigratedEntity(db, {
-				id: projectId,
-				kind: "project",
-				title: projectTitle,
-				status: "active",
-				body: "",
-				bodySource: "generated",
-				createdAt: now,
-				updatedAt: now
-			});
-			insertMigratedEntity(db, {
-				id: epicId,
-				kind: "epic",
-				title: DEFAULT_EPIC_TITLE,
-				status: "active",
-				body: "",
-				bodySource: "generated",
-				createdAt: now,
-				updatedAt: now
-			});
-			insertMigratedRelation(db, projectId, epicId, "contains", now);
-
-			for (const entity of legacyEntities) {
-				if (entity.id === DEFAULT_PROJECT_ID || entity.id === DEFAULT_EPIC_ID) {
-					continue;
-				}
-				insertMigratedEntity(db, {
-					id: idMap.get(entity.id) as string,
-					kind: entity.kind,
-					title: entity.title,
-					status: entity.status,
-					body: entity.body,
-					bodySource: entity.body_source,
-					createdAt: entity.created_at,
-					updatedAt: entity.updated_at
-				});
-			}
-
-			const legacyRelations = db.prepare(`SELECT * FROM relations WHERE tenant_id = ?`).all(legacyTenantId) as Array<{
-				from_id: string;
-				to_id: string;
-				type: string;
-				created_at: string;
-			}>;
-			for (const relation of legacyRelations) {
-				const fromId = idMap.get(relation.from_id);
-				const toId = idMap.get(relation.to_id);
-				if (!fromId || !toId) {
-					continue;
-				}
-				insertMigratedRelation(db, fromId, toId, relation.type, relation.created_at);
-			}
-
-			// Any initiative that had no incoming 'contains' relation in the
-			// legacy tenant (predates ISS34, or was created before its own
-			// EPIC0 existed) attaches to this project's freshly-minted epic,
-			// mirroring attachOrphanInitiativesToDefaultEpic's per-tenant logic.
-			const hasIncomingContains = db.prepare(
-				`SELECT 1 FROM relations WHERE tenant_id = @tenantId AND to_id = @id AND type = 'contains'`
-			);
-			for (const entity of legacyEntities) {
-				if (entity.kind !== "initiative") {
-					continue;
-				}
-				const newId = idMap.get(entity.id) as string;
-				if (!hasIncomingContains.get({ tenantId: db.tenantId, id: newId })) {
-					insertMigratedRelation(db, epicId, newId, "contains", now);
-				}
-			}
-
-			// history_entries.id is a global PK (not tenant-scoped, ISS57/ADR16 -
-			// only the id itself is unique, never tenant_id+id), so these rows are
-			// relocated in place via UPDATE rather than copied via INSERT: an
-			// INSERT with the same id would collide with the still-present
-			// original row (not yet removed - that happens via deleteTenant at
-			// the end of this transaction).
-			const legacyHistory = db.prepare(`SELECT * FROM history_entries WHERE tenant_id = ?`).all(legacyTenantId) as Array<{
-				id: string;
-				entity_id: string;
-				parent_id: string | null;
-			}>;
-			const relocateHistory = db.prepare(
-				`UPDATE history_entries SET tenant_id = @tenantId, entity_id = @entityId, parent_id = @parentId WHERE id = @id`
-			);
-			for (const entry of legacyHistory) {
-				relocateHistory.run({
-					id: entry.id,
-					tenantId: db.tenantId,
-					entityId: idMap.get(entry.entity_id) ?? entry.entity_id,
-					parentId: entry.parent_id ? (idMap.get(entry.parent_id) ?? null) : null
-				});
-			}
-
-			// A legacy tenant that already had its own PROJ0/EPIC0 sentinel
-			// (predates ISS63, but not ISS34) relocates that sentinel's OWN
-			// history above - stale content from when it was still generically
-			// titled "Default Project"/"Default Epic", now attached to this
-			// project/epic's freshly-minted id. Left alone, that stale relocated
-			// entry would be the ONLY history this project/epic has, so
-			// `synchronize`'s history-is-truth reconciliation (`applyResolvedFacts`)
-			// would recompute and overwrite the entities table's correct,
-			// freshly-minted title right back to the old generic one on the very
-			// first sync. Appending one more version, unconditionally, recording
-			// the migration's own final facts keeps entities and history
-			// consistent regardless of whether the legacy tenant had a sentinel
-			// (with stale history to relocate) or not (nothing to relocate,
-			// `ensureHistorySeed` already covers that case correctly on its own).
-			appendMigratedSentinelHistoryEntry(db, {
-				id: projectId,
-				title: projectTitle,
-				body: "",
-				bodySource: "generated",
-				status: "active",
-				parentId: null,
-				createdAt: now
-			});
-			appendMigratedSentinelHistoryEntry(db, {
-				id: epicId,
-				title: DEFAULT_EPIC_TITLE,
-				body: "",
-				bodySource: "generated",
-				status: "active",
-				parentId: projectId,
-				createdAt: now
-			});
-
-			// Contexts: an initiative-scoped context's key is that initiative's
-			// own id (remapped like any other entity reference); the tenant-wide
-			// "default"/shared context has no entity to key off, so it is
-			// namespaced by the new project id instead - each project keeps its
-			// own shared glossary rather than colliding on the literal "default"
-			// key with every other project now sharing this tenant. NOTE: bare
-			// `context show`/`context set` (no --scope) still always resolves the
-			// literal "default" key (context-store.ts's DEFAULT_CONTEXT_KEY),
-			// which is not yet project-aware - this preserves the migrated data
-			// without losing it, but reaching it again through the CLI needs a
-			// follow-up to make default-context resolution project-scoped.
-			const legacyContexts = db.prepare(`SELECT * FROM contexts WHERE tenant_id = ?`).all(legacyTenantId) as Array<{
-				key: string;
-				scope_entity_id: string | null;
-				title: string;
-				summary: string;
-				created_at: string;
-				updated_at: string;
-			}>;
-			const insertContext = db.prepare(
-				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-				 VALUES (@tenantId, @key, @scopeEntityId, @title, @summary, @createdAt, @updatedAt)`
-			);
-			const contextKeyMap = new Map<string, string>();
-			for (const context of legacyContexts) {
-				const isDefaultContext = context.scope_entity_id === null;
-				const newScopeEntityId = isDefaultContext ? null : (idMap.get(context.scope_entity_id as string) ?? null);
-				const newKey = isDefaultContext ? `default:${projectId}` : (newScopeEntityId ?? context.key);
-				contextKeyMap.set(context.key, newKey);
-				insertContext.run({
-					tenantId: db.tenantId,
-					key: newKey,
-					scopeEntityId: newScopeEntityId,
-					title: context.title,
-					summary: context.summary,
-					createdAt: context.created_at,
-					updatedAt: context.updated_at
-				});
-			}
-
-			const legacyTerms = db.prepare(`SELECT * FROM context_terms WHERE tenant_id = ?`).all(legacyTenantId) as Array<{
-				context_key: string;
-				term: string;
-				definition: string;
-				avoid_terms: string;
-				created_at: string;
-				updated_at: string;
-			}>;
-			const insertTerm = db.prepare(
-				`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-				 VALUES (@tenantId, @contextKey, @term, @definition, @avoidTerms, @createdAt, @updatedAt)`
-			);
-			for (const term of legacyTerms) {
-				insertTerm.run({
-					tenantId: db.tenantId,
-					contextKey: contextKeyMap.get(term.context_key) ?? term.context_key,
-					term: term.term,
-					definition: term.definition,
-					avoidTerms: term.avoid_terms,
-					createdAt: term.created_at,
-					updatedAt: term.updated_at
-				});
-			}
-
-			const legacyHandoffs = db.prepare(`SELECT * FROM handoffs WHERE tenant_id = ?`).all(legacyTenantId) as Array<{
-				id: string;
-				entity_id: string;
-				initiative_id: string | null;
-				summary: string;
-				body: string;
-				created_at: string;
-			}>;
-			const insertHandoff = db.prepare(
-				`INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
-				 VALUES (@tenantId, @id, @entityId, @initiativeId, @summary, @body, @createdAt)`
-			);
-			for (const handoff of legacyHandoffs) {
-				insertHandoff.run({
-					tenantId: db.tenantId,
-					id: mintHandoffId(db),
-					entityId: idMap.get(handoff.entity_id) ?? handoff.entity_id,
-					initiativeId: handoff.initiative_id ? (idMap.get(handoff.initiative_id) ?? null) : null,
-					summary: handoff.summary,
-					body: handoff.body,
-					createdAt: handoff.created_at
-				});
-			}
-
-			db.prepare(
-				`INSERT INTO project_migrations (tenant_id, legacy_tenant_id, project_id, created_at)
-				 VALUES (@tenantId, @legacyTenantId, @projectId, @now)`
-			).run({ tenantId: db.tenantId, legacyTenantId, projectId, now });
-
-			deleteTenant(db, legacyTenantId);
-		})();
-	} finally {
-		db.pragma("defer_foreign_keys = OFF");
+	const migration = getProjectMigration(db, legacyTenantId);
+	if (!migration) {
+		throw new Error(`Consolidation migration for legacy tenant did not record a project migration: ${legacyTenantId}`);
 	}
 
-	return { legacyTenantId, projectId, projectTitle, consolidated: true };
-}
-
-function mintEntityId(db: DatabaseHandle, kind: EntityKind): string {
-	const row = db.prepare(`SELECT next_value FROM counters WHERE tenant_id = ? AND kind = ?`).get(db.tenantId, kind) as
-		| { next_value: number }
-		| undefined;
-
-	if (!row) {
-		throw new Error(`Counter missing for entity kind: ${kind}`);
-	}
-
-	db.prepare(`UPDATE counters SET next_value = next_value + 1 WHERE tenant_id = ? AND kind = ?`).run(db.tenantId, kind);
-	return `${ID_PREFIX[kind]}${row.next_value}`;
-}
-
-function mintHandoffId(db: DatabaseHandle): string {
-	const row = db.prepare(`SELECT next_value FROM counters WHERE tenant_id = ? AND kind = 'handoff'`).get(db.tenantId) as
-		| { next_value: number }
-		| undefined;
-
-	if (!row) {
-		throw new Error("Counter missing for handoffs.");
-	}
-
-	db.prepare(`UPDATE counters SET next_value = next_value + 1 WHERE tenant_id = ? AND kind = 'handoff'`).run(db.tenantId);
-	return `HO${row.next_value}`;
-}
-
-function insertMigratedEntity(
-	db: DatabaseHandle,
-	entity: {
-		id: string;
-		kind: string;
-		title: string;
-		status: string;
-		body: string;
-		bodySource: string;
-		createdAt: string;
-		updatedAt: string;
-	}
-): void {
-	db.prepare(
-		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
-		 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @createdAt, @updatedAt)`
-	).run({ tenantId: db.tenantId, ...entity });
-}
-
-function insertMigratedRelation(db: DatabaseHandle, fromId: string, toId: string, type: string, createdAt: string): void {
-	db.prepare(
-		`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
-		 VALUES (@tenantId, @fromId, @toId, @type, @createdAt)`
-	).run({ tenantId: db.tenantId, fromId, toId, type, createdAt });
-}
-
-/**
- * Appends one more history version (next after whatever version, if any,
- * `entityId` already has - including a legacy sentinel's own history just
- * relocated onto this same id) recording the migration's own final facts.
- * Mirrors `store.ts`'s `appendHistoryEntry` (ADR8's "full snapshot per
- * version" contract), duplicated here rather than imported since that
- * function reads its facts from a live `EntityRecord` object, not the fixed
- * values a migration already knows.
- */
-function appendMigratedSentinelHistoryEntry(
-	db: DatabaseHandle,
-	entity: {
-		id: string;
-		title: string;
-		body: string;
-		bodySource: string;
-		status: string;
-		parentId: string | null;
-		createdAt: string;
-	}
-): void {
-	const row = db.prepare(`SELECT MAX(version) AS max_version FROM history_entries WHERE tenant_id = ? AND entity_id = ?`).get(
-		db.tenantId,
-		entity.id
-	) as { max_version: number | null };
-	const version = (row.max_version ?? 0) + 1;
-
-	db.prepare(
-		`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
-		 VALUES (@id, @tenantId, @entityId, @version, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
-	).run({
-		id: randomUUID(),
-		tenantId: db.tenantId,
-		entityId: entity.id,
-		version,
-		author: RESERVED_SYSTEM_AUTHOR,
-		title: entity.title,
-		body: entity.body,
-		bodySource: entity.bodySource,
-		status: entity.status,
-		parentId: entity.parentId,
-		createdAt: entity.createdAt
-	});
+	return { consolidated: true, legacyTenantId, projectId: migration.projectId, projectTitle };
 }
 
 function backupDatabaseFile(db: DatabaseHandle, dbPath: string): void {

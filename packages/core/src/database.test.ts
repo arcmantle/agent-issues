@@ -436,7 +436,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 			const targetInitiative = createEntity(targetDb, { kind: "initiative", title: "Another pre-existing target initiative" });
 			createEntity(targetDb, { kind: "issue", parentId: targetInitiative.id, title: "Pre-existing target issue" });
 
-			const result = consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
+			const result = await consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
 			expect(result).toMatchObject({ consolidated: true, legacyTenantId: "legacy-team", projectTitle: "Legacy Team" });
 			expect(result.projectId).toMatch(/^PROJ\d+$/);
 
@@ -512,7 +512,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 
 		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
-			const result = consolidateTenantIntoProject(targetDb, dbPath, "orphan-legacy");
+			const result = await consolidateTenantIntoProject(targetDb, dbPath, "orphan-legacy");
 
 			const migratedInitiative = targetDb
 				.prepare(`SELECT id FROM entities WHERE tenant_id = 'well-known-tenant' AND title = 'Orphan initiative'`)
@@ -552,7 +552,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 
 		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
-			const result = consolidateTenantIntoProject(targetDb, dbPath, "legacy-with-sentinel");
+			const result = await consolidateTenantIntoProject(targetDb, dbPath, "legacy-with-sentinel");
 
 			const project = targetDb.prepare(`SELECT title FROM entities WHERE tenant_id = 'well-known-tenant' AND id = ?`).get(
 				result.projectId
@@ -596,7 +596,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 
 		const targetDb = await openTestDatabase(dbPath, "well-known-tenant", { skipTenantConsolidation: true });
 		try {
-			const first = consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
+			const first = await consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
 			expect(first.consolidated).toBe(true);
 
 			const entityCountBefore = (
@@ -605,7 +605,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 				}
 			).count;
 
-			const second = consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
+			const second = await consolidateTenantIntoProject(targetDb, dbPath, "legacy-team");
 			expect(second).toEqual({ ...first, consolidated: false });
 
 			const entityCountAfter = (
@@ -626,7 +626,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 
 		const db = await openTestDatabase(dbPath, "solo-tenant");
 		try {
-			expect(() => consolidateTenantIntoProject(db, dbPath, "solo-tenant")).toThrow(
+			await expect(consolidateTenantIntoProject(db, dbPath, "solo-tenant")).rejects.toThrow(
 				"Cannot consolidate a tenant into itself: solo-tenant"
 			);
 		} finally {
@@ -641,7 +641,7 @@ describe("consolidateTenantIntoProject (ISS63)", () => {
 
 		const db = await openTestDatabase(dbPath, "well-known-tenant");
 		try {
-			expect(() => consolidateTenantIntoProject(db, dbPath, "never-existed")).toThrow(
+			await expect(consolidateTenantIntoProject(db, dbPath, "never-existed")).rejects.toThrow(
 				"Tenant not found or has no data to consolidate: never-existed"
 			);
 		} finally {

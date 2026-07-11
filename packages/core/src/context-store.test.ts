@@ -207,7 +207,7 @@ describe("project-aware default context (ISS166)", () => {
 			// automatic sweep now also runs on every open (ISS178) and would
 			// otherwise fold it into the (different) well-known tenant first.
 			const { db: sharedDb } = await ensureDatabase(dbPath, { skipTenantConsolidation: true, tenant: "test" });
-			const { projectId, projectTitle } = consolidateTenantIntoProject(sharedDb, dbPath, legacyTenantId);
+			const { projectId, projectTitle } = await consolidateTenantIntoProject(sharedDb, dbPath, legacyTenantId);
 			sharedDb.close();
 
 			// Re-opening as if standing in workspaceA should resolve the bare
@@ -245,7 +245,7 @@ describe("project-aware default context (ISS166)", () => {
 			legacyDb.close();
 
 			const { db: sharedDb } = await ensureDatabase(dbPath, { skipTenantConsolidation: true, tenant: "test" });
-			const { projectId, projectTitle } = consolidateTenantIntoProject(sharedDb, dbPath, legacyTenantId);
+			const { projectId, projectTitle } = await consolidateTenantIntoProject(sharedDb, dbPath, legacyTenantId);
 
 			const details = getContextDetails(sharedDb, { scopeRef: projectId });
 

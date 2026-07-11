@@ -100,9 +100,18 @@ function createSqliteMigrationConn(db: Database.Database): MigrationConn {
  * Applies every migration in `migrations` that has not yet run against `db`,
  * in order, recording each applied id in a `schema_migrations` ledger so
  * later runs skip it. Replaces drizzle-kit's `__drizzle_migrations` ledger
- * and the bespoke `project_migrations` table (ADR43). Delegates its control
- * flow to the shared `runMigrationSequence` (ISS173); this function is only
- * the SQLite driver adapter plus its familiar call shape.
+ * (ADR43). `project_migrations` (schema.ts) itself is NOT replaced by this
+ * ledger - it remains a separate, durable `legacyTenantId -> projectId`
+ * lookup table consulted by `getProjectMigration`/`resolveCurrentProjectId`
+ * and the explicit `consolidate-tenant` admin command's own idempotency
+ * check. What IS ledgered here (ISS180) is the copy/remap operation itself:
+ * `buildConsolidateLegacyTenantMigration` gives each discovered legacy
+ * tenant its own dynamically-parameterized migration id
+ * (`consolidate-legacy-tenant:<tenantId>`), so this same `schema_migrations`
+ * table also guarantees that specific copy only ever runs once, without a
+ * second bespoke ledger. Delegates its control flow to the shared
+ * `runMigrationSequence` (ISS173); this function is only the SQLite driver
+ * adapter plus its familiar call shape.
  */
 export async function runMigrations(
 	db: Database.Database,

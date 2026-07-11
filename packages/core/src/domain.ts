@@ -55,6 +55,25 @@ export const DEFAULT_EPIC_ID = "EPIC0";
 export const DEFAULT_PROJECT_TITLE = "Default Project";
 export const DEFAULT_EPIC_TITLE = "Default Epic";
 
+/**
+ * Derives a human-readable display name from a tenant/legacy-tenant id
+ * (e.g. `payments-team` -> `Payments Team`, stripping a trailing 12-hex-char
+ * workspace-path hash if present). Pure and dependency-free so both
+ * `database.ts` (tenant listing/rename/delete) and the
+ * `consolidate-legacy-tenant` migration module (packages/core/src/migrations,
+ * ISS180) can title a freshly-minted project without either one importing
+ * the other (migrations must not import from database.ts, which already
+ * imports from them).
+ */
+export function formatTenantDisplayName(tenantId: string): string {
+	const withoutHashSuffix = tenantId.replace(/-[0-9a-f]{12}$/i, "");
+	return withoutHashSuffix
+		.split(/[-_]+/)
+		.filter((segment) => segment.length > 0)
+		.map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
+		.join(" ");
+}
+
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 export type BodySource = (typeof BODY_SOURCES)[number];
 export type EntityStatus<K extends EntityKind = EntityKind> = (typeof STATUS_FLOW)[K][number];
