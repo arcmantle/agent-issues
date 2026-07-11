@@ -146,12 +146,7 @@ describe("golden-fixture migration wall", () => {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
 			expect(applied).toEqual([
 				{ id: "0000-baseline-v7" },
-				{ id: "0001-history-entries" },
-				{ id: "0002-history-version-index-non-unique" },
-				{ id: "0003-project-migrations" },
-				{ id: "0004-backfill-tenant-counters" },
-				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" },
+				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 		} finally {
@@ -230,12 +225,7 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 			const applied = db.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
 			expect(applied).toEqual([
 				{ id: "0000-baseline-v7" },
-				{ id: "0001-history-entries" },
-				{ id: "0002-history-version-index-non-unique" },
-				{ id: "0003-project-migrations" },
-				{ id: "0004-backfill-tenant-counters" },
-				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" },
+				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 		} finally {
@@ -361,12 +351,7 @@ describe("fresh install schema parity", () => {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
 			expect(applied).toEqual([
 				{ id: "0000-baseline-v7" },
-				{ id: "0001-history-entries" },
-				{ id: "0002-history-version-index-non-unique" },
-				{ id: "0003-project-migrations" },
-				{ id: "0004-backfill-tenant-counters" },
-				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" },
+				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 		} finally {
@@ -470,12 +455,7 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
 			expect(applied).toEqual([
 				{ id: "0000-baseline-v7" },
-				{ id: "0001-history-entries" },
-				{ id: "0002-history-version-index-non-unique" },
-				{ id: "0003-project-migrations" },
-				{ id: "0004-backfill-tenant-counters" },
-				{ id: "0005-backfill-full-chain-invariant" },
-				{ id: "0006-backfill-history-seed" },
+				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" }
 			]);
 

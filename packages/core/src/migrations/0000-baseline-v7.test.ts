@@ -74,7 +74,7 @@ describe("baselineV7Migration", () => {
 		]);
 	});
 
-	it("creates the full v7 table set and named indexes on a fresh install", async () => {
+	it("creates the full v7 table set (plus history_entries and project_migrations) and named indexes on a fresh install", async () => {
 		const db = new Database(":memory:");
 
 		await runMigrations(db, [baselineV7Migration]);
@@ -84,7 +84,20 @@ describe("baselineV7Migration", () => {
 				name: string;
 			}>
 		).map((row) => row.name);
-		expect(tables).toEqual(["context_terms", "contexts", "counters", "entities", "handoffs", "metadata", "relations", "schema_migrations"].sort());
+		expect(tables).toEqual(
+			[
+				"context_terms",
+				"contexts",
+				"counters",
+				"entities",
+				"handoffs",
+				"history_entries",
+				"metadata",
+				"project_migrations",
+				"relations",
+				"schema_migrations"
+			].sort()
+		);
 
 		const indexes = (
 			db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as Array<{
@@ -96,6 +109,7 @@ describe("baselineV7Migration", () => {
 			"contexts_tenant_scope_entity_id_idx",
 			"handoffs_tenant_entity_id_idx",
 			"handoffs_tenant_initiative_id_idx",
+			"history_entries_tenant_entity_version_idx",
 			"relations_tenant_to_id_idx"
 		]);
 	});
@@ -148,6 +162,36 @@ describe("baselineV7Migration", () => {
 			{ name: "kind", type: "TEXT", notnull: 1, dflt: null, pk: 2 },
 			{ name: "next_value", type: "INTEGER", notnull: 1, dflt: null, pk: 0 }
 		]);
+		expect(describeTable(db, "history_entries")).toEqual([
+			{ name: "id", type: "TEXT", notnull: 1, dflt: null, pk: 1 },
+			{ name: "tenant_id", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "entity_id", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "version", type: "INTEGER", notnull: 1, dflt: null, pk: 0 },
+			{ name: "author", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "title", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "body", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "body_source", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "status", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "parent_id", type: "TEXT", notnull: 0, dflt: null, pk: 0 },
+			{ name: "created_at", type: "TEXT", notnull: 1, dflt: null, pk: 0 }
+		]);
+		expect(describeTable(db, "project_migrations")).toEqual([
+			{ name: "tenant_id", type: "TEXT", notnull: 1, dflt: null, pk: 1 },
+			{ name: "legacy_tenant_id", type: "TEXT", notnull: 1, dflt: null, pk: 2 },
+			{ name: "project_id", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
+			{ name: "created_at", type: "TEXT", notnull: 1, dflt: null, pk: 0 }
+		]);
+	});
+
+	it("creates history_entries_tenant_entity_version_idx as non-unique", async () => {
+		const db = new Database(":memory:");
+
+		await runMigrations(db, [baselineV7Migration]);
+
+		const index = db
+			.prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'history_entries_tenant_entity_version_idx'`)
+			.get() as { sql: string };
+		expect(index.sql).not.toContain("UNIQUE");
 	});
 
 	it("leaves every record in the golden-fixture v7 database untouched", async () => {

@@ -16,12 +16,7 @@ import {
 } from "./domain.js";
 import { runMigrations } from "./migration-runner.js";
 import { baselineV7Migration } from "./migrations/0000-baseline-v7.js";
-import { historyEntriesMigration } from "./migrations/0001-history-entries.js";
-import { historyVersionIndexNonUniqueMigration } from "./migrations/0002-history-version-index-non-unique.js";
-import { projectMigrationsMigration } from "./migrations/0003-project-migrations.js";
-import { backfillFullChainInvariantMigration } from "./migrations/0005-backfill-full-chain-invariant.js";
-import { backfillHistorySeedMigration } from "./migrations/0006-backfill-history-seed.js";
-import { backfillTenantCountersMigration } from "./migrations/0004-backfill-tenant-counters.js";
+import { backfillTenantBootstrapMigration } from "./migrations/0004-backfill-tenant-bootstrap.js";
 import { buildConsolidateLegacyTenantMigration } from "./migrations/0007-consolidate-legacy-tenant.js";
 import { buildConsolidateLegacyTenantsBackfillMigration } from "./migrations/0008-consolidate-legacy-tenants-backfill.js";
 import { resolveWellKnownLocalTenantId, sanitizePathSegment } from "./tenant-identity.js";
@@ -29,22 +24,17 @@ import { resolveWellKnownLocalTenantId, sanitizePathSegment } from "./tenant-ide
 export { resolveWellKnownLocalTenantId, sanitizePathSegment };
 
 /**
- * The schema-shape migrations (ADR43) applied on every open, before any
- * tenant is resolved - baseline table creation plus the two forward DDL
- * tweaks and `project_migrations`' own table. Every statement is `IF NOT
- * EXISTS`-guarded, so re-running this list against an already-shaped
- * database (including ones that pre-date this runner and only have plain
- * tables, no ledger at all) is a safe no-op that just gets recorded, rather
- * than needing a separate "does this predate the old tool" detection
- * (ISS172 removed drizzle-kit and its `__drizzle_migrations` ledger
- * entirely - one ledgered runner is now the only migration mechanism).
+ * The schema-shape migration (ADR43) applied on every open, before any
+ * tenant is resolved - full baseline table creation, including
+ * `history_entries` and `project_migrations`. Every statement is `IF NOT
+ * EXISTS`-guarded, so re-running this against an already-shaped database
+ * (including ones that pre-date this runner and only have plain tables, no
+ * ledger at all) is a safe no-op that just gets recorded, rather than
+ * needing a separate "does this predate the old tool" detection (ISS172
+ * removed drizzle-kit and its `__drizzle_migrations` ledger entirely - one
+ * ledgered runner is now the only migration mechanism).
  */
-const BASELINE_MIGRATIONS = [
-	baselineV7Migration,
-	historyEntriesMigration,
-	historyVersionIndexNonUniqueMigration,
-	projectMigrationsMigration
-];
+const BASELINE_MIGRATIONS = [baselineV7Migration];
 
 export type DatabaseHandle = Database.Database & {
 	tenantId: string;
@@ -122,7 +112,7 @@ const LEGACY_TENANTS_DIRECTORY = "tenants";
 const DATABASE_FILENAME = "agent-issues.db";
 
 /**
- * The one-time, all-tenants sweep migrations (ADR43) that retroactively fix
+ * The one-time, all-tenants sweep migration (ADR43) that retroactively fixes
  * every tenant already present in the database file for the historical gap
  * left by `ensureFullChainInvariant`/`ensureTenantCounters`/`ensureHistorySeed`
  * only ever running for whichever tenant happened to be open. Ledgered via
@@ -134,17 +124,13 @@ const DATABASE_FILENAME = "agent-issues.db";
  * The one-time legacy-tenant fold-in
  * (`buildConsolidateLegacyTenantsBackfillMigration`, ISS181) is a SEPARATE,
  * later call in `ensureDatabase` - not part of this array - because it must
- * run AFTER the per-current-tenant trio below, not alongside these three:
+ * run AFTER the per-current-tenant trio below, not alongside this migration:
  * folding in the first legacy tenant seeds the well-known tenant's own
  * counters as a side effect (so its freshly-minted project can mint ids),
  * which would otherwise trick `isTenantBootstrapped` into skipping the
  * well-known tenant's OWN PROJ0/EPIC0 sentinel if it ran any earlier.
  */
-const BOOTSTRAP_BACKFILL_MIGRATIONS = [
-	backfillTenantCountersMigration,
-	backfillFullChainInvariantMigration,
-	backfillHistorySeedMigration
-];
+const BOOTSTRAP_BACKFILL_MIGRATIONS = [backfillTenantBootstrapMigration];
 
 export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocationOptions): string {
 	if (inputPath) {

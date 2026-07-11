@@ -154,24 +154,6 @@ export async function createHistoryEntriesTable(conn: MigrationConn): Promise<vo
 	`);
 }
 
-/**
- * Creates (or replaces) `history_entries_tenant_entity_version_idx`.
- * `unique: true` reproduces api's original drizzle-kit baseline, which
- * mistakenly created this index as unique; `unique: false` (the default) is
- * every other caller's correct, permanent shape (core's baseline creates it
- * non-unique directly; both packages' `0002-history-version-index-non-unique`
- * migration calls this with `unique: false` again to relax an
- * already-installed unique index).
- */
-export async function createHistoryEntriesVersionIndex(conn: MigrationConn, options?: { unique?: boolean }): Promise<void> {
-	const unique = options?.unique ?? false;
-	await conn.run(
-		unique
-			? sql`CREATE UNIQUE INDEX IF NOT EXISTS history_entries_tenant_entity_version_idx ON history_entries (tenant_id, entity_id, version)`
-			: sql`CREATE INDEX IF NOT EXISTS history_entries_tenant_entity_version_idx ON history_entries (tenant_id, entity_id, version)`
-	);
-}
-
-export async function dropHistoryEntriesVersionIndex(conn: MigrationConn): Promise<void> {
-	await conn.run(sql`DROP INDEX IF EXISTS history_entries_tenant_entity_version_idx`);
+export async function createHistoryEntriesVersionIndex(conn: MigrationConn): Promise<void> {
+	await conn.run(sql`CREATE INDEX IF NOT EXISTS history_entries_tenant_entity_version_idx ON history_entries (tenant_id, entity_id, version)`);
 }
