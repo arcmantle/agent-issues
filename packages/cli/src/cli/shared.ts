@@ -3,10 +3,26 @@ import type { Writable } from "node:stream";
 
 import { Command, Option, type BaseContext } from "clipanion";
 
-import { openStorageDriver, type ContextDirectoryView, type DatabaseLocationOptions, type StorageDriver } from "@agent-issues/core";
+import {
+	openStorageDriver,
+	type AuthSessionStoreOptions,
+	type ContextDirectoryView,
+	type DatabaseLocationOptions,
+	type StorageDriver
+} from "@agent-issues/core";
+
+import { readBuildContentHash } from "../build-info.js";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;
+	/**
+	 * Overrides how `auth-session.ts` reaches the native OS credential store
+	 * (ISS185, ADR46). Production never sets this - the real OS tool is used.
+	 * Tests inject an in-memory fake here (via `runCli`'s context argument)
+	 * so `auth login`/`logout`/`status`/`switch` never shell out to the
+	 * developer's or CI machine's real credential store.
+	 */
+	credentialStoreOptions?: AuthSessionStoreOptions;
 };
 
 export type BodyInputOptions = {
@@ -23,11 +39,23 @@ export abstract class BaseCommand extends Command<AgentIssuesContext> {
 	protected print(payload: object, text: string) {
 		printOutput(this.context.stdout, this.asJson, this.prettyJson, payload, text);
 	}
+
+	/**
+	 * The `withStore`/`openStorageDriver` options every command needs: the
+	 * invoking cwd (for database-path resolution) and this invocation's
+	 * `credentialStoreOptions` override (ISS185) so auth-session lookups in
+	 * cloud mode go through whatever the test injected via `runCli`'s
+	 * context instead of always defaulting to the real OS credential store.
+	 */
+	protected withStoreOptions(
+		extra?: DatabaseLocationOptions
+	): DatabaseLocationOptions & { credentialStoreOptions?: AuthSessionStoreOptions } {
+		return { credentialStoreOptions: this.context.credentialStoreOptions, currentWorkingDirectory: this.context.cwd, ...extra };
+	}
 }
 
 export abstract class TenantCommand extends BaseCommand {
 	public dbPath = Option.String("--db");
-	public tenant = Option.String("--tenant");
 }
 
 export abstract class MutableTenantCommand extends TenantCommand {
@@ -60,13 +88,27 @@ export abstract class TargetCommand extends BaseCommand {
  * resolved backend, so commands never branch on backend themselves. Hands
  * the resolved `dbPath` back too, since a few commands echo it in their
  * output (the cloud API URL in cloud mode, per `OpenStorageDriverResult`).
+ *
+ * Passes this install's build-content-hash so local mode's daemon routing
+ * (ISS190, ADR44/45) can detect a stale already-running daemon; surfaces
+ * `daemonFallbackWarning` on stderr so a failed daemon spawn is visible
+ * without ever failing the command itself.
  */
 export async function withStore<T>(
 	dbPath: string | undefined,
-	options: DatabaseLocationOptions | undefined,
+	options: (DatabaseLocationOptions & { credentialStoreOptions?: AuthSessionStoreOptions }) | undefined,
 	fn: (store: StorageDriver, dbPath: string) => Promise<T>
 ): Promise<T> {
-	const { store, dbPath: resolvedDbPath } = await openStorageDriver({ dbPath, databaseOptions: options });
+	const { store, dbPath: resolvedDbPath, daemonFallbackWarning } = await openStorageDriver({
+		dbPath,
+		databaseOptions: options,
+		authSessionOptions: options?.credentialStoreOptions,
+		localDaemon: { buildHash: readBuildContentHash() }
+	});
+
+	if (daemonFallbackWarning) {
+		process.stderr.write(`Warning: ${daemonFallbackWarning}\n`);
+	}
 
 	try {
 		return await fn(store, resolvedDbPath);

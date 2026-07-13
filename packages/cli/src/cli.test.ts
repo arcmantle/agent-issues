@@ -6,9 +6,9 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { isEntrypointInvocation, runCli } from "./cli.js";
+import { isEntrypointInvocation, runCli, shouldRunLocalDaemon } from "./cli.js";
 import { main } from "./cli/index.js";
-import { createEntity, ensureDatabase, getEntityDetails, listEntities } from "@agent-issues/core";
+import { createEntity, ensureDatabase, getEntityDetails, listEntities, LOCAL_DAEMON_SPAWN_FLAG } from "@agent-issues/core";
 import { startLiveSite } from "./site/index.js";
 
 let tempDir: string | null = null;
@@ -31,6 +31,45 @@ function createCapture() {
 		stream,
 		read: () => text
 	};
+}
+
+// Opens a real SSE connection and resolves once a `snapshot-changed` event
+// arrives (mirrors `cloud-site-server.test.ts`'s helper of the same name).
+function waitForSnapshotChangedEvent(url: string): { event: Promise<unknown>; stop: () => void } {
+	let resolveEvent: (value: unknown) => void;
+	const promise = new Promise<unknown>((resolve) => {
+		resolveEvent = resolve;
+	});
+
+	const controller = new AbortController();
+	void (async () => {
+		const response = await fetch(url, { signal: controller.signal });
+		if (!response.body) return;
+		const decoder = new TextDecoder();
+		let buffer = "";
+		try {
+			for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+				buffer += decoder.decode(chunk, { stream: true });
+				let boundary = buffer.indexOf("\n\n");
+				while (boundary !== -1) {
+					const rawEvent = buffer.slice(0, boundary);
+					buffer = buffer.slice(boundary + 2);
+					const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data:"));
+					if (dataLine) {
+						const parsed = JSON.parse(dataLine.slice("data:".length).trim());
+						if (parsed.type === "snapshot-changed") {
+							resolveEvent(parsed);
+						}
+					}
+					boundary = buffer.indexOf("\n\n");
+				}
+			}
+		} catch {
+			// aborted
+		}
+	})();
+
+	return { event: promise, stop: () => controller.abort() };
 }
 
 afterEach(() => {
@@ -180,6 +219,15 @@ describe("cli", () => {
 		expect(isEntrypointInvocation(pathToFileURL(cliPath).href, linkedPath)).toBe(true);
 	});
 
+	it("recognizes the hidden daemon-spawn flag as the first argument (ISS190)", () => {
+		expect(shouldRunLocalDaemon([LOCAL_DAEMON_SPAWN_FLAG])).toBe(true);
+	});
+
+	it("does not treat an ordinary command as the daemon-spawn flag", () => {
+		expect(shouldRunLocalDaemon(["list", "initiative"])).toBe(false);
+		expect(shouldRunLocalDaemon([])).toBe(false);
+	});
+
 	it("creates entities through clipanion-parsed options", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
@@ -187,7 +235,7 @@ describe("cli", () => {
 		const stderr = createCapture();
 
 		const exitCode = await runCli(
-			["create", "initiative", "--title", "Ship clipanion", "--db", dbPath, "--tenant", "test-tenant"],
+			["create", "initiative", "--title", "Ship clipanion", "--db", dbPath],
 			{ cwd: root, stderr: stderr.stream, stdout: stdout.stream }
 		);
 
@@ -195,7 +243,7 @@ describe("cli", () => {
 		expect(stderr.read()).toBe("");
 		expect(stdout.read()).toContain("initiative");
 
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath);
 		try {
 			const initiatives = listEntities(db, "initiative");
 			expect(initiatives).toHaveLength(1);
@@ -212,14 +260,14 @@ describe("cli", () => {
 		const projectOut = createCapture();
 		const projectErr = createCapture();
 		const projectExitCode = await runCli(
-			["create", "project", "--title", "Platform", "--db", dbPath, "--tenant", "test-tenant"],
+			["create", "project", "--title", "Platform", "--db", dbPath],
 			{ cwd: root, stderr: projectErr.stream, stdout: projectOut.stream }
 		);
 		expect(projectExitCode).toBe(0);
 		expect(projectErr.read()).toBe("");
 		expect(projectOut.read()).toContain("project");
 
-		const { db: afterProject } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterProject } = await ensureDatabase(dbPath);
 		const project = listEntities(afterProject, "project").find((entity) => entity.title === "Platform");
 		afterProject.close();
 		expect(project).toBeDefined();
@@ -227,14 +275,14 @@ describe("cli", () => {
 		const epicOut = createCapture();
 		const epicErr = createCapture();
 		const epicExitCode = await runCli(
-			["create", "epic", "--title", "Checkout revamp", "--parent", project!.id, "--db", dbPath, "--tenant", "test-tenant"],
+			["create", "epic", "--title", "Checkout revamp", "--parent", project!.id, "--db", dbPath],
 			{ cwd: root, stderr: epicErr.stream, stdout: epicOut.stream }
 		);
 		expect(epicExitCode).toBe(0);
 		expect(epicErr.read()).toBe("");
 		expect(epicOut.read()).toContain("epic");
 
-		const { db: afterEpic } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterEpic } = await ensureDatabase(dbPath);
 		const epic = listEntities(afterEpic, "epic").find((entity) => entity.title === "Checkout revamp");
 		afterEpic.close();
 		expect(epic).toBeDefined();
@@ -242,14 +290,14 @@ describe("cli", () => {
 		const initiativeOut = createCapture();
 		const initiativeErr = createCapture();
 		const initiativeExitCode = await runCli(
-			["create", "initiative", "--title", "Checkout redesign", "--parent", epic!.id, "--db", dbPath, "--tenant", "test-tenant"],
+			["create", "initiative", "--title", "Checkout redesign", "--parent", epic!.id, "--db", dbPath],
 			{ cwd: root, stderr: initiativeErr.stream, stdout: initiativeOut.stream }
 		);
 		expect(initiativeExitCode).toBe(0);
 		expect(initiativeErr.read()).toBe("");
 		expect(initiativeOut.read()).toContain("Checkout redesign");
 
-		const { db: afterInitiative } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterInitiative } = await ensureDatabase(dbPath);
 		try {
 			const initiative = listEntities(afterInitiative, "initiative").find((entity) => entity.title === "Checkout redesign");
 			expect(initiative).toBeDefined();
@@ -270,7 +318,7 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 
-		const { db: seedDb } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: seedDb } = await ensureDatabase(dbPath);
 		const project = createEntity(seedDb, { kind: "project", title: "Platform" });
 		const initiative = createEntity(seedDb, { kind: "initiative", title: "Checkout redesign" });
 		seedDb.close();
@@ -278,14 +326,14 @@ describe("cli", () => {
 		const versionOut = createCapture();
 		const versionErr = createCapture();
 		const versionExitCode = await runCli(
-			["create", "version", "--title", "2.0", "--parent", project.id, "--db", dbPath, "--tenant", "test-tenant"],
+			["create", "version", "--title", "2.0", "--parent", project.id, "--db", dbPath],
 			{ cwd: root, stderr: versionErr.stream, stdout: versionOut.stream }
 		);
 		expect(versionExitCode).toBe(0);
 		expect(versionErr.read()).toBe("");
 		expect(versionOut.read()).toContain("version");
 
-		const { db: afterVersion } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterVersion } = await ensureDatabase(dbPath);
 		const version = listEntities(afterVersion, "version").find((entity) => entity.title === "2.0");
 		afterVersion.close();
 		expect(version).toBeDefined();
@@ -293,14 +341,14 @@ describe("cli", () => {
 		const linkOut = createCapture();
 		const linkErr = createCapture();
 		const linkExitCode = await runCli(
-			["link", initiative.id, "taggedWith", version!.id, "--db", dbPath, "--tenant", "test-tenant"],
+			["link", initiative.id, "taggedWith", version!.id, "--db", dbPath],
 			{ cwd: root, stderr: linkErr.stream, stdout: linkOut.stream }
 		);
 		expect(linkExitCode).toBe(0);
 		expect(linkErr.read()).toBe("");
 		expect(linkOut.read()).toContain("taggedWith");
 
-		const { db: afterLink } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db: afterLink } = await ensureDatabase(dbPath);
 		try {
 			const versionDetails = getEntityDetails(afterLink, version!.id);
 			const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
@@ -318,13 +366,13 @@ describe("cli", () => {
 		const dbPath = path.join(root, "agent-issues.db");
 		const stdout = createCapture();
 		const stderr = createCapture();
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath);
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Parent issue" });
 		db.close();
 
 		const createExitCode = await runCli(
-			["create", "issue", "--title", "Sub-issue", "--parent", parentIssue.id, "--db", dbPath, "--tenant", "test-tenant"],
+			["create", "issue", "--title", "Sub-issue", "--parent", parentIssue.id, "--db", dbPath],
 			{ cwd: root, stderr: stderr.stream, stdout: stdout.stream }
 		);
 
@@ -334,7 +382,7 @@ describe("cli", () => {
 
 		const bundleStdout = createCapture();
 		const bundleStderr = createCapture();
-		const bundleExitCode = await runCli(["bundle", initiative.id, "--db", dbPath, "--tenant", "test-tenant"], {
+		const bundleExitCode = await runCli(["bundle", initiative.id, "--db", dbPath], {
 			cwd: root,
 			stderr: bundleStderr.stream,
 			stdout: bundleStdout.stream
@@ -349,14 +397,14 @@ describe("cli", () => {
 	it("exports one initiative to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath);
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view", body: "Issue body" });
 		db.close();
 
 		const stdout = createCapture();
 		const stderr = createCapture();
-		const exitCode = await runCli(["export", initiative.id, "--db", dbPath, "--tenant", "test-tenant"], {
+		const exitCode = await runCli(["export", initiative.id, "--db", dbPath], {
 			cwd: root,
 			stderr: stderr.stream,
 			stdout: stdout.stream
@@ -372,14 +420,14 @@ describe("cli", () => {
 	it("exports the whole project to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath);
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		createEntity(db, { kind: "adr", title: "Use SVG graphs" });
 		db.close();
 
 		const stdout = createCapture();
 		const stderr = createCapture();
-		const exitCode = await runCli(["export", "project", "--db", dbPath, "--tenant", "test-tenant"], {
+		const exitCode = await runCli(["export", "project", "--db", dbPath], {
 			cwd: root,
 			stderr: stderr.stream,
 			stdout: stdout.stream
@@ -395,13 +443,13 @@ describe("cli", () => {
 	it("emits single-file markdown when requested", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath);
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		db.close();
 
 		const stdout = createCapture();
 		const stderr = createCapture();
-		const exitCode = await runCli(["export", initiative.id, "--single-file", "--db", dbPath, "--tenant", "test-tenant"], {
+		const exitCode = await runCli(["export", initiative.id, "--single-file", "--db", dbPath], {
 			cwd: root,
 			stderr: stderr.stream,
 			stdout: stdout.stream
@@ -417,14 +465,14 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const outputPath = path.join(root, "exports", "initiative.md");
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const { db } = await ensureDatabase(dbPath);
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		db.close();
 
 		const stdout = createCapture();
 		const stderr = createCapture();
 		const exitCode = await runCli(
-			["export", initiative.id, "--single-file", "--output", outputPath, "--db", dbPath, "--tenant", "test-tenant"],
+			["export", initiative.id, "--single-file", "--output", outputPath, "--db", dbPath],
 			{
 				cwd: root,
 				stderr: stderr.stream,
@@ -506,6 +554,48 @@ describe("cli", () => {
 			const snapshot = await snapshotResponse.json();
 			expect(snapshot.entities.map((entity: { id: string }) => entity.id)).toContain(initiative.id);
 		} finally {
+			const closePromise = new Promise<void>((resolve) => {
+				handle.server.once("close", () => resolve());
+			});
+			handle.close();
+			await closePromise;
+			liveSiteClosers.delete(handle.close);
+		}
+	});
+
+	it("broadcasts a snapshot-changed event through the seam after a local write (ISS191)", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const port = await getAvailablePort();
+		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		db.close();
+
+		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant", pollIntervalMs: 20 });
+		liveSiteClosers.add(() => {
+			if (handle.server.listening) {
+				handle.close();
+			}
+		});
+
+		await new Promise<void>((resolve) => {
+			handle.server.once("listening", () => resolve());
+		});
+
+		const listener = waitForSnapshotChangedEvent(`http://127.0.0.1:${port}/events`);
+
+		try {
+			const { db: writeDb } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+			createEntity(writeDb, { kind: "initiative", title: "Live-refresh through the seam" });
+			writeDb.close();
+
+			const event = await Promise.race([
+				listener.event,
+				new Promise((_resolve, reject) => setTimeout(() => reject(new Error("Timed out waiting for snapshot-changed")), 5000))
+			]);
+
+			expect(event).toMatchObject({ type: "snapshot-changed" });
+		} finally {
+			listener.stop();
 			const closePromise = new Promise<void>((resolve) => {
 				handle.server.once("close", () => resolve());
 			});

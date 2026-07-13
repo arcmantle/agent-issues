@@ -93,10 +93,6 @@ const GLOBAL_OPTIONS: GlobalOptionSpec[] = [
 		description: "Use a specific SQLite database path."
 	},
 	{
-		name: "--tenant <name>",
-		description: "Select a named tenant inside the shared user-local ~/.agent-issues/agent-issues.db database instead of deriving one from the current workspace root."
-	},
-	{
 		name: "--json",
 		description: "Print machine-readable JSON in compact form."
 	},
@@ -221,22 +217,15 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "current-tenant",
 		summary: "Show which tenant the CLI would use from the current workspace.",
-		usage: ["agent-issues current-tenant", "agent-issues current-tenant --tenant <name>"],
-		options: [
-			{
-				name: "--tenant <name>",
-				description: "Show the explicitly requested tenant instead of deriving one from the workspace root."
-			}
-		],
-		examples: ["agent-issues current-tenant", "agent-issues current-tenant --tenant payments --json"],
+		usage: ["agent-issues current-tenant"],
+		examples: ["agent-issues current-tenant", "agent-issues current-tenant --json"],
 		notes: [
-			"Without --tenant, the CLI derives the tenant from the current workspace root path.",
-			"Workspace root discovery walks upward from the current directory and prefers pnpm-workspace.yaml, then .git, then package.json.",
-			"The derived tenant format is <sanitized-workspace-name>-<stable-path-hash>."
+			"The CLI always derives the tenant automatically - there is exactly one tenant per OS user.",
+			"Workspace root discovery walks upward from the current directory and prefers pnpm-workspace.yaml, then .git, then package.json."
 		],
 		output: {
-			human: ["Current tenant, resolution mode, workspace root, and database path"],
-			json: ["command", "tenantId", "resolution", "workspaceRoot", "dbPath"]
+			human: ["Current tenant, workspace root, and database path"],
+			json: ["command", "tenantId", "workspaceRoot", "dbPath"]
 		}
 	},
 	{
@@ -246,8 +235,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: ["agent-issues list-tenants", "agent-issues list-tenants --json"],
 		notes: [
 			"The command lists tenants with any stored entities, relations, context, terms, or handoffs.",
-			"`--tenant` only changes which tenant is marked as current in the output; it does not filter the list.",
-			"Use this before `delete-tenant` to avoid deleting the wrong workspace namespace."
+			"Use this before `delete-tenant` to avoid deleting the wrong tenant."
 		],
 		output: {
 			human: ["Database path followed by one line per tenant with per-table counts"],
@@ -268,7 +256,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: ["agent-issues delete-tenant payments --force", "agent-issues delete-tenant agent-issues-de3fbe614e21 --force --json"],
 		notes: [
 			"This removes the tenant's counters, entities, relations, context, context terms, and handoffs.",
-			"Tenant names are sanitized the same way as `--tenant`, so display-style input like `Payments Sandbox` resolves to `payments-sandbox`.",
+			"Tenant IDs are sanitized (display-style input like `Payments Sandbox` resolves to `payments-sandbox`).",
 			"The command is irreversible. Run `list-tenants` first if you are not sure which tenant to delete."
 		],
 		output: {
@@ -292,41 +280,13 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		examples: ["agent-issues rename-tenant smoke-handoff handoff-sandbox --force", "agent-issues rename-tenant payments-sandbox payments --force --json"],
 		notes: [
-			"Tenant ids are sanitized with the same rules as `--tenant`, so display-style input like `Payments Sandbox` resolves to `payments-sandbox`.",
+			"Tenant IDs are sanitized the same way (display-style input like `Payments Sandbox` resolves to `payments-sandbox`).",
 			"Renaming updates counters, entities, relations, contexts, context terms, and handoffs.",
 			"The target tenant must not already exist. Run `list-tenants` first if you are not sure."
 		],
 		output: {
 			human: ["Renamed tenant summary with per-table moved counts, or a not-found message"],
 			json: ["command", "dbPath", "previousTenantId", "previousDisplayName", "newTenantId", "newDisplayName", "renamed", "counts", "counters"]
-		}
-	},
-	{
-		name: "consolidate-tenant",
-		summary: "Fold a legacy per-folder tenant into a project under the well-known local tenant (ISS63).",
-		usage: ["agent-issues consolidate-tenant <tenantId> --force"],
-		positionals: [{ name: "tenantId", description: "Legacy tenant ID to fold in.", required: true }],
-		options: [
-			{
-				name: "--force",
-				description: "Required safety flag for whole-tenant consolidation."
-			}
-		],
-		examples: [
-			"agent-issues consolidate-tenant content-hub-5ab5819bb0a8 --force",
-			"agent-issues consolidate-tenant weave-e2d77991499a --force --json"
-		],
-		notes: [
-			"Local only (ADR7): this folds a pre-ISS63 per-folder tenant into a project under the well-known local tenant (`local-<os-username>`), the target every workspace now defaults into with no explicit --tenant.",
-			"Running any command against the default local database already sweeps in every outstanding legacy tenant automatically on open - not just one matching the current folder. Use this command to force it right now instead of waiting for the next open, or to target a custom `--db` path (the automatic sweep only runs for the real default db file).",
-			"Every entity, relation, context, context term, and handoff moves across with freshly-minted ids under the target tenant's own counters - the legacy tenant's ids are never reused verbatim, since two independent legacy tenants can each have had their own INIT1/ISS1/etc.",
-			"Idempotent: consolidating the same tenant id twice is a no-op the second time, reporting the existing project id rather than erroring or duplicating data.",
-			"Not supported against a cloud-bound tenant - cloud tenant ids are always an explicit, user-chosen value at `cloud bind` time, so there is no per-folder legacy tenant to fold in.",
-			"Run `list-tenants` first if you are not sure which tenant id to consolidate."
-		],
-		output: {
-			human: ["Consolidated tenant summary naming the new project, or an already-consolidated message"],
-			json: ["command", "dbPath", "legacyTenantId", "projectId", "projectTitle", "consolidated"]
 		}
 	},
 	{
@@ -871,8 +831,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: [
 			"agent-issues serve-site",
 			"agent-issues serve-site --port 4300",
-			"agent-issues serve-site --tenant payments --json",
-			"agent-issues serve-site --db ~/.agent-issues/agent-issues.db --tenant payments --json"
+			"agent-issues serve-site --db ~/.agent-issues/agent-issues.db --json"
 		],
 		notes: [
 			"The server exposes the built site assets plus /site-config.json, /api/snapshot, and /events.",
@@ -899,8 +858,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: [
 			"agent-issues open-site",
 			"agent-issues open-site --port 4300",
-			"agent-issues open-site --tenant payments --json",
-			"agent-issues open-site --db ~/.agent-issues/agent-issues.db --tenant payments --json"
+			"agent-issues open-site --db ~/.agent-issues/agent-issues.db --json"
 		],
 		notes: [
 			"This command serves the same live site as serve-site, then asks the OS to open the browser.",

@@ -34,7 +34,6 @@ import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta
 import { OpenSiteCommand, ServeSiteCommand, StopSiteCommand } from "./commands/site.js";
 import { SynchronizeCommand } from "./commands/synchronize.js";
 import {
-	ConsolidateTenantCommand,
 	CurrentTenantCommand,
 	DeleteTenantCommand,
 	InitCommand,
@@ -68,7 +67,6 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(ListTenantsCommand);
 	cli.register(DeleteTenantCommand);
 	cli.register(RenameTenantCommand);
-	cli.register(ConsolidateTenantCommand);
 	cli.register(BackfillBodiesCommand);
 	cli.register(ContextCommand);
 	cli.register(CreateCommand);

@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { openStorageDriver, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/core";
+import { openStorageDriver, resolveDatabasePath, resolveTenantSlug, type AuthSessionStoreOptions } from "@agent-issues/core";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
+import { readBuildContentHash } from "../build-info.js";
 
 export type LiveSiteInfo = {
 	dbPath: string;
@@ -39,12 +40,24 @@ export async function startLiveSite(input: {
 	openInBrowser?: boolean;
 	tenant?: string;
 	currentWorkingDirectory?: string;
+	/** Overrides the local-mode snapshot-signature poll interval; defaults to 1000ms. Test-only knob. */
+	pollIntervalMs?: number;
+	/**
+	 * Overrides how `auth-session.ts` reaches the native OS credential store
+	 * (ISS185, ADR46) for the cloud-mode bearer-token lookup. Production
+	 * never sets this - the real OS tool is used. Tests inject an
+	 * in-memory fake so a cloud-bound site server never shells out to the
+	 * real credential store.
+	 */
+	credentialStoreOptions?: AuthSessionStoreOptions;
 }): Promise<LiveSiteHandle> {
 	const currentWorkingDirectory = input.currentWorkingDirectory;
+	const credentialStoreOptions = input.credentialStoreOptions;
 	const defaultTenant = resolveTenantSlug({ currentWorkingDirectory, tenant: input.tenant });
 	const dbPath = resolveDatabasePath(input.dbPath, { tenant: input.tenant });
 	const host = input.host ?? "127.0.0.1";
 	const port = input.port ?? 4173;
+	const pollIntervalMs = input.pollIntervalMs ?? 1000;
 	const info: LiveSiteInfo = {
 		dbPath,
 		defaultTenant,
@@ -61,28 +74,51 @@ export async function startLiveSite(input: {
 	// instead, since a long-lived cloud session could expire mid-run.
 	const opened = await openStorageDriver({
 		dbPath: input.dbPath,
-		databaseOptions: { currentWorkingDirectory, tenant: input.tenant }
+		databaseOptions: { currentWorkingDirectory, tenant: input.tenant },
+		authSessionOptions: credentialStoreOptions,
+		localDaemon: { buildHash: readBuildContentHash() }
 	});
 	await opened.store.close();
 
-	let databaseSignature = opened.backend === "local" ? getDatabaseSignature(dbPath) : undefined;
-	let pollInterval: NodeJS.Timeout | undefined;
+	if (opened.daemonFallbackWarning) {
+		process.stderr.write(`Warning: ${opened.daemonFallbackWarning}\n`);
+	}
+
+	let databaseSignature =
+		opened.backend === "local"
+			? await readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions)
+			: undefined;
+	let pollTimer: NodeJS.Timeout | undefined;
+	let pollingStopped = false;
 	let stopCloudEventsRelay: (() => void) | undefined;
 
 	const server = createServer((request, response) => {
-		void handleRequest({ request, response, dbPath, clients, currentWorkingDirectory, defaultTenant, server });
+		void handleRequest({ request, response, dbPath, clients, currentWorkingDirectory, defaultTenant, server, credentialStoreOptions });
 	});
 
 	if (opened.backend === "local") {
-		pollInterval = setInterval(() => {
-			const nextSignature = getDatabaseSignature(dbPath);
-			if (nextSignature === databaseSignature) {
+		// A self-rescheduling `setTimeout` (rather than `setInterval`) so a
+		// slow tick through the storage-driver seam can never overlap with
+		// the next one - the next poll is only scheduled once the current
+		// one's `getSnapshotSignature()` call has resolved (ISS191).
+		const scheduleNextPoll = () => {
+			if (pollingStopped) {
 				return;
 			}
 
-			databaseSignature = nextSignature;
-			broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString() }));
-		}, 1000);
+			pollTimer = setTimeout(() => {
+				void readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions).then((nextSignature) => {
+					if (nextSignature !== databaseSignature) {
+						databaseSignature = nextSignature;
+						broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString() }));
+					}
+
+					scheduleNextPoll();
+				});
+			}, pollIntervalMs);
+		};
+
+		scheduleNextPoll();
 	} else if (opened.cloudConnection) {
 		stopCloudEventsRelay = subscribeToCloudEvents(opened.cloudConnection, (event) => {
 			broadcast(clients, JSON.stringify(event));
@@ -90,8 +126,9 @@ export async function startLiveSite(input: {
 	}
 
 	server.on("close", () => {
-		if (pollInterval) {
-			clearInterval(pollInterval);
+		pollingStopped = true;
+		if (pollTimer) {
+			clearTimeout(pollTimer);
 		}
 		stopCloudEventsRelay?.();
 		for (const client of clients) {
@@ -101,8 +138,9 @@ export async function startLiveSite(input: {
 	});
 
 	server.on("error", () => {
-		if (pollInterval) {
-			clearInterval(pollInterval);
+		pollingStopped = true;
+		if (pollTimer) {
+			clearTimeout(pollTimer);
 		}
 		stopCloudEventsRelay?.();
 	});
@@ -182,6 +220,7 @@ async function handleRequest(input: {
 	currentWorkingDirectory: string | undefined;
 	defaultTenant: string;
 	server: Server;
+	credentialStoreOptions: AuthSessionStoreOptions | undefined;
 }) {
 	const requestUrl = new URL(input.request.url ?? "/", "http://127.0.0.1");
 	const requestedTenant = requestUrl.searchParams.get("tenant")?.trim() || input.defaultTenant;
@@ -205,12 +244,18 @@ async function handleRequest(input: {
 	}
 
 	if (requestUrl.pathname === "/site-config.json") {
-		writeJson(input.response, await readSiteConfig(input.dbPath, input.defaultTenant, input.currentWorkingDirectory));
+		writeJson(
+			input.response,
+			await readSiteConfig(input.dbPath, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions)
+		);
 		return;
 	}
 
 	if (requestUrl.pathname === "/api/snapshot") {
-		writeJson(input.response, await readSnapshot(input.dbPath, requestedTenant, input.currentWorkingDirectory));
+		writeJson(
+			input.response,
+			await readSnapshot(input.dbPath, requestedTenant, input.currentWorkingDirectory, input.credentialStoreOptions)
+		);
 		return;
 	}
 
@@ -243,36 +288,46 @@ async function handleRequest(input: {
 	writeText(input.response, 404, "Not Found");
 }
 
-async function readSiteConfig(dbPath: string, defaultTenant: string, currentWorkingDirectory: string | undefined) {
-	return withStore(dbPath, { currentWorkingDirectory, tenant: defaultTenant }, async (store, resolvedDbPath) => {
-		const availableTenants = await store.listTenants();
-		const currentTenant = availableTenants.some((tenant) => tenant.id === defaultTenant)
-			? defaultTenant
-			: (availableTenants[0]?.id ?? defaultTenant);
+async function readSiteConfig(
+	dbPath: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: AuthSessionStoreOptions | undefined
+) {
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+		async (store, resolvedDbPath) => {
+			const availableTenants = await store.listTenants();
+			const currentTenant = availableTenants.some((tenant) => tenant.id === defaultTenant)
+				? defaultTenant
+				: (availableTenants[0]?.id ?? defaultTenant);
 
-		return {
-			availableTenants,
-			currentTenant,
-			dbPath: resolvedDbPath
-		};
-	});
+			return {
+				availableTenants,
+				currentTenant,
+				dbPath: resolvedDbPath
+			};
+		}
+	);
 }
 
-async function readSnapshot(dbPath: string, tenant: string, currentWorkingDirectory: string | undefined) {
-	return withStore(dbPath, { currentWorkingDirectory, tenant }, (store) => store.getDatabaseSnapshot());
+async function readSnapshot(
+	dbPath: string,
+	tenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: AuthSessionStoreOptions | undefined
+) {
+	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getDatabaseSnapshot());
 }
 
-function getDatabaseSignature(dbPath: string): string {
-	return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
-		.map((candidate) => {
-			if (!existsSync(candidate)) {
-				return `${candidate}:missing`;
-			}
-
-			const stats = statSync(candidate);
-			return `${candidate}:${stats.size}:${stats.mtimeMs}`;
-		})
-		.join("|");
+async function readSnapshotSignature(
+	dbPath: string,
+	tenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: AuthSessionStoreOptions | undefined
+) {
+	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getSnapshotSignature());
 }
 
 function broadcast(clients: Set<ServerResponse>, payload: string) {

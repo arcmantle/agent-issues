@@ -60,7 +60,7 @@ export async function performLogin(
 		expiresAt: result.expiresAt
 	};
 
-	saveAuthSession(session, storeOptions);
+	await saveAuthSession(session, storeOptions);
 	return session;
 }
 
@@ -93,9 +93,14 @@ export class AuthLoginCommand extends BaseCommand {
 
 		const { acquireEntraDeviceCodeSession } = await import("../../entra-device-login.js");
 
-		return performLogin({ tenantId, clientId }, acquireEntraDeviceCodeSession, (message) => {
-			this.context.stdout.write(`${message}\n`);
-		});
+		return performLogin(
+			{ tenantId, clientId },
+			acquireEntraDeviceCodeSession,
+			(message) => {
+				this.context.stdout.write(`${message}\n`);
+			},
+			this.context.credentialStoreOptions
+		);
 	}
 
 	private async loginLocal(): Promise<AuthSession> {
@@ -111,7 +116,7 @@ export class AuthLoginCommand extends BaseCommand {
 		const localDevLogin: DeviceCodeLoginFn = ({ tenantId: sessionTenantId }) =>
 			issueLocalDevSession({ tenantId: sessionTenantId, userId, secret });
 
-		return performLogin({ tenantId, clientId: "local" }, localDevLogin, () => {});
+		return performLogin({ tenantId, clientId: "local" }, localDevLogin, () => {}, this.context.credentialStoreOptions);
 	}
 }
 
@@ -121,7 +126,7 @@ export class AuthLogoutCommand extends BaseCommand {
 	public tenantId = Option.String("--tenant-id");
 
 	public async execute(): Promise<number> {
-		const current = getCurrentAuthSession();
+		const current = await getCurrentAuthSession(this.context.credentialStoreOptions);
 		const tenantId = this.tenantId ?? current?.tenantId;
 
 		if (!tenantId) {
@@ -129,7 +134,7 @@ export class AuthLogoutCommand extends BaseCommand {
 			return 0;
 		}
 
-		removeAuthSession(tenantId);
+		await removeAuthSession(tenantId, this.context.credentialStoreOptions);
 		this.print({ command: "auth-logout" as const, loggedOut: true, tenantId }, renderAuthLogout(tenantId));
 		return 0;
 	}
@@ -139,7 +144,7 @@ export class AuthStatusCommand extends BaseCommand {
 	public static paths = [["auth", "status"]];
 
 	public async execute(): Promise<number> {
-		const current = getCurrentAuthSession();
+		const current = await getCurrentAuthSession(this.context.credentialStoreOptions);
 
 		if (!current) {
 			this.print(
@@ -162,7 +167,7 @@ export class AuthSwitchCommand extends BaseCommand {
 
 	public async execute(): Promise<number> {
 		const tenantId = requirePositional(this.positionals, 0, "auth switch <tenantId>");
-		const session = switchAuthSession(tenantId);
+		const session = await switchAuthSession(tenantId, this.context.credentialStoreOptions);
 		const view = toAuthSessionView(session);
 		this.print({ command: "auth-switch" as const, session: view }, renderAuthSwitch(view));
 		return 0;

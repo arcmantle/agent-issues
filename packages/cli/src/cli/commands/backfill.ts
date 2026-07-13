@@ -13,11 +13,7 @@ export class BackfillBodiesCommand extends MutableTenantCommand {
 	public kinds = Option.String("--kinds");
 
 	public async execute(): Promise<number> {
-		if (this.allTenants && this.tenant) {
-			throw new Error("`backfill-bodies --all-tenants` cannot be combined with `--tenant`.");
-		}
-
-		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store, dbPath) => {
+		return withStore(this.dbPath, this.withStoreOptions(), async (store, dbPath) => {
 			const kinds = parseBackfillableBodyKinds(parseCsvOption(this.kinds));
 			const tenantIds = this.allTenants ? (await store.listTenants()).map((tenant) => tenant.id) : [store.tenantId];
 
@@ -29,7 +25,7 @@ export class BackfillBodiesCommand extends MutableTenantCommand {
 				}
 
 				tenants.push(
-					await withStore(this.dbPath, { tenant: tenantId, currentWorkingDirectory: this.context.cwd }, (tenantStore) =>
+					await withStore(this.dbPath, this.withStoreOptions({ tenant: tenantId }), (tenantStore) =>
 						backfillBodies(tenantStore, { dryRun: this.dryRun, force: this.force, kinds })
 					)
 				);

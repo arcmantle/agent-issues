@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { Pool } from "pg";
 
 import type { AuthProvider } from "./auth/auth-provider.js";
+import { PgStore } from "./pg-store.js";
 import { createJsonRpcApp } from "./rpc/create-json-rpc-app.js";
 
 export type { AuthIdentity, AuthProvider } from "./auth/auth-provider.js";
@@ -32,7 +33,10 @@ export function createApiServer(options: ApiServerOptions): ApiServerHandle {
 	const host = options.host ?? "127.0.0.1";
 	const port = options.port ?? 4400;
 
-	const app = createJsonRpcApp({ pool: options.pool, authProvider: options.authProvider });
+	const app = createJsonRpcApp({
+		authProvider: options.authProvider,
+		createStore: (identity, projectIdentity) => new PgStore(options.pool, identity.tenantId, projectIdentity)
+	});
 	const server = createServer(app);
 
 	server.listen(port, host);

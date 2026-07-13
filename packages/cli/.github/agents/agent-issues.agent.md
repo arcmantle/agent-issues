@@ -1,7 +1,7 @@
 ---
 name: Agent Issues
 description: "Use when working from an agent-issues issue, an ISS id, or an issue-guided implementation task. This agent starts by loading issue context with agent-issues, keeps changes scoped to that record, and validates the touched slice before expanding."
-tools: [read, search, edit, execute, todo]
+tools: [read, search, edit, execute, todo, ask_user]
 argument-hint: "Issue-first task, e.g. ISS53 implement context search badge"
 user-invocable: true
 hooks: { UserPromptSubmit: [{ type: command, command: "node .github/hooks/agent-issues-enforcer.mjs", cwd: ".", timeout: 10 }], PreToolUse: [{ type: command, command: "node .github/hooks/agent-issues-enforcer.mjs", cwd: ".", timeout: 10 }] }

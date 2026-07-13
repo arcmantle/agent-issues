@@ -194,13 +194,11 @@ export function renderUninstallAgent(result: ReturnType<typeof uninstallAgent>):
 export function renderCurrentTenant(result: {
 	command: "current-tenant";
 	dbPath: string;
-	resolution: "derived" | "explicit";
 	tenantId: string;
 	workspaceRoot: string;
 }): string {
 	return [
 		`Current tenant: ${result.tenantId}`,
-		`Resolution: ${result.resolution}`,
 		`Workspace root: ${result.workspaceRoot}`,
 		`Database: ${result.dbPath}`
 	].join("\n");
@@ -282,24 +280,6 @@ export function renderRenameTenant(result: {
 		`Renamed tenant ${result.previousTenantId} (${result.previousDisplayName}) to ${result.newTenantId} (${result.newDisplayName})`,
 		`Database: ${result.dbPath}`,
 		`Moved rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} history=${result.counts.historyEntries} counters=${result.counters}`
-	].join("\n");
-}
-
-export function renderConsolidateTenant(result: {
-	command: "consolidate-tenant";
-	dbPath: string;
-	legacyTenantId: string;
-	projectId: string;
-	projectTitle: string;
-	consolidated: boolean;
-}): string {
-	if (!result.consolidated) {
-		return `Tenant ${result.legacyTenantId} was already consolidated into project ${result.projectId} (${result.projectTitle}).`;
-	}
-
-	return [
-		`Consolidated tenant ${result.legacyTenantId} into project ${result.projectId} (${result.projectTitle})`,
-		`Database: ${result.dbPath}`
 	].join("\n");
 }
 

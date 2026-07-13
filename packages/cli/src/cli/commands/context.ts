@@ -34,7 +34,7 @@ export class ContextCommand extends TenantCommand {
 	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
+		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const firstPositional = this.positionals[0];
 			const subcommand = !firstPositional || CONTEXT_SUBCOMMANDS.has(firstPositional) ? firstPositional ?? "show" : "show";
 			const showScopeRef = subcommand === "show"

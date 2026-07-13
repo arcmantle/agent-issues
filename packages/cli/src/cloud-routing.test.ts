@@ -5,9 +5,36 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { bindCloudProject, saveAuthSession } from "@agent-issues/core";
+import {
+	bindCloudProject,
+	saveAuthSession,
+	type AuthSessionStoreOptions,
+	type RunCredentialCommand
+} from "@agent-issues/core";
 
 import { runCli } from "./cli.js";
+
+function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {
+	const store = new Map<string, string>();
+
+	const runCommand: RunCredentialCommand = async (command) => {
+		const [action, , account, , service] = command.args;
+		const key = `${service}:${account}`;
+
+		if (action === "add-generic-password") {
+			store.set(key, command.args[6]);
+			return { stdout: "", exitCode: 0 };
+		}
+		if (action === "find-generic-password") {
+			const value = store.get(key);
+			return value === undefined ? { stdout: "", exitCode: 44 } : { stdout: `${value}\n`, exitCode: 0 };
+		}
+		const existed = store.delete(key);
+		return { stdout: "", exitCode: existed ? 0 : 44 };
+	};
+
+	return { platform: "darwin", runCommand };
+}
 
 function createCapture() {
 	const stream = new PassThrough();
@@ -64,12 +91,14 @@ describe("CLI commands route through the cloud backend once bound", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
 	let projectDirectory: string;
+	let credentialStoreOptions: AuthSessionStoreOptions;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-cloud-routing-home-"));
 		originalHome = process.env.HOME;
 		process.env.HOME = homeDirectory;
 		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-cloud-routing-project-"));
+		credentialStoreOptions = fakeCredentialStore();
 	});
 
 	afterEach(() => {
@@ -98,16 +127,20 @@ describe("CLI commands route through the cloud backend once bound", () => {
 			bindCloudProject(
 				{ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" }
 			);
-			saveAuthSession({
-				accessToken: "token-a",
-				expiresAt: "2099-01-01T00:00:00.000Z",
-				tenantId: "tenant-a",
-				userId: "user-1"
-			});
+			await saveAuthSession(
+				{
+					accessToken: "token-a",
+					expiresAt: "2099-01-01T00:00:00.000Z",
+					tenantId: "tenant-a",
+					userId: "user-1"
+				},
+				credentialStoreOptions
+			);
 
 			const stdout = createCapture();
 			const stderr = createCapture();
 			const exitCode = await runCli(["create", "initiative", "--title", "Ship it", "--json"], {
+				credentialStoreOptions,
 				cwd: projectDirectory,
 				stderr: stderr.stream,
 				stdout: stdout.stream
@@ -132,7 +165,7 @@ describe("CLI commands route through the cloud backend once bound", () => {
 			);
 
 			await expect(
-				runCli(["create", "initiative", "--title", "Ship it"], { cwd: projectDirectory })
+				runCli(["create", "initiative", "--title", "Ship it"], { credentialStoreOptions, cwd: projectDirectory })
 			).rejects.toThrow(/auth login/);
 			expect(gate.requests).toHaveLength(0);
 		} finally {

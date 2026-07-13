@@ -107,26 +107,26 @@ If you already had a container from before this role was introduced, the
 init script won't retroactively run - reset the volume once:
 `docker compose down -v && docker compose up -d`.
 
-## Browsing the local Postgres data (CloudBeaver)
+## Browsing the local Postgres data (pgAdmin)
 
 `docker compose up -d` also starts
-[CloudBeaver](https://github.com/dbeaver/cloudbeaver) Community Edition
-(`agent-issues-local-cloudbeaver`, port 8978) - a web UI for browsing tables,
-running ad-hoc SQL, and inspecting data without a desktop client.
+[pgAdmin 4](https://www.pgadmin.org/) (`agent-issues-local-pgadmin`,
+port 8978) - a web UI for browsing tables, running ad-hoc SQL, and
+inspecting data without a desktop client.
 
 ```
 http://localhost:8978
 ```
 
-Log in with `agent_issues_admin` / `agent_issues_dev_only` (seeded via
-`CB_ADMIN_NAME`/`CB_ADMIN_PASSWORD`, so the first-run setup wizard is skipped).
-Two connections are pre-configured (from
-`docker/cloudbeaver/initial-data-sources.conf`, applied once to a fresh
-`agent-issues-cloudbeaver-workspace` volume) and visible to any logged-in
-user without further setup - `CLOUDBEAVER_APP_GRANT_CONNECTIONS_ACCESS_TO_ANONYMOUS_TEAM`
-grants every user's default team access to predefined connections, since
-CloudBeaver otherwise leaves them ungranted (and therefore invisible) until
-explicitly shared with a team:
+The container runs pgAdmin in **desktop mode** (`PGADMIN_CONFIG_SERVER_MODE=False`),
+so the normal pgAdmin login screen is skipped entirely for this local-only
+setup. It also disables pgAdmin's master-password prompt
+(`PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False`) and supplies the database
+passwords through `docker/pgadmin/pgpass`, so the bundled connections can
+open immediately without any extra credential entry.
+
+Two connections are pre-configured from `docker/pgadmin/servers.json` and
+re-applied on every startup (`PGADMIN_REPLACE_SERVERS_ON_STARTUP=True`):
 
 - **agent-issues (admin, bypasses RLS)** - connects as the `agent_issues`
   superuser. Use this to see all tenants' data at once (RLS doesn't apply to
@@ -135,7 +135,10 @@ explicitly shared with a team:
   the same role `PgStore` uses. Use this to see exactly what a given
   session/tenant sees.
 
-If you reset the CloudBeaver volume (`docker compose down -v` or manually
-removing `agent-issues-cloudbeaver-workspace`), these connections and the
-admin login are reapplied automatically on next startup - nothing to
-reconfigure by hand.
+If you reset the pgAdmin volume (`docker compose down -v` or manually
+removing `agent-issues-pgadmin-data`), these connections are rebuilt
+automatically on next startup - nothing to reconfigure by hand.
+
+If you were already running the old CloudBeaver service, refresh with
+`docker compose up -d --remove-orphans` once so Docker cleans up the old
+container.

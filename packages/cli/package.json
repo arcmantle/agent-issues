@@ -18,7 +18,7 @@
 	},
 	"scripts": {
 		"build": "node --eval \"import { rmSync, cpSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true }); rmSync('site/dist', { recursive: true, force: true }); cpSync('../site/dist', 'site/dist', { recursive: true });\" && tsc -p tsconfig.json",
-		"postbuild": "node --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/cli.js', 0o755);\"",
+		"postbuild": "node --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/cli.js', 0o755);\" && node --eval \"import { writeBuildInfoFile } from './dist/build-info.js'; writeBuildInfoFile('dist');\"",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit -p tsconfig.json"

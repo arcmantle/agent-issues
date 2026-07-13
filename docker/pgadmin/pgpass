@@ -1,0 +1,2 @@
+postgres:5432:agent_issues:agent_issues:agent_issues_dev_only
+postgres:5432:agent_issues:agent_issues_app:agent_issues_app_dev_only

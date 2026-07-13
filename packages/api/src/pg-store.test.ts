@@ -592,6 +592,44 @@ describe("PgStore entity lifecycle", () => {
 			const detailsForA = await storeA.getContextDetails();
 			expect(detailsForA.terms.map((term) => term.term)).toEqual(["Order"]);
 		});
+
+		it("resolves the bare default scope to the tenant sentinel when no projectIdentity is set (no regression)", async () => {
+			const tenantId = createTestTenantId();
+			const store = new PgStore(appPool, tenantId);
+
+			const details = await store.getContextDetails();
+			expect(details.context.scopeKind).toBe("default");
+			expect(details.context.scopeLabel).toBe("Shared");
+		});
+
+		it("resolves the bare default scope to the current project's own shared glossary when projectIdentity is set (ISS183)", async () => {
+			const tenantId = createTestTenantId();
+			const storeForRepoA = new PgStore(appPool, tenantId, "repo-a");
+			const storeForRepoB = new PgStore(appPool, tenantId, "repo-b");
+
+			await storeForRepoA.defineContextTerm({ term: "Order", definition: "Repo A's order." });
+			await storeForRepoB.defineContextTerm({ term: "Order", definition: "Repo B's order." });
+
+			const detailsForA = await storeForRepoA.getContextDetails();
+			const detailsForB = await storeForRepoB.getContextDetails();
+
+			expect(detailsForA.context.scopeLabel).toBe("repo-a");
+			expect(detailsForA.terms.map((term) => term.definition)).toEqual(["Repo A's order."]);
+			expect(detailsForB.context.scopeLabel).toBe("repo-b");
+			expect(detailsForB.terms.map((term) => term.definition)).toEqual(["Repo B's order."]);
+		});
+
+		it("reuses the same project entity across calls for the same projectIdentity instead of minting a new one each time", async () => {
+			const tenantId = createTestTenantId();
+			const firstOpen = new PgStore(appPool, tenantId, "repo-a");
+			const secondOpen = new PgStore(appPool, tenantId, "repo-a");
+
+			const firstDetails = await firstOpen.getContextDetails();
+			await secondOpen.defineContextTerm({ term: "Order", definition: "Repo A's order." });
+			const secondDetails = await secondOpen.getContextDetails();
+
+			expect(secondDetails.context.key).toBe(firstDetails.context.key);
+		});
 	});
 
 	// RLS (ADR9) makes every PgStore instance's own tenant the only one it can

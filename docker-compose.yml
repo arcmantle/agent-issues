@@ -13,23 +13,29 @@ services:
       - agent-issues-postgres-data:/var/lib/postgresql/data
       - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
 
-  cloudbeaver:
-    image: dbeaver/cloudbeaver:24
-    container_name: agent-issues-local-cloudbeaver
+  pgadmin:
+    image: dpage/pgadmin4:9
+    container_name: agent-issues-local-pgadmin
     restart: unless-stopped
     depends_on:
       - postgres
     environment:
-      CB_SERVER_NAME: agent-issues-local
-      CB_ADMIN_NAME: agent_issues_admin
-      CB_ADMIN_PASSWORD: agent_issues_dev_only
-      CLOUDBEAVER_APP_GRANT_CONNECTIONS_ACCESS_TO_ANONYMOUS_TEAM: "true"
+      PGADMIN_DEFAULT_EMAIL: agent_issues_admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: agent_issues_dev_only
+      PGADMIN_DISABLE_POSTFIX: "true"
+      PGADMIN_LISTEN_PORT: "5050"
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
+      PGPASS_FILE: /pgadmin4/pgpass
     ports:
-      - "8978:8978"
+      - "8978:5050"
     volumes:
-      - agent-issues-cloudbeaver-workspace:/opt/cloudbeaver/workspace
-      - ./docker/cloudbeaver/initial-data-sources.conf:/opt/cloudbeaver/conf/initial-data-sources.conf:ro
+      - agent-issues-pgadmin-data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./docker/pgadmin/pgpass:/pgadmin4/pgpass:ro
 
 volumes:
   agent-issues-postgres-data:
-  agent-issues-cloudbeaver-workspace:
+  agent-issues-pgadmin-data:

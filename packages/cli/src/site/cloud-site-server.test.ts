@@ -4,11 +4,38 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { bindCloudProject, saveAuthSession } from "@agent-issues/core";
+import {
+	bindCloudProject,
+	saveAuthSession,
+	type AuthSessionStoreOptions,
+	type RunCredentialCommand
+} from "@agent-issues/core";
 
 import { startLiveSite, type LiveSiteHandle } from "./index.js";
 
 type RpcRequestLog = { authorization: string | undefined; method: string; params: unknown };
+
+function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {
+	const store = new Map<string, string>();
+
+	const runCommand: RunCredentialCommand = async (command) => {
+		const [action, , account, , service] = command.args;
+		const key = `${service}:${account}`;
+
+		if (action === "add-generic-password") {
+			store.set(key, command.args[6]);
+			return { stdout: "", exitCode: 0 };
+		}
+		if (action === "find-generic-password") {
+			const value = store.get(key);
+			return value === undefined ? { stdout: "", exitCode: 44 } : { stdout: `${value}\n`, exitCode: 0 };
+		}
+		const existed = store.delete(key);
+		return { stdout: "", exitCode: existed ? 0 : 44 };
+	};
+
+	return { platform: "darwin", runCommand };
+}
 
 /** A minimal fake cloud gate exposing both /rpc and /events, standing in for the real one (proven in packages/api/src/http-store-contract.test.ts and the cloud API's own SSE route). */
 function startFakeCloudGate(handleMethod: (method: string, params: unknown) => unknown): {
@@ -103,12 +130,14 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 	let originalHome: string | undefined;
 	let projectDirectory: string;
 	let handle: LiveSiteHandle | undefined;
+	let credentialStoreOptions: AuthSessionStoreOptions;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-site-cloud-home-"));
 		originalHome = process.env.HOME;
 		process.env.HOME = homeDirectory;
 		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-site-cloud-project-"));
+		credentialStoreOptions = fakeCredentialStore();
 	});
 
 	afterEach(async () => {
@@ -137,9 +166,12 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 
 		try {
 			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			saveAuthSession({ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" });
+			await saveAuthSession(
+				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+				credentialStoreOptions
+			);
 
-			handle = await startLiveSite({ currentWorkingDirectory: projectDirectory, port: 0, tenant: "tenant-a" });
+			handle = await startLiveSite({ credentialStoreOptions, currentWorkingDirectory: projectDirectory, port: 0, tenant: "tenant-a" });
 			await new Promise<void>((resolve) => handle?.server.once("listening", resolve));
 
 			const address = handle.server.address();
@@ -165,9 +197,12 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 
 		try {
 			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			saveAuthSession({ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" });
+			await saveAuthSession(
+				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+				credentialStoreOptions
+			);
 
-			handle = await startLiveSite({ currentWorkingDirectory: projectDirectory, port: 0, tenant: "tenant-a" });
+			handle = await startLiveSite({ credentialStoreOptions, currentWorkingDirectory: projectDirectory, port: 0, tenant: "tenant-a" });
 			await new Promise<void>((resolve) => handle?.server.once("listening", resolve));
 
 			const address = handle.server.address();

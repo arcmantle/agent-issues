@@ -1,16 +1,98 @@
+import type { StorageDriver } from "@agent-issues/core";
 import express, { type Express, type Request } from "express";
-import type { Pool } from "pg";
 
 import type { AuthIdentity, AuthProvider } from "../auth/auth-provider.js";
-import { PgStore } from "../pg-store.js";
 import { ChangeEventBroadcaster } from "./change-events.js";
 import { isJsonRpcRequest, JSON_RPC_ERROR_CODES, type JsonRpcErrorResponse, type JsonRpcSuccessResponse } from "./json-rpc.js";
 import { rpcMethods, writeMethods } from "./rpc-methods.js";
 
-export type CreateJsonRpcAppOptions = {
-	pool: Pool;
-	authProvider: AuthProvider;
+export type VersionMismatchDetails =
+	| { reason: "build-hash"; expectedBuildHash: string; receivedBuildHash: string | undefined }
+	| { reason: "db-path"; expectedDbPath: string; receivedDbPath: string | undefined };
+
+export type VersionHandshakeOptions = {
+	/** This daemon instance's own build-content-hash (ADR45), computed once at startup and compared against every request's build-hash header. */
+	buildHash: string;
+	/** HTTP header carrying the client's build-content-hash. Defaults to `x-agent-issues-build-hash`. */
+	header?: string;
+	/**
+	 * This daemon instance's own resolved db path (ISS190): compared against
+	 * every request's db-path header the same way `buildHash` is - a client
+	 * requesting a different `--db` is exactly as incompatible as a stale
+	 * build, and triggers the same drain-then-exit-and-respawn flow. Omitted
+	 * entirely by the cloud gate, which has no local db-path concept.
+	 */
+	dbPath?: string;
+	/** HTTP header carrying the client's requested db path. Defaults to `x-agent-issues-db-path`. */
+	dbPathHeader?: string;
+	/**
+	 * Fired once per mismatched request (not deduplicated here - the daemon
+	 * itself decides whether to start draining only the first time). Absent
+	 * or a differing header value both count as a mismatch, since a client
+	 * that sends no header at all is exactly as stale/incompatible as one
+	 * sending an old hash.
+	 */
+	onMismatch?: (details: VersionMismatchDetails) => void;
 };
+
+export type CreateJsonRpcAppOptions = {
+	authProvider: AuthProvider;
+	/**
+	 * Opens the `StorageDriver` a request's dispatched method runs against,
+	 * given the auth-seam-resolved identity (ADR44) and the client's
+	 * resolved project identity, if it sent one (ISS183, read from the
+	 * `x-agent-issues-project-identity` header). Cloud callers supply
+	 * `(identity, projectIdentity) => new PgStore(pool, identity.tenantId, projectIdentity)`;
+	 * the local daemon supplies a `SqliteStore`-opening equivalent instead
+	 * (ignoring `projectIdentity`, since local mode resolves project scope
+	 * from disk) - the gate itself never branches on which backend it's
+	 * fronting.
+	 */
+	createStore: (identity: AuthIdentity, projectIdentity?: string) => StorageDriver | Promise<StorageDriver>;
+	/**
+	 * The local daemon's build-content-hash version handshake (ADR45,
+	 * ISS188). Omitted entirely by the cloud gate, which has no build-hash
+	 * concept - a request is only ever checked against this when the daemon
+	 * explicitly supplies it.
+	 */
+	versionHandshake?: VersionHandshakeOptions;
+};
+
+const DEFAULT_BUILD_HASH_HEADER = "x-agent-issues-build-hash";
+const DEFAULT_DB_PATH_HEADER = "x-agent-issues-db-path";
+const PROJECT_IDENTITY_HEADER = "x-agent-issues-project-identity";
+
+type VersionCheckResult =
+	| { ok: true }
+	| { ok: false; code: "daemon-version-mismatch"; expectedBuildHash: string; receivedBuildHash: string | undefined }
+	| { ok: false; code: "daemon-db-mismatch"; expectedDbPath: string; receivedDbPath: string | undefined };
+
+function checkVersionHandshake(request: Request, versionHandshake: VersionHandshakeOptions | undefined): VersionCheckResult {
+	if (!versionHandshake) return { ok: true };
+
+	const buildHashHeader = versionHandshake.header ?? DEFAULT_BUILD_HASH_HEADER;
+	const receivedBuildHash = request.header(buildHashHeader);
+	if (receivedBuildHash !== versionHandshake.buildHash) {
+		versionHandshake.onMismatch?.({ reason: "build-hash", expectedBuildHash: versionHandshake.buildHash, receivedBuildHash });
+		return { ok: false, code: "daemon-version-mismatch", expectedBuildHash: versionHandshake.buildHash, receivedBuildHash };
+	}
+
+	if (versionHandshake.dbPath !== undefined) {
+		const dbPathHeader = versionHandshake.dbPathHeader ?? DEFAULT_DB_PATH_HEADER;
+		const receivedDbPath = request.header(dbPathHeader);
+		if (receivedDbPath !== versionHandshake.dbPath) {
+			versionHandshake.onMismatch?.({ reason: "db-path", expectedDbPath: versionHandshake.dbPath, receivedDbPath });
+			return { ok: false, code: "daemon-db-mismatch", expectedDbPath: versionHandshake.dbPath, receivedDbPath };
+		}
+	}
+
+	return { ok: true };
+}
+
+function versionMismatchErrorBody(versionCheck: Extract<VersionCheckResult, { ok: false }>) {
+	const error = versionCheck.code === "daemon-version-mismatch" ? "Daemon build-hash mismatch." : "Daemon db-path mismatch.";
+	return { error, ...versionCheck };
+}
 
 type AuthResult = { identity: AuthIdentity } | { errorStatus: number; errorBody: { error: string } };
 
@@ -49,7 +131,7 @@ async function resolveIdentity(request: Request, authProvider: AuthProvider): Pr
  * methods are writes; only those trigger a broadcast after they succeed.
  */
 export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
-	const { pool, authProvider } = options;
+	const { authProvider, createStore, versionHandshake } = options;
 	const app = express();
 	// Express's default 100kb body limit is too small for `applyHistoryEntries`
 	// (ISS57/ADR16): `synchronize` sends a whole project's history log in one
@@ -58,6 +140,12 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 	const changeEvents = new ChangeEventBroadcaster();
 
 	app.get("/events", async (request, response) => {
+		const versionCheck = checkVersionHandshake(request, versionHandshake);
+		if (!versionCheck.ok) {
+			response.status(409).json(versionMismatchErrorBody(versionCheck));
+			return;
+		}
+
 		const auth = await resolveIdentity(request, authProvider);
 		if ("errorStatus" in auth) {
 			response.status(auth.errorStatus).json(auth.errorBody);
@@ -77,6 +165,12 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 	});
 
 	app.post("/rpc", async (request, response) => {
+		const versionCheck = checkVersionHandshake(request, versionHandshake);
+		if (!versionCheck.ok) {
+			response.status(409).json(versionMismatchErrorBody(versionCheck));
+			return;
+		}
+
 		const auth = await resolveIdentity(request, authProvider);
 		if ("errorStatus" in auth) {
 			response.status(auth.errorStatus).json(auth.errorBody);
@@ -101,7 +195,7 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			return;
 		}
 
-		const store = new PgStore(pool, identity.tenantId);
+		const store = await createStore(identity, request.header(PROJECT_IDENTITY_HEADER));
 		try {
 			const result = await handler(store, rpcRequest.params);
 			const successResponse: JsonRpcSuccessResponse = { jsonrpc: "2.0", id: rpcRequest.id, result };

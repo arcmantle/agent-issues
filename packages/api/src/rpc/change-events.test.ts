@@ -7,6 +7,7 @@ import type { Pool } from "pg";
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
 import { LocalAuthProvider } from "../auth/local-auth-provider.js";
+import { PgStore } from "../pg-store.js";
 import { createJsonRpcApp } from "./create-json-rpc-app.js";
 
 const ADMIN_CONNECTION_STRING =
@@ -39,7 +40,7 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 		appPool = createPgPool({ connectionString: APP_CONNECTION_STRING });
 		authProvider = new LocalAuthProvider({ secret: LOCAL_AUTH_SECRET });
 
-		const app = createJsonRpcApp({ pool: appPool, authProvider });
+		const app = createJsonRpcApp({ authProvider, createStore: (identity) => new PgStore(appPool, identity.tenantId) });
 		server = createServer(app);
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		const { port } = server.address() as AddressInfo;

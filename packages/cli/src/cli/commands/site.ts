@@ -15,8 +15,7 @@ abstract class SiteCommand extends TenantCommand {
 			currentWorkingDirectory: this.context.cwd,
 			dbPath: this.dbPath,
 			openInBrowser: this.openInBrowser,
-			port: parsePortOption(this.portValue),
-			tenant: this.tenant
+			port: parsePortOption(this.portValue)
 		});
 
 		await new Promise<void>((resolve, reject) => {

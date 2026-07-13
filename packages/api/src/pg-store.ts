@@ -25,7 +25,6 @@ import {
 	ID_PREFIX,
 	STRUCTURAL_RELATION_TYPES,
 	type BodySource,
-	type ConsolidateTenantResult,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextDirectoryTerm,
@@ -822,6 +821,95 @@ function getDefaultContextScope(): ResolvedContextScope {
 	};
 }
 
+/**
+ * A specific project's own shared/default context scope (ISS183, mirroring
+ * core's `context-store.ts` `createProjectScope`). Keyed `default:<projectId>`
+ * so this lines up with the exact same key shape local `SqliteStore` uses for
+ * a non-sentinel project's default context.
+ */
+function createProjectScope(project: EntityRecord): ResolvedContextScope {
+	return {
+		key: `${DEFAULT_CONTEXT_KEY}:${project.id}`,
+		scopeKind: "default",
+		scopeEntityId: null,
+		scopeLabel: project.title,
+		defaultTitle: `${project.title} Context`,
+		defaultSummary: `Shared glossary of project-specific domain terms and preferred language for ${project.title}.`
+	};
+}
+
+/**
+ * Finds the `project` entity this tenant already minted for a given
+ * client-resolved `projectIdentity` (matched by title, the same field
+ * local's one-time consolidation migration wrote the identity into), or
+ * mints one plus its own epic (ADR7's full-chain invariant) the first time
+ * a request for that identity arrives - mirroring `ensurePgTenant`'s own
+ * project+epic+contains seeding, just per-identity instead of once per
+ * tenant.
+ */
+async function getOrCreateProjectByIdentity(client: PoolClient, tenantId: string, projectIdentity: string): Promise<EntityRecord> {
+	// Bootstraps the tenant's counters/sentinels (idempotent) so a project-scoped
+	// request can arrive before any entity has ever been created for this tenant.
+	await ensurePgTenant(client, tenantId);
+
+	const existing = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'project' AND title = $2`, [
+		tenantId,
+		projectIdentity
+	]);
+	const existingRow = existing.rows[0];
+	if (existingRow) {
+		return mapEntityRow(existingRow);
+	}
+
+	const now = new Date().toISOString();
+	const projectId = await nextEntityId(client, tenantId, "project");
+	const epicId = await nextEntityId(client, tenantId, "epic");
+
+	await client.query(
+		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+		 VALUES ($1, $2, 'project', $3, 'active', '', 'generated', $4, $4)`,
+		[tenantId, projectId, projectIdentity, now]
+	);
+	await client.query(
+		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+		 VALUES ($1, $2, 'epic', $3, 'active', '', 'generated', $4, $4)`,
+		[tenantId, epicId, DEFAULT_EPIC_TITLE, now]
+	);
+	await client.query(
+		`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
+		 VALUES ($1, $2, $3, 'contains', $4)`,
+		[tenantId, projectId, epicId, now]
+	);
+
+	return {
+		id: projectId,
+		kind: "project",
+		title: projectIdentity,
+		status: "active",
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		updatedAt: now
+	};
+}
+
+/**
+ * Bare (no `--scope`) context resolution (ISS183, mirroring core's
+ * project-aware `getDefaultContextScope` from ISS166): resolves to the
+ * CURRENT project's own shared glossary when a `projectIdentity` is known
+ * for this request, instead of the one tenant-wide sentinel every project
+ * in a multi-project tenant would otherwise collide on. Undefined
+ * `projectIdentity` (no header sent) keeps today's sentinel-only behavior.
+ */
+async function resolveDefaultContextScope(client: PoolClient, tenantId: string, projectIdentity: string | undefined): Promise<ResolvedContextScope> {
+	if (!projectIdentity) {
+		return getDefaultContextScope();
+	}
+
+	const project = await getOrCreateProjectByIdentity(client, tenantId, projectIdentity);
+	return createProjectScope(project);
+}
+
 function createInitiativeScope(initiative: EntityRecord): ResolvedContextScope {
 	return {
 		key: initiative.id,
@@ -947,9 +1035,14 @@ async function getOwningInitiativeOrThrow(client: PoolClient, tenantId: string, 
 	}
 }
 
-async function resolveContextScope(client: PoolClient, tenantId: string, scopeRef?: string): Promise<ResolvedContextScope> {
+async function resolveContextScope(
+	client: PoolClient,
+	tenantId: string,
+	projectIdentity: string | undefined,
+	scopeRef?: string
+): Promise<ResolvedContextScope> {
 	if (!scopeRef || scopeRef === DEFAULT_CONTEXT_KEY) {
-		return getDefaultContextScope();
+		return resolveDefaultContextScope(client, tenantId, projectIdentity);
 	}
 
 	const entity = await getEntityOrThrow(client, tenantId, scopeRef);
@@ -974,8 +1067,13 @@ async function fetchContextTermRows(client: PoolClient, tenantId: string, key: s
 	return result.rows;
 }
 
-async function queryContextDetails(client: PoolClient, tenantId: string, scopeRef?: string): Promise<ContextDetails> {
-	const scope = await resolveContextScope(client, tenantId, scopeRef);
+async function queryContextDetails(
+	client: PoolClient,
+	tenantId: string,
+	projectIdentity: string | undefined,
+	scopeRef?: string
+): Promise<ContextDetails> {
+	const scope = await resolveContextScope(client, tenantId, projectIdentity, scopeRef);
 	const row = await fetchContextRow(client, tenantId, scope.key);
 	const termRows = row ? await fetchContextTermRows(client, tenantId, scope.key) : [];
 
@@ -993,8 +1091,8 @@ async function queryContextTermCount(client: PoolClient, tenantId: string, conte
 	return Number(result.rows[0]?.count ?? "0");
 }
 
-async function queryListContexts(client: PoolClient, tenantId: string): Promise<ContextListResult> {
-	const defaultScope = getDefaultContextScope();
+async function queryListContexts(client: PoolClient, tenantId: string, projectIdentity: string | undefined): Promise<ContextListResult> {
+	const defaultScope = await resolveDefaultContextScope(client, tenantId, projectIdentity);
 	const defaultRow = await fetchContextRow(client, tenantId, defaultScope.key);
 	const contexts = [
 		{
@@ -1020,12 +1118,12 @@ async function queryListContexts(client: PoolClient, tenantId: string): Promise<
 	return { contexts };
 }
 
-async function buildContextDirectory(client: PoolClient, tenantId: string): Promise<ContextDirectory> {
-	const shared = await queryContextDetails(client, tenantId);
+async function buildContextDirectory(client: PoolClient, tenantId: string, projectIdentity: string | undefined): Promise<ContextDirectory> {
+	const shared = await queryContextDetails(client, tenantId, projectIdentity);
 	const initiativeRows = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'initiative' ORDER BY id`, [
 		tenantId
 	]);
-	const initiatives = await Promise.all(initiativeRows.rows.map((row) => queryContextDetails(client, tenantId, row.id)));
+	const initiatives = await Promise.all(initiativeRows.rows.map((row) => queryContextDetails(client, tenantId, projectIdentity, row.id)));
 	const termsByKey = new Map<string, ContextDirectoryTerm>();
 
 	for (const details of [shared, ...initiatives]) {
@@ -1180,8 +1278,13 @@ function filterContextDirectoryTerm(entry: ContextDirectoryTerm, normalizedQuery
 	};
 }
 
-async function ensureContextExists(client: PoolClient, tenantId: string, scopeRef?: string): Promise<ResolvedContextScope> {
-	const scope = await resolveContextScope(client, tenantId, scopeRef);
+async function ensureContextExists(
+	client: PoolClient,
+	tenantId: string,
+	projectIdentity: string | undefined,
+	scopeRef?: string
+): Promise<ResolvedContextScope> {
+	const scope = await resolveContextScope(client, tenantId, projectIdentity, scopeRef);
 	const existing = await fetchContextRow(client, tenantId, scope.key);
 	if (existing) {
 		return scope;
@@ -1310,7 +1413,17 @@ function requireOwnTenant(ownTenantId: string, requestedTenantId: string, operat
 export class PgStore implements StorageDriver {
 	public constructor(
 		private readonly pool: Pool,
-		public readonly tenantId: string
+		public readonly tenantId: string,
+		/**
+		 * The client-resolved project identity (ISS183, mirroring
+		 * `resolveProjectIdentity` in core) this request is scoped to.
+		 * Threaded from the cloud gate's `x-agent-issues-project-identity`
+		 * header. Undefined keeps today's behavior: the bare (no `--scope`)
+		 * default context resolves to the tenant-wide sentinel, exactly as
+		 * before this issue - so single-project tenants and any caller that
+		 * doesn't send the header see no change at all.
+		 */
+		private readonly projectIdentity?: string
 	) {}
 
 	public async createEntity(input: {
@@ -1936,8 +2049,10 @@ export class PgStore implements StorageDriver {
 			const projectAdrs = await this.listProjectAdrs();
 			const initiativeBundles = await Promise.all(initiatives.map((entity) => this.getInitiativeBundle(entity.id)));
 
-			const sharedContext = await queryContextDetails(client, this.tenantId);
-			const initiativeContexts = await Promise.all(initiatives.map((entity) => queryContextDetails(client, this.tenantId, entity.id)));
+			const sharedContext = await queryContextDetails(client, this.tenantId, this.projectIdentity);
+			const initiativeContexts = await Promise.all(
+				initiatives.map((entity) => queryContextDetails(client, this.tenantId, this.projectIdentity, entity.id))
+			);
 
 			return {
 				generatedAt: new Date().toISOString(),
@@ -1951,6 +2066,44 @@ export class PgStore implements StorageDriver {
 					initiatives: initiativeContexts
 				}
 			};
+		});
+	}
+
+	// A cheap aggregate signature of this tenant's own data (ISS191): unlike
+	// SqliteStore's whole-file stat (one sqlite file can span tenants),
+	// Postgres RLS already scopes every query below to this tenant alone, so
+	// count + max(updated_at) per table is both cheap and sufficient - any
+	// entity/context/term write bumps one of these, and cloud's site never
+	// actually polls this today (it relies on `change-events.ts`'s push
+	// broadcast instead), so this exists purely to satisfy the shared seam.
+	public async getSnapshotSignature(): Promise<string> {
+		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
+			const result = await client.query<{
+				entity_count: string;
+				entity_max_updated: string | null;
+				relation_count: string;
+				context_count: string;
+				context_max_updated: string | null;
+				term_count: string;
+				term_max_updated: string | null;
+			}>(
+				`SELECT
+				   (SELECT count(*) FROM entities WHERE tenant_id = $1) AS entity_count,
+				   (SELECT max(updated_at) FROM entities WHERE tenant_id = $1) AS entity_max_updated,
+				   (SELECT count(*) FROM relations WHERE tenant_id = $1) AS relation_count,
+				   (SELECT count(*) FROM contexts WHERE tenant_id = $1) AS context_count,
+				   (SELECT max(updated_at) FROM contexts WHERE tenant_id = $1) AS context_max_updated,
+				   (SELECT count(*) FROM context_terms WHERE tenant_id = $1) AS term_count,
+				   (SELECT max(updated_at) FROM context_terms WHERE tenant_id = $1) AS term_max_updated`,
+				[this.tenantId]
+			);
+			const row = result.rows[0]!;
+			return [
+				`entities:${row.entity_count}:${row.entity_max_updated}`,
+				`relations:${row.relation_count}`,
+				`contexts:${row.context_count}:${row.context_max_updated}`,
+				`terms:${row.term_count}:${row.term_max_updated}`
+			].join("|");
 		});
 	}
 
@@ -2090,20 +2243,22 @@ export class PgStore implements StorageDriver {
 	}
 
 	public async listContexts(): Promise<ContextListResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => queryListContexts(client, this.tenantId));
+		return withTenantTransaction(this.pool, this.tenantId, (client) => queryListContexts(client, this.tenantId, this.projectIdentity));
 	}
 
 	public async getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => queryContextDetails(client, this.tenantId, input?.scopeRef));
+		return withTenantTransaction(this.pool, this.tenantId, (client) =>
+			queryContextDetails(client, this.tenantId, this.projectIdentity, input?.scopeRef)
+		);
 	}
 
 	public async getContextDirectory(): Promise<ContextDirectory> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => buildContextDirectory(client, this.tenantId));
+		return withTenantTransaction(this.pool, this.tenantId, (client) => buildContextDirectory(client, this.tenantId, this.projectIdentity));
 	}
 
 	public async queryContextDirectory(input: QueryContextDirectoryInput = {}): Promise<QueryContextDirectoryResult> {
 		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
-			const directory = await buildContextDirectory(client, this.tenantId);
+			const directory = await buildContextDirectory(client, this.tenantId, this.projectIdentity);
 			const view = input.view ?? "all";
 			const query = input.query?.trim() ?? "";
 			const conflictsOnly = input.conflictsOnly ?? false;
@@ -2150,8 +2305,8 @@ export class PgStore implements StorageDriver {
 		}
 
 		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
-			const scope = await resolveContextScope(client, this.tenantId, input.scopeRef);
-			const existing = await queryContextDetails(client, this.tenantId, input.scopeRef);
+			const scope = await resolveContextScope(client, this.tenantId, this.projectIdentity, input.scopeRef);
+			const existing = await queryContextDetails(client, this.tenantId, this.projectIdentity, input.scopeRef);
 			const now = new Date().toISOString();
 
 			await client.query(
@@ -2165,7 +2320,7 @@ export class PgStore implements StorageDriver {
 				[this.tenantId, scope.key, scope.scopeEntityId, title, summary, existing.context.createdAt ?? now, now]
 			);
 
-			return queryContextDetails(client, this.tenantId, input.scopeRef);
+			return queryContextDetails(client, this.tenantId, this.projectIdentity, input.scopeRef);
 		});
 	}
 
@@ -2187,7 +2342,7 @@ export class PgStore implements StorageDriver {
 		}
 
 		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
-			const scope = await ensureContextExists(client, this.tenantId, input.scopeRef);
+			const scope = await ensureContextExists(client, this.tenantId, this.projectIdentity, input.scopeRef);
 			const normalizedAvoid = normalizeAvoidTerms(input.avoid ?? [], term);
 			const existing = await getContextTermRecord(client, this.tenantId, scope.key, term);
 			const now = new Date().toISOString();
@@ -2208,7 +2363,7 @@ export class PgStore implements StorageDriver {
 			}
 
 			return {
-				context: (await queryContextDetails(client, this.tenantId, input.scopeRef)).context,
+				context: (await queryContextDetails(client, this.tenantId, this.projectIdentity, input.scopeRef)).context,
 				term: storedTerm,
 				created: existing === null
 			};
@@ -2222,7 +2377,7 @@ export class PgStore implements StorageDriver {
 		}
 
 		return withTenantTransaction(this.pool, this.tenantId, async (client) => {
-			const scope = await resolveContextScope(client, this.tenantId, input.scopeRef);
+			const scope = await resolveContextScope(client, this.tenantId, this.projectIdentity, input.scopeRef);
 			const result = await client.query(`DELETE FROM context_terms WHERE tenant_id = $1 AND context_key = $2 AND term = $3`, [
 				this.tenantId,
 				scope.key,
@@ -2230,7 +2385,7 @@ export class PgStore implements StorageDriver {
 			]);
 
 			return {
-				context: (await queryContextDetails(client, this.tenantId, input.scopeRef)).context,
+				context: (await queryContextDetails(client, this.tenantId, this.projectIdentity, input.scopeRef)).context,
 				term,
 				removed: (result.rowCount ?? 0) > 0
 			};
@@ -2511,13 +2666,6 @@ export class PgStore implements StorageDriver {
 				renamed: true
 			};
 		});
-	}
-
-	public consolidateTenant(_legacyTenantId: string): Promise<ConsolidateTenantResult> {
-		// ISS63 is local-only (ADR7): RLS scopes every PgStore instance to
-		// exactly its own tenant (see the class doc comment above), so there
-		// is never another tenant's rows for a Postgres tenant to fold in.
-		throw new Error("consolidateTenant is a local-only operation (ISS63) and is not supported for Postgres tenants.");
 	}
 
 	public async close(): Promise<void> {

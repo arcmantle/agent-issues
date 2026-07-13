@@ -1,20 +1,24 @@
-import type { PgStore } from "../pg-store.js";
+import type { StorageDriver } from "@agent-issues/core";
 
 /**
  * One entry per `StorageDriver` method exposed over JSON-RPC (ADR13, ADR14).
- * The tracer bullet (ISS49) wires only `createEntity`; the remaining entity,
- * handoff, context/glossary, and tenant-administration methods are added
- * mechanically by ISS50-ISS52 following this exact shape.
+ * Generic over `StorageDriver` rather than hardcoded to `PgStore` (ADR44):
+ * the local daemon fronts a `SqliteStore` through this exact same dispatch
+ * table. The tracer bullet (ISS49) wired only `createEntity`; the remaining
+ * entity, handoff, context/glossary, and tenant-administration methods were
+ * added mechanically by ISS50-ISS52 following this exact shape - every
+ * handler only ever calls `StorageDriver` interface methods, so widening
+ * the type is a pure type-level change.
  */
-export type RpcMethodHandler = (store: PgStore, params: unknown) => Promise<unknown>;
+export type RpcMethodHandler = (store: StorageDriver, params: unknown) => Promise<unknown>;
 
 export const rpcMethods: Record<string, RpcMethodHandler> = {
-	createEntity: async (store, params) => store.createEntity(params as Parameters<PgStore["createEntity"]>[0]),
+	createEntity: async (store, params) => store.createEntity(params as Parameters<StorageDriver["createEntity"]>[0]),
 
 	// Entity lifecycle (ISS50). Methods whose `StorageDriver` signature takes
 	// a bare string/no argument are wrapped in a named-field params object for
 	// a consistent JSON-RPC surface; methods that already take a single input
-	// object are forwarded to `PgStore` unchanged.
+	// object are forwarded to `store` unchanged.
 	getEntityDetails: async (store, params) => store.getEntityDetails((params as { entityId: string }).entityId),
 	listEntities: async (store, params) => store.listEntities((params as { kind: string }).kind),
 	listEntityHistory: async (store, params) => store.listEntityHistory((params as { entityId: string }).entityId),
@@ -22,43 +26,44 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	// Deliberately absent from `writeMethods` below: it only appends rows to
 	// `history_entries`, which `getDatabaseSnapshot` never reads (ISS57) - so
 	// it can never change what a `snapshot-changed` broadcast would report.
-	applyHistoryEntries: async (store, params) => store.applyHistoryEntries((params as { entries: Parameters<PgStore["applyHistoryEntries"]>[0] }).entries),
+	applyHistoryEntries: async (store, params) => store.applyHistoryEntries((params as { entries: Parameters<StorageDriver["applyHistoryEntries"]>[0] }).entries),
 	applyResolvedFacts: async (store, params) =>
-		store.applyResolvedFacts((params as { resolvedEntries: Parameters<PgStore["applyResolvedFacts"]>[0] }).resolvedEntries),
+		store.applyResolvedFacts((params as { resolvedEntries: Parameters<StorageDriver["applyResolvedFacts"]>[0] }).resolvedEntries),
 	listAllRelations: async (store) => store.listAllRelations(),
-	applyRelations: async (store, params) => store.applyRelations((params as { relations: Parameters<PgStore["applyRelations"]>[0] }).relations),
+	applyRelations: async (store, params) => store.applyRelations((params as { relations: Parameters<StorageDriver["applyRelations"]>[0] }).relations),
 	listOrphans: async (store, params) => store.listOrphans((params as { kind?: string } | undefined)?.kind),
 	listProjectAdrs: async (store) => store.listProjectAdrs(),
-	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<PgStore["updateEntityStatus"]>[0]),
-	setEntityBody: async (store, params) => store.setEntityBody(params as Parameters<PgStore["setEntityBody"]>[0]),
-	archiveEntity: async (store, params) => store.archiveEntity(params as Parameters<PgStore["archiveEntity"]>[0]),
-	deleteEntity: async (store, params) => store.deleteEntity(params as Parameters<PgStore["deleteEntity"]>[0]),
-	moveEntity: async (store, params) => store.moveEntity(params as Parameters<PgStore["moveEntity"]>[0]),
-	linkEntities: async (store, params) => store.linkEntities(params as Parameters<PgStore["linkEntities"]>[0]),
-	unlinkEntities: async (store, params) => store.unlinkEntities(params as Parameters<PgStore["unlinkEntities"]>[0]),
+	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<StorageDriver["updateEntityStatus"]>[0]),
+	setEntityBody: async (store, params) => store.setEntityBody(params as Parameters<StorageDriver["setEntityBody"]>[0]),
+	archiveEntity: async (store, params) => store.archiveEntity(params as Parameters<StorageDriver["archiveEntity"]>[0]),
+	deleteEntity: async (store, params) => store.deleteEntity(params as Parameters<StorageDriver["deleteEntity"]>[0]),
+	moveEntity: async (store, params) => store.moveEntity(params as Parameters<StorageDriver["moveEntity"]>[0]),
+	linkEntities: async (store, params) => store.linkEntities(params as Parameters<StorageDriver["linkEntities"]>[0]),
+	unlinkEntities: async (store, params) => store.unlinkEntities(params as Parameters<StorageDriver["unlinkEntities"]>[0]),
 	getDatabaseSnapshot: async (store) => store.getDatabaseSnapshot(),
 	getInitiativeBundle: async (store, params) => store.getInitiativeBundle((params as { initiativeId: string }).initiativeId),
+	getSnapshotSignature: async (store) => store.getSnapshotSignature(),
 
 	// Handoffs and context/glossary (ISS51), same wrapping convention as ISS50.
-	createHandoff: async (store, params) => store.createHandoff(params as Parameters<PgStore["createHandoff"]>[0]),
-	updateHandoff: async (store, params) => store.updateHandoff(params as Parameters<PgStore["updateHandoff"]>[0]),
-	deleteHandoff: async (store, params) => store.deleteHandoff(params as Parameters<PgStore["deleteHandoff"]>[0]),
+	createHandoff: async (store, params) => store.createHandoff(params as Parameters<StorageDriver["createHandoff"]>[0]),
+	updateHandoff: async (store, params) => store.updateHandoff(params as Parameters<StorageDriver["updateHandoff"]>[0]),
+	deleteHandoff: async (store, params) => store.deleteHandoff(params as Parameters<StorageDriver["deleteHandoff"]>[0]),
 	getHandoffDetails: async (store, params) => store.getHandoffDetails((params as { entityId: string }).entityId),
-	listHandoffs: async (store, params) => store.listHandoffs(params as Parameters<PgStore["listHandoffs"]>[0]),
+	listHandoffs: async (store, params) => store.listHandoffs(params as Parameters<StorageDriver["listHandoffs"]>[0]),
 	listAllHandoffs: async (store) => store.listAllHandoffs(),
-	applyHandoffs: async (store, params) => store.applyHandoffs((params as { handoffs: Parameters<PgStore["applyHandoffs"]>[0] }).handoffs),
+	applyHandoffs: async (store, params) => store.applyHandoffs((params as { handoffs: Parameters<StorageDriver["applyHandoffs"]>[0] }).handoffs),
 
 	listContexts: async (store) => store.listContexts(),
-	getContextDetails: async (store, params) => store.getContextDetails(params as Parameters<PgStore["getContextDetails"]>[0]),
+	getContextDetails: async (store, params) => store.getContextDetails(params as Parameters<StorageDriver["getContextDetails"]>[0]),
 	getContextDirectory: async (store) => store.getContextDirectory(),
-	queryContextDirectory: async (store, params) => store.queryContextDirectory(params as Parameters<PgStore["queryContextDirectory"]>[0]),
-	upsertContext: async (store, params) => store.upsertContext(params as Parameters<PgStore["upsertContext"]>[0]),
-	defineContextTerm: async (store, params) => store.defineContextTerm(params as Parameters<PgStore["defineContextTerm"]>[0]),
-	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<PgStore["forgetContextTerm"]>[0]),
+	queryContextDirectory: async (store, params) => store.queryContextDirectory(params as Parameters<StorageDriver["queryContextDirectory"]>[0]),
+	upsertContext: async (store, params) => store.upsertContext(params as Parameters<StorageDriver["upsertContext"]>[0]),
+	defineContextTerm: async (store, params) => store.defineContextTerm(params as Parameters<StorageDriver["defineContextTerm"]>[0]),
+	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<StorageDriver["forgetContextTerm"]>[0]),
 	listAllContexts: async (store) => store.listAllContexts(),
-	applyContexts: async (store, params) => store.applyContexts((params as { contexts: Parameters<PgStore["applyContexts"]>[0] }).contexts),
+	applyContexts: async (store, params) => store.applyContexts((params as { contexts: Parameters<StorageDriver["applyContexts"]>[0] }).contexts),
 	listAllContextTerms: async (store) => store.listAllContextTerms(),
-	applyContextTerms: async (store, params) => store.applyContextTerms((params as { terms: Parameters<PgStore["applyContextTerms"]>[0] }).terms),
+	applyContextTerms: async (store, params) => store.applyContextTerms((params as { terms: Parameters<StorageDriver["applyContextTerms"]>[0] }).terms),
 
 	// Tenant administration (ISS52). `PgStore`'s guard against acting on any
 	// tenant other than the auth-seam-resolved one (ISS46's requireOwnTenant)

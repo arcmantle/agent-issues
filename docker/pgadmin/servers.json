@@ -1,0 +1,32 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "agent-issues (admin, bypasses RLS)",
+      "Group": "agent-issues",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "agent_issues",
+      "Username": "agent_issues",
+      "SSLMode": "prefer",
+      "ConnectionParameters": {
+        "connect_timeout": 10,
+        "passfile": "/var/lib/pgadmin/.pgpass",
+        "sslmode": "prefer"
+      }
+    },
+    "2": {
+      "Name": "agent-issues (app role, RLS enforced)",
+      "Group": "agent-issues",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "agent_issues",
+      "Username": "agent_issues_app",
+      "SSLMode": "prefer",
+      "ConnectionParameters": {
+        "connect_timeout": 10,
+        "passfile": "/var/lib/pgadmin/.pgpass",
+        "sslmode": "prefer"
+      }
+    }
+  }
+}

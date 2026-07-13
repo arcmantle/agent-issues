@@ -17,7 +17,7 @@ export class ExportCommand extends MutableTenantCommand {
 	public singleFile = Option.Boolean("--single-file", false);
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
+		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const target = requirePositional(this.positionals, 0, "export <initiativeId|project>");
 			const snapshot = await store.getDatabaseSnapshot();
 

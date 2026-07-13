@@ -43,7 +43,7 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 	});
 
 	function app() {
-		return createJsonRpcApp({ pool: appPool, authProvider });
+		return createJsonRpcApp({ authProvider, createStore: (identity) => new PgStore(appPool, identity.tenantId) });
 	}
 
 	async function tenantAndToken() {

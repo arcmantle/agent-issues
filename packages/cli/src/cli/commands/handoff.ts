@@ -15,7 +15,7 @@ export class HandoffCommand extends BodyTenantCommand {
 	public summary = Option.String("--summary");
 
 	public async execute(): Promise<number> {
-		return withStore(this.dbPath, { tenant: this.tenant, currentWorkingDirectory: this.context.cwd }, async (store) => {
+		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const firstPositional = this.positionals[0];
 
 			if (firstPositional === "create" || firstPositional === "write") {

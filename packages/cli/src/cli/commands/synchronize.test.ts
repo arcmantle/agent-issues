@@ -5,9 +5,38 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { bindCloudProject, openSqliteStore, saveAuthSession, type SqliteStore } from "@agent-issues/core";
+import {
+	bindCloudProject,
+	openSqliteStore,
+	saveAuthSession,
+	type AuthSessionStoreOptions,
+	type RunCredentialCommand,
+	type SqliteStore
+} from "@agent-issues/core";
 
 import { runCli } from "../../cli.js";
+
+function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {
+	const store = new Map<string, string>();
+
+	const runCommand: RunCredentialCommand = async (command) => {
+		const [action, , account, , service] = command.args;
+		const key = `${service}:${account}`;
+
+		if (action === "add-generic-password") {
+			store.set(key, command.args[6]);
+			return { stdout: "", exitCode: 0 };
+		}
+		if (action === "find-generic-password") {
+			const value = store.get(key);
+			return value === undefined ? { stdout: "", exitCode: 44 } : { stdout: `${value}\n`, exitCode: 0 };
+		}
+		const existed = store.delete(key);
+		return { stdout: "", exitCode: existed ? 0 : 44 };
+	};
+
+	return { platform: "darwin", runCommand };
+}
 
 function createCapture() {
 	const stream = new PassThrough();
@@ -94,6 +123,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	let projectDirectory: string;
 	let cloudDirectory: string;
 	let cloudStore: SqliteStore;
+	let credentialStoreOptions: AuthSessionStoreOptions;
 
 	beforeEach(async () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-home-"));
@@ -102,6 +132,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-project-"));
 		cloudDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-cloud-"));
 		cloudStore = (await openSqliteStore(path.join(cloudDirectory, "cloud.db"), { tenant: "tenant-a" })).store;
+		credentialStoreOptions = fakeCredentialStore();
 	});
 
 	afterEach(async () => {
@@ -117,17 +148,25 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 
 		try {
 			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			saveAuthSession({ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" });
+			await saveAuthSession(
+				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+				credentialStoreOptions
+			);
 
 			// First run reconciles each side's independently-seeded sentinel
 			// history (different ids, identical content) - only the second run
 			// is a true no-op.
 			const firstRun = createCapture();
-			await runCli(["synchronize"], { cwd: projectDirectory, stdout: firstRun.stream });
+			await runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory, stdout: firstRun.stream });
 
 			const stdout = createCapture();
 			const stderr = createCapture();
-			const exitCode = await runCli(["synchronize"], { cwd: projectDirectory, stderr: stderr.stream, stdout: stdout.stream });
+			const exitCode = await runCli(["synchronize"], {
+				credentialStoreOptions,
+				cwd: projectDirectory,
+				stderr: stderr.stream,
+				stdout: stdout.stream
+			});
 
 			expect(stderr.read()).toBe("");
 			expect(exitCode).toBe(0);
@@ -142,7 +181,10 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 
 		try {
 			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			saveAuthSession({ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" });
+			await saveAuthSession(
+				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+				credentialStoreOptions
+			);
 
 			// Once cloud-bound, ordinary commands (like `create`) already route
 			// through the cloud backend (ADR18/ISS55) - so this creates the
@@ -150,13 +192,14 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 			// it down to local.
 			const createOut = createCapture();
 			await runCli(["create", "initiative", "--title", "Ship synchronize", "--json"], {
+				credentialStoreOptions,
 				cwd: projectDirectory,
 				stdout: createOut.stream
 			});
 			const created = JSON.parse(createOut.read()) as { id: string };
 
 			const stdout = createCapture();
-			const exitCode = await runCli(["synchronize"], { cwd: projectDirectory, stdout: stdout.stream });
+			const exitCode = await runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory, stdout: stdout.stream });
 
 			expect(exitCode).toBe(0);
 			expect(stdout.read()).toContain("Synchronized with");
@@ -174,12 +217,12 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	});
 
 	it("surfaces the same clear cloud-bind error openStorageDriver produces when the project has no cloud binding", async () => {
-		await expect(runCli(["synchronize"], { cwd: projectDirectory })).rejects.toThrow(/cloud bind/);
+		await expect(runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory })).rejects.toThrow(/cloud bind/);
 	});
 
 	it("surfaces the same clear auth-login error openStorageDriver produces when cloud-bound but no session is cached", async () => {
 		bindCloudProject({ cloudApiUrl: "https://api.example.com", projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
 
-		await expect(runCli(["synchronize"], { cwd: projectDirectory })).rejects.toThrow(/auth login/);
+		await expect(runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory })).rejects.toThrow(/auth login/);
 	});
 });
