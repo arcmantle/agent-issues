@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { resolveAgentIssuesHomeDirectory, resolveDefaultDatabasePath } from "../../utilities/agent-issues-paths.js";
+import { resolveAgentIssuesHomeDirectory, resolveDefaultDatabasePath } from "@agent-issues/core";
 
 /** Discovery record for an already-running local daemon (ADR44). */
 export type DaemonState = {

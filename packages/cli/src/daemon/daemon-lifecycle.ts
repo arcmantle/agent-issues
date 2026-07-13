@@ -1,13 +1,8 @@
 import { closeSync, existsSync, openSync, unlinkSync } from "node:fs";
 import { Socket } from "node:net";
 
-import {
-	DaemonHandshakeMismatchError,
-	readDaemonState,
-	resolveDaemonFilePath,
-	type DaemonState,
-	type DaemonStateStoreOptions
-} from "@agent-issues/core";
+import { DaemonHandshakeMismatchError } from "@agent-issues/core";
+import { readDaemonState, resolveDaemonFilePath, type DaemonState, type DaemonStateStoreOptions } from "@agent-issues/api-local";
 
 /**
  * Probes whether a local daemon is actually reachable on `port`, via a bare

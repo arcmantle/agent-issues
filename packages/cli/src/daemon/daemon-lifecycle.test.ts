@@ -11,7 +11,8 @@ import {
 	releaseDaemonSpawnLock,
 	tryAcquireDaemonSpawnLock,
 } from "./daemon-lifecycle.js";
-import { DaemonDbPathMismatchError, DaemonVersionMismatchError, saveDaemonState } from "@agent-issues/core";
+import { DaemonDbPathMismatchError, DaemonVersionMismatchError } from "@agent-issues/core";
+import { saveDaemonState } from "@agent-issues/api-local";
 
 describe("daemon liveness probe (ISS189)", () => {
 	let server: Server | undefined;

@@ -4,7 +4,6 @@ export * from "./features/entity-store/tenant-types.js";
 export * from "./features/context/context-types.js";
 export * from "./features/storage-driver/storage-driver.js";
 export * from "./features/storage-driver/http-store.js";
-export * from "./features/daemon/daemon-state.js";
 export * from "./utilities/agent-issues-paths.js";
 export * from "./utilities/os-credential-store.js";
 export * from "./utilities/tenant-identity.js";

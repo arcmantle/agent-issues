@@ -20,10 +20,13 @@ export function resolveAgentIssuesHomeDirectory(): string {
 
 /**
  * Resolves the default local sqlite database path (`~/.agent-issues/agent-issues.db`).
- * Used by `daemon-state.ts` purely as the comparison target for the daemon's
- * default discovery slot (ISS192) - it never opens this file itself, so it
- * can live here without `@agent-issues/core` depending on
- * `@agent-issues/api-local`.
+ * Lives here (rather than in `@agent-issues/api-local`'s `database.ts`,
+ * which is the only thing that actually opens this file) because
+ * `@agent-issues/api-local`'s own `daemon-state.ts` needs it purely as the
+ * comparison target for the daemon's default discovery slot (ISS192) - it
+ * never opens the file itself. Keeping it here means both `database.ts` and
+ * `daemon-state.ts` agree on the same path without either depending on the
+ * other.
  */
 export function resolveDefaultDatabasePath(): string {
 	return path.join(resolveAgentIssuesHomeDirectory(), DEFAULT_DATABASE_FILENAME);
