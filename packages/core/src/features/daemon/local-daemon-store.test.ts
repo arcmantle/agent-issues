@@ -1,0 +1,271 @@
+import { createServer, type Server } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { saveDaemonState } from "./daemon-state.js";
+import { saveDaemonToken, type RunCredentialCommand } from "./daemon-token.js";
+import { openLocalDaemonStore, spawnLocalDaemon, LOCAL_DAEMON_SPAWN_FLAG } from "./local-daemon-store.js";
+import { resolveWellKnownLocalTenantId } from "../../utilities/tenant-identity.js";
+
+const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+
+/** Fake in-memory OS credential store, mirroring `daemon-token.test.ts`'s helper, so this suite never shells out to a real native tool. */
+function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {
+	const store = new Map<string, string>();
+
+	const runCommand: RunCredentialCommand = async (command) => {
+		const [action, , account, , service] = command.args;
+		const key = `${service}:${account}`;
+
+		if (action === "add-generic-password") {
+			store.set(key, command.args[6]);
+			return { stdout: "", exitCode: 0 };
+		}
+		if (action === "find-generic-password") {
+			const value = store.get(key);
+			return value === undefined ? { stdout: "", exitCode: 44 } : { stdout: `${value}\n`, exitCode: 0 };
+		}
+		const existed = store.delete(key);
+		return { stdout: "", exitCode: existed ? 0 : 44 };
+	};
+
+	return { platform: "darwin", runCommand };
+}
+
+describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
+	let homeDirectory: string;
+	let credentialStoreOptions: ReturnType<typeof fakeCredentialStore>;
+	let servers: Server[];
+
+	beforeEach(() => {
+		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-local-daemon-store-"));
+		credentialStoreOptions = fakeCredentialStore();
+		servers = [];
+	});
+
+	afterEach(async () => {
+		rmSync(homeDirectory, { recursive: true, force: true });
+		for (const server of servers) {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	type FakeDaemonHandler = (headers: Record<string, string | string[] | undefined>, body: string) => { status: number; body: unknown };
+
+	function listenFakeDaemon(handler: FakeDaemonHandler): Promise<number> {
+		const server = createServer((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => (body += chunk));
+			request.on("end", () => {
+				const result = handler(request.headers, body);
+				response.writeHead(result.status, { "content-type": "application/json" });
+				response.end(JSON.stringify(result.body));
+			});
+		});
+		servers.push(server);
+		return new Promise((resolve) => {
+			server.listen(0, "127.0.0.1", () => {
+				const address = server.address();
+				resolve(typeof address === "object" && address !== null ? address.port : 0);
+			});
+		});
+	}
+
+	it("returns a store whose calls reach the already-running daemon with the token and build hash", async () => {
+		await saveDaemonToken("real-token", credentialStoreOptions);
+		let seenAuth: string | string[] | undefined;
+		let seenBuildHash: string | string[] | undefined;
+		const port = await listenFakeDaemon((headers) => {
+			seenAuth = headers.authorization;
+			seenBuildHash = headers["x-agent-issues-build-hash"];
+			return { status: 200, body: { jsonrpc: "2.0", id: "1", result: [] } };
+		});
+		saveDaemonState({ pid: process.pid, port }, { homeDirectory });
+
+		const store = await openLocalDaemonStore({ homeDirectory, credentialStoreOptions, buildHash: "hash-1", spawn: vi.fn() });
+		await store.listEntities("initiative");
+
+		expect(seenAuth).toBe("Bearer real-token");
+		expect(seenBuildHash).toBe("hash-1");
+		expect(store.tenantId).toBe(resolveWellKnownLocalTenantId());
+	});
+
+	it("sends the configured db path on every call (ISS190)", async () => {
+		await saveDaemonToken("real-token", credentialStoreOptions);
+		let seenDbPath: string | string[] | undefined;
+		const port = await listenFakeDaemon((headers) => {
+			seenDbPath = headers["x-agent-issues-db-path"];
+			return { status: 200, body: { jsonrpc: "2.0", id: "1", result: [] } };
+		});
+		saveDaemonState({ pid: process.pid, port }, { homeDirectory, dbPath: "/tmp/other.db" });
+
+		const store = await openLocalDaemonStore({ homeDirectory, credentialStoreOptions, dbPath: "/tmp/other.db", spawn: vi.fn() });
+		await store.listEntities("initiative");
+
+		expect(seenDbPath).toBe("/tmp/other.db");
+	});
+
+	it("retries once against a freshly-spawned daemon when the current one reports a stale build hash", async () => {
+		await saveDaemonToken("real-token", credentialStoreOptions);
+		const oldPort = await listenFakeDaemon(() => {
+			// Simulates the stale daemon's own server-side drain-then-exit (ISS188), which begins as soon as it sees a mismatched request - not something the client triggers.
+			setTimeout(() => servers[0]?.close(), 10);
+			return {
+				status: 409,
+				body: { error: "Daemon build-hash mismatch.", code: "daemon-version-mismatch", expectedBuildHash: "hash-2", receivedBuildHash: "hash-1" }
+			};
+		});
+		saveDaemonState({ pid: process.pid, port: oldPort }, { homeDirectory });
+
+		const spawn = vi.fn(() => {
+			void listenFakeDaemon(() => ({ status: 200, body: { jsonrpc: "2.0", id: "1", result: [] } })).then((newPort) => {
+				saveDaemonState({ pid: process.pid, port: newPort }, { homeDirectory });
+			});
+		});
+
+		const store = await openLocalDaemonStore({
+			homeDirectory,
+			credentialStoreOptions,
+			buildHash: "hash-1",
+			spawn,
+			pollIntervalMs: 5,
+			drainPollIntervalMs: 5
+		});
+		const result = await store.listEntities("initiative");
+
+		expect(result).toEqual([]);
+		expect(spawn).toHaveBeenCalledOnce();
+	});
+
+	it("throws a clear error when the daemon is reachable but no token can be read from the credential store", async () => {
+		const port = await listenFakeDaemon(() => ({ status: 200, body: { jsonrpc: "2.0", id: "1", result: [] } }));
+		saveDaemonState({ pid: process.pid, port }, { homeDirectory });
+
+		await expect(
+			openLocalDaemonStore({ homeDirectory, credentialStoreOptions, spawn: vi.fn() })
+		).rejects.toThrow(/token/i);
+	});
+
+	it("retries once against a freshly-spawned daemon when the current one reports a db-path mismatch (ISS190)", async () => {
+		await saveDaemonToken("real-token", credentialStoreOptions);
+		const oldPort = await listenFakeDaemon(() => {
+			setTimeout(() => servers[0]?.close(), 10);
+			return {
+				status: 409,
+				body: { error: "Daemon db-path mismatch.", code: "daemon-db-mismatch", expectedDbPath: "/tmp/old.db", receivedDbPath: "/tmp/new.db" }
+			};
+		});
+		saveDaemonState({ pid: process.pid, port: oldPort }, { homeDirectory, dbPath: "/tmp/new.db" });
+
+		const spawn = vi.fn(() => {
+			void listenFakeDaemon(() => ({ status: 200, body: { jsonrpc: "2.0", id: "1", result: [] } })).then((newPort) => {
+				saveDaemonState({ pid: process.pid, port: newPort }, { homeDirectory, dbPath: "/tmp/new.db" });
+			});
+		});
+
+		const store = await openLocalDaemonStore({
+			homeDirectory,
+			credentialStoreOptions,
+			dbPath: "/tmp/new.db",
+			spawn,
+			pollIntervalMs: 5,
+			drainPollIntervalMs: 5
+		});
+		const result = await store.listEntities("initiative");
+
+		expect(result).toEqual([]);
+		expect(spawn).toHaveBeenCalledOnce();
+	});
+
+	it("re-reads the daemon token before retrying, since a freshly-spawned daemon mints its own new one (ISS190)", async () => {
+		await saveDaemonToken("stale-token", credentialStoreOptions);
+		const oldPort = await listenFakeDaemon(() => {
+			setTimeout(() => servers[0]?.close(), 10);
+			return {
+				status: 409,
+				body: { error: "Daemon db-path mismatch.", code: "daemon-db-mismatch", expectedDbPath: "/tmp/old.db", receivedDbPath: "/tmp/new.db" }
+			};
+		});
+		saveDaemonState({ pid: process.pid, port: oldPort }, { homeDirectory, dbPath: "/tmp/new.db" });
+
+		const spawn = vi.fn(() => {
+			void (async () => {
+				// A freshly-spawned real daemon mints and persists its own new token independently of whatever the client already read.
+				await saveDaemonToken("freshly-minted-token", credentialStoreOptions);
+				const newPort = await listenFakeDaemon((headers) => {
+					if (headers.authorization !== "Bearer freshly-minted-token") {
+						return { status: 401, body: { error: "unauthorized" } };
+					}
+					return { status: 200, body: { jsonrpc: "2.0", id: "1", result: [] } };
+				});
+				saveDaemonState({ pid: process.pid, port: newPort }, { homeDirectory, dbPath: "/tmp/new.db" });
+			})();
+		});
+
+		const store = await openLocalDaemonStore({
+			homeDirectory,
+			credentialStoreOptions,
+			dbPath: "/tmp/new.db",
+			spawn,
+			pollIntervalMs: 5,
+			drainPollIntervalMs: 5
+		});
+		const result = await store.listEntities("initiative");
+
+		expect(result).toEqual([]);
+	});
+});
+
+describe("spawnLocalDaemon (ISS190)", () => {
+	beforeEach(() => {
+		spawnMock.mockClear();
+	});
+
+	it("re-invokes this process's own entrypoint as a detached child carrying the hidden daemon flag", () => {
+		const originalArgv1 = process.argv[1];
+		process.argv[1] = "/path/to/entrypoint.js";
+
+		try {
+			spawnLocalDaemon();
+
+			expect(spawnMock).toHaveBeenCalledWith(
+				process.execPath,
+				["/path/to/entrypoint.js", LOCAL_DAEMON_SPAWN_FLAG],
+				expect.objectContaining({ detached: true })
+			);
+		} finally {
+			process.argv[1] = originalArgv1;
+		}
+	});
+
+	it("appends --db <path> to the respawned argv when a db path is supplied (ISS190)", () => {
+		const originalArgv1 = process.argv[1];
+		process.argv[1] = "/path/to/entrypoint.js";
+
+		try {
+			spawnLocalDaemon({ dbPath: "/tmp/other.db" });
+
+			expect(spawnMock).toHaveBeenCalledWith(
+				process.execPath,
+				["/path/to/entrypoint.js", LOCAL_DAEMON_SPAWN_FLAG, "--db", "/tmp/other.db"],
+				expect.objectContaining({ detached: true })
+			);
+		} finally {
+			process.argv[1] = originalArgv1;
+		}
+	});
+
+	it("throws when no process entrypoint is available to re-invoke", () => {
+		const originalArgv1 = process.argv[1];
+		process.argv[1] = undefined as unknown as string;
+
+		try {
+			expect(() => spawnLocalDaemon()).toThrow(/entrypoint/i);
+		} finally {
+			process.argv[1] = originalArgv1;
+		}
+	});
+});
