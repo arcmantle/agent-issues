@@ -4,9 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { HttpStore, saveDaemonToken, type RunCredentialCommand } from "@agent-issues/core";
-import { saveDaemonState } from "@agent-issues/api-local";
-import { SqliteStore } from "@agent-issues/api-local";
+import { HttpStore, type RunCredentialCommand } from "@agent-issues/core";
+import { saveDaemonState, saveDaemonToken, SqliteStore } from "@agent-issues/api-local";
 import { saveAuthSession } from "./auth-session.js";
 import { bindCloudProject } from "./cloud-binding.js";
 import { LocalDaemonStore } from "./daemon/local-daemon-store.js";

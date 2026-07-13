@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import type { CredentialCommand, RunCredentialCommand } from "@agent-issues/core";
 import { clearDaemonToken, mintDaemonToken, readDaemonToken, saveDaemonToken } from "./daemon-token.js";
-import type { CredentialCommand, RunCredentialCommand } from "../../utilities/os-credential-store.js";
 
 /** Fake in-memory credential store standing in for a real OS credential tool, keyed the same way `os-credential-store.ts` addresses a real one. */
 function fakeCredentialStore(): { runCommand: RunCredentialCommand } {

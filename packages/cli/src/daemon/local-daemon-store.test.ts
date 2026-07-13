@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveWellKnownLocalTenantId, saveDaemonToken, type RunCredentialCommand } from "@agent-issues/core";
-import { saveDaemonState } from "@agent-issues/api-local";
+import { resolveWellKnownLocalTenantId, type RunCredentialCommand } from "@agent-issues/core";
+import { saveDaemonState, saveDaemonToken } from "@agent-issues/api-local";
 import { openLocalDaemonStore, spawnLocalDaemon, LOCAL_DAEMON_SPAWN_FLAG } from "./local-daemon-store.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));

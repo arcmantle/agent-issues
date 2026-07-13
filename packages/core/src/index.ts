@@ -7,7 +7,6 @@ export * from "./features/storage-driver/http-store.js";
 export * from "./utilities/agent-issues-paths.js";
 export * from "./utilities/os-credential-store.js";
 export * from "./utilities/tenant-identity.js";
-export * from "./features/daemon/daemon-token.js";
 export * from "./features/synchronize/history-merge.js";
 export * from "./features/synchronize/synchronize.js";
 export * from "./features/migrations/migration-engine.js";

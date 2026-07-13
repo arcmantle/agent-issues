@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { deleteCredential, getCredential, setCredential, type OsCredentialStoreOptions } from "../../utilities/os-credential-store.js";
+import { deleteCredential, getCredential, setCredential, type OsCredentialStoreOptions } from "@agent-issues/core";
 
 const SERVICE = "agent-issues-daemon";
 const ACCOUNT = "local-daemon-token";
