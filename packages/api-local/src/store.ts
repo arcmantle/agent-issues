@@ -3,10 +3,13 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "./database.js";
 import { getContextDetails, type ContextDetails } from "./context-store.js";
 import {
+	collectReachableIds,
 	getArchiveStatus,
 	getAllowedRelationType,
+	deriveEntityKindFromId,
 	deriveEntityStatuses,
 	DEFAULT_EPIC_ID,
+	factsMatchEntity,
 	getInitialStatus,
 	isBodySource,
 	isAllowedRelation,
@@ -751,32 +754,6 @@ export function applyHistoryEntries(db: DatabaseHandle, entries: HistoryEntryRec
 	return { inserted };
 }
 
-// Derives an entity's kind from its own id prefix (ADR7's per-kind `ID_PREFIX`,
-// e.g. "ISS57" -> issue). `HistoryEntryRecord` carries no `kind` field, so this
-// is what lets `applyResolvedFacts` create a live-cache row for an entity this
-// side has never seen, purely from a merged history entry (ISS59).
-function deriveEntityKindFromId(entityId: string): EntityKind {
-	const prefix = /^([A-Za-z]+)\d+$/.exec(entityId)?.[1];
-	const found = prefix
-		? (Object.entries(ID_PREFIX) as Array<[EntityKind, string]>).find(([, candidatePrefix]) => candidatePrefix === prefix)
-		: undefined;
-
-	if (!found) {
-		throw new Error(`Cannot derive entity kind from id: ${entityId}`);
-	}
-
-	return found[0];
-}
-
-function factsMatchEntity(entity: EntityRecord, resolved: HistoryEntryRecord): boolean {
-	return (
-		entity.title === resolved.title &&
-		entity.body === resolved.body &&
-		entity.bodySource === resolved.bodySource &&
-		entity.status === resolved.status
-	);
-}
-
 // Bumps `kind`'s id counter past `entityId`'s numeric suffix if needed, so a
 // later local `createEntity` of that kind can never collide with an id that
 // arrived via synchronize instead of this side's own counter (ISS59).
@@ -1398,29 +1375,6 @@ function getAllRelations(db: DatabaseHandle): RelationRecord[] {
 		type: row.type as RelationType,
 		createdAt: row.created_at
 	}));
-}
-
-function collectReachableIds(relations: RelationRecord[], startId: string): Set<string> {
-	const seen = new Set<string>([startId]);
-	const queue = [startId];
-
-	while (queue.length > 0) {
-		const currentId = queue.shift();
-		if (!currentId) {
-			continue;
-		}
-
-		for (const relation of relations) {
-			if (relation.fromId !== currentId || seen.has(relation.toId)) {
-				continue;
-			}
-
-			seen.add(relation.toId);
-			queue.push(relation.toId);
-		}
-	}
-
-	return seen;
 }
 
 function hasTypedPath(db: DatabaseHandle, startId: string, targetId: string, relationType: string): boolean {

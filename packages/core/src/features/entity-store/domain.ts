@@ -365,3 +365,63 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 		return derived === undefined || derived === entity.status ? entity : { ...entity, status: derived };
 	});
 }
+
+/**
+ * Recovers an entity's `EntityKind` from its id's `ID_PREFIX` (e.g.
+ * `ISS42` -> `"issue"`), for call sites (synchronize's resolved-facts
+ * application) that only have the bare id string to work with. Pure and
+ * dependency-free, so both `PgStore` and `SqliteStore` share one
+ * implementation rather than each re-deriving the same prefix table lookup.
+ */
+export function deriveEntityKindFromId(entityId: string): EntityKind {
+	const prefix = /^([A-Za-z]+)\d+$/.exec(entityId)?.[1];
+	const found = prefix
+		? (Object.entries(ID_PREFIX) as Array<[EntityKind, string]>).find(([, candidatePrefix]) => candidatePrefix === prefix)
+		: undefined;
+
+	if (!found) {
+		throw new Error(`Cannot derive entity kind from id: ${entityId}`);
+	}
+
+	return found[0];
+}
+
+/** True when `entity`'s trackable facts (title/body/bodySource/status) already match `resolved`'s - synchronize's no-op guard against writing an identical history entry twice. */
+export function factsMatchEntity(entity: EntityRecord, resolved: HistoryEntryRecord): boolean {
+	return (
+		entity.title === resolved.title &&
+		entity.body === resolved.body &&
+		entity.bodySource === resolved.bodySource &&
+		entity.status === resolved.status
+	);
+}
+
+/**
+ * Breadth-first walk of `relations` from `startId`, returning every id
+ * reachable via an outgoing edge (transitively). Used by both stores'
+ * `hasTypedPath`/`hasStructuralPath` (structural-move cycle guards) once
+ * they've fetched their own relation rows - the graph traversal itself is
+ * pure and identical regardless of how those rows were fetched.
+ */
+export function collectReachableIds(relations: RelationRecord[], startId: string): Set<string> {
+	const seen = new Set<string>([startId]);
+	const queue = [startId];
+
+	while (queue.length > 0) {
+		const currentId = queue.shift();
+		if (!currentId) {
+			continue;
+		}
+
+		for (const relation of relations) {
+			if (relation.fromId !== currentId || seen.has(relation.toId)) {
+				continue;
+			}
+
+			seen.add(relation.toId);
+			queue.push(relation.toId);
+		}
+	}
+
+	return seen;
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+	collectReachableIds,
 	DEFAULT_CONTEXT_KEY,
 	DEFAULT_CONTEXT_SUMMARY,
 	DEFAULT_CONTEXT_TITLE,
@@ -8,9 +9,12 @@ import {
 	DEFAULT_EPIC_TITLE,
 	DEFAULT_PROJECT_ID,
 	DEFAULT_PROJECT_TITLE,
+	deriveEntityKindFromId,
 	deriveEntityStatuses,
 	ENTITY_KINDS,
+	factsMatchEntity,
 	filterContextDirectory,
+	formatTenantDisplayName,
 	getAllowedRelationType,
 	getArchiveStatus,
 	getInitialStatus,
@@ -405,33 +409,6 @@ async function insertRelation(client: PoolClient, tenantId: string, relation: Re
 	return { inserted: (result.rowCount ?? 0) > 0 };
 }
 
-// Derives an entity's kind from its own id prefix (ADR7's per-kind `ID_PREFIX`,
-// e.g. "ISS57" -> issue), mirroring core's `deriveEntityKindFromId`.
-// `HistoryEntryRecord` carries no `kind` field, so this is what lets
-// `applyResolvedFacts` create a live-cache row for an entity this side has
-// never seen, purely from a merged history entry (ISS59).
-function deriveEntityKindFromId(entityId: string): EntityKind {
-	const prefix = /^([A-Za-z]+)\d+$/.exec(entityId)?.[1];
-	const found = prefix
-		? (Object.entries(ID_PREFIX) as Array<[EntityKind, string]>).find(([, candidatePrefix]) => candidatePrefix === prefix)
-		: undefined;
-
-	if (!found) {
-		throw new Error(`Cannot derive entity kind from id: ${entityId}`);
-	}
-
-	return found[0];
-}
-
-function factsMatchEntity(entity: EntityRecord, resolved: HistoryEntryRecord): boolean {
-	return (
-		entity.title === resolved.title &&
-		entity.body === resolved.body &&
-		entity.bodySource === resolved.bodySource &&
-		entity.status === resolved.status
-	);
-}
-
 // Bumps `kind`'s id counter past `entityId`'s numeric suffix if needed, so a
 // later local `createEntity` of that kind can never collide with an id that
 // arrived via synchronize instead of this side's own counter (ISS59).
@@ -486,29 +463,6 @@ async function reconcileStructuralParent(
 	}
 
 	await insertRelation(client, tenantId, { fromId: parent.id, toId: entityId, type: relationType, createdAt: new Date().toISOString() });
-}
-
-function collectReachableIds(relations: RelationRecord[], startId: string): Set<string> {
-	const seen = new Set<string>([startId]);
-	const queue = [startId];
-
-	while (queue.length > 0) {
-		const currentId = queue.shift();
-		if (!currentId) {
-			continue;
-		}
-
-		for (const relation of relations) {
-			if (relation.fromId !== currentId || seen.has(relation.toId)) {
-				continue;
-			}
-
-			seen.add(relation.toId);
-			queue.push(relation.toId);
-		}
-	}
-
-	return seen;
 }
 
 async function hasTypedPath(client: PoolClient, tenantId: string, startId: string, targetId: string, relationType: string): Promise<boolean> {
@@ -1154,18 +1108,6 @@ async function getContextTermRecord(client: PoolClient, tenantId: string, contex
 	);
 	const row = result.rows[0];
 	return row ? mapContextTermRow(row) : null;
-}
-
-// Mirrors database.ts's formatTenantDisplayName field-for-field: strips a
-// trailing 12-hex-char workspace hash suffix, then title-cases the
-// remaining hyphen/underscore-separated segments.
-function formatTenantDisplayName(tenantId: string): string {
-	const withoutHashSuffix = tenantId.replace(/-[0-9a-f]{12}$/i, "");
-	return withoutHashSuffix
-		.split(/[-_]+/)
-		.filter((segment) => segment.length > 0)
-		.map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1)}`)
-		.join(" ");
 }
 
 async function getTenantRecordCounts(client: PoolClient, tenantId: string): Promise<TenantRecordCounts> {
