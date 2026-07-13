@@ -29,9 +29,6 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
     devDependencies:
-      '@agent-issues/api-local':
-        specifier: workspace:*
-        version: link:../api-local
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
@@ -75,6 +72,12 @@ importers:
       '@types/node':
         specifier: ^25.9.2
         version: 25.9.2
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
       typescript:
         specifier: ^7.0.0
         version: 7.0.2
