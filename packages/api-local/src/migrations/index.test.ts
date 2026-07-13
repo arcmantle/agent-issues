@@ -5,11 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runMigrations } from "../migration-runner.js";
+import { runMigrations } from "../db/migration-runner.js";
 import { migrations } from "./index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const GOLDEN_FIXTURE = path.join(here, "..", "__fixtures__", "schema-v7.db");
+const GOLDEN_FIXTURE = path.join(here, "__fixtures__", "schema-v7.db");
 const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "handoffs", "metadata"] as const;
 
 const tempDirs: string[] = [];

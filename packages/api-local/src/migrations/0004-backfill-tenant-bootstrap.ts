@@ -8,9 +8,10 @@ import {
 	DEFAULT_PROJECT_TITLE,
 	ENTITY_KINDS,
 	RESERVED_SYSTEM_AUTHOR,
-	STRUCTURAL_RELATION_TYPES
-} from "../../entity-store/domain.js";
-import type { Migration, MigrationConn } from "../migration-engine.js";
+	STRUCTURAL_RELATION_TYPES,
+	type Migration,
+	type MigrationConn
+} from "@agent-issues/core";
 
 /**
  * Every distinct `tenant_id` with real content in this database - excludes

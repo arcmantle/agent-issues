@@ -8,9 +8,10 @@ import {
 	ENTITY_KINDS,
 	ID_PREFIX,
 	RESERVED_SYSTEM_AUTHOR,
-	type EntityKind
-} from "../../entity-store/domain.js";
-import type { Migration, MigrationConn } from "../migration-engine.js";
+	type EntityKind,
+	type Migration,
+	type MigrationConn
+} from "@agent-issues/core";
 
 type LegacyEntityRow = {
 	id: string;

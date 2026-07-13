@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runStorageDriverContractSuite } from "./storage-driver-contract.js";
-import type { StorageDriver } from "./storage-driver.js";
+import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
+import type { StorageDriver } from "@agent-issues/core";
 import { openSqliteStore } from "./sqlite-store.js";
 
 let tempDir: string | null = null;

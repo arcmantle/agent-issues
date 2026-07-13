@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 
 import {
+	AGENT_ISSUES_DIRECTORY,
+	DEFAULT_DATABASE_FILENAME,
 	DEFAULT_EPIC_ID,
 	DEFAULT_EPIC_TITLE,
 	DEFAULT_PROJECT_ID,
@@ -12,15 +13,29 @@ import {
 	ENTITY_KINDS,
 	formatTenantDisplayName,
 	RESERVED_SYSTEM_AUTHOR,
-	STRUCTURAL_RELATION_TYPES
-} from "./domain.js";
-import { runMigrations } from "../migrations/migration-runner.js";
-import { baselineV7Migration } from "../migrations/versions/0000-baseline-v7.js";
-import { backfillTenantBootstrapMigration } from "../migrations/versions/0004-backfill-tenant-bootstrap.js";
-import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/versions/0008-consolidate-legacy-tenants-backfill.js";
-import { resolveWellKnownLocalTenantId, sanitizePathSegment } from "../../utilities/tenant-identity.js";
+	resolveAgentIssuesHomeDirectory,
+	resolveWellKnownLocalTenantId,
+	sanitizePathSegment,
+	STRUCTURAL_RELATION_TYPES,
+	type DeleteTenantResult,
+	type RenameTenantResult,
+	type TenantRecordCounts,
+	type TenantSummary
+} from "@agent-issues/core";
+import { runMigrations } from "./db/migration-runner.js";
+import { baselineV7Migration } from "./migrations/0000-baseline-v7.js";
+import { backfillTenantBootstrapMigration } from "./migrations/0004-backfill-tenant-bootstrap.js";
+import { buildConsolidateLegacyTenantsBackfillMigration } from "./migrations/0008-consolidate-legacy-tenants-backfill.js";
 
-export { resolveWellKnownLocalTenantId, sanitizePathSegment };
+export {
+	resolveAgentIssuesHomeDirectory,
+	resolveWellKnownLocalTenantId,
+	sanitizePathSegment,
+	type DeleteTenantResult,
+	type RenameTenantResult,
+	type TenantRecordCounts,
+	type TenantSummary
+};
 
 /**
  * The schema-shape migration (ADR43) applied on every open, before any
@@ -72,42 +87,7 @@ export type DatabaseLocationOptions = {
 	skipTenantConsolidation?: boolean;
 };
 
-export type TenantRecordCounts = {
-	entities: number;
-	relations: number;
-	contexts: number;
-	contextTerms: number;
-	handoffs: number;
-	historyEntries: number;
-};
-
-export type TenantSummary = {
-	id: string;
-	displayName: string;
-	counts: TenantRecordCounts;
-};
-
-export type DeleteTenantResult = {
-	tenantId: string;
-	displayName: string;
-	removed: boolean;
-	counts: TenantRecordCounts;
-	counters: number;
-};
-
-export type RenameTenantResult = {
-	previousTenantId: string;
-	previousDisplayName: string;
-	newTenantId: string;
-	newDisplayName: string;
-	renamed: boolean;
-	counts: TenantRecordCounts;
-	counters: number;
-};
-
-const AGENT_ISSUES_DIRECTORY = ".agent-issues";
 const LEGACY_TENANTS_DIRECTORY = "tenants";
-const DATABASE_FILENAME = "agent-issues.db";
 
 /**
  * The one-time, all-tenants sweep migration (ADR43) that retroactively fixes
@@ -135,7 +115,7 @@ export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocati
 		return path.resolve(inputPath);
 	}
 
-	return path.join(resolveAgentIssuesHomeDirectory(), DATABASE_FILENAME);
+	return path.join(resolveAgentIssuesHomeDirectory(), DEFAULT_DATABASE_FILENAME);
 }
 
 export async function ensureDatabase(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenDatabaseResult> {
@@ -212,10 +192,6 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	return { db, dbPath };
 }
 
-export function resolveAgentIssuesHomeDirectory(): string {
-	return path.join(homedir(), AGENT_ISSUES_DIRECTORY);
-}
-
 export function resolveTenantDirectory(options?: DatabaseLocationOptions): string {
 	const requestedTenant = options?.tenant?.trim();
 	const slug = requestedTenant
@@ -225,7 +201,7 @@ export function resolveTenantDirectory(options?: DatabaseLocationOptions): strin
 }
 
 export function resolveLegacyDatabasePath(options?: DatabaseLocationOptions): string {
-	return path.join(resolveTenantRootPath(options?.currentWorkingDirectory ?? process.cwd()), AGENT_ISSUES_DIRECTORY, DATABASE_FILENAME);
+	return path.join(resolveTenantRootPath(options?.currentWorkingDirectory ?? process.cwd()), AGENT_ISSUES_DIRECTORY, DEFAULT_DATABASE_FILENAME);
 }
 
 export function resolveTenantSlug(options?: DatabaseLocationOptions): string {
@@ -816,7 +792,7 @@ function importLegacyTenantDataIfNeeded(db: DatabaseHandle, options?: DatabaseLo
 	}
 
 	const candidatePaths = [
-		path.join(resolveTenantDirectory(options), DATABASE_FILENAME),
+		path.join(resolveTenantDirectory(options), DEFAULT_DATABASE_FILENAME),
 		resolveLegacyDatabasePath(options)
 	].filter((candidatePath, index, allPaths) => allPaths.indexOf(candidatePath) === index && existsSync(candidatePath));
 

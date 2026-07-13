@@ -8,8 +8,8 @@ import type {
 	ForgetContextTermResult,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult
-} from "../context/context-store.js";
-import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../entity-store/database.js";
+} from "../context/context-types.js";
+import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../entity-store/tenant-types.js";
 import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "../entity-store/domain.js";
 import type {
 	DatabaseSnapshot,
@@ -23,7 +23,7 @@ import type {
 	MoveResult,
 	StatusUpdateResult,
 	UnlinkResult
-} from "../entity-store/store.js";
+} from "../entity-store/store-types.js";
 
 /**
  * The engine-agnostic boundary the domain layer talks to (ADR11, ADR13):

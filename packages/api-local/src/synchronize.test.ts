@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { openSqliteStore } from "../storage-driver/sqlite-store.js";
-import type { SqliteStore } from "../storage-driver/sqlite-store.js";
-import { synchronizeStores } from "./synchronize.js";
+import { openSqliteStore } from "./sqlite-store.js";
+import type { SqliteStore } from "./sqlite-store.js";
+import { synchronizeStores } from "@agent-issues/core";
 
 // `synchronizeStores` only depends on the `StorageDriver` interface, so two
 // `SqliteStore`s stand in for "local" and "cloud" here - proving the

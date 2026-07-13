@@ -5,7 +5,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineContextTerm } from "../context/context-store.js";
+import { defineContextTerm } from "./context-store.js";
 import {
 	deleteTenant,
 	ensureDatabase,
@@ -17,9 +17,10 @@ import {
 	resolveWellKnownLocalTenantId,
 	type DatabaseHandle
 } from "./database.js";
-import { runMigrations } from "../migrations/migration-runner.js";
-import { baselineV7Migration } from "../migrations/versions/0000-baseline-v7.js";
+import { runMigrations } from "./db/migration-runner.js";
+import { baselineV7Migration } from "./migrations/0000-baseline-v7.js";
 import { createEntity, createHandoff } from "./store.js";
+
 
 const tempDirs: string[] = [];
 

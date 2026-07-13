@@ -1,8 +1,8 @@
-import type { ContextSyncRecord, ContextTermSyncRecord } from "../context/context-store.js";
+import type { ContextSyncRecord, ContextTermSyncRecord } from "../context/context-types.js";
 import type { HistoryEntryRecord, RelationRecord } from "../entity-store/domain.js";
 import { mergeHistoryLogs } from "./history-merge.js";
 import type { StorageDriver } from "../storage-driver/storage-driver.js";
-import type { HandoffRecord } from "../entity-store/store.js";
+import type { HandoffRecord } from "../entity-store/store-types.js";
 
 export type SynchronizeSummary = {
 	entriesAppliedToLocal: number;

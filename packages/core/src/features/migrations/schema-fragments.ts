@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import type { MigrationConn } from "../migration-engine.js";
+import type { MigrationConn } from "./migration-engine.js";
 
 /**
  * Shared DDL fragments for the `schema_version 7` domain tables (ISS174):

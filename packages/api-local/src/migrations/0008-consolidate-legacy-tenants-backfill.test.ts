@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runMigrations } from "../migration-runner.js";
-import { resolveWellKnownLocalTenantId } from "../../../utilities/tenant-identity.js";
+import { runMigrations } from "../db/migration-runner.js";
+import { resolveWellKnownLocalTenantId } from "@agent-issues/core";
 import { migrations as coreMigrations } from "./index.js";
 import { buildConsolidateLegacyTenantsBackfillMigration } from "./0008-consolidate-legacy-tenants-backfill.js";
 

@@ -3,6 +3,7 @@ packages:
   - packages/cli
   - packages/site
   - packages/api
+  - packages/api-local
 
 allowBuilds:
   better-sqlite3: true

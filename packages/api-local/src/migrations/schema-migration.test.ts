@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ensureDatabase, resolveWellKnownLocalTenantId } from "../entity-store/database.js";
+import { ensureDatabase, resolveWellKnownLocalTenantId } from "../database.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN_FIXTURE = path.join(here, "__fixtures__", "schema-v7.db");

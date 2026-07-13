@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 
-import type { Migration } from "../migration-engine.js";
 import {
 	createContextsTable,
 	createContextsTenantScopeEntityIdIndex,
@@ -15,8 +14,9 @@ import {
 	createHistoryEntriesVersionIndex,
 	createMetadataTable,
 	createRelationsTable,
-	createRelationsTenantToIdIndex
-} from "./schema-fragments.js";
+	createRelationsTenantToIdIndex,
+	type Migration
+} from "@agent-issues/core";
 
 /**
  * Recreates the full core schema in one step through the ADR43 runner:

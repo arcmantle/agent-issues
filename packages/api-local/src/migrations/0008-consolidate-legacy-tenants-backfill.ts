@@ -1,8 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import { formatTenantDisplayName } from "../../entity-store/domain.js";
-import type { Migration, MigrationConn } from "../migration-engine.js";
-import { resolveWellKnownLocalTenantId } from "../../../utilities/tenant-identity.js";
+import { formatTenantDisplayName, resolveWellKnownLocalTenantId, type Migration, type MigrationConn } from "@agent-issues/core";
 import { consolidateLegacyTenantData } from "./0007-consolidate-legacy-tenant.js";
 
 /**

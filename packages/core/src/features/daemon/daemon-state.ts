@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { resolveAgentIssuesHomeDirectory, resolveDatabasePath } from "../entity-store/database.js";
+import { resolveAgentIssuesHomeDirectory, resolveDefaultDatabasePath } from "../../utilities/agent-issues-paths.js";
 
 /** Discovery record for an already-running local daemon (ADR44). */
 export type DaemonState = {
@@ -37,8 +37,8 @@ export type DaemonStateStoreOptions = {
  * db path maps to.
  */
 export function resolveDaemonSlotKey(dbPath?: string): string {
-	const resolved = path.resolve(dbPath ?? resolveDatabasePath());
-	const defaultResolved = path.resolve(resolveDatabasePath());
+	const resolved = path.resolve(dbPath ?? resolveDefaultDatabasePath());
+	const defaultResolved = path.resolve(resolveDefaultDatabasePath());
 	if (resolved === defaultResolved) return "default";
 
 	return createHash("sha256").update(resolved).digest("hex").slice(0, 16);

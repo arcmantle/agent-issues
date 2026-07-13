@@ -3,8 +3,7 @@ import type { SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { copyFileSync } from "node:fs";
 
-import type { Migration, MigrationConn, MigrationEngine } from "./migration-engine.js";
-import { runMigrationSequence } from "./migration-engine.js";
+import { runMigrationSequence, type Migration, type MigrationConn, type MigrationEngine } from "@agent-issues/core";
 
 const LEDGER_TABLE = "schema_migrations";
 

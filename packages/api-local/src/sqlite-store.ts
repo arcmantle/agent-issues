@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 
+import type { BodySource, HistoryEntryRecord, RelationRecord, StorageDriver } from "@agent-issues/core";
 import type {
 	ContextDetails,
 	ContextDirectory,
@@ -7,7 +8,7 @@ import type {
 	ContextSyncRecord,
 	ContextTermSyncRecord,
 	QueryContextDirectoryInput
-} from "../context/context-store.js";
+} from "./context-store.js";
 import {
 	applyContextTerms,
 	applyContexts,
@@ -20,12 +21,10 @@ import {
 	listContexts,
 	queryContextDirectory,
 	upsertContext
-} from "../context/context-store.js";
-import type { DatabaseHandle, DatabaseLocationOptions } from "../entity-store/database.js";
-import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "../entity-store/database.js";
-import type { BodySource, HistoryEntryRecord, RelationRecord } from "../entity-store/domain.js";
-import type { StorageDriver } from "./storage-driver.js";
-import type { HandoffRecord } from "../entity-store/store.js";
+} from "./context-store.js";
+import type { DatabaseHandle, DatabaseLocationOptions } from "./database.js";
+import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./database.js";
+import type { HandoffRecord } from "./store.js";
 import {
 	applyHandoffs,
 	applyHistoryEntries,
@@ -54,7 +53,7 @@ import {
 	unlinkEntities,
 	updateEntityStatus,
 	updateHandoff
-} from "../entity-store/store.js";
+} from "./store.js";
 
 export type OpenSqliteStoreResult = {
 	store: SqliteStore;

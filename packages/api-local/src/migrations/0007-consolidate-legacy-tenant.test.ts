@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runMigrations } from "../migration-runner.js";
+import { runMigrations } from "../db/migration-runner.js";
 import { migrations as coreMigrations } from "./index.js";
 import { buildConsolidateLegacyTenantMigration } from "./0007-consolidate-legacy-tenant.js";
 
