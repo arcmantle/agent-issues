@@ -29,6 +29,9 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
     devDependencies:
+      '@agent-issues/api-local':
+        specifier: workspace:*
+        version: link:../api-local
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6
@@ -51,11 +54,42 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
 
+  packages/api-local:
+    dependencies:
+      '@agent-issues/core':
+        specifier: workspace:*
+        version: link:../core
+      better-sqlite3:
+        specifier: ^12.10.0
+        version: 12.10.0
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.10.0)(pg@8.22.0)
+      fuse.js:
+        specifier: ^7.4.2
+        version: 7.4.2
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      '@types/node':
+        specifier: ^25.9.2
+        version: 25.9.2
+      typescript:
+        specifier: ^7.0.0
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
+
   packages/cli:
     dependencies:
       '@agent-issues/api':
         specifier: workspace:*
         version: link:../api
+      '@agent-issues/api-local':
+        specifier: workspace:*
+        version: link:../api-local
       '@agent-issues/core':
         specifier: workspace:*
         version: link:../core
@@ -78,19 +112,19 @@ importers:
 
   packages/core:
     dependencies:
-      better-sqlite3:
-        specifier: ^12.10.0
-        version: 12.10.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.10.0)(pg@8.22.0)
-      fuse.js:
-        specifier: ^7.4.2
-        version: 7.4.2
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
     devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
       '@types/node':
         specifier: ^25.9.2
         version: 25.9.2

@@ -3,10 +3,9 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { LOCAL_DAEMON_SPAWN_FLAG } from "@agent-issues/core";
-
 import { main, runCli, type AgentIssuesContext } from "./cli/index.js";
 import { runDaemonProcess } from "./daemon/daemon-main.js";
+import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
 
 export { runCli, type AgentIssuesContext };
 

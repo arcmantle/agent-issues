@@ -4,8 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { backfillBodies } from "./body-backfill.js";
-import { ensureDatabase, SqliteStore, type DatabaseHandle } from "@agent-issues/core";
-import { createEntity, getDatabaseSnapshot, linkEntities } from "@agent-issues/core";
+import { createEntity, ensureDatabase, getDatabaseSnapshot, linkEntities, SqliteStore, type DatabaseHandle } from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
 

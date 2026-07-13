@@ -4,15 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bindCloudProject } from "../cloud/cloud-binding.js";
-import { saveDaemonState } from "../daemon/daemon-state.js";
-import { saveDaemonToken, type RunCredentialCommand } from "../daemon/daemon-token.js";
-import { HttpStore } from "./http-store.js";
-import { LocalDaemonStore } from "../daemon/local-daemon-store.js";
+import { HttpStore, saveDaemonState, saveDaemonToken, type RunCredentialCommand } from "@agent-issues/core";
+import { SqliteStore } from "@agent-issues/api-local";
+import { saveAuthSession } from "./auth-session.js";
+import { bindCloudProject } from "./cloud-binding.js";
+import { LocalDaemonStore } from "./daemon/local-daemon-store.js";
 import { openStorageDriver } from "./open-storage-driver.js";
-import { resolveProjectIdentity } from "../cloud/project-identity.js";
-import { saveAuthSession } from "../auth/auth-session.js";
-import { SqliteStore } from "./sqlite-store.js";
+import { resolveProjectIdentity } from "./project-identity.js";
 
 /** Fake in-memory OS credential store, mirroring `daemon-token.test.ts`'s helper, so this suite never shells out to a real native tool. */
 function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {

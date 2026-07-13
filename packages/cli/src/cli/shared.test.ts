@@ -1,13 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 const openStorageDriverMock = vi.hoisted(() => vi.fn());
-vi.mock("@agent-issues/core", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@agent-issues/core")>();
-	return { ...actual, openStorageDriver: openStorageDriverMock };
-});
+vi.mock("../open-storage-driver.js", () => ({ openStorageDriver: openStorageDriverMock }));
 
 const readBuildContentHashMock = vi.hoisted(() => vi.fn(() => "test-build-hash"));
-vi.mock("../build-info.js", () => ({ readBuildContentHash: readBuildContentHashMock }));
+vi.mock("@agent-issues/api-local", () => ({ readBuildContentHash: readBuildContentHashMock }));
 
 const { withStore } = await import("./shared.js");
 

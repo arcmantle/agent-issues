@@ -4,7 +4,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { getCloudBinding } from "@agent-issues/core";
+import { getCloudBinding } from "./cloud-binding.js";
 
 import { runCli } from "./cli.js";
 

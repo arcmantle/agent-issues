@@ -3,11 +3,18 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { LocalAuthProvider } from "@agent-issues/api";
-import { DaemonDbPathMismatchError, DaemonVersionMismatchError, HttpStore, readDaemonState, readDaemonToken, type RunCredentialCommand } from "@agent-issues/core";
+import {
+	DaemonDbPathMismatchError,
+	DaemonVersionMismatchError,
+	HttpStore,
+	LocalAuthProvider,
+	readDaemonState,
+	readDaemonToken,
+	type RunCredentialCommand
+} from "@agent-issues/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { readBuildContentHash } from "../build-info.js";
+import { readBuildContentHash } from "./build-info.js";
 import { createLocalDaemonServer, type LocalDaemonServerHandle } from "./local-daemon-server.js";
 
 const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";

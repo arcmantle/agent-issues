@@ -8,7 +8,7 @@ import {
 	isStructuralRelationType,
 	type EntityKind
 } from "@agent-issues/core";
-import { DEFAULT_CONTEXT_KEY } from "@agent-issues/core";
+import { DEFAULT_CONTEXT_KEY } from "@agent-issues/api-local";
 import type { ListSkillsResult } from "./skill-installer.js";
 
 type OptionSpec = {

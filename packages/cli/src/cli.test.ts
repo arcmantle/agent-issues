@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { isEntrypointInvocation, runCli, shouldRunLocalDaemon } from "./cli.js";
 import { main } from "./cli/index.js";
-import { createEntity, ensureDatabase, getEntityDetails, listEntities, LOCAL_DAEMON_SPAWN_FLAG } from "@agent-issues/core";
+import { createEntity, ensureDatabase, getEntityDetails, listEntities } from "@agent-issues/api-local";
+import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
 import { startLiveSite } from "./site/index.js";
 
 let tempDir: string | null = null;

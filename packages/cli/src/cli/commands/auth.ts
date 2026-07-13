@@ -10,7 +10,7 @@ import {
 	toAuthSessionView,
 	type AuthSession,
 	type AuthSessionStoreOptions
-} from "@agent-issues/core";
+} from "../../auth-session.js";
 
 import { renderAuthLogin, renderAuthLogout, renderAuthStatus, renderAuthSwitch } from "../renderers.js";
 import { BaseCommand, requireOption, requirePositional } from "../shared.js";

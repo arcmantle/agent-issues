@@ -5,14 +5,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-	bindCloudProject,
-	openSqliteStore,
-	saveAuthSession,
-	type AuthSessionStoreOptions,
-	type RunCredentialCommand,
-	type SqliteStore
-} from "@agent-issues/core";
+import type { RunCredentialCommand } from "@agent-issues/core";
+import { openSqliteStore, type SqliteStore } from "@agent-issues/api-local";
+import { bindCloudProject } from "../../cloud-binding.js";
+import { saveAuthSession, type AuthSessionStoreOptions } from "../../auth-session.js";
 
 import { runCli } from "../../cli.js";
 

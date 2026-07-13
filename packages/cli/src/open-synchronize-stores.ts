@@ -1,13 +1,10 @@
-import type { AuthSessionStoreOptions } from "../auth/auth-session.js";
-import { listAuthSessions } from "../auth/auth-session.js";
-import { resolveBackendSelection } from "../cloud/backend-selection.js";
-import type { CloudBinding, CloudBindingStoreOptions } from "../cloud/cloud-binding.js";
-import type { DatabaseLocationOptions } from "../entity-store/database.js";
-import { HttpStore } from "../storage-driver/http-store.js";
-import { isSessionExpired } from "../storage-driver/open-storage-driver.js";
-import { resolveProjectIdentity } from "../cloud/project-identity.js";
-import { openSqliteStore } from "../storage-driver/sqlite-store.js";
-import type { StorageDriver } from "../storage-driver/storage-driver.js";
+import { HttpStore, type StorageDriver } from "@agent-issues/core";
+import { openSqliteStore, type DatabaseLocationOptions } from "@agent-issues/api-local";
+import { listAuthSessions, type AuthSessionStoreOptions } from "./auth-session.js";
+import { resolveBackendSelection } from "./backend-selection.js";
+import type { CloudBinding, CloudBindingStoreOptions } from "./cloud-binding.js";
+import { isSessionExpired } from "./open-storage-driver.js";
+import { resolveProjectIdentity } from "./project-identity.js";
 
 export type OpenSynchronizeStoresOptions = {
 	/** Only used for the local backend; ignored otherwise. */

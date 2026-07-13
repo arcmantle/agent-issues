@@ -1,6 +1,8 @@
 import { Option } from "clipanion";
 
-import { bindCloudProject, getCloudBinding, resolveBackendSelection, resolveProjectIdentity, unbindCloudProject } from "@agent-issues/core";
+import { bindCloudProject, getCloudBinding, unbindCloudProject } from "../../cloud-binding.js";
+import { resolveBackendSelection } from "../../backend-selection.js";
+import { resolveProjectIdentity } from "../../project-identity.js";
 
 import { renderCloudBind, renderCloudStatus, renderCloudUnbind } from "../renderers.js";
 import { BaseCommand, requireOption } from "../shared.js";

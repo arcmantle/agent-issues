@@ -12,7 +12,7 @@ import {
 	toAuthSessionView,
 	type AuthSessionStoreOptions
 } from "./auth-session.js";
-import { setCredential, type CredentialCommand, type RunCredentialCommand } from "../../utilities/os-credential-store.js";
+import { setCredential, type CredentialCommand, type RunCredentialCommand } from "@agent-issues/core";
 
 /** Fake in-memory credential store standing in for a real OS credential tool, keyed the same way `os-credential-store.ts` addresses a real one (mirrors `daemon-token.test.ts`'s helper). */
 function fakeCredentialStore(): { runCommand: RunCredentialCommand } {

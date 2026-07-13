@@ -5,12 +5,9 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-	bindCloudProject,
-	saveAuthSession,
-	type AuthSessionStoreOptions,
-	type RunCredentialCommand
-} from "@agent-issues/core";
+import type { RunCredentialCommand } from "@agent-issues/core";
+import { bindCloudProject } from "./cloud-binding.js";
+import { saveAuthSession, type AuthSessionStoreOptions } from "./auth-session.js";
 
 import { runCli } from "./cli.js";
 

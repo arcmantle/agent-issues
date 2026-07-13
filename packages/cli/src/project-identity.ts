@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { resolveTenantRootPath, sanitizePathSegment } from "../entity-store/database.js";
+import { resolveTenantRootPath, sanitizePathSegment } from "@agent-issues/api-local";
 
 export type ProjectIdentitySource = "folder-name" | "git-repository" | "package-json" | "code-workspace" | "project-file";
 

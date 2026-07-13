@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { openStorageDriver, resolveDatabasePath, resolveTenantSlug, type AuthSessionStoreOptions } from "@agent-issues/core";
+import { readBuildContentHash, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/api-local";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
-import { readBuildContentHash } from "../build-info.js";
+import type { AuthSessionStoreOptions } from "../auth-session.js";
+import { openStorageDriver } from "../open-storage-driver.js";
 
 export type LiveSiteInfo = {
 	dbPath: string;

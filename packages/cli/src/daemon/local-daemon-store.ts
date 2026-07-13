@@ -5,9 +5,13 @@ import {
 	ensureDaemonRunning,
 	type CallDaemonWithVersionHandshakeRetryOptions
 } from "./daemon-lifecycle.js";
-import { readDaemonToken, type DaemonTokenStoreOptions } from "./daemon-token.js";
-import { HttpStore, type HttpStoreOptions } from "../storage-driver/http-store.js";
-import { resolveWellKnownLocalTenantId } from "../../utilities/tenant-identity.js";
+import {
+	HttpStore,
+	readDaemonToken,
+	resolveWellKnownLocalTenantId,
+	type DaemonTokenStoreOptions,
+	type HttpStoreOptions
+} from "@agent-issues/core";
 
 /**
  * Hidden argv flag a self-respawned daemon process recognizes (ISS190): the

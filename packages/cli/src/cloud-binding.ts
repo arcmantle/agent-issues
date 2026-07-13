@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { resolveAgentIssuesHomeDirectory } from "../entity-store/database.js";
+import { resolveAgentIssuesHomeDirectory } from "@agent-issues/core";
 
 export type CloudBinding = {
 	projectIdentity: string;

@@ -4,15 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runDaemonProcess } from "./daemon-main.js";
 
 const createLocalDaemonServerMock = vi.hoisted(() => vi.fn());
-vi.mock("./local-daemon-server.js", () => ({ createLocalDaemonServer: createLocalDaemonServerMock }));
+vi.mock("@agent-issues/api-local", () => ({ createLocalDaemonServer: createLocalDaemonServerMock }));
 
 /**
  * The self-respawned daemon process's real entrypoint (ISS190): what
- * `spawnLocalDaemon` (`@agent-issues/core`) actually launches. Kept
+ * `spawnLocalDaemon` (`local-daemon-store.ts`) actually launches. Kept
  * intentionally thin - just starts the real daemon server and lets the
  * event loop (the listening HTTP server) keep the process alive; the
  * daemon's own idle-timeout/drain-then-exit logic is what eventually calls
- * `process.exit`, already covered by `local-daemon-server.test.ts`.
+ * `process.exit`, already covered by `@agent-issues/api-local`'s own
+ * `local-daemon-server.test.ts`.
  */
 describe("runDaemonProcess (ISS190)", () => {
 	beforeEach(() => {

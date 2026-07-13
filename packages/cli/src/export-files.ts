@@ -1,10 +1,9 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import type { ContextDetails } from "@agent-issues/core";
+import type { ContextDetails, DatabaseSnapshot, HandoffRecord, InitiativeBundle } from "@agent-issues/api-local";
 import type { EntityRecord, RelationRecord } from "@agent-issues/core";
 import { renderFrontmatter, renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "./export-markdown.js";
-import type { DatabaseSnapshot, HandoffRecord, InitiativeBundle } from "@agent-issues/core";
 
 export type DirectoryExportResult = {
 	mode: "directory";

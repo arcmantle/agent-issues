@@ -1,9 +1,10 @@
 import type { installAgent, listAgent, uninstallAgent } from "../agent-installer.js";
 import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
-import type { AuthSessionView, listTenants, SynchronizeSummary } from "@agent-issues/core";
+import type { SynchronizeSummary } from "@agent-issues/core";
+import type { listTenants, createHandoff, deleteHandoff, getHandoffDetails, updateHandoff } from "@agent-issues/api-local";
+import type { AuthSessionView } from "../auth-session.js";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
-import type { createHandoff, deleteHandoff, getHandoffDetails, updateHandoff } from "@agent-issues/core";
 
 export function renderEntityList(kind: string, entities: Array<{ id: string; status: string; title: string }>): string {
 	if (entities.length === 0) {

@@ -1,10 +1,6 @@
 import { Option } from "clipanion";
 
-import {
-	resolveDatabasePath,
-	resolveTenantRootPath,
-	resolveTenantSlug
-} from "@agent-issues/core";
+import { resolveDatabasePath, resolveTenantRootPath, resolveTenantSlug } from "@agent-issues/api-local";
 
 import { renderCurrentTenant, renderDeleteTenant, renderRenameTenant, renderTenantList } from "../renderers.js";
 import { MutableTenantCommand, TenantCommand, requirePositional, withStore } from "../shared.js";

@@ -1,5 +1,4 @@
-import type { ContextDetails } from "@agent-issues/core";
-import type { DatabaseSnapshot, HandoffRecord, InitiativeBundle } from "@agent-issues/core";
+import type { DatabaseSnapshot, HandoffRecord, InitiativeBundle, ContextDetails } from "@agent-issues/api-local";
 import type { EntityRecord, RelationRecord } from "@agent-issues/core";
 
 export type InitiativeMarkdownExport = {

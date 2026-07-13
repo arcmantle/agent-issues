@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineContextTerm, upsertContext } from "@agent-issues/core";
-import { ensureDatabase } from "@agent-issues/core";
 import { renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "./export-markdown.js";
-import { createEntity, createHandoff, getDatabaseSnapshot, getInitiativeBundle, linkEntities, listHandoffs } from "@agent-issues/core";
+import {
+	createEntity,
+	createHandoff,
+	defineContextTerm,
+	ensureDatabase,
+	getDatabaseSnapshot,
+	getInitiativeBundle,
+	linkEntities,
+	listHandoffs,
+	upsertContext
+} from "@agent-issues/api-local";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

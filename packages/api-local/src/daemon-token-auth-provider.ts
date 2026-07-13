@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 
-import type { AuthIdentity, AuthProvider } from "@agent-issues/api";
+import type { AuthIdentity, AuthProvider } from "@agent-issues/core";
 
 export type DaemonTokenAuthProviderOptions = {
 	/** The current daemon instance's own minted token (ISS184), compared against every request's bearer token. */

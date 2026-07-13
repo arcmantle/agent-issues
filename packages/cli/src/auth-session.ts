@@ -1,8 +1,7 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
-import { resolveAgentIssuesHomeDirectory } from "../entity-store/database.js";
-import { getCredential, setCredential, type OsCredentialStoreOptions } from "../../utilities/os-credential-store.js";
+import { getCredential, resolveAgentIssuesHomeDirectory, setCredential, type OsCredentialStoreOptions } from "@agent-issues/core";
 
 export type AuthSession = {
 	tenantId: string;

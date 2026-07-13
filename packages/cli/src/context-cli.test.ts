@@ -8,9 +8,7 @@ import {
 	renderContextSearchTermsOnly,
 	toContextSearchTermsOnly
 } from "./context-cli.js";
-import { defineContextTerm, queryContextDirectory } from "@agent-issues/core";
-import { ensureDatabase, type DatabaseHandle } from "@agent-issues/core";
-import { createEntity } from "@agent-issues/core";
+import { createEntity, defineContextTerm, ensureDatabase, queryContextDirectory, type DatabaseHandle } from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
 

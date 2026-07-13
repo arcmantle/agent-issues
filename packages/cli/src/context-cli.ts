@@ -5,7 +5,7 @@ import type {
 	DefineContextTermResult,
 	ForgetContextTermResult,
 	QueryContextDirectoryResult
-} from "@agent-issues/core";
+} from "@agent-issues/api-local";
 
 export type ContextSearchTermsOnlyResult = {
 	query: string;

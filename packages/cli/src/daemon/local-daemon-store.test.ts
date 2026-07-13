@@ -4,10 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { saveDaemonState } from "./daemon-state.js";
-import { saveDaemonToken, type RunCredentialCommand } from "./daemon-token.js";
+import { saveDaemonState, saveDaemonToken, resolveWellKnownLocalTenantId, type RunCredentialCommand } from "@agent-issues/core";
 import { openLocalDaemonStore, spawnLocalDaemon, LOCAL_DAEMON_SPAWN_FLAG } from "./local-daemon-store.js";
-import { resolveWellKnownLocalTenantId } from "../../utilities/tenant-identity.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));

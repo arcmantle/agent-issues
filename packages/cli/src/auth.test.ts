@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "./cli.js";
 import { performLogin, type DeviceCodeLoginFn } from "./cli/commands/auth.js";
-import { getCurrentAuthSession, saveAuthSession, type AuthSessionStoreOptions, type RunCredentialCommand } from "@agent-issues/core";
+import { getCurrentAuthSession, saveAuthSession, type AuthSessionStoreOptions } from "./auth-session.js";
+import type { RunCredentialCommand } from "@agent-issues/core";
 
 /** Fake in-memory credential store, mirroring `daemon-token.test.ts`'s helper, so this suite never shells out to a real native OS credential tool. */
 function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {

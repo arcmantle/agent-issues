@@ -3,15 +3,10 @@ import type { Writable } from "node:stream";
 
 import { Command, Option, type BaseContext } from "clipanion";
 
-import {
-	openStorageDriver,
-	type AuthSessionStoreOptions,
-	type ContextDirectoryView,
-	type DatabaseLocationOptions,
-	type StorageDriver
-} from "@agent-issues/core";
-
-import { readBuildContentHash } from "../build-info.js";
+import type { StorageDriver } from "@agent-issues/core";
+import { readBuildContentHash, type ContextDirectoryView, type DatabaseLocationOptions } from "@agent-issues/api-local";
+import type { AuthSessionStoreOptions } from "../auth-session.js";
+import { openStorageDriver } from "../open-storage-driver.js";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;

@@ -3,10 +3,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineContextTerm, upsertContext } from "@agent-issues/core";
-import { ensureDatabase } from "@agent-issues/core";
 import { writeInitiativeDirectoryExport, writeProjectDirectoryExport } from "./export-files.js";
-import { createEntity, createHandoff, getDatabaseSnapshot, getInitiativeBundle, linkEntities, listHandoffs } from "@agent-issues/core";
+import {
+	createEntity,
+	createHandoff,
+	defineContextTerm,
+	ensureDatabase,
+	getDatabaseSnapshot,
+	getInitiativeBundle,
+	linkEntities,
+	listHandoffs,
+	upsertContext
+} from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
 
