@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readBuildContentHash } from "./build-info.js";
 import { readDaemonState } from "./daemon-state.js";
-import { readDaemonToken } from "./daemon-token.js";
+import { readDaemonToken } from "../auth/daemon-token.js";
 import { createLocalDaemonServer, type LocalDaemonServerHandle } from "./local-daemon-server.js";
 
 const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";

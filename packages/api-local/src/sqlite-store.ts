@@ -8,7 +8,7 @@ import type {
 	ContextSyncRecord,
 	ContextTermSyncRecord,
 	QueryContextDirectoryInput
-} from "./context-store.js";
+} from "./features/context/context-store.js";
 import {
 	applyContextTerms,
 	applyContexts,
@@ -21,10 +21,10 @@ import {
 	listContexts,
 	queryContextDirectory,
 	upsertContext
-} from "./context-store.js";
-import type { DatabaseHandle, DatabaseLocationOptions } from "./database.js";
-import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./database.js";
-import type { HandoffRecord } from "./store.js";
+} from "./features/context/context-store.js";
+import type { DatabaseHandle, DatabaseLocationOptions } from "./db/database.js";
+import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./db/database.js";
+import type { HandoffRecord } from "./features/entity-store/store.js";
 import {
 	applyHandoffs,
 	applyHistoryEntries,
@@ -53,7 +53,7 @@ import {
 	unlinkEntities,
 	updateEntityStatus,
 	updateHandoff
-} from "./store.js";
+} from "./features/entity-store/store.js";
 
 export type OpenSqliteStoreResult = {
 	store: SqliteStore;

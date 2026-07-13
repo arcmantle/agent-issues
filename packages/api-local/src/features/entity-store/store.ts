@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import type { DatabaseHandle } from "./database.js";
-import { getContextDetails, type ContextDetails } from "./context-store.js";
+import type { DatabaseHandle } from "../../db/database.js";
+import { getContextDetails, type ContextDetails } from "../context/context-store.js";
 import {
 	collectReachableIds,
 	getArchiveStatus,

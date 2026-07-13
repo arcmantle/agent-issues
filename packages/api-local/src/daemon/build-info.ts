@@ -43,7 +43,7 @@ export function writeBuildInfoFile(distDir: string): void {
 }
 
 export type ReadBuildContentHashOptions = {
-	/** Overrides where `build-info.json` is read from; defaults to the directory this compiled module itself lives in (i.e. `dist/` for a real install). */
+	/** Overrides where `build-info.json` is read from; defaults to the package's `dist/` root (i.e. two directories up from this compiled module, which lives at `dist/daemon/build-info.js` for a real install). */
 	distDir?: string;
 };
 
@@ -55,7 +55,7 @@ export type ReadBuildContentHashOptions = {
  * outside of an actual built install.
  */
 export function readBuildContentHash(options?: ReadBuildContentHashOptions): string {
-	const distDir = options?.distDir ?? path.dirname(fileURLToPath(import.meta.url));
+	const distDir = options?.distDir ?? path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 	const filePath = path.join(distDir, BUILD_INFO_FILENAME);
 	if (!existsSync(filePath)) return "dev";
 

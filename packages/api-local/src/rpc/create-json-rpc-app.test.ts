@@ -6,7 +6,7 @@ import { createJsonRpcApp, LocalAuthProvider, type StorageDriver } from "@agent-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
-import { openSqliteStore } from "./sqlite-store.js";
+import { openSqliteStore } from "../sqlite-store.js";
 
 /**
  * Proves the gate is generic over any `StorageDriver`, not hardcoded to

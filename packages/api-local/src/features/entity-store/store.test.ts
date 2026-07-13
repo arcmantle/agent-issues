@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ensureDatabase, type DatabaseHandle } from "./database.js";
+import { ensureDatabase, type DatabaseHandle } from "../../db/database.js";
 import { createEntity, createHandoff, deleteHandoff, getDatabaseSnapshot, getEntityDetails, getHandoffDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listHandoffs, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus, updateHandoff } from "./store.js";
 
 function statusOf(db: DatabaseHandle, entityId: string): string {

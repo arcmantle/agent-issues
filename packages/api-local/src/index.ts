@@ -1,10 +1,10 @@
-export * from "./database.js";
+export * from "./db/database.js";
 export * from "./schema.js";
-export * from "./store.js";
-export * from "./context-store.js";
+export * from "./features/entity-store/store.js";
+export * from "./features/context/context-store.js";
 export * from "./sqlite-store.js";
-export * from "./daemon-state.js";
-export * from "./daemon-token.js";
-export { createLocalDaemonServer, type LocalDaemonServerHandle, type LocalDaemonServerOptions } from "./local-daemon-server.js";
-export { DaemonTokenAuthProvider, type DaemonTokenAuthProviderOptions } from "./daemon-token-auth-provider.js";
-export { computeBuildContentHash, readBuildContentHash, writeBuildInfoFile, type ReadBuildContentHashOptions } from "./build-info.js";
+export * from "./daemon/daemon-state.js";
+export * from "./auth/daemon-token.js";
+export { createLocalDaemonServer, type LocalDaemonServerHandle, type LocalDaemonServerOptions } from "./daemon/local-daemon-server.js";
+export { DaemonTokenAuthProvider, type DaemonTokenAuthProviderOptions } from "./auth/daemon-token-auth-provider.js";
+export { computeBuildContentHash, readBuildContentHash, writeBuildInfoFile, type ReadBuildContentHashOptions } from "./daemon/build-info.js";

@@ -3,11 +3,11 @@ import { createServer, type Server } from "node:http";
 import { createJsonRpcApp, resolveWellKnownLocalTenantId, type AuthProvider, type StorageDriver } from "@agent-issues/core";
 
 import { readBuildContentHash } from "./build-info.js";
-import { resolveDatabasePath } from "./database.js";
-import { clearDaemonToken, mintDaemonToken, saveDaemonToken, type DaemonTokenStoreOptions } from "./daemon-token.js";
-import { DaemonTokenAuthProvider } from "./daemon-token-auth-provider.js";
+import { resolveDatabasePath } from "../db/database.js";
+import { clearDaemonToken, mintDaemonToken, saveDaemonToken, type DaemonTokenStoreOptions } from "../auth/daemon-token.js";
+import { DaemonTokenAuthProvider } from "../auth/daemon-token-auth-provider.js";
 import { clearDaemonState, saveDaemonState, type DaemonStateStoreOptions } from "./daemon-state.js";
-import { openSqliteStore } from "./sqlite-store.js";
+import { openSqliteStore } from "../sqlite-store.js";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 

@@ -22,10 +22,10 @@ import {
 	type TenantRecordCounts,
 	type TenantSummary
 } from "@agent-issues/core";
-import { runMigrations } from "./db/migration-runner.js";
-import { baselineV7Migration } from "./migrations/0000-baseline-v7.js";
-import { backfillTenantBootstrapMigration } from "./migrations/0004-backfill-tenant-bootstrap.js";
-import { buildConsolidateLegacyTenantsBackfillMigration } from "./migrations/0008-consolidate-legacy-tenants-backfill.js";
+import { runMigrations } from "./migration-runner.js";
+import { baselineV7Migration } from "../migrations/0000-baseline-v7.js";
+import { backfillTenantBootstrapMigration } from "../migrations/0004-backfill-tenant-bootstrap.js";
+import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/0008-consolidate-legacy-tenants-backfill.js";
 
 export {
 	resolveAgentIssuesHomeDirectory,

@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { formatTenantDisplayName } from "@agent-issues/core";
 import { defineContextTerm, getContextDetails, getContextDirectory, queryContextDirectory } from "./context-store.js";
-import { ensureDatabase, resolveCurrentProjectId, resolveLegacyWorkspaceTenantId, type DatabaseHandle } from "./database.js";
-import { createEntity } from "./store.js";
+import { ensureDatabase, resolveCurrentProjectId, resolveLegacyWorkspaceTenantId, type DatabaseHandle } from "../../db/database.js";
+import { createEntity } from "../entity-store/store.js";
 
 let tempDir: string | null = null;
 

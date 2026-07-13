@@ -23,7 +23,7 @@ import {
 	type QueryContextDirectoryInput,
 	type QueryContextDirectoryResult
 } from "@agent-issues/core";
-import type { DatabaseHandle } from "./database.js";
+import type { DatabaseHandle } from "../../db/database.js";
 
 export {
 	DEFAULT_CONTEXT_KEY,
