@@ -50,7 +50,8 @@ import {
 	type RenameTenantResult,
 	type StorageDriver,
 	type TenantRecordCounts,
-	type TenantSummary
+	type TenantSummary,
+	wouldOrphanSubtree as wouldOrphanSubtreeInGraph
 } from "@agent-issues/core";
 import type { Pool, PoolClient } from "pg";
 
@@ -475,36 +476,9 @@ async function hasStructuralPath(client: PoolClient, tenantId: string, startId: 
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-// Mirrors `wouldOrphanSubtree` in core's `store.ts`: blocks removing a
-// structural relation that would leave an entity (and everything under it)
-// unreachable from every initiative.
 async function wouldOrphanSubtree(client: PoolClient, tenantId: string, relation: RelationRecord): Promise<boolean> {
-	if (!isStructuralRelationType(relation.type)) {
-		return false;
-	}
-
-	const currentRelations = await getAllRelations(client, tenantId);
-	const remainingRelations = currentRelations.filter(
-		(candidate) => !(candidate.fromId === relation.fromId && candidate.toId === relation.toId && candidate.type === relation.type)
-	);
-	const entities = await getAllEntities(client, tenantId);
-	const stillReachable = new Set<string>();
-
-	for (const entity of entities) {
-		if (entity.kind !== "initiative") {
-			continue;
-		}
-
-		for (const id of collectReachableIds(remainingRelations, entity.id)) {
-			stillReachable.add(id);
-		}
-	}
-
-	if (stillReachable.has(relation.toId)) {
-		return false;
-	}
-
-	return remainingRelations.some((candidate) => candidate.fromId === relation.toId);
+	const [relations, entities] = await Promise.all([getAllRelations(client, tenantId), getAllEntities(client, tenantId)]);
+	return wouldOrphanSubtreeInGraph(entities, relations, relation);
 }
 
 // Mirrors `wouldBreakFullChainInvariant` in core's `store.ts`: blocks

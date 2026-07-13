@@ -425,3 +425,40 @@ export function collectReachableIds(relations: RelationRecord[], startId: string
 
 	return seen;
 }
+
+/**
+ * True when removing `relation` (a structural edge) would leave its `toId`
+ * entity - and everything only reachable through it - unreachable from
+ * every initiative (ADR7's "never orphan a subtree" invariant). Takes the
+ * full entity/relation graph rather than fetching it, so both stores'
+ * `wouldOrphanSubtree` wrappers can fetch their own rows their own way and
+ * delegate the actual reachability computation here exactly once. Non-
+ * structural relations can never orphan anything by definition and return
+ * `false` immediately.
+ */
+export function wouldOrphanSubtree(entities: EntityRecord[], relations: RelationRecord[], relation: RelationRecord): boolean {
+	if (!isStructuralRelationType(relation.type)) {
+		return false;
+	}
+
+	const remainingRelations = relations.filter(
+		(candidate) => !(candidate.fromId === relation.fromId && candidate.toId === relation.toId && candidate.type === relation.type)
+	);
+	const stillReachable = new Set<string>();
+
+	for (const entity of entities) {
+		if (entity.kind !== "initiative") {
+			continue;
+		}
+
+		for (const id of collectReachableIds(remainingRelations, entity.id)) {
+			stillReachable.add(id);
+		}
+	}
+
+	if (stillReachable.has(relation.toId)) {
+		return false;
+	}
+
+	return remainingRelations.some((candidate) => candidate.fromId === relation.toId);
+}

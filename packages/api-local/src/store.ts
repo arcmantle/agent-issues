@@ -36,7 +36,8 @@ import {
 	type RelationRecord,
 	type RelationType,
 	type StatusUpdateResult,
-	type UnlinkResult
+	type UnlinkResult,
+	wouldOrphanSubtree as wouldOrphanSubtreeInGraph
 } from "@agent-issues/core";
 
 export {
@@ -1397,37 +1398,7 @@ function hasStructuralPath(db: DatabaseHandle, startId: string, targetId: string
 }
 
 function wouldOrphanSubtree(db: DatabaseHandle, relation: RelationRecord): boolean {
-	if (!isStructuralRelationType(relation.type)) {
-		return false;
-	}
-
-	const currentRelations = getAllRelations(db);
-	const remainingRelations = currentRelations.filter(
-		(candidate) =>
-			!(
-				candidate.fromId === relation.fromId &&
-				candidate.toId === relation.toId &&
-				candidate.type === relation.type
-			)
-	);
-	const entities = getAllEntities(db);
-	const stillReachable = new Set<string>();
-
-	for (const entity of entities) {
-		if (entity.kind !== "initiative") {
-			continue;
-		}
-
-		for (const id of collectReachableIds(remainingRelations, entity.id)) {
-			stillReachable.add(id);
-		}
-	}
-
-	if (stillReachable.has(relation.toId)) {
-		return false;
-	}
-
-	return remainingRelations.some((candidate) => candidate.fromId === relation.toId);
+	return wouldOrphanSubtreeInGraph(getAllEntities(db), getAllRelations(db), relation);
 }
 
 /**
