@@ -19,9 +19,6 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
-      fuse.js:
-        specifier: ^7.4.2
-        version: 7.4.2
       jose:
         specifier: ^6.2.3
         version: 6.2.3
@@ -62,9 +59,6 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.10.0)(pg@8.22.0)
-      fuse.js:
-        specifier: ^7.4.2
-        version: 7.4.2
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.13
@@ -121,6 +115,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      fuse.js:
+        specifier: ^7.4.2
+        version: 7.4.2
       jose:
         specifier: ^6.2.3
         version: 6.2.3

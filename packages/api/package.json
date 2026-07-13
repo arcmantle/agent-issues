@@ -36,7 +36,6 @@
 		"@agent-issues/core": "workspace:*",
 		"drizzle-orm": "^0.45.2",
 		"express": "^5.2.1",
-		"fuse.js": "^7.4.2",
 		"jose": "^6.2.3",
 		"pg": "^8.22.0"
 	}

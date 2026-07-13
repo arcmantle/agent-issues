@@ -35,7 +35,6 @@
 	"dependencies": {
 		"@agent-issues/core": "workspace:*",
 		"better-sqlite3": "^12.10.0",
-		"drizzle-orm": "^0.45.2",
-		"fuse.js": "^7.4.2"
+		"drizzle-orm": "^0.45.2"
 	}
 }

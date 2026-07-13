@@ -1,6 +1,7 @@
 export * from "./features/entity-store/domain.js";
 export * from "./features/entity-store/store-types.js";
 export * from "./features/entity-store/tenant-types.js";
+export * from "./features/context/context-directory.js";
 export * from "./features/context/context-types.js";
 export * from "./features/storage-driver/storage-driver.js";
 export * from "./features/storage-driver/http-store.js";
