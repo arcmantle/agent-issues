@@ -1,9 +1,8 @@
-import { HttpStore, type StorageDriver } from "@agent-issues/core";
+import { HttpStore, LocalAuthProvider, type StorageDriver } from "@agent-issues/core";
 import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
-import { LocalAuthProvider } from "./auth/local-auth-provider.js";
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "./db/test-tenant-cleanup.js";
 import { createApiServer, type ApiServerHandle } from "./index.js";

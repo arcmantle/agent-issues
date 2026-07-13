@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
-import type { AuthIdentity, AuthProvider } from "./auth-provider.js";
+import type { AuthIdentity, AuthProvider } from "@agent-issues/core";
 
 export type EntraIdAuthProviderOptions = {
 	/** The Entra ID (Azure AD) tenant GUID this provider trusts tokens from. */

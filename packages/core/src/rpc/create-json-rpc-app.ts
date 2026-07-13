@@ -1,7 +1,7 @@
-import type { StorageDriver } from "@agent-issues/core";
 import express, { type Express, type Request } from "express";
 
 import type { AuthIdentity, AuthProvider } from "../auth/auth-provider.js";
+import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
 import { ChangeEventBroadcaster } from "./change-events.js";
 import { isJsonRpcRequest, JSON_RPC_ERROR_CODES, type JsonRpcErrorResponse, type JsonRpcSuccessResponse } from "./json-rpc.js";
 import { rpcMethods, writeMethods } from "./rpc-methods.js";

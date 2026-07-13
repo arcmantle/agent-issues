@@ -1,7 +1,7 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { AuthProvider } from "./auth-provider.js";
+import type { AuthProvider } from "@agent-issues/core";
 import { EntraIdAuthProvider } from "./entra-id-auth-provider.js";
 
 const TENANT_ID = "11111111-1111-1111-1111-111111111111";

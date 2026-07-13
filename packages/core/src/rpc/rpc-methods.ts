@@ -1,4 +1,4 @@
-import type { StorageDriver } from "@agent-issues/core";
+import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
 
 /**
  * One entry per `StorageDriver` method exposed over JSON-RPC (ADR13, ADR14).

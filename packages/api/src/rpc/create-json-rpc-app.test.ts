@@ -2,16 +2,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { openSqliteStore, type StorageDriver } from "@agent-issues/core";
+import type { StorageDriver } from "@agent-issues/core";
+import { openSqliteStore } from "@agent-issues/api-local";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Pool } from "pg";
 import request from "supertest";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
-import { LocalAuthProvider } from "../auth/local-auth-provider.js";
+import { createJsonRpcApp, LocalAuthProvider } from "@agent-issues/core";
 import { PgStore } from "../pg-store.js";
-import { createJsonRpcApp } from "./create-json-rpc-app.js";
 
 const ADMIN_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";

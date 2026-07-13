@@ -2,14 +2,14 @@ import { createServer, type Server } from "node:http";
 
 import type { Pool } from "pg";
 
-import type { AuthProvider } from "./auth/auth-provider.js";
-import { PgStore } from "./pg-store.js";
-import { createJsonRpcApp } from "./rpc/create-json-rpc-app.js";
+import { createJsonRpcApp, type AuthProvider } from "@agent-issues/core";
 
-export type { AuthIdentity, AuthProvider } from "./auth/auth-provider.js";
+import { PgStore } from "./pg-store.js";
+
+export type { AuthIdentity, AuthProvider } from "@agent-issues/core";
+export { createJsonRpcApp, type CreateJsonRpcAppOptions } from "@agent-issues/core";
 export { EntraIdAuthProvider, type EntraIdAuthProviderOptions } from "./auth/entra-id-auth-provider.js";
-export { LocalAuthProvider, type LocalAuthProviderOptions } from "./auth/local-auth-provider.js";
-export { createJsonRpcApp, type CreateJsonRpcAppOptions } from "./rpc/create-json-rpc-app.js";
+export { LocalAuthProvider, type LocalAuthProviderOptions } from "@agent-issues/core";
 
 /**
  * Configuration for the agent-issues cloud API host: the single Postgres

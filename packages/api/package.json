@@ -24,6 +24,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"devDependencies": {
+		"@agent-issues/api-local": "workspace:*",
 		"@types/express": "^5.0.6",
 		"@types/node": "^25.9.2",
 		"@types/pg": "^8.20.0",
