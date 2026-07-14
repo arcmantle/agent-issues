@@ -62,6 +62,8 @@ export type LocalDaemonStoreOptions = Omit<CallDaemonWithVersionHandshakeRetryOp
 	dbPath?: string;
 	/** Pass-through to the native OS credential store reading the daemon's token (ADR46); tests inject a fake runner instead of touching a real native tool. */
 	credentialStoreOptions?: DaemonTokenStoreOptions;
+	/** The caller's workspace root, forwarded to the daemon on every RPC request so it resolves this workspace's project instead of the daemon process's cwd. */
+	workspaceRoot?: string;
 };
 
 /**
@@ -126,6 +128,7 @@ export async function openLocalDaemonStore(options?: LocalDaemonStoreOptions): P
 		bearerToken: token,
 		tenantId: resolveWellKnownLocalTenantId(),
 		buildHash: options?.buildHash,
-		dbPath: options?.dbPath
+		dbPath: options?.dbPath,
+		workspaceRoot: options?.workspaceRoot
 	});
 }

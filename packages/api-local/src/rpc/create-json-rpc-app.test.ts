@@ -58,7 +58,7 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 		}
 	});
 
-	it("forwards the client's project-identity header to createStore (ISS183)", async () => {
+	it("forwards the client's project identity and workspace root headers to createStore (ISS183, ISS166)", async () => {
 		const dbPath = path.join(tempDir, "test.db");
 		const tenantId = "sqlite-tenant";
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
@@ -70,9 +70,10 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.set("x-agent-issues-project-identity", "repo-a")
+			.set("x-agent-issues-workspace-root", "/workspaces/repo-a")
 			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Ship the daemon" } });
 
-		expect(createStore).toHaveBeenCalledWith(expect.objectContaining({ tenantId }), "repo-a");
+		expect(createStore).toHaveBeenCalledWith(expect.objectContaining({ tenantId }), "repo-a", "/workspaces/repo-a");
 	});
 });
 

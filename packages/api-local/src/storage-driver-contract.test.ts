@@ -27,13 +27,8 @@ describe("storage-driver seam: tenant administration (SqliteStore)", () => {
 	it("lists, renames, and deletes tenants through the seam", async () => {
 		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-tenants-"));
 		const dbPath = path.join(tempDir, "test.db");
-		// Both opens deliberately keep "alpha-team"/"beta-team" un-migrated
-		// (skipTenantConsolidation) - the automatic sweep now runs on every
-		// open (ISS178), and this test's whole point is exercising
-		// listTenants/renameTenant/deleteTenant against two genuinely-
-		// separate, still-unmerged tenants coexisting in one file.
-		const alphaStore = (await openSqliteStore(dbPath, { skipTenantConsolidation: true, tenant: "alpha-team" })).store;
-		const betaStore = (await openSqliteStore(dbPath, { skipTenantConsolidation: true, tenant: "beta-team" })).store;
+		const alphaStore = (await openSqliteStore(dbPath, { tenant: "alpha-team" })).store;
+		const betaStore = (await openSqliteStore(dbPath, { tenant: "beta-team" })).store;
 
 		try {
 			await alphaStore.createEntity({ kind: "initiative", title: "Alpha" });

@@ -25,6 +25,7 @@ import {
 import { runMigrations } from "./migration-runner.js";
 import { baselineV7Migration } from "../migrations/0000-baseline-v7.js";
 import { backfillTenantBootstrapMigration } from "../migrations/0004-backfill-tenant-bootstrap.js";
+import { addEntityProjectIdMigration } from "../migrations/0009-add-entity-project-id.js";
 import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/0008-consolidate-legacy-tenants-backfill.js";
 
 export {
@@ -71,20 +72,6 @@ export type OpenDatabaseResult = {
 export type DatabaseLocationOptions = {
 	tenant?: string;
 	currentWorkingDirectory?: string;
-	/**
-	 * Opts this one open out of the one-time legacy-tenant backfill
-	 * migration (`buildConsolidateLegacyTenantsBackfillMigration`, ISS181)
-	 * only, while still running every other bootstrap step
-	 * (`ensureTenantCounters`, `ensureFullChainInvariant`, etc). Every
-	 * non-well-known tenant present the FIRST time that migration ever runs
-	 * is ordinary legacy debris under the current architecture
-	 * (ISS63/ISS178) - this exists purely for tests that deliberately
-	 * construct two or more named tenants coexisting in one shared db file
-	 * to exercise admin operations (`listTenants`/`renameTenant`/
-	 * `deleteTenant`) against that still-unmerged state. No production code
-	 * path needs this.
-	 */
-	skipTenantConsolidation?: boolean;
 };
 
 const LEGACY_TENANTS_DIRECTORY = "tenants";
@@ -179,13 +166,18 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	// so only triggers the runner's pre-migration backup) when the file
 	// already had real pre-existing data BEFORE this open began - a
 	// brand-new, empty database has nothing worth backing up.
-	if (!options?.skipTenantConsolidation) {
-		await runMigrations(
-			db,
-			[buildConsolidateLegacyTenantsBackfillMigration({ excludeTenantId: db.tenantId })],
-			hadPreExistingData ? { dbPath } : undefined
-		);
-	}
+	await runMigrations(
+		db,
+		[buildConsolidateLegacyTenantsBackfillMigration({ excludeTenantId: db.tenantId })],
+		hadPreExistingData ? { dbPath } : undefined
+	);
+
+	// Adds `entities.project_id` and backfills every tenant already in the
+	// file (ISS166 follow-up) - one-time and ledgered. It runs after
+	// consolidation so freshly-minted projects and their remapped subtrees
+	// are attributed too. Subsequent raw writers stamp project_id directly;
+	// no per-open migration work is needed.
+	await runMigrations(db, [addEntityProjectIdMigration], hadPreExistingData ? { dbPath } : undefined);
 
 	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory);
 
@@ -717,6 +709,15 @@ function entityExists(db: DatabaseHandle, entityId: string): boolean {
 }
 
 function insertSentinelEntity(db: DatabaseHandle, id: string, kind: string, title: string, now: string): void {
+	if (tableHasColumn(db, "entities", "project_id")) {
+		db.prepare(
+			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			 VALUES (@tenantId, @id, @kind, @title, 'active', '', 'generated', @projectId, @now, @now)
+			 ON CONFLICT (tenant_id, id) DO NOTHING`
+		).run({ tenantId: db.tenantId, id, kind, projectId: DEFAULT_PROJECT_ID, title, now });
+		return;
+	}
+
 	db.prepare(
 		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
 		 VALUES (@tenantId, @id, @kind, @title, 'active', '', 'generated', @now, @now)
@@ -863,11 +864,19 @@ function copyLegacyTablesIntoTenant(
 	}
 
 	if (attachedTableExists(db, schemaName, `${tablePrefix}entities`)) {
-		db.prepare(
-			`INSERT OR IGNORE INTO entities (tenant_id, id, kind, title, status, created_at, updated_at)
-			 SELECT @tenantId, id, kind, title, status, created_at, updated_at
-			 FROM ${entitiesTable}`
-		).run({ tenantId });
+		if (tableHasColumn(db, "entities", "project_id")) {
+			db.prepare(
+				`INSERT OR IGNORE INTO entities (tenant_id, id, kind, title, status, project_id, created_at, updated_at)
+				 SELECT @tenantId, id, kind, title, status, @projectId, created_at, updated_at
+				 FROM ${entitiesTable}`
+			).run({ tenantId, projectId: DEFAULT_PROJECT_ID });
+		} else {
+			db.prepare(
+				`INSERT OR IGNORE INTO entities (tenant_id, id, kind, title, status, created_at, updated_at)
+				 SELECT @tenantId, id, kind, title, status, created_at, updated_at
+				 FROM ${entitiesTable}`
+			).run({ tenantId });
+		}
 	}
 
 	if (attachedTableExists(db, schemaName, `${tablePrefix}relations`)) {

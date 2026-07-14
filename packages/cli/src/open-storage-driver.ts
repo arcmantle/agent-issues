@@ -83,7 +83,11 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 		}
 
 		try {
-			const store = await openLocalDaemonStore({ ...options.localDaemon, dbPath: options.localDaemon?.dbPath ?? dbPath });
+			const store = await openLocalDaemonStore({
+				...options.localDaemon,
+				dbPath: options.localDaemon?.dbPath ?? dbPath,
+				workspaceRoot: currentWorkingDirectory
+			});
 			return { store, backend: "local", dbPath };
 		} catch (error) {
 			const { store } = await openSqliteStore(options.dbPath, options.databaseOptions);

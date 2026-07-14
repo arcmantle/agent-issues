@@ -116,7 +116,7 @@ export function createEntity(
 	}
 
 	const now = new Date().toISOString();
-	const parentId = input.parentId ?? (kind === "initiative" ? DEFAULT_EPIC_ID : undefined);
+	const parentId = input.parentId ?? (kind === "initiative" ? resolveDefaultEpicId(db) : undefined);
 	const parent = parentId ? getEntityOrThrow(db, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
 
@@ -124,11 +124,19 @@ export function createEntity(
 		throw new Error(`Cannot create ${kind} under ${parent.kind}.`);
 	}
 
+	// The new entity belongs to its parent's project (structural children
+	// always share their parent's owning project); a parentless entity -
+	// an orphan issue or a project-scoped ADR - belongs to this workspace's
+	// own resolved project (ISS166 follow-up).
+	const inheritedProjectId = (parent ? getEntityProjectId(db, parent.id) : null) ?? db.currentProjectId;
+
 	const tx = db.transaction(() => {
 		const id = nextEntityId(db, kind);
+		// A project owns itself, so scoped reads from its own workspace see it.
+		const projectId = kind === "project" ? id : inheritedProjectId;
 		db.prepare(
-			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
-			 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @createdAt, @updatedAt)`
+			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @projectId, @createdAt, @updatedAt)`
 		).run(tenantParams(db, {
 			id,
 			kind,
@@ -136,6 +144,7 @@ export function createEntity(
 			status,
 			body,
 			bodySource,
+			projectId,
 			createdAt: now,
 			updatedAt: now
 		}));
@@ -387,6 +396,24 @@ export function moveEntity(
 			type: relationType,
 			createdAt: updatedAt
 		});
+
+		// A move can re-home the entity into a different project (ISS166);
+		// its whole structural subtree inherits the new parent's owning
+		// project so `project_id` stays consistent with the structure.
+		const projectId = getEntityProjectId(db, newParent.id) ?? db.currentProjectId;
+		db.prepare(
+			`WITH RECURSIVE subtree(id) AS (
+			   SELECT @entityId
+			   UNION
+			   SELECT relations.to_id
+			   FROM relations
+			   JOIN subtree ON relations.from_id = subtree.id
+			   WHERE relations.tenant_id = @tenantId
+			 )
+			 UPDATE entities
+			 SET project_id = @projectId
+			 WHERE tenant_id = @tenantId AND id IN (SELECT id FROM subtree)`
+		).run(tenantParams(db, { entityId: entity.id, projectId }));
 
 		db.prepare(
 			`UPDATE entities
@@ -870,9 +897,15 @@ export function applyResolvedFacts(
 			}
 		} else {
 			const kind = deriveEntityKindFromId(entityId);
+			// An entity introduced by the other side of a synchronize belongs
+			// to its structural parent's project (resolved before it), or this
+			// workspace's own project when it has none - so it is immediately
+			// visible to project-scoped reads rather than stranded with a null
+			// project_id until the next open's backfill (ISS166 follow-up).
+			const projectId = (resolved.parentId ? getEntityProjectId(db, resolved.parentId) : null) ?? db.currentProjectId;
 			db.prepare(
-				`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
-				 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @createdAt, @updatedAt)`
+				`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+				 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @projectId, @createdAt, @updatedAt)`
 			).run(tenantParams(db, {
 				id: entityId,
 				kind,
@@ -880,6 +913,7 @@ export function applyResolvedFacts(
 				status: resolved.status,
 				body: resolved.body,
 				bodySource: resolved.bodySource,
+				projectId,
 				createdAt: resolved.createdAt,
 				updatedAt: resolved.createdAt
 			}));
@@ -1263,8 +1297,42 @@ function mapHistoryEntryRow(row: HistoryEntryRow): HistoryEntryRecord {
 }
 
 function getAllEntities(db: DatabaseHandle): EntityRecord[] {
-	const rows = db.prepare(`SELECT * FROM entities WHERE tenant_id = ? ORDER BY id`).all(db.tenantId) as EntityRow[];
+	const rows = db
+		.prepare(`SELECT * FROM entities WHERE tenant_id = @tenantId AND project_id = @projectId ORDER BY id`)
+		.all(tenantParams(db, { projectId: db.currentProjectId })) as EntityRow[];
 	return rows.map(mapEntityRow);
+}
+
+/** The `project_id` an entity is stamped with, or null if it predates the ISS166 backfill. */
+function getEntityProjectId(db: DatabaseHandle, entityId: string): string | null {
+	const row = db.prepare(`SELECT project_id AS projectId FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) as
+		| { projectId: string | null }
+		| undefined;
+	return row?.projectId ?? null;
+}
+
+/**
+ * The epic to attach a new parentless initiative to (ADR7's full-chain
+ * invariant): this workspace's own project's epic rather than the tenant's
+ * one literal `EPIC0`, so an initiative created in a consolidated project's
+ * workspace (ISS63) lands under that project, not the sentinel one. Falls
+ * back to `DEFAULT_EPIC_ID` for the sentinel/single-project case.
+ */
+function resolveDefaultEpicId(db: DatabaseHandle): string {
+	const row = db
+		.prepare(
+			`SELECT entities.id AS id
+			 FROM relations
+			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+			 WHERE relations.tenant_id = @tenantId
+			   AND relations.from_id = @projectId
+			   AND relations.type = 'contains'
+			   AND entities.kind = 'epic'
+			 ORDER BY entities.id
+			 LIMIT 1`
+		)
+		.get(tenantParams(db, { projectId: db.currentProjectId })) as { id: string } | undefined;
+	return row?.id ?? DEFAULT_EPIC_ID;
 }
 
 function getAllDerivedEntities(db: DatabaseHandle): EntityRecord[] {
@@ -1369,7 +1437,15 @@ function getInitiativeChildStatuses(
 }
 
 function getAllRelations(db: DatabaseHandle): RelationRecord[] {
-	const rows = db.prepare(`SELECT * FROM relations WHERE tenant_id = ? ORDER BY from_id, to_id, type`).all(db.tenantId) as RelationRow[];
+	const rows = db
+		.prepare(
+			`SELECT relations.*
+			 FROM relations
+			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+			 WHERE relations.tenant_id = @tenantId AND entities.project_id = @projectId
+			 ORDER BY relations.from_id, relations.to_id, relations.type`
+		)
+		.all(tenantParams(db, { projectId: db.currentProjectId })) as RelationRow[];
 	return rows.map((row) => ({
 		fromId: row.from_id,
 		toId: row.to_id,

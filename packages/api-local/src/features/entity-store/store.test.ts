@@ -56,6 +56,45 @@ describe("project-scoped ADRs", () => {
 	});
 });
 
+describe("project scoping (ISS166)", () => {
+	it("scopes list and snapshot to the workspace's resolved project", async () => {
+		const db = await openTestDatabase();
+		// Lives in the tenant's default sentinel project (PROJ0).
+		const defaultIssue = createEntity(db, { kind: "issue", title: "Default project issue" });
+
+		// A second project, fully populated through the structural chain.
+		const project = createEntity(db, { kind: "project", title: "Second Project" });
+		const epic = createEntity(db, { kind: "epic", parentId: project.id, title: "Second Epic" });
+		const initiative = createEntity(db, { kind: "initiative", parentId: epic.id, title: "Second Initiative" });
+		const scopedIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Second issue" });
+
+		// Resolve this invocation to the second project (normally derived from cwd).
+		db.currentProjectId = project.id;
+
+		const issueIds = listEntities(db, "issue").map((entity) => entity.id);
+		expect(issueIds).toContain(scopedIssue.id);
+		expect(issueIds).not.toContain(defaultIssue.id);
+
+		const snapshotIds = getDatabaseSnapshot(db).entities.map((entity) => entity.id);
+		expect(snapshotIds).toEqual(expect.arrayContaining([project.id, epic.id, initiative.id, scopedIssue.id]));
+		expect(snapshotIds).not.toContain(defaultIssue.id);
+		expect(snapshotIds).not.toContain("PROJ0");
+	});
+
+	it("attaches a parentless orphan issue to the current project so it stays scoped there", async () => {
+		const db = await openTestDatabase();
+		const project = createEntity(db, { kind: "project", title: "Second Project" });
+		db.currentProjectId = project.id;
+
+		const orphan = createEntity(db, { kind: "issue", title: "Loose issue" });
+		expect(listEntities(db, "issue").map((entity) => entity.id)).toContain(orphan.id);
+
+		// The same orphan must not bleed into the default project's scope.
+		db.currentProjectId = "PROJ0";
+		expect(listEntities(db, "issue").map((entity) => entity.id)).not.toContain(orphan.id);
+	});
+});
+
 describe("record bodies", () => {
 	it("persists and returns the authored body when creating an entity", async () => {
 		const db = await openTestDatabase();

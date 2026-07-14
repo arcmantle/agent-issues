@@ -44,11 +44,11 @@ export type CreateJsonRpcAppOptions = {
 	 * `x-agent-issues-project-identity` header). Cloud callers supply
 	 * `(identity, projectIdentity) => new PgStore(pool, identity.tenantId, projectIdentity)`;
 	 * the local daemon supplies a `SqliteStore`-opening equivalent instead
-	 * (ignoring `projectIdentity`, since local mode resolves project scope
-	 * from disk) - the gate itself never branches on which backend it's
+	 * (using `workspaceRoot`, since local mode resolves project scope from the
+	 * client workspace's on-disk `project_migrations` mapping) - the gate itself never branches on which backend it's
 	 * fronting.
 	 */
-	createStore: (identity: AuthIdentity, projectIdentity?: string) => StorageDriver | Promise<StorageDriver>;
+	createStore: (identity: AuthIdentity, projectIdentity?: string, workspaceRoot?: string) => StorageDriver | Promise<StorageDriver>;
 	/**
 	 * The local daemon's build-content-hash version handshake (ADR45,
 	 * ISS188). Omitted entirely by the cloud gate, which has no build-hash
@@ -61,6 +61,7 @@ export type CreateJsonRpcAppOptions = {
 const DEFAULT_BUILD_HASH_HEADER = "x-agent-issues-build-hash";
 const DEFAULT_DB_PATH_HEADER = "x-agent-issues-db-path";
 const PROJECT_IDENTITY_HEADER = "x-agent-issues-project-identity";
+const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 
 type VersionCheckResult =
 	| { ok: true }
@@ -195,7 +196,7 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			return;
 		}
 
-		const store = await createStore(identity, request.header(PROJECT_IDENTITY_HEADER));
+		const store = await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER));
 		try {
 			const result = await handler(store, rpcRequest.params);
 			const successResponse: JsonRpcSuccessResponse = { jsonrpc: "2.0", id: rpcRequest.id, result };

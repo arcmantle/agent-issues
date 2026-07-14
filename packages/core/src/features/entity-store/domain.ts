@@ -462,3 +462,50 @@ export function wouldOrphanSubtree(entities: EntityRecord[], relations: Relation
 
 	return remainingRelations.some((candidate) => candidate.fromId === relation.toId);
 }
+
+/**
+ * Assigns every entity to exactly one owning `project` (ISS166 follow-up):
+ * the project it is structurally reachable from (walking
+ * `STRUCTURAL_RELATION_TYPES` edges downward from each `project` root).
+ * Entities not reachable from any project - orphans (unattached issues) and
+ * parentless project ADRs - fall back to the tenant's sentinel
+ * `DEFAULT_PROJECT_ID` when it exists, or the sole project when a tenant has
+ * exactly one; a multi-project tenant's genuinely unattributable leftovers
+ * are left unassigned (returned map has no entry for them). Pure so both the
+ * one-time `project_id` backfill migration and the per-open, per-tenant
+ * backfill can share the exact same attribution, each doing its own IO.
+ */
+export function assignEntitiesToProjects(
+	entities: readonly { id: string; kind: string }[],
+	relations: readonly { fromId: string; toId: string; type: string }[]
+): Map<string, string> {
+	const structuralRelations = relations
+		.filter((relation) => isStructuralRelationType(relation.type))
+		.map((relation) => ({ ...relation, type: relation.type as StructuralRelationType, createdAt: "" }));
+	const projectIds = entities.filter((entity) => entity.kind === "project").map((entity) => entity.id);
+	const assignment = new Map<string, string>();
+
+	for (const projectId of projectIds) {
+		for (const reachableId of collectReachableIds(structuralRelations, projectId)) {
+			if (!assignment.has(reachableId)) {
+				assignment.set(reachableId, projectId);
+			}
+		}
+	}
+
+	const fallbackProjectId = projectIds.includes(DEFAULT_PROJECT_ID)
+		? DEFAULT_PROJECT_ID
+		: projectIds.length === 1
+			? projectIds[0]
+			: undefined;
+
+	if (fallbackProjectId !== undefined) {
+		for (const entity of entities) {
+			if (!assignment.has(entity.id)) {
+				assignment.set(entity.id, fallbackProjectId);
+			}
+		}
+	}
+
+	return assignment;
+}

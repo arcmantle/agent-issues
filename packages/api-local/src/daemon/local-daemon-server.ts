@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { createJsonRpcApp, resolveWellKnownLocalTenantId, type AuthProvider, type StorageDriver } from "@agent-issues/core";
 
 import { readBuildContentHash } from "./build-info.js";
-import { resolveDatabasePath } from "../db/database.js";
+import { resolveDatabasePath, resolveTenantRootPath } from "../db/database.js";
 import { clearDaemonToken, mintDaemonToken, saveDaemonToken, type DaemonTokenStoreOptions } from "../auth/daemon-token.js";
 import { DaemonTokenAuthProvider } from "../auth/daemon-token-auth-provider.js";
 import { clearDaemonState, saveDaemonState, type DaemonStateStoreOptions } from "./daemon-state.js";
@@ -92,18 +92,20 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 	const authProvider =
 		options.authProvider ?? new DaemonTokenAuthProvider({ token: mintedToken!, tenantId: resolveWellKnownLocalTenantId() });
 
-	const storesByTenant = new Map<string, Promise<StorageDriver>>();
-	function getOrOpenStore(tenantId: string): Promise<StorageDriver> {
-		let store = storesByTenant.get(tenantId);
+	const storesByWorkspace = new Map<string, Promise<StorageDriver>>();
+	function getOrOpenStore(tenantId: string, workspaceRoot?: string): Promise<StorageDriver> {
+		const currentWorkingDirectory = workspaceRoot ? resolveTenantRootPath(workspaceRoot) : process.cwd();
+		const storeKey = `${tenantId}:${currentWorkingDirectory}`;
+		let store = storesByWorkspace.get(storeKey);
 		if (!store) {
-			store = openSqliteStore(dbPath, { tenant: tenantId }).then((opened) => opened.store);
-			storesByTenant.set(tenantId, store);
+			store = openSqliteStore(dbPath, { currentWorkingDirectory, tenant: tenantId }).then((opened) => opened.store);
+			storesByWorkspace.set(storeKey, store);
 		}
 		return store;
 	}
 
 	async function closeAllStores(): Promise<void> {
-		for (const storePromise of storesByTenant.values()) {
+		for (const storePromise of storesByWorkspace.values()) {
 			const store = await storePromise;
 			await store.close();
 		}
@@ -148,7 +150,7 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 
 	const app = createJsonRpcApp({
 		authProvider,
-		createStore: (identity) => getOrOpenStore(identity.tenantId),
+		createStore: (identity, _projectIdentity, workspaceRoot) => getOrOpenStore(identity.tenantId, workspaceRoot),
 		versionHandshake: {
 			buildHash,
 			dbPath,

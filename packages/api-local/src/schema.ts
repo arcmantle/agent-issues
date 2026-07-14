@@ -26,6 +26,7 @@ export const entities = sqliteTable(
 		status: text("status").notNull(),
 		body: text("body").notNull().default(""),
 		bodySource: text("body_source").notNull().default("authored"),
+		projectId: text("project_id"),
 		createdAt: text("created_at").notNull(),
 		updatedAt: text("updated_at").notNull()
 	},

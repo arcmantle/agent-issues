@@ -58,6 +58,16 @@ export type HttpStoreOptions = {
 	 * mapping instead.
 	 */
 	projectIdentity?: string;
+	/**
+	 * This request's workspace root (ISS166 follow-up), sent as a header so
+	 * the local daemon - which fronts one shared database for every
+	 * workspace on the machine and cannot trust its own long-lived process
+	 * cwd - resolves each request against the CLIENT's project rather than
+	 * whichever workspace happened to spawn it. Only meaningful against the
+	 * local daemon; the cloud gate ignores it (it scopes by `projectIdentity`
+	 * and the token's tenant instead).
+	 */
+	workspaceRoot?: string;
 	/** Injectable for tests; defaults to the global `fetch`. */
 	fetchImpl?: typeof fetch;
 };
@@ -65,6 +75,7 @@ export type HttpStoreOptions = {
 const BUILD_HASH_HEADER = "x-agent-issues-build-hash";
 const DB_PATH_HEADER = "x-agent-issues-db-path";
 const PROJECT_IDENTITY_HEADER = "x-agent-issues-project-identity";
+const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 
 type JsonRpcSuccessResponse = { jsonrpc: "2.0"; id: string; result: unknown };
 type JsonRpcErrorResponse = { jsonrpc: "2.0"; id: string; error: { code: number; message: string } };
@@ -163,6 +174,9 @@ export class HttpStore implements StorageDriver {
 		}
 		if (this.options.projectIdentity !== undefined) {
 			headers[PROJECT_IDENTITY_HEADER] = this.options.projectIdentity;
+		}
+		if (this.options.workspaceRoot !== undefined) {
+			headers[WORKSPACE_ROOT_HEADER] = this.options.workspaceRoot;
 		}
 
 		const response = await fetchImpl(`${this.options.baseUrl}/rpc`, {

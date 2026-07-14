@@ -16,6 +16,39 @@ async function openTestDatabase(): Promise<DatabaseHandle> {
 	return db;
 }
 
+async function seedProjectContext(
+	dbPath: string,
+	workspaceMappingId: string,
+	projectTitle: string,
+	term?: { definition: string; term: string }
+): Promise<void> {
+	const { db } = await ensureDatabase(dbPath, {});
+	try {
+		const projectId = "PROJ1";
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			 VALUES (?, ?, 'project', ?, 'active', '', 'authored', ?, ?, ?)`
+		).run(db.tenantId, projectId, projectTitle, projectId, now, now);
+		db.prepare(
+			`INSERT INTO project_migrations (tenant_id, legacy_tenant_id, project_id, created_at)
+			 VALUES (?, ?, ?, ?)`
+		).run(db.tenantId, workspaceMappingId, projectId, now);
+		if (term) {
+			db.prepare(
+				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+				 VALUES (?, ?, NULL, ?, '', ?, ?)`
+			).run(db.tenantId, `default:${projectId}`, `${projectTitle} Context`, now, now);
+			db.prepare(
+				`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, '', ?, ?)`
+			).run(db.tenantId, `default:${projectId}`, term.term, term.definition, now, now);
+		}
+	} finally {
+		db.close();
+	}
+}
+
 afterEach(() => {
 	if (tempDir) {
 		rmSync(tempDir, { force: true, recursive: true });
@@ -190,33 +223,20 @@ describe("project-aware default context (ISS166)", () => {
 		const workspaceA = mkdtempSync(path.join(tmpdir(), "agent-issues-workspace-a-"));
 
 		try {
-			// Seed a legacy per-folder tenant (pre-ISS63) with its own data,
-			// keyed by workspaceA's deterministic legacy tenant id.
-			// `skipTenantConsolidation` keeps this seeding open from spending
-			// the one-time automatic sweep's only chance to run (ISS181: it
-			// is ledgered globally, once ever per database file) before the
-			// well-known tenant below gets to be the one performing it.
-			const legacyTenantId = resolveLegacyWorkspaceTenantId(workspaceA);
-			const { db: legacyDb } = await ensureDatabase(dbPath, { tenant: legacyTenantId, skipTenantConsolidation: true });
-			defineContextTerm(legacyDb, {
-				term: "Widget",
+			// Seed the current project and its workspace mapping directly.
+			const workspaceMappingId = resolveLegacyWorkspaceTenantId(workspaceA);
+			const projectTitle = formatTenantDisplayName(workspaceMappingId);
+			await seedProjectContext(dbPath, workspaceMappingId, projectTitle, {
 				definition: "Workspace A's own widget.",
-				scopeRef: "default"
+				term: "Widget"
 			});
-			legacyDb.close();
 
-			// Opening the well-known tenant is this database file's first
-			// ordinary (non-skipped) open, so it is the one that spends the
-			// automatic sweep's one-time run (ISS178/ISS181) - not a manual
-			// admin path (removed once the sweep made it redundant).
 			const { db: sharedDb } = await ensureDatabase(dbPath, {});
 			const projectId = resolveCurrentProjectId(sharedDb, workspaceA);
-			const projectTitle = formatTenantDisplayName(legacyTenantId);
 			sharedDb.close();
 
-			// Re-opening as if standing in workspaceA should resolve the bare
-			// (no --scope) context straight to that project's own migrated
-			// `default:<projectId>` row, not the tenant-wide literal "default".
+			// Re-opening as if standing in workspaceA resolves the bare
+			// (no --scope) context to that project's `default:<projectId>` row.
 			const { db: dbFromWorkspaceA } = await ensureDatabase(dbPath, { currentWorkingDirectory: workspaceA });
 			const details = getContextDetails(dbFromWorkspaceA, {});
 
@@ -225,9 +245,7 @@ describe("project-aware default context (ISS166)", () => {
 			expect(details.terms.map((term) => term.term)).toEqual(["Widget"]);
 			dbFromWorkspaceA.close();
 
-			// Standing anywhere else in this tenant (never consolidated) still
-			// resolves the tenant's own sentinel default - no regression for the
-			// common single-project case.
+			// A workspace without a mapping resolves the tenant's sentinel default.
 			const { db: dbElsewhere } = await ensureDatabase(dbPath, {});
 			const elsewhereDetails = getContextDetails(dbElsewhere, {});
 			expect(elsewhereDetails.context.key).toBe("default");
@@ -244,17 +262,12 @@ describe("project-aware default context (ISS166)", () => {
 		const workspaceB = mkdtempSync(path.join(tmpdir(), "agent-issues-workspace-b-"));
 
 		try {
-			const legacyTenantId = resolveLegacyWorkspaceTenantId(workspaceB);
-			const { db: legacyDb } = await ensureDatabase(dbPath, { tenant: legacyTenantId, skipTenantConsolidation: true });
-			legacyDb.close();
+			const workspaceMappingId = resolveLegacyWorkspaceTenantId(workspaceB);
+			const projectTitle = formatTenantDisplayName(workspaceMappingId);
+			await seedProjectContext(dbPath, workspaceMappingId, projectTitle);
 
-			// Opening the well-known tenant is this database file's first
-			// ordinary (non-skipped) open, so it is the one that spends the
-			// automatic sweep's one-time run (ISS178/ISS181) - no manual
-			// admin path.
 			const { db: sharedDb } = await ensureDatabase(dbPath, {});
 			const projectId = resolveCurrentProjectId(sharedDb, workspaceB);
-			const projectTitle = formatTenantDisplayName(legacyTenantId);
 
 			const details = getContextDetails(sharedDb, { scopeRef: projectId });
 
