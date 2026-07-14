@@ -44,7 +44,7 @@ function createCapture() {
 
 type RpcRequestLog = { method: string; params: unknown; authorization: string | undefined };
 
-/** A minimal fake JSON-RPC gate, standing in for the real cloud API (proven separately in packages/api/src/http-store-contract.test.ts) so this suite can verify CLI-level plumbing without a Postgres dependency. */
+/** A minimal fake JSON-RPC gate, standing in for the real cloud API (proven separately in packages/api-pg/src/http-store-contract.test.ts) so this suite can verify CLI-level plumbing without a Postgres dependency. */
 function startFakeRpcGate(handleMethod: (method: string, params: unknown) => unknown): {
 	requests: RpcRequestLog[];
 	server: Server;

@@ -2,7 +2,7 @@
 	"name": "@agent-issues/api-local",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Local SQLite storage engine and daemon JSON-RPC server (the local mirror of @agent-issues/api's cloud Postgres service).",
+	"description": "Local SQLite storage engine and daemon JSON-RPC server (the local mirror of @agent-issues/api-pg's cloud Postgres service).",
 	"type": "module",
 	"main": "./dist/index.js",
 	"exports": {

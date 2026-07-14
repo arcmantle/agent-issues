@@ -1,4 +1,4 @@
-import { LocalAuthProvider } from "@agent-issues/api";
+import { LocalAuthProvider } from "@agent-issues/api-pg";
 
 import type { DeviceCodeLoginResult } from "./cli/commands/auth.js";
 

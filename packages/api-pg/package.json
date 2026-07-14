@@ -1,5 +1,5 @@
 {
-	"name": "@agent-issues/api",
+	"name": "@agent-issues/api-pg",
 	"version": "0.1.0",
 	"private": true,
 	"description": "Deployable agent-issues cloud API service (stub). The JSON-RPC Postgres gate is filled in by a later slice.",

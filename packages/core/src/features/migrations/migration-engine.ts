@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 
 /**
  * The one shared migration *content* abstraction (ISS174): every migration
- * module in both `packages/core` and `packages/api` issues its DDL/DML
+ * module in both `packages/core` and `packages/api-pg` issues its DDL/DML
  * through this one `MigrationConn`, never through a raw `better-sqlite3` or
  * `pg` call. `run`/`all` are backed by `drizzle-orm`'s dialect-agnostic
  * `sql` tagged template - the same template text (including parameterized
@@ -21,7 +21,7 @@ export type MigrationConn = {
 /**
  * The one shared migration control-flow algorithm (ADR43), driven against
  * either driver (SQLite: `packages/core/src/migration-runner.ts`, Postgres:
- * `packages/api/src/db/migration-runner.ts`) through a small adapter -
+ * `packages/api-pg/src/db/migration-runner.ts`) through a small adapter -
  * `MigrationEngine` - instead of being duplicated per package.
  *
  * Only the driver adapter differs between packages (ledger check, backup

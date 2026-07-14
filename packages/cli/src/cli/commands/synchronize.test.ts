@@ -49,7 +49,7 @@ function createCapture() {
  * command's own wiring (opens both stores, calls `synchronizeStores`,
  * reports the summary, closes both) without needing a real Postgres-backed
  * API server. `HttpStore`'s wire shape and every individual seam method are
- * already proven for real in `packages/api/src/http-store-contract.test.ts`.
+ * already proven for real in `packages/api-pg/src/http-store-contract.test.ts`.
  */
 function startFakeCloudGate(store: SqliteStore): { server: Server; url: string } {
 	const server = createServer((request: IncomingMessage, response: ServerResponse) => {

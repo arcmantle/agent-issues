@@ -2,7 +2,7 @@
 
 `agent-issues` is a TypeScript ESM CLI for managing shared context, initiatives, PRDs, user stories, ADRs, and issues in a local SQLite database.
 
-The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds the shared domain (schema, database, and store layers), `agent-issues` (the CLI) compiles to `dist/` and depends on core, `@agent-issues/site` is a separate Lit app that builds with Vite and is served live by the CLI, and `@agent-issues/api` is a deployable cloud API service scaffold. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
+The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds the shared domain (schema, database, and store layers), `agent-issues` (the CLI) compiles to `dist/` and depends on core, `@agent-issues/site` is a separate Lit app that builds with Vite and is served live by the CLI, and `@agent-issues/api-pg` is a deployable cloud API service scaffold. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
 
 ## Requirements
 
@@ -135,7 +135,7 @@ agent-issues auth logout
 
 ## Auth (Entra ID)
 
-The cloud API (`@agent-issues/api`) validates requests through a swappable `AuthProvider` seam, with Entra ID (Azure AD) as the first concrete provider. The CLI ships matching `auth login`/`auth logout`/`auth status`/`auth switch` commands:
+The cloud API (`@agent-issues/api-pg`) validates requests through a swappable `AuthProvider` seam, with Entra ID (Azure AD) as the first concrete provider. The CLI ships matching `auth login`/`auth logout`/`auth status`/`auth switch` commands:
 
 ```bash
 agent-issues auth login --tenant-id <entra-tenant-guid> --client-id <entra-app-client-guid>
@@ -152,7 +152,7 @@ agent-issues auth logout
 
 ### Local dev auth (no Azure required)
 
-For local development and AFK testing of the auth seam and cloud path, `LocalAuthProvider` (`@agent-issues/api`) issues and validates a locally-signed dev credential with no network call and no Azure tenant:
+For local development and AFK testing of the auth seam and cloud path, `LocalAuthProvider` (`@agent-issues/api-pg`) issues and validates a locally-signed dev credential with no network call and no Azure tenant:
 
 ```bash
 agent-issues auth login --local --secret <any-shared-secret>

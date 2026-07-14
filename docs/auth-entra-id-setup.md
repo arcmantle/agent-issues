@@ -55,7 +55,7 @@ is present (it's added by default to new registrations) and click
 without an individual consent prompt per user.
 
 > The cloud API's own token-validation seam (`EntraIdAuthProvider` in
-> `packages/api`) doesn't require any additional scope beyond this today -
+> `packages/api-pg`) doesn't require any additional scope beyond this today -
 > it validates the `oid`/`tid` claims already present on a standard signed-in
 > token. If a future issue introduces API-specific scopes, this guide will
 > need an additional "expose an API" step; nothing here needs to change

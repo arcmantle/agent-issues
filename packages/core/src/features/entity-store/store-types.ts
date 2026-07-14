@@ -4,7 +4,7 @@ import type { ContextDetails } from "../context/context-types.js";
 /**
  * The entity/handoff-store result contract (ADR13's dialect-agnostic
  * boundary): every `StorageDriver` implementation - SQLite
- * (`@agent-issues/api-local`) and Postgres (`@agent-issues/api`) alike -
+ * (`@agent-issues/api-local`) and Postgres (`@agent-issues/api-pg`) alike -
  * returns these same shapes, so they live in core rather than either
  * concrete store.
  */

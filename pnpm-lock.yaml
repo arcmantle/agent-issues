@@ -8,7 +8,38 @@ importers:
 
   .: {}
 
-  packages/api:
+  packages/api-local:
+    dependencies:
+      '@agent-issues/core':
+        specifier: workspace:*
+        version: link:../core
+      better-sqlite3:
+        specifier: ^12.10.0
+        version: 12.10.0
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.10.0)(pg@8.22.0)
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      '@types/node':
+        specifier: ^25.9.2
+        version: 25.9.2
+      '@types/supertest':
+        specifier: ^7.2.0
+        version: 7.2.0
+      supertest:
+        specifier: ^7.2.2
+        version: 7.2.2
+      typescript:
+        specifier: ^7.0.0
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
+
+  packages/api-pg:
     dependencies:
       '@agent-issues/core':
         specifier: workspace:*
@@ -48,45 +79,14 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
 
-  packages/api-local:
-    dependencies:
-      '@agent-issues/core':
-        specifier: workspace:*
-        version: link:../core
-      better-sqlite3:
-        specifier: ^12.10.0
-        version: 12.10.0
-      drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.10.0)(pg@8.22.0)
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
-      '@types/node':
-        specifier: ^25.9.2
-        version: 25.9.2
-      '@types/supertest':
-        specifier: ^7.2.0
-        version: 7.2.0
-      supertest:
-        specifier: ^7.2.2
-        version: 7.2.2
-      typescript:
-        specifier: ^7.0.0
-        version: 7.0.2
-      vitest:
-        specifier: ^4.1.8
-        version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
-
   packages/cli:
     dependencies:
-      '@agent-issues/api':
-        specifier: workspace:*
-        version: link:../api
       '@agent-issues/api-local':
         specifier: workspace:*
         version: link:../api-local
+      '@agent-issues/api-pg':
+        specifier: workspace:*
+        version: link:../api-pg
       '@agent-issues/core':
         specifier: workspace:*
         version: link:../core

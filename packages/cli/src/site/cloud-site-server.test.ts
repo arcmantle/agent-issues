@@ -34,7 +34,7 @@ function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialC
 	return { platform: "darwin", runCommand };
 }
 
-/** A minimal fake cloud gate exposing both /rpc and /events, standing in for the real one (proven in packages/api/src/http-store-contract.test.ts and the cloud API's own SSE route). */
+/** A minimal fake cloud gate exposing both /rpc and /events, standing in for the real one (proven in packages/api-pg/src/http-store-contract.test.ts and the cloud API's own SSE route). */
 function startFakeCloudGate(handleMethod: (method: string, params: unknown) => unknown): {
 	push: (tenantEvent: unknown) => void;
 	requests: RpcRequestLog[];
