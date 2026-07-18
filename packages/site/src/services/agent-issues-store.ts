@@ -1,19 +1,35 @@
 import { computed, signal } from "@lit-labs/signals";
-import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, Entity, FixLink, GraphEdge, GraphNode, InitiativeBundle, InitiativeTab, PageMode, ProjectContextTermEntry, ProjectContextTermSource, Relation, RelationshipGraph, RootTab, SiteConfig, Snapshot, ViewMode } from "../models.js";
+import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, Entity, EpicInitiativeGroup, FixLink, GraphEdge, GraphNode, InitiativeBundle, InitiativeTab, PageMode, ProjectContextTermEntry, ProjectContextTermSource, ProjectDiscovery, Relation, RelationshipGraph, RootTab, SiteConfig, Snapshot, ViewMode } from "../models.js";
 
 type IssueTreeNode = {
 	issue: Entity;
 	children: IssueTreeNode[];
 };
 
+type ProjectSnapshot = {
+	kind: "available";
+	snapshot: Snapshot;
+} | {
+	kind: "unavailable";
+};
+type ViewerRoute = {
+	tenantId: string | null;
+	projectId: string | null;
+	entityId: string | null;
+	initiativeId: string | null;
+	cascadePath: string[];
+};
+
 export class AgentIssuesStore {
 	public config = signal<SiteConfig | null>(null);
 	public snapshot = signal<Snapshot | null>(null);
+	public projectDiscovery = signal<ProjectDiscovery | null>(null);
 	public search = signal("");
 	public contextSearch = signal("");
 	public contextTab = signal<ContextPageTab>("all");
 	public kindFilter = signal("all");
 	public selectedTenant = signal<string | null>(null);
+	public selectedProjectId = signal<string | null>(null);
 	public selectedInitiativeId = signal<string | null>(null);
 	public selectedId = signal<string | null>(null);
 	public cascadePath = signal<string[]>([]);
@@ -22,6 +38,7 @@ export class AgentIssuesStore {
 	public reRootTrail = signal<string[][]>([]);
 	public railCollapsed = signal<boolean>(false);
 	public masterCollapsedOverride = signal<boolean | null>(null);
+	public collapsedEpicIdsByProject = signal<Map<string, Set<string>>>(new Map());
 	public syncLabel = signal("loading");
 	public errorMessage = signal<string | null>(null);
 	public activeView = signal<ViewMode>("overview");
@@ -52,6 +69,19 @@ export class AgentIssuesStore {
 		}
 
 		return this.tenantById.get().get(selectedTenant)?.displayName ?? this.formatTenantDisplayName(selectedTenant);
+	});
+
+	public selectedProjectDisplayName = computed(() => {
+		const selectedProjectId = this.selectedProjectId.get();
+		if (!selectedProjectId) {
+			return null;
+		}
+		const discovery = this.projectDiscovery.get();
+		if (discovery?.kind !== "available") {
+			return selectedProjectId;
+		}
+
+		return discovery.projects.find((entry) => entry.project.id === selectedProjectId)?.project.title ?? selectedProjectId;
 	});
 
 	public entityById = computed(() => new Map((this.snapshot.get()?.entities ?? []).map((entity) => [entity.id, entity])));
@@ -444,6 +474,38 @@ export class AgentIssuesStore {
 
 	public projectInitiatives = computed(() => this.snapshot.get()?.initiatives ?? []);
 
+	public epicInitiativeGroups = computed<EpicInitiativeGroup[]>(() => {
+		const snapshot = this.snapshot.get();
+		if (!snapshot) {
+			return [];
+		}
+
+		const bundlesByInitiativeId = new Map(snapshot.initiatives.map((bundle) => [bundle.initiative.id, bundle]));
+		const initiativeIdsByEpicId = new Map<string, string[]>();
+		for (const relation of snapshot.relations) {
+			if (relation.type !== "contains" || !bundlesByInitiativeId.has(relation.toId)) {
+				continue;
+			}
+
+			const initiativeIds = initiativeIdsByEpicId.get(relation.fromId) ?? [];
+			initiativeIds.push(relation.toId);
+			initiativeIdsByEpicId.set(relation.fromId, initiativeIds);
+		}
+
+		return this.sortEntities(snapshot.entities.filter((entity) => entity.kind === "epic"))
+			.map((epic) => {
+				const initiatives = (initiativeIdsByEpicId.get(epic.id) ?? [])
+					.map((initiativeId) => bundlesByInitiativeId.get(initiativeId))
+					.filter((bundle): bundle is InitiativeBundle => Boolean(bundle));
+				return {
+					epic,
+					initiatives,
+					completedInitiativeCount: initiatives.filter((bundle) => this.isDoneStatus(bundle.initiative.status)).length
+				};
+			})
+			.filter((group) => group.initiatives.length > 0);
+	});
+
 	public projectAdrs = computed(() => this.sortEntities((this.snapshot.get()?.entities ?? []).filter((entity) => entity.kind === "adr")));
 
 	public adrRailEntries = computed<AdrRailEntry[]>(() => {
@@ -487,7 +549,7 @@ export class AgentIssuesStore {
 		}
 
 		this.connected = true;
-		window.addEventListener("hashchange", this.onHashChange);
+		window.addEventListener("hashchange", this.onBrowserNavigation);
 		window.addEventListener("popstate", this.onPopState);
 		void this.bootstrap();
 	}
@@ -498,7 +560,7 @@ export class AgentIssuesStore {
 		}
 
 		this.connected = false;
-		window.removeEventListener("hashchange", this.onHashChange);
+		window.removeEventListener("hashchange", this.onBrowserNavigation);
 		window.removeEventListener("popstate", this.onPopState);
 		this.events?.close();
 		this.events = null;
@@ -509,20 +571,31 @@ export class AgentIssuesStore {
 	}
 
 	public onHashChange = () => {
-		const hashParams = new URLSearchParams(window.location.hash.slice(1));
-		const nextSelectedId = hashParams.get("entity");
-		const nextSelectedInitiativeId = hashParams.get("initiative");
-		const nextCascade = hashParams.get("cascade");
-		this.cascadePath.set(nextCascade ? nextCascade.split("~").map((id) => decodeURIComponent(id)) : []);
+		const route = this.normalizeRoute(this.readRoute());
+		this.selectedTenant.set(route.tenantId);
+		this.selectedProjectId.set(route.projectId);
+		this.cascadePath.set(route.cascadePath);
 		this.clearMasterOverrideIfShallow();
-		this.selectedId.set(nextSelectedId);
-		this.selectedInitiativeId.set(nextSelectedInitiativeId);
-		this.activePage.set(nextSelectedId ? "entity" : nextSelectedInitiativeId ? "initiative" : "list");
+		this.selectedId.set(route.entityId);
+		this.selectedInitiativeId.set(route.initiativeId);
+		this.activePage.set(route.entityId ? "entity" : route.initiativeId ? "initiative" : "list");
 		this.activeView.set("overview");
+		this.writeRoute(route, true);
 	};
 
-	public onPopState = () => {
+	public onPopState = async () => {
+		const route = this.readRoute();
+		if (route.tenantId !== this.selectedTenant.get() || route.projectId !== this.selectedProjectId.get()) {
+			await this.navigateToRoute(route);
+			return;
+		}
+
+		this.onHashChange();
 		this.popReRoot();
+	};
+
+	public onBrowserNavigation = async () => {
+		await this.navigateToRoute(this.readRoute());
 	};
 
 	public setSearchFromEvent = (event: Event) => {
@@ -545,9 +618,7 @@ export class AgentIssuesStore {
 		this.contextSearch.set("");
 		this.contextTab.set("all");
 		this.activePage.set("list");
-		const nextUrl = new URL(window.location.href);
-		nextUrl.hash = "";
-		window.history.pushState({}, "", nextUrl);
+		this.writeRoute(this.currentRoute());
 	}
 
 	public setContextTab(tab: ContextPageTab) {
@@ -586,7 +657,7 @@ export class AgentIssuesStore {
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(entityId);
 		this.activePage.set("entity");
-		window.location.hash = `entity=${encodeURIComponent(entityId)}`;
+		this.writeRoute(this.currentRoute());
 	}
 
 	public selectInitiativeFromEvent = (event: Event) => {
@@ -611,6 +682,29 @@ export class AgentIssuesStore {
 
 	public toggleMaster() {
 		this.masterCollapsedOverride.set(!this.masterCollapsed.get());
+	}
+
+	public isEpicExpanded(epicId: string): boolean {
+		const projectId = this.selectedProjectId.get();
+		return !projectId || !this.collapsedEpicIdsByProject.get().get(projectId)?.has(epicId);
+	}
+
+	public toggleEpicExpanded(epicId: string) {
+		const projectId = this.selectedProjectId.get();
+		if (!projectId) {
+			return;
+		}
+
+		const collapsedEpicIdsByProject = new Map(this.collapsedEpicIdsByProject.get());
+		const collapsedEpicIds = new Set(collapsedEpicIdsByProject.get(projectId));
+		if (collapsedEpicIds.has(epicId)) {
+			collapsedEpicIds.delete(epicId);
+		} else {
+			collapsedEpicIds.add(epicId);
+		}
+
+		collapsedEpicIdsByProject.set(projectId, collapsedEpicIds);
+		this.collapsedEpicIdsByProject.set(collapsedEpicIdsByProject);
 	}
 
 	protected clearMasterOverrideIfShallow() {
@@ -688,8 +782,7 @@ export class AgentIssuesStore {
 	}
 
 	protected writeCascadeHash() {
-		const path = this.cascadePath.get();
-		window.location.hash = path.length > 0 ? `cascade=${path.map((id) => encodeURIComponent(id)).join("~")}` : "";
+		this.writeRoute(this.currentRoute());
 	}
 
 	public selectInitiative(initiativeId: string) {
@@ -709,9 +802,7 @@ export class AgentIssuesStore {
 		this.selectedId.set(null);
 		this.activePage.set("list");
 		this.activeView.set("overview");
-		const nextUrl = new URL(window.location.href);
-		nextUrl.hash = "";
-		window.history.pushState({}, "", nextUrl);
+		this.writeRoute(this.currentRoute());
 	}
 
 	public async selectTenant(tenantId: string) {
@@ -720,17 +811,50 @@ export class AgentIssuesStore {
 		}
 
 		this.selectedTenant.set(tenantId);
-		this.selectedId.set(null);
-		this.selectedInitiativeId.set(null);
-		this.activeSection.set("initiatives");
-		this.activePage.set("list");
-		this.activeView.set("overview");
-		this.initTab.set("overview");
-		this.updateTenantInUrl(tenantId);
+		this.selectedProjectId.set(null);
+		this.resetScopeDetail();
+		this.writeRoute(this.currentRoute());
+		this.stopLiveUpdates();
+		this.syncLabel.set("choose a project");
+		await this.reloadProjectDiscovery();
+	}
+
+	public async returnToProjectChooser() {
+		if (!this.selectedTenant.get() || !this.selectedProjectId.get()) {
+			return;
+		}
+
+		this.selectedProjectId.set(null);
+		this.snapshot.set(null);
+		this.resetScopeDetail();
+		this.writeRoute(this.currentRoute());
+		this.stopLiveUpdates();
+		this.syncLabel.set("choose a project");
+		await this.reloadProjectDiscovery();
+	}
+
+	public async selectProject(projectId: string) {
+		const tenantId = this.selectedTenant.get();
+		if (!tenantId || !projectId || projectId === this.selectedProjectId.get()) {
+			return;
+		}
+
+		this.selectedProjectId.set(projectId);
+		this.resetScopeDetail();
+		this.writeRoute(this.currentRoute());
 		this.stopLiveUpdates();
 		this.syncLabel.set("connecting");
-		await this.reloadSnapshot();
-		this.connectEvents();
+
+		try {
+			await this.reloadSnapshot();
+			this.connectEvents();
+		} catch (error) {
+			this.selectedProjectId.set(null);
+			this.snapshot.set(null);
+			this.writeRoute(this.currentRoute(), true);
+			this.errorMessage.set(error instanceof Error ? error.message : String(error));
+			this.syncLabel.set("project unavailable");
+		}
 	}
 
 	public initiativeStats(bundle: InitiativeBundle) {
@@ -800,6 +924,20 @@ export class AgentIssuesStore {
 		});
 
 		return this.buildIssueTree(bundle, rootIds, relevantIds);
+	}
+
+	public issueTreeForDirectIssues(bundle: InitiativeBundle): IssueTreeNode[] {
+		const storyIssueIds = new Set(
+			bundle.userStories.flatMap((story) => this.issueTreeForStory(bundle, story.id).flatMap((node) => this.issueTreeNodeIds(node)))
+		);
+		const directIssueIds = new Set(bundle.issues.map((issue) => issue.id).filter((issueId) => !storyIssueIds.has(issueId)));
+		const parentIssueIdByChildId = new Map(bundle.subIssueLinks.map((link) => [link.issue.id, link.parent.id]));
+		const rootIds = [...directIssueIds].filter((issueId) => {
+			const parentIssueId = parentIssueIdByChildId.get(issueId);
+			return !parentIssueId || !directIssueIds.has(parentIssueId);
+		});
+
+		return this.buildIssueTree(bundle, rootIds, directIssueIds);
 	}
 
 	public subIssueTreeForIssue(bundle: InitiativeBundle, issueId: string): IssueTreeNode[] {
@@ -923,7 +1061,8 @@ export class AgentIssuesStore {
 	}
 
 	public buildProjectGraph(): RelationshipGraph {
-		const bundles = this.snapshot.get()?.initiatives ?? [];
+		const snapshot = this.snapshot.get();
+		const epicGroups = this.epicInitiativeGroups.get();
 		const projectKey = "__project";
 		const nodes: GraphNode[] = [
 			{
@@ -937,30 +1076,50 @@ export class AgentIssuesStore {
 		];
 		const edges: GraphEdge[] = [];
 
-		for (const bundle of bundles) {
-			const initiative = bundle.initiative;
+		for (const adr of snapshot?.projectAdrs ?? []) {
+			nodes.push({ col: 1, fullLabel: adr.title, id: adr.id, key: adr.id, kind: "adr", label: adr.title, status: adr.status });
+			edges.push({ from: projectKey, to: adr.id });
+		}
+
+		for (const group of epicGroups) {
+			const { epic } = group;
 			nodes.push({
 				col: 1,
-				fullLabel: `${initiative.title} — ${bundle.userStories.length} stories, ${bundle.issues.length} issues`,
-				id: initiative.id,
-				key: initiative.id,
-				kind: "initiative",
-				label: initiative.title
+				fullLabel: epic.title,
+				id: epic.id,
+				key: epic.id,
+				kind: "epic",
+				label: epic.title,
+				status: epic.status
 			});
-			edges.push({ from: projectKey, to: initiative.id });
+			edges.push({ from: projectKey, to: epic.id });
 
-			const records: { entity: Entity; kind: string }[] = [
-				...bundle.prds.map((prd) => ({ entity: prd, kind: "prd" })),
-				...bundle.adrs.map((adr) => ({ entity: adr, kind: "adr" }))
-			];
-			for (const { entity, kind } of records) {
-				const key = `${initiative.id}:${entity.id}`;
-				nodes.push({ col: 2, fullLabel: entity.title, id: entity.id, key, kind, label: entity.title });
-				edges.push({ from: initiative.id, to: key });
+			for (const bundle of group.initiatives) {
+				const initiative = bundle.initiative;
+				nodes.push({
+					col: 2,
+					fullLabel: `${initiative.title} — ${bundle.userStories.length} stories, ${bundle.issues.length} issues`,
+					id: initiative.id,
+					key: initiative.id,
+					kind: "initiative",
+					label: initiative.title,
+					status: initiative.status
+				});
+				edges.push({ from: epic.id, to: initiative.id });
+
+				const records: { entity: Entity; kind: string }[] = [
+					...bundle.prds.map((prd) => ({ entity: prd, kind: "prd" })),
+					...bundle.adrs.map((adr) => ({ entity: adr, kind: "adr" }))
+				];
+				for (const { entity, kind } of records) {
+					const key = `${initiative.id}:${entity.id}`;
+					nodes.push({ col: 3, fullLabel: entity.title, id: entity.id, key, kind, label: entity.title, status: entity.status });
+					edges.push({ from: initiative.id, to: key });
+				}
 			}
 		}
 
-		return { columns: ["Project", "Initiatives", "PRDs & ADRs"], edges, nodes };
+		return { columns: ["Project", "Epics", "Initiatives", "PRDs & ADRs"], edges, nodes };
 	}
 
 	public isDoneStatus(status: string) {
@@ -1192,14 +1351,12 @@ export class AgentIssuesStore {
 		if (this.activeSection.get() !== "adrs" && bundle) {
 			this.selectedInitiativeId.set(bundle.initiative.id);
 			this.activePage.set("initiative");
-			window.location.hash = `initiative=${encodeURIComponent(bundle.initiative.id)}`;
+			this.writeRoute(this.currentRoute());
 			return;
 		}
 
 		this.activePage.set("list");
-		const nextUrl = new URL(window.location.href);
-		nextUrl.hash = "";
-		window.history.pushState({}, "", nextUrl);
+		this.writeRoute(this.currentRoute());
 	}
 
 	public getContextForInitiative(initiativeId: string): ContextDetails | null {
@@ -1210,18 +1367,8 @@ export class AgentIssuesStore {
 		try {
 			const config = await this.fetchJson<SiteConfig>("site-config.json");
 			this.config.set(config);
-			const requestedTenant = this.readTenantFromUrl();
-			const selectedTenant = requestedTenant && config.availableTenants.some((tenant) => tenant.id === requestedTenant)
-				? requestedTenant
-				: config.currentTenant;
-
-			this.selectedTenant.set(selectedTenant);
-			if (selectedTenant !== requestedTenant) {
-				this.updateTenantInUrl(selectedTenant);
-			}
-			this.syncLabel.set("connecting");
-			await this.reloadSnapshot();
-			this.connectEvents();
+			const route = this.readRoute();
+			await this.navigateToRoute({ ...route, tenantId: route.tenantId ?? config.currentTenant });
 		} catch (error) {
 			this.errorMessage.set(error instanceof Error ? error.message : String(error));
 			this.syncLabel.set("load failed");
@@ -1229,7 +1376,12 @@ export class AgentIssuesStore {
 	}
 
 	protected async reloadSnapshot() {
-		this.snapshot.set(await this.fetchJson<Snapshot>(this.buildTenantScopedPath("/api/snapshot")));
+		const result = await this.fetchJson<ProjectSnapshot>(this.buildTenantScopedPath("/api/snapshot"));
+		if (result.kind === "unavailable") {
+			throw new Error("Selected project is unavailable.");
+		}
+
+		this.snapshot.set(result.snapshot);
 		this.onHashChange();
 		const selectedId = this.selectedId.get();
 		if (selectedId && !this.entityById.get().has(selectedId)) {
@@ -1237,6 +1389,58 @@ export class AgentIssuesStore {
 		}
 		this.errorMessage.set(null);
 		this.syncLabel.set("listening");
+	}
+
+	protected async reloadProjectDiscovery() {
+		try {
+			this.projectDiscovery.set(await this.fetchJson<ProjectDiscovery>(this.buildTenantScopedPath("/api/projects")));
+			this.errorMessage.set(null);
+		} catch (error) {
+			this.projectDiscovery.set({ kind: "unavailable" });
+			this.errorMessage.set(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	protected async navigateToRoute(route: ViewerRoute) {
+		const scopeChanged = route.tenantId !== this.selectedTenant.get() || route.projectId !== this.selectedProjectId.get();
+		this.selectedTenant.set(route.tenantId);
+		this.selectedProjectId.set(route.projectId);
+		if (scopeChanged) {
+			this.resetScopeDetail();
+		}
+		this.writeRoute(this.currentRoute(), true);
+
+		if (!route.projectId) {
+			this.snapshot.set(null);
+			this.syncLabel.set("choose a project");
+			await this.reloadProjectDiscovery();
+			return;
+		}
+
+		this.stopLiveUpdates();
+		this.syncLabel.set("connecting");
+		try {
+			await this.reloadSnapshot();
+			this.connectEvents();
+		} catch (error) {
+			this.selectedProjectId.set(null);
+			this.snapshot.set(null);
+			this.writeRoute(this.currentRoute(), true);
+			this.errorMessage.set(error instanceof Error ? error.message : String(error));
+			this.syncLabel.set("project unavailable");
+		}
+	}
+
+	protected resetScopeDetail() {
+		this.selectedId.set(null);
+		this.selectedInitiativeId.set(null);
+		this.cascadePath.set([]);
+		this.reRootTrail.set([]);
+		this.activeSection.set("initiatives");
+		this.activePage.set("list");
+		this.activeView.set("overview");
+		this.initTab.set("overview");
+		this.clearMasterOverrideIfShallow();
 	}
 
 	protected connectEvents() {
@@ -1332,6 +1536,10 @@ export class AgentIssuesStore {
 			.filter((node): node is IssueTreeNode => node !== null);
 	}
 
+	protected issueTreeNodeIds(node: IssueTreeNode): string[] {
+		return [node.issue.id, ...node.children.flatMap((child) => this.issueTreeNodeIds(child))];
+	}
+
 	protected formatTenantDisplayName(tenantId: string) {
 		return tenantId
 			.replace(/-[0-9a-f]{12}$/i, "")
@@ -1342,24 +1550,96 @@ export class AgentIssuesStore {
 	}
 
 	protected readTenantFromUrl() {
-		return new URL(window.location.href).searchParams.get("tenant");
+		return this.readRoute().tenantId;
 	}
 
-	protected updateTenantInUrl(tenantId: string) {
+	protected readProjectFromUrl() {
+		return this.readRoute().projectId;
+	}
+
+	protected currentRoute(): ViewerRoute {
+		return {
+			tenantId: this.selectedTenant.get(),
+			projectId: this.selectedProjectId.get(),
+			entityId: this.selectedId.get(),
+			initiativeId: this.selectedInitiativeId.get(),
+			cascadePath: this.cascadePath.get()
+		};
+	}
+
+	protected readRoute(): ViewerRoute {
+		const url = new URL(window.location.href);
+		const params = new URLSearchParams(url.hash.slice(1));
+		const legacyParams = url.searchParams;
+		const tenantId = params.get("tenant") ?? legacyParams.get("tenant");
+		const projectId = params.get("project") ?? legacyParams.get("project");
+		const cascade = params.get("cascade");
+
+		return {
+			tenantId,
+			projectId,
+			entityId: params.get("entity"),
+			initiativeId: params.get("initiative"),
+			cascadePath: cascade ? cascade.split("~").filter(Boolean) : []
+		};
+	}
+
+	protected normalizeRoute(route: ViewerRoute): ViewerRoute {
+		const entityById = this.entityById.get();
+		if (entityById.size === 0) {
+			return route;
+		}
+
+		const validEntityId = route.entityId && entityById.has(route.entityId) ? route.entityId : null;
+		const validInitiativeId = route.initiativeId && this.bundleForInitiativeId(route.initiativeId) ? route.initiativeId : null;
+		const validCascadePath = route.cascadePath.every((entityId) => entityById.has(entityId)) ? route.cascadePath : [];
+
+		return {
+			...route,
+			entityId: validEntityId,
+			initiativeId: validInitiativeId,
+			cascadePath: validCascadePath
+		};
+	}
+
+	protected writeRoute(route: ViewerRoute, replace = false) {
 		const nextUrl = new URL(window.location.href);
-		nextUrl.searchParams.set("tenant", tenantId);
-		nextUrl.hash = "";
-		window.history.pushState({}, "", nextUrl);
+		const entries: string[] = [];
+		const add = (key: string, value: string | null) => {
+			if (value) {
+				entries.push(`${key}=${encodeURIComponent(value)}`);
+			}
+		};
+		add("tenant", route.tenantId);
+		add("project", route.projectId);
+		add("entity", route.entityId);
+		add("initiative", route.initiativeId);
+		if (route.cascadePath.length > 0) {
+			entries.push(`cascade=${route.cascadePath.map((entityId) => encodeURIComponent(entityId)).join("~")}`);
+		}
+
+		nextUrl.searchParams.delete("tenant");
+		nextUrl.searchParams.delete("project");
+		nextUrl.hash = entries.join("&");
+		window.history[replace ? "replaceState" : "pushState"]({}, "", nextUrl);
 	}
 
 	protected buildTenantScopedPath(resourcePath: string) {
 		const tenantId = this.selectedTenant.get();
-		if (!tenantId) {
+		const projectId = this.selectedProjectId.get();
+		if (!tenantId && !projectId) {
 			return resourcePath;
 		}
 
 		const separator = resourcePath.includes("?") ? "&" : "?";
-		return `${resourcePath}${separator}tenant=${encodeURIComponent(tenantId)}`;
+		const query = new URLSearchParams();
+		if (tenantId) {
+			query.set("tenant", tenantId);
+		}
+		if (projectId && resourcePath === "/api/snapshot") {
+			query.set("project", projectId);
+		}
+		return query.size > 0 ? `${resourcePath}${separator}${query}` : resourcePath;
 	}
 
 	protected stopLiveUpdates() {

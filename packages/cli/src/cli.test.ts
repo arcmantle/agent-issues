@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { isEntrypointInvocation, runCli, shouldRunLocalDaemon } from "./cli.js";
 import { main } from "./cli/index.js";
-import { createEntity, ensureDatabase, getEntityDetails, listEntities } from "@agent-issues/api-local";
+import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listEntityHistory, listTenants } from "@agent-issues/api-local";
 import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
 import { startLiveSite } from "./site/index.js";
 
@@ -154,6 +154,24 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues auth login --tenant-id");
 	});
 
+	it("documents generic handoff creation and title or body edits in help", async () => {
+		const createStdout = createCapture();
+		const createExitCode = await runCli(["help", "create", "--json"], { stdout: createStdout.stream, stderr: createCapture().stream });
+
+		expect(createExitCode).toBe(0);
+		expect(JSON.parse(createStdout.read()).command.examples).toContain(
+			'agent-issues create handoff --title "Resume export work" --body-file - --link handsOff ISS1'
+		);
+
+		const editStdout = createCapture();
+		const editExitCode = await runCli(["help", "edit", "--json"], { stdout: editStdout.stream, stderr: createCapture().stream });
+
+		expect(editExitCode).toBe(0);
+		expect(JSON.parse(editStdout.read()).command.usage).toContain(
+			"agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->]"
+		);
+	});
+
 	it("prints compact json by default and pretty json when requested", async () => {
 		const compactStdout = createCapture();
 		const compactStderr = createCapture();
@@ -268,8 +286,11 @@ describe("cli", () => {
 		expect(projectErr.read()).toBe("");
 		expect(projectOut.read()).toContain("project");
 
-		const { db: afterProject } = await ensureDatabase(dbPath);
-		const project = listEntities(afterProject, "project").find((entity) => entity.title === "Platform");
+		const { db: afterProject } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const discovery = getProjectDiscovery(afterProject);
+		const project = discovery.kind === "available"
+			? discovery.projects.find((entry) => entry.project.title === "Platform")?.project
+			: undefined;
 		afterProject.close();
 		expect(project).toBeDefined();
 
@@ -283,8 +304,11 @@ describe("cli", () => {
 		expect(epicErr.read()).toBe("");
 		expect(epicOut.read()).toContain("epic");
 
-		const { db: afterEpic } = await ensureDatabase(dbPath);
-		const epic = listEntities(afterEpic, "epic").find((entity) => entity.title === "Checkout revamp");
+		const { db: afterEpic } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const projectAfterEpic = getDatabaseSnapshot(afterEpic, { projectId: project!.id });
+		const epic = projectAfterEpic.kind === "available"
+			? projectAfterEpic.snapshot.entities.find((entity) => entity.kind === "epic" && entity.title === "Checkout revamp")
+			: undefined;
 		afterEpic.close();
 		expect(epic).toBeDefined();
 
@@ -298,9 +322,12 @@ describe("cli", () => {
 		expect(initiativeErr.read()).toBe("");
 		expect(initiativeOut.read()).toContain("Checkout redesign");
 
-		const { db: afterInitiative } = await ensureDatabase(dbPath);
+		const { db: afterInitiative } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		try {
-			const initiative = listEntities(afterInitiative, "initiative").find((entity) => entity.title === "Checkout redesign");
+			const projectAfterInitiative = getDatabaseSnapshot(afterInitiative, { projectId: project!.id });
+			const initiative = projectAfterInitiative.kind === "available"
+				? projectAfterInitiative.snapshot.entities.find((entity) => entity.kind === "initiative" && entity.title === "Checkout redesign")
+				: undefined;
 			expect(initiative).toBeDefined();
 
 			const epicDetails = getEntityDetails(afterInitiative, epic!.id);
@@ -319,7 +346,7 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 
-		const { db: seedDb } = await ensureDatabase(dbPath);
+		const { db: seedDb } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		const project = createEntity(seedDb, { kind: "project", title: "Platform" });
 		const initiative = createEntity(seedDb, { kind: "initiative", title: "Checkout redesign" });
 		seedDb.close();
@@ -334,8 +361,11 @@ describe("cli", () => {
 		expect(versionErr.read()).toBe("");
 		expect(versionOut.read()).toContain("version");
 
-		const { db: afterVersion } = await ensureDatabase(dbPath);
-		const version = listEntities(afterVersion, "version").find((entity) => entity.title === "2.0");
+		const { db: afterVersion } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const projectSnapshot = getDatabaseSnapshot(afterVersion, { projectId: project.id });
+		const version = projectSnapshot.kind === "available"
+			? projectSnapshot.snapshot.entities.find((entity) => entity.kind === "version" && entity.title === "2.0")
+			: undefined;
 		afterVersion.close();
 		expect(version).toBeDefined();
 
@@ -349,7 +379,7 @@ describe("cli", () => {
 		expect(linkErr.read()).toBe("");
 		expect(linkOut.read()).toContain("taggedWith");
 
-		const { db: afterLink } = await ensureDatabase(dbPath);
+		const { db: afterLink } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		try {
 			const versionDetails = getEntityDetails(afterLink, version!.id);
 			const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
@@ -360,6 +390,54 @@ describe("cli", () => {
 		} finally {
 			afterLink.close();
 		}
+	});
+
+	it("creates initial links and edits an entity title and body through generic commands", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db } = await ensureDatabase(dbPath);
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const blocker = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Blocking issue" });
+		const secondBlocker = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Second blocking issue" });
+		db.close();
+
+		const createExitCode = await runCli(
+			[
+				"create", "issue", "--title", "Initial title", "--parent", initiative.id,
+				"--link", "blocks", blocker.id,
+				"--link", "blocks", secondBlocker.id,
+				"--db", dbPath
+			],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		);
+		expect(createExitCode).toBe(0);
+
+		const { db: afterCreate } = await ensureDatabase(dbPath);
+		const created = listEntities(afterCreate, "issue").find((entity) => entity.title === "Initial title");
+		expect(getEntityDetails(afterCreate, created!.id).outgoing).toEqual(expect.arrayContaining([
+			expect.objectContaining({ entity: expect.objectContaining({ id: blocker.id }), relationType: "blocks" }),
+			expect.objectContaining({ entity: expect.objectContaining({ id: secondBlocker.id }), relationType: "blocks" })
+		]));
+		afterCreate.close();
+
+		const editExitCode = await runCli(
+			["edit", created!.id, "--title", "Final title", "--body", "Final body", "--db", dbPath],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		);
+		expect(editExitCode).toBe(0);
+
+		const { db: afterEdit } = await ensureDatabase(dbPath);
+		try {
+			expect(getEntityDetails(afterEdit, created!.id).entity).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
+			expect(listEntityHistory(afterEdit, created!.id)).toHaveLength(2);
+		} finally {
+			afterEdit.close();
+		}
+
+		const error = createCapture();
+		await expect(runCli(["edit", created!.id, "--db", dbPath], { cwd: root, stderr: error.stream, stdout: createCapture().stream })).rejects.toThrow(
+			"--title or --body is required for edit."
+		);
 	});
 
 	it("creates sub-issues through the existing create command and shows them in the bundle", async () => {
@@ -525,12 +603,14 @@ describe("cli", () => {
 		expect(stdout.read()).toContain(`Stopped live site at http://127.0.0.1:${port}`);
 	});
 
-	it("serves site config and a database snapshot through the seam", async () => {
+	it("serves an explicitly selected project snapshot through the seam", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const port = await getAvailablePort();
 		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const project = createEntity(db, { kind: "project", title: "Console Viewer" });
+		const epic = createEntity(db, { kind: "epic", title: "Console Epic", parentId: project.id });
+		const initiative = createEntity(db, { kind: "initiative", parentId: epic.id, title: "Console Viewer" });
 		db.close();
 
 		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
@@ -551,12 +631,54 @@ describe("cli", () => {
 			expect(config.dbPath).toBe(dbPath);
 			expect(config.availableTenants.map((tenant: { id: string }) => tenant.id)).toContain("test-tenant");
 
-			const snapshotResponse = await fetch(`http://127.0.0.1:${port}/api/snapshot?tenant=test-tenant`);
+			const snapshotResponse = await fetch(`http://127.0.0.1:${port}/api/snapshot?tenant=test-tenant&project=${project.id}`);
 			const snapshot = await snapshotResponse.json();
-			expect(snapshot.entities.map((entity: { id: string }) => entity.id)).toContain(initiative.id);
+			expect(snapshot.kind).toBe("available");
+			expect(snapshot.snapshot.entities.map((entity: { id: string }) => entity.id)).toContain(initiative.id);
+
+			const unavailableResponse = await fetch(`http://127.0.0.1:${port}/api/snapshot?tenant=test-tenant&project=PROJ404`);
+			expect(await unavailableResponse.json()).toEqual({ kind: "unavailable" });
 		} finally {
 			const closePromise = new Promise<void>((resolve) => {
 				handle.server.once("close", () => resolve());
+			});
+			handle.close();
+			await closePromise;
+			liveSiteClosers.delete(handle.close);
+		}
+	});
+
+	it("returns typed unavailable project discovery for an unknown tenant without bootstrapping it", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const port = await getAvailablePort();
+		const { db } = await ensureDatabase(dbPath, { tenant: "known-tenant" });
+		db.close();
+
+		const handle = await startLiveSite({ dbPath, port, tenant: "known-tenant" });
+		liveSiteClosers.add(() => {
+			if (handle.server.listening) {
+				handle.close();
+			}
+		});
+		await new Promise<void>((resolve) => {
+			handle.server.once("listening", resolve);
+		});
+
+		try {
+			const response = await fetch(`http://127.0.0.1:${port}/api/projects?tenant=missing-tenant`);
+			expect(await response.json()).toEqual({ kind: "unavailable" });
+
+			const { db: verificationDb } = await ensureDatabase(dbPath, { tenant: "known-tenant" });
+			try {
+				expect(listEntities(verificationDb, "project").map((entity) => entity.id)).toEqual(["PROJ0"]);
+				expect(listTenants(verificationDb).map((tenant) => tenant.id)).toEqual(["known-tenant"]);
+			} finally {
+				verificationDb.close();
+			}
+		} finally {
+			const closePromise = new Promise<void>((resolve) => {
+				handle.server.once("close", resolve);
 			});
 			handle.close();
 			await closePromise;

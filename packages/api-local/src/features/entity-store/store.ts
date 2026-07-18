@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import type { DatabaseHandle } from "../../db/database.js";
+import { and, eq, sql, type SQL } from "drizzle-orm";
+
+import { getSqliteEntityOrThrow, type SqliteExecutor } from "../../db/sqlite-executor.js";
+import { counters, entities } from "../../schema.js";
 import { getContextDetails, type ContextDetails } from "../context/context-store.js";
 import {
 	collectReachableIds,
@@ -9,6 +12,7 @@ import {
 	deriveEntityKindFromId,
 	deriveEntityStatuses,
 	DEFAULT_EPIC_ID,
+	DEFAULT_PROJECT_ID,
 	factsMatchEntity,
 	getInitialStatus,
 	isBodySource,
@@ -26,13 +30,12 @@ import {
 	type EntityDetails,
 	type EntityKind,
 	type EntityRecord,
-	type HandoffDeleteResult,
-	type HandoffDetails,
-	type HandoffRecord,
 	type HistoryEntryRecord,
 	type InitiativeBundle,
 	type LinkResult,
 	type MoveResult,
+	type ProjectDiscovery,
+	type ProjectSnapshot,
 	type RelationRecord,
 	type RelationType,
 	type StatusUpdateResult,
@@ -44,9 +47,6 @@ export {
 	type DatabaseSnapshot,
 	type DeleteResult,
 	type EntityDetails,
-	type HandoffDeleteResult,
-	type HandoffDetails,
-	type HandoffRecord,
 	type InitiativeBundle,
 	type LinkResult,
 	type MoveResult,
@@ -65,19 +65,12 @@ type EntityRow = {
 	updated_at: string;
 };
 
+type DrizzleEntityRow = typeof entities.$inferSelect;
+
 type RelationRow = {
 	from_id: string;
 	to_id: string;
 	type: string;
-	created_at: string;
-};
-
-type HandoffRow = {
-	id: string;
-	entity_id: string;
-	initiative_id: string | null;
-	summary: string;
-	body: string;
 	created_at: string;
 };
 
@@ -94,10 +87,31 @@ type HistoryEntryRow = {
 	created_at: string;
 };
 
+function all<T>(executor: SqliteExecutor, query: SQL): T[] {
+	return executor.drizzle.all(query) as T[];
+}
+
+function first<T>(executor: SqliteExecutor, query: SQL): T | undefined {
+	return all<T>(executor, query)[0];
+}
+
+function run(executor: SqliteExecutor, query: SQL): { changes: number } {
+	return executor.drizzle.run(query);
+}
+
 export function createEntity(
-	db: DatabaseHandle,
-	input: { kind: string; title: string; parentId?: string; status?: string; body?: string; author?: string }
+	executor: SqliteExecutor,
+	input: {
+		kind: string;
+		title: string;
+		parentId?: string;
+		status?: string;
+		body?: string;
+		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
+	}
 ): EntityRecord {
+	const db = executor;
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
 	}
@@ -116,8 +130,8 @@ export function createEntity(
 	}
 
 	const now = new Date().toISOString();
-	const parentId = input.parentId ?? (kind === "initiative" ? resolveDefaultEpicId(db) : undefined);
-	const parent = parentId ? getEntityOrThrow(db, parentId) : null;
+	const parentId = input.parentId ?? (kind === "initiative" ? resolveDefaultEpicId(executor) : undefined);
+	const parent = parentId ? getEntityOrThrow(executor, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
 
 	if (parent && !relationType) {
@@ -128,16 +142,13 @@ export function createEntity(
 	// always share their parent's owning project); a parentless entity -
 	// an orphan issue or a project-scoped ADR - belongs to this workspace's
 	// own resolved project (ISS166 follow-up).
-	const inheritedProjectId = (parent ? getEntityProjectId(db, parent.id) : null) ?? db.currentProjectId;
+	const inheritedProjectId = (parent ? getEntityProjectId(executor, parent.id) : null) ?? db.currentProjectId;
 
-	const tx = db.transaction(() => {
-		const id = nextEntityId(db, kind);
+	return executor.transaction(() => {
+		const id = nextEntityId(executor, kind);
 		// A project owns itself, so scoped reads from its own workspace see it.
 		const projectId = kind === "project" ? id : inheritedProjectId;
-		db.prepare(
-			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
-			 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @projectId, @createdAt, @updatedAt)`
-		).run(tenantParams(db, {
+		const values = tenantParams(db, {
 			id,
 			kind,
 			title,
@@ -147,10 +158,11 @@ export function createEntity(
 			projectId,
 			createdAt: now,
 			updatedAt: now
-		}));
+		});
+		executor.drizzle.insert(entities).values(values).run();
 
 		if (parent && relationType) {
-			insertRelation(db, {
+			insertRelation(executor, {
 				fromId: parent.id,
 				toId: id,
 				type: relationType,
@@ -158,16 +170,18 @@ export function createEntity(
 			});
 		}
 
-		const entity = getEntityOrThrow(db, id);
-		appendHistoryEntry(db, entity, input.author);
+		for (const link of input.links ?? []) {
+			linkEntities(executor, { fromId: id, relationType: link.relationType, toId: link.targetId });
+		}
+
+		const entity = getEntityOrThrow(executor, id);
+		appendHistoryEntry(executor, entity, input.author);
 		return entity;
 	});
-
-	return tx();
 }
 
 export function linkEntities(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): LinkResult {
 	if (input.fromId === input.toId) {
@@ -208,13 +222,25 @@ export function linkEntities(
 }
 
 export function updateEntityStatus(
-	db: DatabaseHandle,
+	executor: SqliteExecutor,
 	input: { entityId: string; status: string; author?: string }
 ): StatusUpdateResult {
-	const entity = getEntityOrThrow(db, input.entityId);
+	const db = executor;
+	const entity = getEntityOrThrow(executor, input.entityId);
 
 	if (!isValidStatus(entity.kind, input.status)) {
 		throw new Error(`Invalid status for ${entity.kind}: ${input.status}`);
+	}
+
+	if ((entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") && input.status === "superseded") {
+		throw new Error(`${entity.id} status is derived (superseded); link a replacement record with supersedes instead.`);
+	}
+
+	if (
+		(entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") &&
+		isEntitySuperseded(db, entity.id, entity.kind)
+	) {
+		throw new Error(`${entity.id} status is derived (superseded) because another ${entity.kind} supersedes it.`);
 	}
 
 	if (entity.kind === "userStory") {
@@ -236,11 +262,6 @@ export function updateEntityStatus(
 	}
 
 	if (entity.kind === "adr") {
-		if (isAdrSuperseded(db, entity.id)) {
-			throw new Error(
-				`${entity.id} status is derived (superseded) because another ADR supersedes it.`
-			);
-		}
 		if (getConstrainedIssueStatuses(db, entity.id).length > 0) {
 			throw new Error(
 				`${entity.id} status is derived from the issues it constrains; update those issues instead of setting it directly.`
@@ -281,17 +302,11 @@ export function updateEntityStatus(
 	const previousStatus = entity.status;
 	const updatedAt = new Date().toISOString();
 
-	db.prepare(
-		`UPDATE entities
-		 SET status = @status,
-		     updated_at = @updatedAt
-		 WHERE tenant_id = @tenantId
-		   AND id = @entityId`
-	).run(tenantParams(db, {
-		entityId: input.entityId,
-		status: input.status,
-		updatedAt
-	}));
+	executor.drizzle
+		.update(entities)
+		.set({ status: input.status, updatedAt })
+		.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, input.entityId)))
+		.run();
 
 	const updated = getEntityOrThrow(db, input.entityId);
 	appendHistoryEntry(db, updated, input.author);
@@ -303,34 +318,56 @@ export function updateEntityStatus(
 }
 
 export function setEntityBody(
-	db: DatabaseHandle,
+	executor: SqliteExecutor,
 	input: { entityId: string; body: string; bodySource?: BodySource; author?: string }
 ): EntityRecord {
-	getEntityOrThrow(db, input.entityId);
+	const db = executor;
+	getEntityOrThrow(executor, input.entityId);
 
 	const updatedAt = new Date().toISOString();
 	const bodySource = input.bodySource ?? "authored";
 
-	db.prepare(
-		`UPDATE entities
-		 SET body = @body,
-		     body_source = @bodySource,
-		     updated_at = @updatedAt
-		 WHERE tenant_id = @tenantId
-		   AND id = @entityId`
-	).run(tenantParams(db, {
-		entityId: input.entityId,
-		body: input.body,
-		bodySource,
-		updatedAt
-	}));
+	executor.drizzle
+		.update(entities)
+		.set({ body: input.body, bodySource, updatedAt })
+		.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, input.entityId)))
+		.run();
 
 	const updated = getEntityOrThrow(db, input.entityId);
 	appendHistoryEntry(db, updated, input.author);
 	return updated;
 }
 
-export function archiveEntity(db: DatabaseHandle, input: { entityId: string }): StatusUpdateResult {
+export function updateEntity(
+	executor: SqliteExecutor,
+	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }
+): EntityRecord {
+	const db = executor;
+	const entity = getEntityOrThrow(executor, input.entityId);
+	if (input.title === undefined && input.body === undefined) {
+		throw new Error("Entity edit requires --title, --body, or both.");
+	}
+
+	const title = input.title === undefined ? entity.title : input.title.trim();
+	if (title.length === 0) {
+		throw new Error("Entity title must not be empty.");
+	}
+	const body = input.body ?? entity.body;
+	const bodySource = input.body === undefined ? entity.bodySource : input.bodySource ?? "authored";
+	const updatedAt = new Date().toISOString();
+
+	executor.drizzle
+		.update(entities)
+		.set({ body, bodySource, title, updatedAt })
+		.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, input.entityId)))
+		.run();
+
+	const updated = getEntityOrThrow(executor, input.entityId);
+	appendHistoryEntry(db, updated, input.author);
+	return updated;
+}
+
+export function archiveEntity(db: SqliteExecutor, input: { entityId: string }): StatusUpdateResult {
 	const entity = getEntityOrThrow(db, input.entityId);
 	return updateEntityStatus(db, {
 		entityId: input.entityId,
@@ -339,7 +376,7 @@ export function archiveEntity(db: DatabaseHandle, input: { entityId: string }): 
 }
 
 export function moveEntity(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	input: { entityId: string; newParentId: string; author?: string }
 ): MoveResult {
 	if (input.entityId === input.newParentId) {
@@ -377,17 +414,11 @@ export function moveEntity(
 
 	db.transaction(() => {
 		for (const relation of currentParentRelations) {
-			db.prepare(
-				`DELETE FROM relations
-				 WHERE tenant_id = @tenantId
-				   AND from_id = @fromId
-				   AND to_id = @toId
-				   AND type = @type`
-			).run(tenantParams(db, {
-				fromId: relation.fromId,
-				toId: relation.toId,
-				type: relation.type
-			}));
+			run(db, sql`DELETE FROM relations
+				WHERE tenant_id = ${db.tenantId}
+					AND from_id = ${relation.fromId}
+					AND to_id = ${relation.toId}
+					AND type = ${relation.type}`);
 		}
 
 		insertRelation(db, {
@@ -401,32 +432,25 @@ export function moveEntity(
 		// its whole structural subtree inherits the new parent's owning
 		// project so `project_id` stays consistent with the structure.
 		const projectId = getEntityProjectId(db, newParent.id) ?? db.currentProjectId;
-		db.prepare(
-			`WITH RECURSIVE subtree(id) AS (
-			   SELECT @entityId
-			   UNION
-			   SELECT relations.to_id
-			   FROM relations
-			   JOIN subtree ON relations.from_id = subtree.id
-			   WHERE relations.tenant_id = @tenantId
-			 )
-			 UPDATE entities
-			 SET project_id = @projectId
-			 WHERE tenant_id = @tenantId AND id IN (SELECT id FROM subtree)`
-		).run(tenantParams(db, { entityId: entity.id, projectId }));
+		run(db, sql`WITH RECURSIVE subtree(id) AS (
+			SELECT ${entity.id}
+			UNION
+			SELECT relations.to_id
+			FROM relations
+			JOIN subtree ON relations.from_id = subtree.id
+			WHERE relations.tenant_id = ${db.tenantId}
+		)
+		UPDATE entities
+		SET project_id = ${projectId}
+		WHERE tenant_id = ${db.tenantId} AND id IN (SELECT id FROM subtree)`);
 
-		db.prepare(
-			`UPDATE entities
-			 SET updated_at = @updatedAt
-			 WHERE tenant_id = @tenantId
-			   AND id = @entityId`
-		).run(tenantParams(db, {
-			entityId: entity.id,
-			updatedAt
-		}));
+		run(db, sql`UPDATE entities
+			SET updated_at = ${updatedAt}
+			WHERE tenant_id = ${db.tenantId}
+				AND id = ${entity.id}`);
 
 		appendHistoryEntry(db, getEntityOrThrow(db, entity.id), input.author);
-	})();
+	});
 
 	return {
 		entity: getEntityOrThrow(db, entity.id),
@@ -437,7 +461,7 @@ export function moveEntity(
 }
 
 export function unlinkEntities(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): UnlinkResult {
 	const relation = getRelationOrThrow(db, input);
@@ -454,17 +478,11 @@ export function unlinkEntities(
 		);
 	}
 
-	const result = db.prepare(
-		`DELETE FROM relations
-		 WHERE tenant_id = @tenantId
-		   AND from_id = @fromId
-		   AND to_id = @toId
-		   AND type = @type`
-	).run(tenantParams(db, {
-		fromId: relation.fromId,
-		toId: relation.toId,
-		type: relation.type
-	}));
+	const result = run(db, sql`DELETE FROM relations
+		WHERE tenant_id = ${db.tenantId}
+			AND from_id = ${relation.fromId}
+			AND to_id = ${relation.toId}
+			AND type = ${relation.type}`);
 
 	return {
 		relation,
@@ -472,46 +490,57 @@ export function unlinkEntities(
 	};
 }
 
-export function deleteEntity(db: DatabaseHandle, input: { entityId: string }): DeleteResult {
-	const entity = getEntityOrThrow(db, input.entityId);
-	const outgoingCount = db
-		.prepare(`SELECT COUNT(*) as count FROM relations WHERE tenant_id = ? AND from_id = ?`)
-		.get(db.tenantId, input.entityId) as { count: number };
+export function deleteEntity(executor: SqliteExecutor, input: { entityId: string }): DeleteResult {
+	const db = executor;
+	const entity = getEntityOrThrow(executor, input.entityId);
 
-	if (outgoingCount.count > 0) {
-		throw new Error(`Cannot delete ${entity.id} while it still has outgoing relations. Unlink or delete dependents first.`);
-	}
+	return db.transaction(() => {
+		run(db, sql`DELETE FROM entities
+			WHERE tenant_id = ${db.tenantId}
+				AND kind = 'handoff'
+				AND id IN (
+					SELECT from_id
+					FROM relations
+					WHERE tenant_id = ${db.tenantId}
+						AND to_id = ${input.entityId}
+						AND type = 'handsOff'
+				)`);
+			const outgoingCount = first<{ count: number }>(
+				db,
+				sql`SELECT COUNT(*) as count FROM relations WHERE tenant_id = ${db.tenantId} AND from_id = ${input.entityId}`
+			)!;
 
-	const result = db.prepare(`DELETE FROM entities WHERE tenant_id = ? AND id = ?`).run(db.tenantId, input.entityId);
+			if (outgoingCount.count > 0) {
+				throw new Error(`Cannot delete ${entity.id} while it still has outgoing relations. Unlink or delete dependents first.`);
+			}
 
-	return {
-		entity,
-		removed: result.changes > 0
-	};
+			const result = executor.drizzle
+				.delete(entities)
+				.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, input.entityId)))
+				.run();
+
+			return {
+				entity,
+				removed: result.changes > 0
+			};
+		});
 }
 
-export function getEntityDetails(db: DatabaseHandle, entityId: string): EntityDetails {
-	const entity = getEntityOrThrow(db, entityId);
-	const incomingRows = db
-		.prepare(
-			`SELECT relations.type, entities.*
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.to_id = @entityId
-			 ORDER BY entities.id`
-		)
-		.all(tenantParams(db, { entityId })) as Array<EntityRow & { type: string }>;
-	const outgoingRows = db
-		.prepare(
-			`SELECT relations.type, entities.*
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.from_id = @entityId
-			 ORDER BY entities.id`
-		)
-		.all(tenantParams(db, { entityId })) as Array<EntityRow & { type: string }>;
+export function getEntityDetails(executor: SqliteExecutor, entityId: string): EntityDetails {
+	const db = executor;
+	const entity = getEntityOrThrow(executor, entityId);
+	const incomingRows = all<EntityRow & { type: string }>(db, sql`SELECT relations.type, entities.*
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.to_id = ${entityId}
+		ORDER BY entities.id`);
+	const outgoingRows = all<EntityRow & { type: string }>(db, sql`SELECT relations.type, entities.*
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.from_id = ${entityId}
+		ORDER BY entities.id`);
 
 	const statusMap = getDerivedStatusMap(db);
 	return {
@@ -527,197 +556,77 @@ export function getEntityDetails(db: DatabaseHandle, entityId: string): EntityDe
 	};
 }
 
-export function getInitiativeBundle(db: DatabaseHandle, initiativeId: string): InitiativeBundle {
+export function getInitiativeBundle(db: SqliteExecutor, initiativeId: string, allowedIds?: ReadonlySet<string>): InitiativeBundle {
 	const initiative = getEntityOrThrow(db, initiativeId);
 
 	if (initiative.kind !== "initiative") {
 		throw new Error(`${initiativeId} is not an initiative.`);
 	}
 
-	const entityRows = db
-		.prepare(
-			`WITH RECURSIVE reachable(id) AS (
-			   SELECT @initiativeId
-			   UNION
-			   SELECT relations.to_id
-			   FROM relations
-			   JOIN reachable ON relations.from_id = reachable.id
-			   WHERE relations.tenant_id = @tenantId
-			 )
-			 SELECT entities.*
-			 FROM entities
-			 JOIN reachable ON entities.id = reachable.id
-			 WHERE entities.tenant_id = @tenantId
-			 ORDER BY entities.id`
-		)
-		.all(tenantParams(db, { initiativeId })) as EntityRow[];
-	const relationRows = db
-		.prepare(
-			`WITH RECURSIVE reachable(id) AS (
-			   SELECT @initiativeId
-			   UNION
-			   SELECT relations.to_id
-			   FROM relations
-			   JOIN reachable ON relations.from_id = reachable.id
-			   WHERE relations.tenant_id = @tenantId
-			 )
-			 SELECT relations.*
-			 FROM relations
-			 JOIN reachable source ON relations.from_id = source.id
-			 JOIN reachable target ON relations.to_id = target.id
-			 WHERE relations.tenant_id = @tenantId`
-		)
-		.all(tenantParams(db, { initiativeId })) as RelationRow[];
+	const entityRows = all<EntityRow>(db, sql`WITH RECURSIVE reachable(id) AS (
+		SELECT ${initiativeId}
+		UNION
+		SELECT relations.to_id
+		FROM relations
+		JOIN reachable ON relations.from_id = reachable.id
+		WHERE relations.tenant_id = ${db.tenantId}
+		UNION
+		SELECT relations.from_id
+		FROM relations
+		JOIN reachable ON relations.to_id = reachable.id
+		WHERE relations.tenant_id = ${db.tenantId} AND relations.type = 'handsOff'
+	)
+	SELECT entities.*
+	FROM entities
+	JOIN reachable ON entities.id = reachable.id
+	WHERE entities.tenant_id = ${db.tenantId}
+	ORDER BY entities.id`);
+	const relationRows = all<RelationRow>(db, sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId}`);
 
-	const entities = entityRows.map(mapEntityRow);
+	const entities = entityRows.map(mapEntityRow).filter((entity) => !allowedIds || allowedIds.has(entity.id));
+	const allowedEntityIds = new Set(entities.map((entity) => entity.id));
+	const filteredRelationRows = relationRows.filter(
+		(relation) => allowedEntityIds.has(relation.from_id) && allowedEntityIds.has(relation.to_id)
+	);
 	const statusMap = getDerivedStatusMap(db);
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, statusMap));
 	const entityById = new Map(derivedEntities.map((entity) => [entity.id, entity]));
 
 	return {
 		initiative: applyDerivedStatus(initiative, statusMap),
+		entities: derivedEntities,
 		prds: derivedEntities.filter((entity) => entity.kind === "prd"),
 		userStories: derivedEntities.filter((entity) => entity.kind === "userStory"),
 		adrs: derivedEntities.filter((entity) => entity.kind === "adr"),
 		issues: derivedEntities.filter((entity) => entity.kind === "issue"),
-		fixLinks: relationRows
+		fixLinks: filteredRelationRows
 			.filter((relation) => relation.type === "fixes")
 			.map((relation) => ({
 				issue: entityById.get(relation.from_id)!,
 				userStory: entityById.get(relation.to_id)!
 			})),
-		subIssueLinks: relationRows
+		subIssueLinks: filteredRelationRows
 			.filter((relation) => relation.type === "decomposes")
 			.map((relation) => ({
 				parent: entityById.get(relation.from_id)!,
 				issue: entityById.get(relation.to_id)!
 			})),
-		blockerLinks: relationRows
+		blockerLinks: filteredRelationRows
 			.filter((relation) => relation.type === "blocks")
 			.map((relation) => ({
 				source: entityById.get(relation.from_id)!,
 				target: entityById.get(relation.to_id)!
 			})),
-		constrainsLinks: relationRows
+		constrainsLinks: filteredRelationRows
 			.filter((relation) => relation.type === "constrains")
 			.map((relation) => ({
 				adr: entityById.get(relation.from_id)!,
 				issue: entityById.get(relation.to_id)!
-			})),
-		handoffs: listHandoffs(db, { initiativeId })
+			}))
 	};
 }
 
-export function getHandoffDetails(db: DatabaseHandle, entityId: string): HandoffDetails {
-	const focus = getEntityDetails(db, entityId);
-	const structuralPath = getStructuralPath(db, entityId);
-	const initiativeAncestor =
-		focus.entity.kind === "initiative"
-			? focus.entity
-			: structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity ?? null;
-
-	return {
-		focus,
-		structuralPath,
-		initiative: initiativeAncestor ? getInitiativeBundle(db, initiativeAncestor.id) : null,
-		orphaned: focus.entity.kind !== "initiative" && initiativeAncestor === null,
-		activeBlockers: focus.entity.kind === "issue" ? getActiveBlockingIssues(db, focus.entity.id) : [],
-		handoffs: initiativeAncestor
-			? listHandoffs(db, { initiativeId: initiativeAncestor.id })
-			: listHandoffs(db, { entityId: focus.entity.id })
-	};
-}
-
-export function createHandoff(
-	db: DatabaseHandle,
-	input: { entityId: string; summary?: string; body: string }
-): HandoffRecord {
-	const focus = getEntityOrThrow(db, input.entityId);
-	const initiativeId = resolveOwningInitiativeId(db, focus);
-	const summary = normalizeHandoffSummary(input.summary);
-	const body = normalizeHandoffBody(input.body);
-	const now = new Date().toISOString();
-
-	const tx = db.transaction(() => {
-		const id = nextHandoffId(db);
-		db.prepare(
-			`INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
-			 VALUES (@tenantId, @id, @entityId, @initiativeId, @summary, @body, @createdAt)`
-		).run(tenantParams(db, {
-			id,
-			entityId: focus.id,
-			initiativeId,
-			summary,
-			body,
-			createdAt: now
-		}));
-
-		return getHandoffOrThrow(db, id);
-	});
-
-	return tx();
-}
-
-export function updateHandoff(
-	db: DatabaseHandle,
-	input: { handoffId: string; summary?: string; body?: string }
-): HandoffRecord {
-	const current = getHandoffOrThrow(db, input.handoffId);
-
-	if (input.summary === undefined && input.body === undefined) {
-		throw new Error("Provide --summary, --body, or --body-file to update a handoff.");
-	}
-
-	const summary = input.summary === undefined ? current.summary : normalizeHandoffSummary(input.summary);
-	const body = input.body === undefined ? current.body : normalizeHandoffBody(input.body);
-
-	db.prepare(
-		`UPDATE handoffs
-		 SET summary = @summary,
-		     body = @body
-		 WHERE tenant_id = @tenantId
-		   AND id = @handoffId`
-	).run(tenantParams(db, {
-		handoffId: input.handoffId,
-		summary,
-		body
-	}));
-
-	return getHandoffOrThrow(db, input.handoffId);
-}
-
-export function deleteHandoff(db: DatabaseHandle, input: { handoffId: string }): HandoffDeleteResult {
-	const handoff = getHandoffOrThrow(db, input.handoffId);
-	const result = db.prepare(`DELETE FROM handoffs WHERE tenant_id = ? AND id = ?`).run(db.tenantId, input.handoffId);
-
-	return {
-		handoff,
-		removed: result.changes > 0
-	};
-}
-
-export function listHandoffs(db: DatabaseHandle, filter?: { initiativeId?: string; entityId?: string }): HandoffRecord[] {
-	const conditions = ["tenant_id = @tenantId"];
-	const params: Record<string, unknown> = { tenantId: db.tenantId };
-
-	if (filter?.initiativeId !== undefined) {
-		conditions.push("initiative_id = @initiativeId");
-		params.initiativeId = filter.initiativeId;
-	}
-
-	if (filter?.entityId !== undefined) {
-		conditions.push("entity_id = @entityId");
-		params.entityId = filter.entityId;
-	}
-
-	const rows = db
-		.prepare(`SELECT * FROM handoffs WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC`)
-		.all(params) as HandoffRow[];
-
-	return rows.map(mapHandoffRow);
-}
-
-export function listEntities(db: DatabaseHandle, kind: string): EntityRecord[] {
+export function listEntities(db: SqliteExecutor, kind: string): EntityRecord[] {
 	if (!isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
@@ -731,10 +640,11 @@ export function listEntities(db: DatabaseHandle, kind: string): EntityRecord[] {
 // entity to still exist: the whole point of an audit trail is that it
 // outlives the record it documents (a deleted entity's history is still
 // queryable; only a whole-tenant wipe removes it).
-export function listEntityHistory(db: DatabaseHandle, entityId: string): HistoryEntryRecord[] {
-	const rows = db
-		.prepare(`SELECT * FROM history_entries WHERE tenant_id = ? AND entity_id = ? ORDER BY version ASC`)
-		.all(db.tenantId, entityId) as HistoryEntryRow[];
+export function listEntityHistory(db: SqliteExecutor, entityId: string): HistoryEntryRecord[] {
+	const rows = all<HistoryEntryRow>(
+		db,
+		sql`SELECT * FROM history_entries WHERE tenant_id = ${db.tenantId} AND entity_id = ${entityId} ORDER BY version ASC`
+	);
 
 	return rows.map(mapHistoryEntryRow);
 }
@@ -743,8 +653,8 @@ export function listEntityHistory(db: DatabaseHandle, entityId: string): History
 // the read half of synchronize's merge substrate. No entity filter and no
 // ordering guarantee beyond "everything" - the merge algorithm (slice 2)
 // groups/orders per entity itself.
-export function listAllHistoryEntries(db: DatabaseHandle): HistoryEntryRecord[] {
-	const rows = db.prepare(`SELECT * FROM history_entries WHERE tenant_id = ?`).all(db.tenantId) as HistoryEntryRow[];
+export function listAllHistoryEntries(db: SqliteExecutor): HistoryEntryRecord[] {
+	const rows = all<HistoryEntryRow>(db, sql`SELECT * FROM history_entries WHERE tenant_id = ${db.tenantId}`);
 
 	return rows.map(mapHistoryEntryRow);
 }
@@ -756,26 +666,11 @@ export function listAllHistoryEntries(db: DatabaseHandle): HistoryEntryRecord[] 
 // table; recomputing "resolve latest" from the merged log and updating the
 // live cache is the merge algorithm/synchronize command's job (slices 2/3),
 // not this seam primitive's.
-export function applyHistoryEntries(db: DatabaseHandle, entries: HistoryEntryRecord[]): { inserted: number } {
-	const insert = db.prepare(
-		`INSERT OR IGNORE INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
-		 VALUES (@id, @tenantId, @entityId, @version, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
-	);
-
+export function applyHistoryEntries(db: SqliteExecutor, entries: HistoryEntryRecord[]): { inserted: number } {
 	let inserted = 0;
 	for (const entry of entries) {
-		const result = insert.run(tenantParams(db, {
-			id: entry.id,
-			entityId: entry.entityId,
-			version: entry.version,
-			author: entry.author,
-			title: entry.title,
-			body: entry.body,
-			bodySource: entry.bodySource,
-			status: entry.status,
-			parentId: entry.parentId,
-			createdAt: entry.createdAt
-		}));
+		const result = run(db, sql`INSERT OR IGNORE INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+			VALUES (${entry.id}, ${db.tenantId}, ${entry.entityId}, ${entry.version}, ${entry.author}, ${entry.title}, ${entry.body}, ${entry.bodySource}, ${entry.status}, ${entry.parentId}, ${entry.createdAt})`);
 		inserted += result.changes;
 	}
 
@@ -785,15 +680,15 @@ export function applyHistoryEntries(db: DatabaseHandle, entries: HistoryEntryRec
 // Bumps `kind`'s id counter past `entityId`'s numeric suffix if needed, so a
 // later local `createEntity` of that kind can never collide with an id that
 // arrived via synchronize instead of this side's own counter (ISS59).
-function bumpCounterPast(db: DatabaseHandle, kind: EntityKind, entityId: string): void {
+function bumpCounterPast(db: SqliteExecutor, kind: EntityKind, entityId: string): void {
 	const numericSuffix = Number(entityId.slice(ID_PREFIX[kind].length));
 	if (!Number.isFinite(numericSuffix)) {
 		return;
 	}
 
-	db.prepare(`UPDATE counters SET next_value = max(next_value, @next) WHERE tenant_id = @tenantId AND kind = @kind`).run(
-		tenantParams(db, { kind, next: numericSuffix + 1 })
-	);
+	run(db, sql`UPDATE counters
+		SET next_value = max(next_value, ${numericSuffix + 1})
+		WHERE tenant_id = ${db.tenantId} AND kind = ${kind}`);
 }
 
 // Reconciles `entityId`'s structural parent relation to `newParentId`,
@@ -803,7 +698,7 @@ function bumpCounterPast(db: DatabaseHandle, kind: EntityKind, entityId: string)
 // already exist locally by the time this runs (`applyResolvedFacts` ensures
 // parents before children), so its real kind is available for the INSERT
 // side's relation-type lookup.
-function reconcileStructuralParent(db: DatabaseHandle, entityId: string, kind: EntityKind, newParentId: string | null): void {
+function reconcileStructuralParent(db: SqliteExecutor, entityId: string, kind: EntityKind, newParentId: string | null): void {
 	const currentParents = getStructuralParentRelations(db, entityId);
 	const currentParentId = currentParents[0]?.fromId ?? null;
 
@@ -812,9 +707,11 @@ function reconcileStructuralParent(db: DatabaseHandle, entityId: string, kind: E
 	}
 
 	for (const relation of currentParents) {
-		db.prepare(
-			`DELETE FROM relations WHERE tenant_id = @tenantId AND from_id = @fromId AND to_id = @toId AND type = @type`
-		).run(tenantParams(db, { fromId: relation.fromId, toId: entityId, type: relation.type }));
+		run(db, sql`DELETE FROM relations
+			WHERE tenant_id = ${db.tenantId}
+				AND from_id = ${relation.fromId}
+				AND to_id = ${entityId}
+				AND type = ${relation.type}`);
 	}
 
 	if (!newParentId) {
@@ -843,7 +740,7 @@ function reconcileStructuralParent(db: DatabaseHandle, entityId: string, kind: E
 // from `resolved.parentId` - parents are always resolved before children so
 // the parent's real kind is available.
 export function applyResolvedFacts(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	resolvedEntries: HistoryEntryRecord[]
 ): { created: string[]; updated: string[] } {
 	const resolvedByEntity = new Map(resolvedEntries.map((entry) => [entry.entityId, entry]));
@@ -873,25 +770,17 @@ export function applyResolvedFacts(
 			visiting.delete(entityId);
 		}
 
-		const existingRow = db.prepare(`SELECT * FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) as
-			| EntityRow
-			| undefined;
+		const existingRow = first<EntityRow>(
+			db,
+			sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`
+		);
 
 		if (existingRow) {
 			const existing = mapEntityRow(existingRow);
 			if (!factsMatchEntity(existing, resolved)) {
-				db.prepare(
-					`UPDATE entities
-					 SET title = @title, status = @status, body = @body, body_source = @bodySource, updated_at = @updatedAt
-					 WHERE tenant_id = @tenantId AND id = @entityId`
-				).run(tenantParams(db, {
-					entityId,
-					title: resolved.title,
-					status: resolved.status,
-					body: resolved.body,
-					bodySource: resolved.bodySource,
-					updatedAt: resolved.createdAt
-				}));
+				run(db, sql`UPDATE entities
+					SET title = ${resolved.title}, status = ${resolved.status}, body = ${resolved.body}, body_source = ${resolved.bodySource}, updated_at = ${resolved.createdAt}
+					WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`);
 				reconcileStructuralParent(db, entityId, existing.kind, resolved.parentId);
 				updated.push(entityId);
 			}
@@ -903,20 +792,8 @@ export function applyResolvedFacts(
 			// visible to project-scoped reads rather than stranded with a null
 			// project_id until the next open's backfill (ISS166 follow-up).
 			const projectId = (resolved.parentId ? getEntityProjectId(db, resolved.parentId) : null) ?? db.currentProjectId;
-			db.prepare(
-				`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
-				 VALUES (@tenantId, @id, @kind, @title, @status, @body, @bodySource, @projectId, @createdAt, @updatedAt)`
-			).run(tenantParams(db, {
-				id: entityId,
-				kind,
-				title: resolved.title,
-				status: resolved.status,
-				body: resolved.body,
-				bodySource: resolved.bodySource,
-				projectId,
-				createdAt: resolved.createdAt,
-				updatedAt: resolved.createdAt
-			}));
+			run(db, sql`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+				VALUES (${db.tenantId}, ${entityId}, ${kind}, ${resolved.title}, ${resolved.status}, ${resolved.body}, ${resolved.bodySource}, ${projectId}, ${resolved.createdAt}, ${resolved.createdAt})`);
 
 			bumpCounterPast(db, kind, entityId);
 
@@ -951,21 +828,17 @@ export function applyResolvedFacts(
 // merge against like `history_entries` does, so this is a plain "list
 // everything [not already covered], apply what's missing" pair rather than
 // a version-aware merge.
-export function listAllRelations(db: DatabaseHandle): RelationRecord[] {
-	const structuralPlaceholders = STRUCTURAL_RELATION_TYPES.map(() => "?").join(", ");
-	const rows = db
-		.prepare(
-			`SELECT r.* FROM relations r WHERE r.tenant_id = ?
-			 AND NOT (
-			   r.type IN (${structuralPlaceholders})
-			   AND r.from_id = (
-			     SELECT h.parent_id FROM history_entries h
-			     WHERE h.tenant_id = r.tenant_id AND h.entity_id = r.to_id
-			     ORDER BY h.version DESC LIMIT 1
-			   )
-			 )`
-		)
-		.all(db.tenantId, ...STRUCTURAL_RELATION_TYPES) as RelationRow[];
+export function listAllRelations(db: SqliteExecutor): RelationRecord[] {
+	const structuralRelationTypes = sql.join(STRUCTURAL_RELATION_TYPES.map((relationType) => sql`${relationType}`), sql`, `);
+	const rows = all<RelationRow>(db, sql`SELECT r.* FROM relations r WHERE r.tenant_id = ${db.tenantId}
+		AND NOT (
+			r.type IN (${structuralRelationTypes})
+			AND r.from_id = (
+				SELECT h.parent_id FROM history_entries h
+				WHERE h.tenant_id = r.tenant_id AND h.entity_id = r.to_id
+				ORDER BY h.version DESC LIMIT 1
+			)
+		)`);
 
 	return rows.map((row) => ({
 		fromId: row.from_id,
@@ -981,7 +854,7 @@ export function listAllRelations(db: DatabaseHandle): RelationRecord[] {
 // synchronize's orchestration, so both endpoints of every relation already
 // exist as entities on this side (`relations` has FK constraints on both
 // from_id and to_id).
-export function applyRelations(db: DatabaseHandle, relations: RelationRecord[]): { inserted: number } {
+export function applyRelations(db: SqliteExecutor, relations: RelationRecord[]): { inserted: number } {
 	let inserted = 0;
 	for (const relation of relations) {
 		const result = insertRelation(db, relation);
@@ -991,39 +864,7 @@ export function applyRelations(db: DatabaseHandle, relations: RelationRecord[]):
 	return { inserted };
 }
 
-// The read half of synchronize's handoff sync (ISS62/ADR16): every handoff
-// this tenant has, with no filter. Handoffs have no append-only log or
-// updated_at column of their own to merge against, so - like relations -
-// this is a plain "list everything, apply what's missing" pair rather than
-// a version-aware merge. `updateHandoff`'s in-place edits made on one side
-// after a handoff has already synced to the other won't propagate on a
-// later sync; only brand-new handoffs (and deletes never propagate either).
-export function listAllHandoffs(db: DatabaseHandle): HandoffRecord[] {
-	const rows = db.prepare(`SELECT * FROM handoffs WHERE tenant_id = ?`).all(db.tenantId) as HandoffRow[];
-	return rows.map(mapHandoffRow);
-}
-
-// The write half (ISS62/ADR16): idempotently inserts whatever handoffs this
-// tenant doesn't already have, keyed by the table's own primary key
-// (tenantId, id). Must run after `applyResolvedFacts` in synchronize's
-// orchestration, so both `entity_id`/`initiative_id` FK targets already
-// exist as entities on this side.
-export function applyHandoffs(db: DatabaseHandle, handoffs: HandoffRecord[]): { inserted: number } {
-	let inserted = 0;
-	for (const handoff of handoffs) {
-		const result = db
-			.prepare(
-				`INSERT OR IGNORE INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
-				 VALUES (@tenantId, @id, @entityId, @initiativeId, @summary, @body, @createdAt)`
-			)
-			.run(tenantParams(db, handoff));
-		inserted += result.changes;
-	}
-
-	return { inserted };
-}
-
-export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
+export function listOrphans(db: SqliteExecutor, kind?: string): EntityRecord[] {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
@@ -1066,7 +907,7 @@ export function listOrphans(db: DatabaseHandle, kind?: string): EntityRecord[] {
 		.map((entity) => applyDerivedStatus(entity, statusMap));
 }
 
-export function listProjectAdrs(db: DatabaseHandle): EntityRecord[] {
+export function listProjectAdrs(db: SqliteExecutor): EntityRecord[] {
 	const entities = getAllEntities(db);
 	const relations = getAllRelations(db);
 	const childIds = new Set(
@@ -1076,17 +917,40 @@ export function listProjectAdrs(db: DatabaseHandle): EntityRecord[] {
 	return entities.filter((entity) => entity.kind === "adr" && !childIds.has(entity.id));
 }
 
-export function getDatabaseSnapshot(db: DatabaseHandle): DatabaseSnapshot {
+export function getDatabaseSnapshot(db: SqliteExecutor): DatabaseSnapshot;
+export function getDatabaseSnapshot(db: SqliteExecutor, input: { projectId: string }): ProjectSnapshot;
+export function getDatabaseSnapshot(db: SqliteExecutor, input?: { projectId: string }): DatabaseSnapshot | ProjectSnapshot {
+	if (input?.projectId && getProjectDiscovery(db, input).kind === "unavailable") {
+		return { kind: "unavailable" };
+	}
+
+	const currentProjectId = db.currentProjectId;
+	if (input?.projectId) {
+		db.currentProjectId = input.projectId;
+	}
+
+	try {
+		const snapshot = getCurrentProjectSnapshot(db);
+		return input ? { kind: "available", snapshot } : snapshot;
+	} finally {
+		db.currentProjectId = currentProjectId;
+	}
+}
+
+function getCurrentProjectSnapshot(db: SqliteExecutor): DatabaseSnapshot {
 	const entities = getAllDerivedEntities(db);
+	const entityIds = new Set(entities.map((entity) => entity.id));
+	const relations = getAllRelations(db).filter((relation) => entityIds.has(relation.fromId) && entityIds.has(relation.toId));
 	const initiatives = entities.filter((entity) => entity.kind === "initiative");
+	const structuralRelations = relations.filter((relation) => isStructuralRelationType(relation.type));
 
 	return {
 		generatedAt: new Date().toISOString(),
 		entities,
-		relations: getAllRelations(db),
+		relations,
 		orphans: listOrphans(db),
 		projectAdrs: listProjectAdrs(db),
-		initiatives: initiatives.map((entity) => getInitiativeBundle(db, entity.id)),
+		initiatives: initiatives.map((entity) => getInitiativeBundle(db, entity.id, collectReachableIds(structuralRelations, entity.id))),
 		contexts: {
 			shared: getContextDetails(db),
 			initiatives: initiatives.map((entity) => getContextDetails(db, { scopeRef: entity.id }))
@@ -1094,27 +958,67 @@ export function getDatabaseSnapshot(db: DatabaseHandle): DatabaseSnapshot {
 	};
 }
 
-function getEntityOrThrow(db: DatabaseHandle, entityId: string): EntityRecord {
-	const row = db.prepare(`SELECT * FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) as EntityRow | undefined;
-
-	if (!row) {
-		throw new Error(`Entity not found: ${entityId}`);
+export function getProjectDiscovery(db: SqliteExecutor, input?: { projectId?: string }): ProjectDiscovery {
+	const tenantEntities = getTenantEntities(db);
+	const relations = getTenantRelations(db);
+	const statusMap = new Map(deriveEntityStatuses(tenantEntities, relations).map((entity) => [entity.id, entity.status]));
+	const entities = tenantEntities.map((entity) => applyDerivedStatus(entity, statusMap));
+	const projects = entities.filter((entity) => entity.kind === "project" && entity.id !== DEFAULT_PROJECT_ID);
+	if (input?.projectId && !projects.some((project) => project.id === input.projectId)) {
+		return { kind: "unavailable" };
 	}
 
-	return mapEntityRow(row);
+	return {
+		kind: "available",
+		projects: projects.map((project) => {
+			const epicIds = new Set(
+				relations
+					.filter((relation) => relation.type === "contains" && relation.fromId === project.id)
+					.map((relation) => relation.toId)
+			);
+			const initiatives = entities.filter(
+				(entity) =>
+					entity.kind === "initiative" &&
+					relations.some((relation) => relation.type === "contains" && epicIds.has(relation.fromId) && relation.toId === entity.id)
+			);
+
+			return {
+				project,
+				epicCount: epicIds.size,
+				initiativeCount: initiatives.length,
+				completedInitiativeCount: initiatives.filter((initiative) => initiative.status === "done").length
+			};
+		})
+	};
+}
+
+
+function getEntityOrThrow(executor: SqliteExecutor, entityId: string): EntityRecord {
+	return mapDrizzleEntityRow(getSqliteEntityOrThrow(executor, entityId));
+}
+
+function mapDrizzleEntityRow(row: DrizzleEntityRow): EntityRecord {
+	return {
+		id: row.id,
+		kind: row.kind as EntityKind,
+		title: row.title,
+		status: row.status,
+		body: row.body,
+		bodySource: isBodySource(row.bodySource) ? row.bodySource : "authored",
+		createdAt: row.createdAt,
+		updatedAt: row.updatedAt
+	};
 }
 
 function getRelationOrThrow(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): RelationRecord {
-	const row = db
-		.prepare(`SELECT * FROM relations WHERE tenant_id = @tenantId AND from_id = @fromId AND to_id = @toId AND type = @type`)
-		.get(tenantParams(db, {
-			fromId: input.fromId,
-			toId: input.toId,
-			type: input.relationType
-		})) as RelationRow | undefined;
+	const row = first<RelationRow>(db, sql`SELECT * FROM relations
+		WHERE tenant_id = ${db.tenantId}
+			AND from_id = ${input.fromId}
+			AND to_id = ${input.toId}
+			AND type = ${input.relationType}`);
 
 	if (!row) {
 		throw new Error(`Relation not found: ${input.fromId} -> ${input.toId} as ${input.relationType}`);
@@ -1128,10 +1032,11 @@ function getRelationOrThrow(
 	};
 }
 
-function getStructuralParentRelations(db: DatabaseHandle, entityId: string): RelationRecord[] {
-	const rows = db
-		.prepare(`SELECT * FROM relations WHERE tenant_id = ? AND to_id = ? ORDER BY from_id, type`)
-		.all(db.tenantId, entityId) as RelationRow[];
+function getStructuralParentRelations(db: SqliteExecutor, entityId: string): RelationRecord[] {
+	const rows = all<RelationRow>(
+		db,
+		sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId} AND to_id = ${entityId} ORDER BY from_id, type`
+	);
 
 	return rows
 		.filter((row) => isStructuralRelationType(row.type))
@@ -1143,7 +1048,7 @@ function getStructuralParentRelations(db: DatabaseHandle, entityId: string): Rel
 		}));
 }
 
-function getStructuralPath(db: DatabaseHandle, entityId: string): Array<{ relationType: RelationType; entity: EntityRecord }> {
+function getStructuralPath(db: SqliteExecutor, entityId: string): Array<{ relationType: RelationType; entity: EntityRecord }> {
 	const path: Array<{ relationType: RelationType; entity: EntityRecord }> = [];
 	const seen = new Set<string>([entityId]);
 	let currentId = entityId;
@@ -1173,85 +1078,36 @@ function getStructuralPath(db: DatabaseHandle, entityId: string): Array<{ relati
 	}
 }
 
-function nextEntityId(db: DatabaseHandle, kind: EntityKind): string {
-	const row = db.prepare(`SELECT next_value FROM counters WHERE tenant_id = ? AND kind = ?`).get(db.tenantId, kind) as { next_value: number } | undefined;
+function nextEntityId(executor: SqliteExecutor, kind: EntityKind): string {
+	const row = executor.drizzle
+		.select({ nextValue: counters.nextValue })
+		.from(counters)
+		.where(and(eq(counters.tenantId, executor.tenantId), eq(counters.kind, kind)))
+		.get();
 
 	if (!row) {
-		throw new Error(`Counter missing for entity kind: ${kind}`);
+		throw new Error(`Missing counter for entity kind: ${kind}`);
 	}
 
-	db.prepare(`UPDATE counters SET next_value = next_value + 1 WHERE tenant_id = ? AND kind = ?`).run(db.tenantId, kind);
-	return `${ID_PREFIX[kind]}${row.next_value}`;
+	executor.drizzle
+		.update(counters)
+		.set({ nextValue: row.nextValue + 1 })
+		.where(and(eq(counters.tenantId, executor.tenantId), eq(counters.kind, kind)))
+		.run();
+
+	return `${ID_PREFIX[kind]}${row.nextValue}`;
 }
 
-function nextHandoffId(db: DatabaseHandle): string {
-	const row = db.prepare(`SELECT next_value FROM counters WHERE tenant_id = ? AND kind = 'handoff'`).get(db.tenantId) as { next_value: number } | undefined;
-
-	if (!row) {
-		throw new Error("Counter missing for handoffs.");
-	}
-
-	db.prepare(`UPDATE counters SET next_value = next_value + 1 WHERE tenant_id = ? AND kind = 'handoff'`).run(db.tenantId);
-	return `HO${row.next_value}`;
+function insertRelation(db: SqliteExecutor, relation: RelationRecord) {
+	return run(db, sql`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
+		VALUES (${db.tenantId}, ${relation.fromId}, ${relation.toId}, ${relation.type}, ${relation.createdAt})`);
 }
 
-function normalizeHandoffSummary(summary: string | undefined): string {
-	return (summary ?? "").trim();
-}
-
-function normalizeHandoffBody(body: string): string {
-	const trimmed = body.trim();
-
-	if (trimmed.length === 0) {
-		throw new Error("Handoff body must not be empty.");
-	}
-
-	return trimmed;
-}
-
-function resolveOwningInitiativeId(db: DatabaseHandle, focus: EntityRecord): string | null {
-	if (focus.kind === "initiative") {
-		return focus.id;
-	}
-
-	const structuralPath = getStructuralPath(db, focus.id);
-	return structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
-}
-
-function getHandoffOrThrow(db: DatabaseHandle, handoffId: string): HandoffRecord {
-	const row = db.prepare(`SELECT * FROM handoffs WHERE tenant_id = ? AND id = ?`).get(db.tenantId, handoffId) as HandoffRow | undefined;
-
-	if (!row) {
-		throw new Error(`Handoff not found: ${handoffId}`);
-	}
-
-	return mapHandoffRow(row);
-}
-
-function mapHandoffRow(row: HandoffRow): HandoffRecord {
-	return {
-		id: row.id,
-		entityId: row.entity_id,
-		initiativeId: row.initiative_id,
-		summary: row.summary ?? "",
-		body: row.body,
-		createdAt: row.created_at
-	};
-}
-
-function insertRelation(db: DatabaseHandle, relation: RelationRecord) {
-	return db
-		.prepare(
-			`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
-			 VALUES (@tenantId, @fromId, @toId, @type, @createdAt)`
-		)
-		.run(tenantParams(db, relation));
-}
-
-function getNextHistoryVersion(db: DatabaseHandle, entityId: string): number {
-	const row = db
-		.prepare(`SELECT MAX(version) AS max_version FROM history_entries WHERE tenant_id = ? AND entity_id = ?`)
-		.get(db.tenantId, entityId) as { max_version: number | null };
+function getNextHistoryVersion(db: SqliteExecutor, entityId: string): number {
+	const row = first<{ max_version: number | null }>(
+		db,
+		sql`SELECT MAX(version) AS max_version FROM history_entries WHERE tenant_id = ${db.tenantId} AND entity_id = ${entityId}`
+	)!;
 
 	return (row.max_version ?? 0) + 1;
 }
@@ -1260,25 +1116,12 @@ function getNextHistoryVersion(db: DatabaseHandle, entityId: string): number {
 // bodySource, stored status, structural parent) as the next history version.
 // Called after every entity-level write (create/status/body/move - ADR8), so
 // "resolve latest" and point-in-time reconstruction are always "read one row".
-function appendHistoryEntry(db: DatabaseHandle, entity: EntityRecord, author: string | undefined): void {
+function appendHistoryEntry(db: SqliteExecutor, entity: EntityRecord, author: string | undefined): void {
 	const parentId = getStructuralParentRelations(db, entity.id)[0]?.fromId ?? null;
 	const version = getNextHistoryVersion(db, entity.id);
 
-	db.prepare(
-		`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
-		 VALUES (@id, @tenantId, @entityId, @version, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
-	).run(tenantParams(db, {
-		id: randomUUID(),
-		entityId: entity.id,
-		version,
-		author: author?.trim() || RESERVED_SYSTEM_AUTHOR,
-		title: entity.title,
-		body: entity.body,
-		bodySource: entity.bodySource,
-		status: entity.status,
-		parentId,
-		createdAt: entity.updatedAt
-	}));
+	run(db, sql`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
+		VALUES (${randomUUID()}, ${db.tenantId}, ${entity.id}, ${version}, ${author?.trim() || RESERVED_SYSTEM_AUTHOR}, ${entity.title}, ${entity.body}, ${entity.bodySource}, ${entity.status}, ${parentId}, ${entity.updatedAt})`);
 }
 
 function mapHistoryEntryRow(row: HistoryEntryRow): HistoryEntryRecord {
@@ -1296,18 +1139,33 @@ function mapHistoryEntryRow(row: HistoryEntryRow): HistoryEntryRecord {
 	};
 }
 
-function getAllEntities(db: DatabaseHandle): EntityRecord[] {
-	const rows = db
-		.prepare(`SELECT * FROM entities WHERE tenant_id = @tenantId AND project_id = @projectId ORDER BY id`)
-		.all(tenantParams(db, { projectId: db.currentProjectId })) as EntityRow[];
+function getAllEntities(db: SqliteExecutor): EntityRecord[] {
+	const rows = all<EntityRow>(
+		db,
+		sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} ORDER BY id`
+	);
 	return rows.map(mapEntityRow);
 }
 
+function getTenantEntities(db: SqliteExecutor): EntityRecord[] {
+	const rows = all<EntityRow>(db, sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} ORDER BY id`);
+	return rows.map(mapEntityRow);
+}
+
+function getTenantRelations(db: SqliteExecutor): RelationRecord[] {
+	const rows = all<RelationRow>(
+		db,
+		sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId} ORDER BY from_id, to_id, type`
+	);
+	return rows.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
+}
+
 /** The `project_id` an entity is stamped with, or null if it predates the ISS166 backfill. */
-function getEntityProjectId(db: DatabaseHandle, entityId: string): string | null {
-	const row = db.prepare(`SELECT project_id AS projectId FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) as
-		| { projectId: string | null }
-		| undefined;
+function getEntityProjectId(db: SqliteExecutor, entityId: string): string | null {
+	const row = first<{ projectId: string | null }>(
+		db,
+		sql`SELECT project_id AS projectId FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`
+	);
 	return row?.projectId ?? null;
 }
 
@@ -1318,28 +1176,24 @@ function getEntityProjectId(db: DatabaseHandle, entityId: string): string | null
  * workspace (ISS63) lands under that project, not the sentinel one. Falls
  * back to `DEFAULT_EPIC_ID` for the sentinel/single-project case.
  */
-function resolveDefaultEpicId(db: DatabaseHandle): string {
-	const row = db
-		.prepare(
-			`SELECT entities.id AS id
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.from_id = @projectId
-			   AND relations.type = 'contains'
-			   AND entities.kind = 'epic'
-			 ORDER BY entities.id
-			 LIMIT 1`
-		)
-		.get(tenantParams(db, { projectId: db.currentProjectId })) as { id: string } | undefined;
+function resolveDefaultEpicId(db: SqliteExecutor): string {
+	const row = first<{ id: string }>(db, sql`SELECT entities.id AS id
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.from_id = ${db.currentProjectId}
+			AND relations.type = 'contains'
+			AND entities.kind = 'epic'
+		ORDER BY entities.id
+		LIMIT 1`);
 	return row?.id ?? DEFAULT_EPIC_ID;
 }
 
-function getAllDerivedEntities(db: DatabaseHandle): EntityRecord[] {
+function getAllDerivedEntities(db: SqliteExecutor): EntityRecord[] {
 	return deriveEntityStatuses(getAllEntities(db), getAllRelations(db));
 }
 
-function getDerivedStatusMap(db: DatabaseHandle): Map<string, string> {
+function getDerivedStatusMap(db: SqliteExecutor): Map<string, string> {
 	return new Map(getAllDerivedEntities(db).map((entity) => [entity.id, entity.status]));
 }
 
@@ -1348,74 +1202,58 @@ function applyDerivedStatus(entity: EntityRecord, statusMap: Map<string, string>
 	return derived === undefined || derived === entity.status ? entity : { ...entity, status: derived };
 }
 
-function getFixingIssueStatuses(db: DatabaseHandle, storyId: string): string[] {
-	const rows = db
-		.prepare(
-			`SELECT entities.status
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.type = 'fixes'
-			   AND relations.to_id = @storyId
-			   AND entities.kind = 'issue'`
-		)
-		.all(tenantParams(db, { storyId })) as Array<{ status: string }>;
+function getFixingIssueStatuses(db: SqliteExecutor, storyId: string): string[] {
+	const rows = all<{ status: string }>(db, sql`SELECT entities.status
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.type = 'fixes'
+			AND relations.to_id = ${storyId}
+			AND entities.kind = 'issue'`);
 
 	return rows.map((row) => row.status);
 }
 
-function getCreatedStoryStatuses(db: DatabaseHandle, prdId: string): string[] {
+function getCreatedStoryStatuses(db: SqliteExecutor, prdId: string): string[] {
 	const statusMap = getDerivedStatusMap(db);
-	const rows = db
-		.prepare(
-			`SELECT entities.id
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.type = 'creates'
-			   AND relations.from_id = @prdId
-			   AND entities.kind = 'userStory'`
-		)
-		.all(tenantParams(db, { prdId })) as Array<{ id: string }>;
+	const rows = all<{ id: string }>(db, sql`SELECT entities.id
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.type = 'creates'
+			AND relations.from_id = ${prdId}
+			AND entities.kind = 'userStory'`);
 
 	return rows.map((row) => statusMap.get(row.id) ?? "");
 }
 
-function getConstrainedIssueStatuses(db: DatabaseHandle, adrId: string): string[] {
-	const rows = db
-		.prepare(
-			`SELECT entities.status
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.type = 'constrains'
-			   AND relations.from_id = @adrId
-			   AND entities.kind = 'issue'`
-		)
-		.all(tenantParams(db, { adrId })) as Array<{ status: string }>;
+function getConstrainedIssueStatuses(db: SqliteExecutor, adrId: string): string[] {
+	const rows = all<{ status: string }>(db, sql`SELECT entities.status
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.type = 'constrains'
+			AND relations.from_id = ${adrId}
+			AND entities.kind = 'issue'`);
 
 	return rows.map((row) => row.status);
 }
 
-function isAdrSuperseded(db: DatabaseHandle, adrId: string): boolean {
-	const row = db
-		.prepare(
-			`SELECT 1
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.type = 'supersedes'
-			   AND relations.to_id = @adrId
-			   AND entities.kind = 'adr'
-			 LIMIT 1`
-		)
-		.get(tenantParams(db, { adrId }));
+function isEntitySuperseded(db: SqliteExecutor, entityId: string, kind: "prd" | "userStory" | "adr"): boolean {
+	const row = first(db, sql`SELECT 1
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.type = 'supersedes'
+			AND relations.to_id = ${entityId}
+			AND entities.kind = ${kind}
+		LIMIT 1`);
 
 	return row !== undefined;
 }
 
 function getInitiativeChildStatuses(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	initiativeId: string
 ): { trackedIssueStatuses: string[]; ownedPrdStatuses: string[] } {
 	const statusMap = getDerivedStatusMap(db);
@@ -1436,16 +1274,12 @@ function getInitiativeChildStatuses(
 	};
 }
 
-function getAllRelations(db: DatabaseHandle): RelationRecord[] {
-	const rows = db
-		.prepare(
-			`SELECT relations.*
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			 WHERE relations.tenant_id = @tenantId AND entities.project_id = @projectId
-			 ORDER BY relations.from_id, relations.to_id, relations.type`
-		)
-		.all(tenantParams(db, { projectId: db.currentProjectId })) as RelationRow[];
+function getAllRelations(db: SqliteExecutor): RelationRecord[] {
+	const rows = all<RelationRow>(db, sql`SELECT relations.*
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+		WHERE relations.tenant_id = ${db.tenantId} AND entities.project_id = ${db.currentProjectId}
+		ORDER BY relations.from_id, relations.to_id, relations.type`);
 	return rows.map((row) => ({
 		fromId: row.from_id,
 		toId: row.to_id,
@@ -1454,10 +1288,11 @@ function getAllRelations(db: DatabaseHandle): RelationRecord[] {
 	}));
 }
 
-function hasTypedPath(db: DatabaseHandle, startId: string, targetId: string, relationType: string): boolean {
-	const rows = db
-		.prepare(`SELECT * FROM relations WHERE tenant_id = ? AND type = ? ORDER BY from_id, to_id`)
-		.all(db.tenantId, relationType) as RelationRow[];
+function hasTypedPath(db: SqliteExecutor, startId: string, targetId: string, relationType: string): boolean {
+	const rows = all<RelationRow>(
+		db,
+		sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId} AND type = ${relationType} ORDER BY from_id, to_id`
+	);
 	const relations = rows.map((row) => ({
 		fromId: row.from_id,
 		toId: row.to_id,
@@ -1468,12 +1303,12 @@ function hasTypedPath(db: DatabaseHandle, startId: string, targetId: string, rel
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-function hasStructuralPath(db: DatabaseHandle, startId: string, targetId: string): boolean {
+function hasStructuralPath(db: SqliteExecutor, startId: string, targetId: string): boolean {
 	const relations = getAllRelations(db).filter((relation) => isStructuralRelationType(relation.type));
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-function wouldOrphanSubtree(db: DatabaseHandle, relation: RelationRecord): boolean {
+function wouldOrphanSubtree(db: SqliteExecutor, relation: RelationRecord): boolean {
 	return wouldOrphanSubtreeInGraph(getAllEntities(db), getAllRelations(db), relation);
 }
 
@@ -1485,7 +1320,7 @@ function wouldOrphanSubtree(db: DatabaseHandle, relation: RelationRecord): boole
  * same logic, epics reached only through their own descendants) are always
  * their own downward-reachability root.
  */
-function wouldBreakFullChainInvariant(db: DatabaseHandle, relation: RelationRecord): boolean {
+function wouldBreakFullChainInvariant(db: SqliteExecutor, relation: RelationRecord): boolean {
 	if (relation.type !== "contains") {
 		return false;
 	}
@@ -1495,47 +1330,35 @@ function wouldBreakFullChainInvariant(db: DatabaseHandle, relation: RelationReco
 		return false;
 	}
 
-	const remainingContainsParents = db
-		.prepare(
-			`SELECT COUNT(*) AS count FROM relations
-			 WHERE tenant_id = @tenantId AND to_id = @toId AND type = 'contains'
-			   AND NOT (from_id = @fromId AND to_id = @toId AND type = 'contains')`
-		)
-		.get(tenantParams(db, { toId: relation.toId, fromId: relation.fromId })) as { count: number };
+	const remainingContainsParents = first<{ count: number }>(db, sql`SELECT COUNT(*) AS count FROM relations
+		WHERE tenant_id = ${db.tenantId} AND to_id = ${relation.toId} AND type = 'contains'
+			AND NOT (from_id = ${relation.fromId} AND to_id = ${relation.toId} AND type = 'contains')`)!;
 
 	return remainingContainsParents.count === 0;
 }
 
-function getActiveBlockingIssues(db: DatabaseHandle, entityId: string): EntityRecord[] {
-	const rows = db
-		.prepare(
-			`SELECT entities.*
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.type = 'blocks'
-			   AND relations.to_id = @entityId
-			   AND entities.status != 'done'
-			 ORDER BY entities.id`
-		)
-		.all(tenantParams(db, { entityId })) as EntityRow[];
+function getActiveBlockingIssues(db: SqliteExecutor, entityId: string): EntityRecord[] {
+	const rows = all<EntityRow>(db, sql`SELECT entities.*
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.type = 'blocks'
+			AND relations.to_id = ${entityId}
+			AND entities.status != 'done'
+		ORDER BY entities.id`);
 
 	return rows.map(mapEntityRow);
 }
 
-function getOpenSubIssues(db: DatabaseHandle, issueId: string): EntityRecord[] {
+function getOpenSubIssues(db: SqliteExecutor, issueId: string): EntityRecord[] {
 	const statusMap = getDerivedStatusMap(db);
-	const rows = db
-		.prepare(
-			`SELECT entities.*
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			 WHERE relations.tenant_id = @tenantId
-			   AND relations.from_id = @issueId
-			   AND relations.type = 'decomposes'
-			 ORDER BY entities.id`
-		)
-		.all(tenantParams(db, { issueId })) as EntityRow[];
+	const rows = all<EntityRow>(db, sql`SELECT entities.*
+		FROM relations
+		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+		WHERE relations.tenant_id = ${db.tenantId}
+			AND relations.from_id = ${issueId}
+			AND relations.type = 'decomposes'
+		ORDER BY entities.id`);
 
 	return rows
 		.map(mapEntityRow)
@@ -1562,7 +1385,7 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 	};
 }
 
-function tenantParams<T extends Record<string, unknown>>(db: DatabaseHandle, values: T): T & { tenantId: string } {
+function tenantParams<T extends Record<string, unknown>>(db: SqliteExecutor, values: T): T & { tenantId: string } {
 	return {
 		tenantId: db.tenantId,
 		...values

@@ -40,15 +40,6 @@ export type ConstrainsLink = {
 	issue: Entity;
 };
 
-export type HandoffRecord = {
-	id: string;
-	entityId: string;
-	initiativeId: string | null;
-	summary: string;
-	body: string;
-	createdAt: string;
-};
-
 export type AdrRailEntry = {
 	adr: Entity;
 	scope: "project" | "initiative";
@@ -57,6 +48,7 @@ export type AdrRailEntry = {
 
 export type InitiativeBundle = {
 	initiative: Entity;
+	entities: Entity[];
 	prds: Entity[];
 	userStories: Entity[];
 	adrs: Entity[];
@@ -65,7 +57,12 @@ export type InitiativeBundle = {
 	subIssueLinks: SubIssueLink[];
 	blockerLinks: BlockerLink[];
 	constrainsLinks: ConstrainsLink[];
-	handoffs: HandoffRecord[];
+};
+
+export type EpicInitiativeGroup = {
+	epic: Entity;
+	initiatives: InitiativeBundle[];
+	completedInitiativeCount: number;
 };
 
 export type ContextRecord = {
@@ -136,6 +133,22 @@ export type SiteConfig = {
 	dbPath: string;
 };
 
+export type ProjectRollup = {
+	project: Entity;
+	epicCount: number;
+	initiativeCount: number;
+	completedInitiativeCount: number;
+};
+
+export type ProjectDiscovery =
+	| {
+			kind: "available";
+			projects: ProjectRollup[];
+	  }
+	| {
+			kind: "unavailable";
+	  };
+
 export type ViewMode = "overview" | "graph" | "raw";
 
 export type PageMode = "list" | "initiative" | "entity";
@@ -146,7 +159,7 @@ export type ContextPageTab = "all" | "global" | "initiatives";
 
 export type ConsoleSection = "initiatives" | "adrs" | "graph" | "context";
 
-export type InitiativeTab = "overview" | "graph" | "context" | "handoffs";
+export type InitiativeTab = "overview" | "graph" | "context";
 
 export type GraphStatus = "idle" | "loading" | "ready" | "error";
 

@@ -1,4 +1,4 @@
-export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue"] as const;
+export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue", "handoff"] as const;
 
 export const BODY_SOURCES = ["authored", "generated"] as const;
 
@@ -7,10 +7,11 @@ export const STATUS_FLOW = {
 	epic: ["draft", "active", "paused", "done"],
 	version: ["draft", "active", "paused", "done"],
 	initiative: ["draft", "active", "paused", "done"],
-	prd: ["draft", "in-progress", "approved"],
-	userStory: ["draft", "ready", "in-progress", "done"],
+	prd: ["draft", "in-progress", "approved", "superseded"],
+	userStory: ["draft", "ready", "in-progress", "done", "superseded"],
 	adr: ["proposed", "accepted", "superseded"],
-	issue: ["todo", "in-progress", "blocked", "done"]
+	issue: ["todo", "in-progress", "blocked", "done"],
+	handoff: ["active", "done"]
 } as const;
 
 export const ID_PREFIX = {
@@ -21,7 +22,8 @@ export const ID_PREFIX = {
 	prd: "PRD",
 	userStory: "US",
 	adr: "ADR",
-	issue: "ISS"
+	issue: "ISS",
+	handoff: "HO"
 } as const;
 
 export const ALLOWED_RELATIONS = [
@@ -32,14 +34,21 @@ export const ALLOWED_RELATIONS = [
 	{ fromKind: "issue", toKind: "version", type: "taggedWith" },
 	{ fromKind: "initiative", toKind: "initiative", type: "supersedes" },
 	{ fromKind: "initiative", toKind: "prd", type: "owns" },
+	{ fromKind: "prd", toKind: "prd", type: "supersedes" },
 	{ fromKind: "initiative", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "issue", type: "tracks" },
 	{ fromKind: "prd", toKind: "userStory", type: "creates" },
+	{ fromKind: "userStory", toKind: "userStory", type: "supersedes" },
 	{ fromKind: "issue", toKind: "issue", type: "decomposes" },
 	{ fromKind: "issue", toKind: "userStory", type: "fixes" },
 	{ fromKind: "adr", toKind: "issue", type: "constrains" },
 	{ fromKind: "adr", toKind: "adr", type: "supersedes" },
-	{ fromKind: "issue", toKind: "issue", type: "blocks" }
+	{ fromKind: "issue", toKind: "issue", type: "blocks" },
+	{ fromKind: "handoff", toKind: "initiative", type: "handsOff" },
+	{ fromKind: "handoff", toKind: "prd", type: "handsOff" },
+	{ fromKind: "handoff", toKind: "userStory", type: "handsOff" },
+	{ fromKind: "handoff", toKind: "adr", type: "handsOff" },
+	{ fromKind: "handoff", toKind: "issue", type: "handsOff" }
 ] as const;
 
 export const STRUCTURAL_RELATION_TYPES = ["contains", "owns", "records", "tracks", "creates", "decomposes"] as const;
@@ -173,6 +182,8 @@ export function getArchiveStatus(kind: EntityKind): EntityStatus {
 			return "superseded";
 		case "issue":
 			return "done";
+		case "handoff":
+			return "done";
 	}
 }
 
@@ -199,7 +210,7 @@ export function isInitiativeComplete(trackedIssueStatuses: string[], ownedPrdSta
 
 	return (
 		trackedIssueStatuses.every((status) => status === "done") &&
-		ownedPrdStatuses.every((status) => status === "approved")
+		ownedPrdStatuses.every((status) => status === "approved" || status === "superseded")
 	);
 }
 
@@ -226,7 +237,7 @@ export function deriveInitiativeStatus(storedStatus: string, trackedIssueStatuse
 }
 
 export function isPrdComplete(createdStoryStatuses: string[]): boolean {
-	return createdStoryStatuses.length > 0 && createdStoryStatuses.every((status) => status === "done");
+	return createdStoryStatuses.length > 0 && createdStoryStatuses.every((status) => status === "done" || status === "superseded");
 }
 
 export function derivePrdStatus(storedStatus: string, createdStoryStatuses: string[]): string {
@@ -234,7 +245,7 @@ export function derivePrdStatus(storedStatus: string, createdStoryStatuses: stri
 		return storedStatus;
 	}
 
-	if (createdStoryStatuses.every((status) => status === "done")) {
+	if (isPrdComplete(createdStoryStatuses)) {
 		return "approved";
 	}
 
@@ -284,7 +295,7 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 	const trackedIssuesByInitiative = new Map<string, string[]>();
 	const ownedPrdsByInitiative = new Map<string, string[]>();
 	const constrainedIssuesByAdr = new Map<string, string[]>();
-	const supersededAdrIds = new Set<string>();
+	const supersededRecordIds = new Set<string>();
 
 	const pushTo = (map: Map<string, string[]>, key: string, value: string) => {
 		const list = map.get(key);
@@ -312,8 +323,12 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 			pushTo(ownedPrdsByInitiative, relation.fromId, relation.toId);
 		} else if (relation.type === "constrains" && kindById.get(relation.fromId) === "adr" && kindById.get(relation.toId) === "issue") {
 			pushTo(constrainedIssuesByAdr, relation.fromId, relation.toId);
-		} else if (relation.type === "supersedes" && kindById.get(relation.fromId) === "adr" && kindById.get(relation.toId) === "adr") {
-			supersededAdrIds.add(relation.toId);
+		} else if (
+			relation.type === "supersedes" &&
+			kindById.get(relation.fromId) === kindById.get(relation.toId) &&
+			["adr", "prd", "userStory"].includes(kindById.get(relation.fromId) ?? "")
+		) {
+			supersededRecordIds.add(relation.toId);
 		}
 	}
 
@@ -348,8 +363,12 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 			derivedStatus = deriveAdrStatus(
 				entity.status,
 				statusesOf(constrainedIssuesByAdr.get(entity.id)),
-				supersededAdrIds.has(entity.id)
+				supersededRecordIds.has(entity.id)
 			);
+		}
+
+		if (supersededRecordIds.has(entity.id)) {
+			derivedStatus = "superseded";
 		}
 
 		derivedStatusById.set(entityId, derivedStatus);

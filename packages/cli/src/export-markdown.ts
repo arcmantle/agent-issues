@@ -1,4 +1,4 @@
-import type { DatabaseSnapshot, HandoffRecord, InitiativeBundle, ContextDetails } from "@agent-issues/api-local";
+import type { DatabaseSnapshot, InitiativeBundle, ContextDetails } from "@agent-issues/api-local";
 import type { EntityRecord, RelationRecord } from "@agent-issues/core";
 
 export type InitiativeMarkdownExport = {
@@ -14,7 +14,6 @@ type InitiativeRenderOptions = {
 
 export type ProjectMarkdownExport = {
 	snapshot: DatabaseSnapshot;
-	handoffs: HandoffRecord[];
 };
 
 export function renderInitiativeMarkdownExport(
@@ -32,11 +31,11 @@ export function renderInitiativeMarkdownExport(
 		type: "initiative-export",
 		initiative: summarizeEntity(bundle.initiative),
 		counts: {
+			entities: bundle.entities.length,
 			prds: bundle.prds.length,
 			userStories: bundle.userStories.length,
 			adrs: bundle.adrs.length,
 			issues: bundle.issues.length,
-			handoffs: bundle.handoffs.length,
 			relations: bundleRelations.length
 		},
 		connections: summarizeRelations(bundleRelations),
@@ -52,8 +51,8 @@ export function renderInitiativeMarkdownExport(
 		renderEntityCollection("User Stories", bundle.userStories, headingLevel + 1),
 		renderEntityCollection("ADRs", bundle.adrs, headingLevel + 1),
 		renderEntityCollection("Issues", bundle.issues, headingLevel + 1),
-		renderRelationsSection("Relations", bundleRelations, headingLevel + 1),
-		renderHandoffsSection(bundle.handoffs, headingLevel + 1)
+		renderEntityCollection("Entities", bundle.entities.filter((entity) => entity.id !== bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), headingLevel + 1),
+		renderRelationsSection("Relations", bundleRelations, headingLevel + 1)
 	];
 
 	return sections
@@ -62,7 +61,7 @@ export function renderInitiativeMarkdownExport(
 }
 
 export function renderProjectMarkdownExport(input: ProjectMarkdownExport): string {
-	const { snapshot, handoffs } = input;
+	const { snapshot } = input;
 	const frontmatter = {
 		type: "project-export",
 		generatedAt: snapshot.generatedAt,
@@ -71,8 +70,7 @@ export function renderProjectMarkdownExport(input: ProjectMarkdownExport): strin
 			relations: snapshot.relations.length,
 			initiatives: snapshot.initiatives.length,
 			projectAdrs: snapshot.projectAdrs.length,
-			orphans: snapshot.orphans.length,
-			handoffs: handoffs.length
+			orphans: snapshot.orphans.length
 		},
 		connections: summarizeRelations(snapshot.relations),
 		sharedContext: summarizeContext(snapshot.contexts.shared)
@@ -94,9 +92,8 @@ export function renderProjectMarkdownExport(input: ProjectMarkdownExport): strin
 		renderFrontmatter(frontmatter),
 		"# Project Export",
 		renderProjectSummary(snapshot),
-		renderProjectAdrsSection(snapshot.projectAdrs),
-		renderOrphansSection(snapshot.orphans),
-		renderProjectHandoffsSection(handoffs),
+		renderEntityCollection("Entities", snapshot.entities, 2),
+		renderRelationsSection("Relations", snapshot.relations, 2),
 		initiativeSections.join("\n\n")
 	]
 		.filter((section) => section.length > 0)
@@ -110,36 +107,6 @@ function renderProjectSummary(snapshot: DatabaseSnapshot): string {
 		`Entities: ${snapshot.entities.length}`,
 		`Relations: ${snapshot.relations.length}`
 	].join("\n");
-}
-
-function renderProjectAdrsSection(adrs: EntityRecord[]): string {
-	if (adrs.length === 0) {
-		return "## Project ADRs\n\nNone.";
-	}
-
-	return renderEntityCollection("Project ADRs", adrs, 2);
-}
-
-function renderOrphansSection(orphans: EntityRecord[]): string {
-	if (orphans.length === 0) {
-		return "## Orphans\n\nNone.";
-	}
-
-	return renderEntityCollection("Orphans", orphans, 2);
-}
-
-function renderProjectHandoffsSection(handoffs: HandoffRecord[]): string {
-	if (handoffs.length === 0) {
-		return "## Handoffs\n\nNone.";
-	}
-
-	const lines = handoffs.map((handoff) => {
-		const summary = handoff.summary ? ` - ${handoff.summary}` : "";
-		const initiative = handoff.initiativeId ? ` initiative=${handoff.initiativeId}` : "";
-		return `- ${handoff.id} entity=${handoff.entityId}${initiative} created=${handoff.createdAt}${summary}`;
-	});
-
-	return [`## Handoffs`, ...lines].join("\n");
 }
 
 function renderEntitySection(entity: EntityRecord, level: 1 | 2 | 3): string {
@@ -174,19 +141,6 @@ function renderRelationsSection(title: string, relations: RelationRecord[], head
 	);
 
 	return [`${"#".repeat(headingLevel)} ${title}`, ...lines].join("\n");
-}
-
-function renderHandoffsSection(handoffs: HandoffRecord[], headingLevel: number): string {
-	if (handoffs.length === 0) {
-		return `${"#".repeat(headingLevel)} Handoffs\n\nNone.`;
-	}
-
-	const sections = handoffs.map((handoff) => {
-		const summary = handoff.summary.trim().length > 0 ? handoff.summary : "Untitled handoff";
-		return [`${"#".repeat(headingLevel + 1)} ${handoff.id} ${summary}`, `Entity: ${handoff.entityId}`, `Created: ${handoff.createdAt}`, handoff.body].join("\n\n");
-	});
-
-	return [`${"#".repeat(headingLevel)} Handoffs`, ...sections].join("\n\n");
 }
 
 function renderContextSection(context: ContextDetails, headingLevel: number): string {
@@ -315,6 +269,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function collectBundleEntityIds(bundle: InitiativeBundle): Set<string> {
 	return new Set([
 		bundle.initiative.id,
+		...bundle.entities.map((entity) => entity.id),
 		...bundle.prds.map((entity) => entity.id),
 		...bundle.userStories.map((entity) => entity.id),
 		...bundle.adrs.map((entity) => entity.id),

@@ -1,5 +1,7 @@
 import { migrations } from "../migrations/index.js";
+import { schema } from "../schema.js";
 import { runMigrations } from "./migration-runner.js";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool, type PoolClient } from "pg";
 
 export type PgConnectionOptions = {
@@ -12,6 +14,9 @@ export type PgConnectionOptions = {
 	 */
 	connectionString: string;
 };
+
+export type QueryExecutor = Pick<PoolClient, "query">;
+export type TenantExecutor = NodePgDatabase<typeof schema> & QueryExecutor;
 
 export function createPgPool(options: PgConnectionOptions): Pool {
 	return new Pool({ connectionString: options.connectionString });
@@ -31,14 +36,15 @@ export async function migratePgDatabase(pool: Pool): Promise<void> {
 export async function withTenantTransaction<T>(
 	pool: Pool,
 	tenantId: string,
-	fn: (client: PoolClient) => Promise<T>
+	fn: (executor: TenantExecutor) => Promise<T>
 ): Promise<T> {
 	const client = await pool.connect();
 
 	try {
 		await client.query("BEGIN");
 		await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
-		const result = await fn(client);
+		const executor: TenantExecutor = Object.assign(drizzle(client, { schema }), { query: client.query.bind(client) });
+		const result = await fn(executor);
 		await client.query("COMMIT");
 		return result;
 	} catch (error) {

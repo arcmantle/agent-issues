@@ -3,19 +3,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ensureDatabase, type DatabaseHandle } from "../../db/database.js";
-import { createEntity, createHandoff, deleteHandoff, getDatabaseSnapshot, getEntityDetails, getHandoffDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listHandoffs, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus, updateHandoff } from "./store.js";
+import { ensureDatabase } from "../../db/database.js";
+import type { SqliteExecutor } from "../../db/sqlite-executor.js";
+import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
 
-function statusOf(db: DatabaseHandle, entityId: string): string {
+function statusOf(db: SqliteExecutor, entityId: string): string {
 	return getEntityDetails(db, entityId).entity.status;
 }
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<DatabaseHandle> {
+async function openTestDatabase(): Promise<SqliteExecutor> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-store-"));
-	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
-	return db;
+	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	return executor;
 }
 
 afterEach(() => {
@@ -145,8 +146,34 @@ describe("record bodies", () => {
 	});
 });
 
+describe("handoff graph entities", () => {
+	it("uses generic entity operations for handoff lifecycle", async () => {
+		const db = await openTestDatabase();
+		const focus = createEntity(db, { kind: "initiative", title: "Migrate handoffs" });
+
+		const handoff = createEntity(db, {
+			kind: "handoff",
+			title: "Resume migration",
+			body: "Move legacy rows into graph entities.",
+			links: [{ relationType: "handsOff", targetId: focus.id }]
+		});
+
+		expect(handoff.id).toMatch(/^HO\d+$/);
+		expect(listEntities(db, "handoff")).toEqual([expect.objectContaining({ id: handoff.id })]);
+		expect(getEntityDetails(db, handoff.id).outgoing).toEqual([
+			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: focus.id }) })
+		]);
+		expect(listEntityHistory(db, handoff.id)).toEqual([
+			expect.objectContaining({ title: "Resume migration", body: "Move legacy rows into graph entities.", version: 1 })
+		]);
+
+		deleteEntity(db, { entityId: focus.id });
+		expect(() => getEntityDetails(db, handoff.id)).toThrow(/not found/i);
+	});
+});
+
 describe("derived user story status", () => {
-	function seedStoryWithIssues(db: DatabaseHandle, issueStatuses: string[]) {
+	function seedStoryWithIssues(db: SqliteExecutor, issueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
@@ -288,7 +315,7 @@ describe("derived initiative status", () => {
 });
 
 describe("derived PRD status cascade", () => {
-	function seedPrdWithStory(db: DatabaseHandle, fixingIssueStatuses: string[]) {
+	function seedPrdWithStory(db: SqliteExecutor, fixingIssueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
@@ -350,7 +377,7 @@ describe("derived PRD status cascade", () => {
 });
 
 describe("derived ADR status", () => {
-	function seedAdrConstrainingIssues(db: DatabaseHandle, issueStatuses: string[]) {
+	function seedAdrConstrainingIssues(db: SqliteExecutor, issueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const adr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Use SQLite" });
 		const issues = issueStatuses.map((status, index) => {
@@ -419,10 +446,28 @@ describe("derived ADR status", () => {
 
 		expect(() => updateEntityStatus(db, { entityId: oldAdr.id, status: "proposed" })).toThrow(/superseded/i);
 	});
+
+	it("derives PRD and user-story supersession from replacement relations", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "History" });
+		const oldPrd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Snapshot history" });
+		const newPrd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Reverse-delta history" });
+		const oldStory = createEntity(db, { kind: "userStory", parentId: oldPrd.id, title: "Store snapshots" });
+		const newStory = createEntity(db, { kind: "userStory", parentId: newPrd.id, title: "Store reverse deltas" });
+
+		linkEntities(db, { fromId: newPrd.id, toId: oldPrd.id, relationType: "supersedes" });
+		linkEntities(db, { fromId: newStory.id, toId: oldStory.id, relationType: "supersedes" });
+
+		expect(statusOf(db, oldPrd.id)).toBe("superseded");
+		expect(statusOf(db, oldStory.id)).toBe("superseded");
+		expect(() => updateEntityStatus(db, { entityId: newPrd.id, status: "superseded" })).toThrow(/link a replacement/i);
+		expect(() => updateEntityStatus(db, { entityId: oldPrd.id, status: "draft" })).toThrow(/superseded/i);
+		expect(() => updateEntityStatus(db, { entityId: oldStory.id, status: "draft" })).toThrow(/superseded/i);
+	});
 });
 
 describe("derived issue status from sub-issues", () => {
-	function seedIssueWithSubIssues(db: DatabaseHandle, subIssueStatuses: string[]) {
+	function seedIssueWithSubIssues(db: SqliteExecutor, subIssueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", status: "active" });
 		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship the parent workflow" });
 		const subIssues = subIssueStatuses.map((status, index) => {
@@ -495,133 +540,6 @@ describe("derived issue status from sub-issues", () => {
 				issue: expect.objectContaining({ id: issue.id })
 			}))
 		);
-	});
-});
-
-describe("handoffs", () => {
-	it("persists a handoff anchored to the focus entity and its owning initiative", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Add handoff persistence" });
-
-		const handoff = createHandoff(db, {
-			entityId: issue.id,
-			summary: "Paused mid-refactor",
-			body: "## State\n\nStore layer done, UI pending."
-		});
-
-		expect(handoff.id).toMatch(/^HO\d+$/);
-		expect(handoff.entityId).toBe(issue.id);
-		expect(handoff.initiativeId).toBe(initiative.id);
-		expect(handoff.summary).toBe("Paused mid-refactor");
-		expect(handoff.body).toBe("## State\n\nStore layer done, UI pending.");
-	});
-
-	it("resolves the owning initiative when the focus is the initiative itself", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-
-		const handoff = createHandoff(db, { entityId: initiative.id, body: "Initiative-level handoff." });
-
-		expect(handoff.initiativeId).toBe(initiative.id);
-	});
-
-	it("rejects an empty handoff body", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-
-		expect(() => createHandoff(db, { entityId: initiative.id, body: "   " })).toThrow(/body/i);
-	});
-
-	it("lists handoffs for an initiative newest first", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const first = createHandoff(db, { entityId: initiative.id, body: "First handoff." });
-		const second = createHandoff(db, { entityId: initiative.id, body: "Second handoff." });
-
-		const listed = listHandoffs(db, { initiativeId: initiative.id });
-
-		expect(listed.map((handoff) => handoff.id)).toEqual([second.id, first.id]);
-	});
-
-	it("updates an existing handoff body and summary", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const handoff = createHandoff(db, {
-			entityId: initiative.id,
-			summary: "Paused mid-refactor",
-			body: "Initial draft."
-		});
-
-		const updated = updateHandoff(db, {
-			handoffId: handoff.id,
-			summary: "Ready for pickup",
-			body: "Updated draft."
-		});
-
-		expect(updated.id).toBe(handoff.id);
-		expect(updated.summary).toBe("Ready for pickup");
-		expect(updated.body).toBe("Updated draft.");
-	});
-
-	it("allows clearing a handoff summary while preserving the current body", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const handoff = createHandoff(db, {
-			entityId: initiative.id,
-			summary: "Temporary summary",
-			body: "Resume here."
-		});
-
-		const updated = updateHandoff(db, { handoffId: handoff.id, summary: "" });
-
-		expect(updated.summary).toBe("");
-		expect(updated.body).toBe("Resume here.");
-	});
-
-	it("rejects handoff updates that do not supply any mutable fields", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const handoff = createHandoff(db, { entityId: initiative.id, body: "Resume here." });
-
-		expect(() => updateHandoff(db, { handoffId: handoff.id })).toThrow(/provide/i);
-	});
-
-	it("deletes a handoff by id", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const handoff = createHandoff(db, { entityId: initiative.id, body: "Resume here." });
-
-		const removed = deleteHandoff(db, { handoffId: handoff.id });
-
-		expect(removed.handoff.id).toBe(handoff.id);
-		expect(removed.removed).toBe(true);
-		expect(listHandoffs(db, { initiativeId: initiative.id })).toHaveLength(0);
-	});
-
-	it("exposes handoffs in the initiative bundle and snapshot", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship it" });
-		const handoff = createHandoff(db, { entityId: issue.id, body: "Resume from the failing test." });
-
-		const bundle = getInitiativeBundle(db, initiative.id);
-		expect(bundle.handoffs.map((entry) => entry.id)).toContain(handoff.id);
-
-		const snapshot = getDatabaseSnapshot(db);
-		const bundled = snapshot.initiatives.find((entry) => entry.initiative.id === initiative.id);
-		expect(bundled?.handoffs.map((entry) => entry.id)).toContain(handoff.id);
-	});
-
-	it("returns saved handoffs from getHandoffDetails", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship it" });
-		const handoff = createHandoff(db, { entityId: issue.id, body: "Resume here." });
-
-		const details = getHandoffDetails(db, issue.id);
-
-		expect(details.handoffs.map((entry) => entry.id)).toContain(handoff.id);
 	});
 });
 

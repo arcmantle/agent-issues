@@ -12,13 +12,12 @@ import type {
 	EntityDetails,
 	EntityRecord,
 	ForgetContextTermResult,
-	HandoffDeleteResult,
-	HandoffDetails,
-	HandoffRecord,
 	HistoryEntryRecord,
 	InitiativeBundle,
 	LinkResult,
 	MoveResult,
+	ProjectDiscovery,
+	ProjectSnapshot,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult,
 	RelationRecord,
@@ -46,34 +45,29 @@ import {
 	upsertContext
 } from "./features/context/pg-context-store.js";
 import {
-	applyHandoffs,
 	applyHistoryEntries,
 	applyRelations,
 	applyResolvedFacts,
 	archiveEntity,
 	createEntity,
-	createHandoff,
 	deleteEntity,
-	deleteHandoff,
 	getDatabaseSnapshot,
+	getProjectDiscovery,
 	getEntityDetails,
-	getHandoffDetails,
 	getInitiativeBundle,
 	getSnapshotSignature,
 	linkEntities,
-	listAllHandoffs,
 	listAllHistoryEntries,
 	listAllRelations,
 	listEntities,
 	listEntityHistory,
-	listHandoffs,
 	listOrphans,
 	listProjectAdrs,
 	moveEntity,
 	setEntityBody,
 	unlinkEntities,
-	updateEntityStatus,
-	updateHandoff
+	updateEntity,
+	updateEntityStatus
 } from "./features/entity-store/pg-entity-store.js";
 
 /**
@@ -118,8 +112,9 @@ export class PgStore implements StorageDriver {
 		status?: string;
 		body?: string;
 		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => createEntity(client, this.tenantId, input));
+		return withTenantTransaction(this.pool, this.tenantId, (client) => createEntity(client, this.tenantId, input, this.projectIdentity));
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
@@ -143,7 +138,7 @@ export class PgStore implements StorageDriver {
 	}
 
 	public async applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyResolvedFacts(client, this.tenantId, resolvedEntries));
+		return withTenantTransaction(this.pool, this.tenantId, (client) => applyResolvedFacts(client, this.tenantId, resolvedEntries, this.projectIdentity));
 	}
 
 	public async listAllRelations(): Promise<RelationRecord[]> {
@@ -164,6 +159,10 @@ export class PgStore implements StorageDriver {
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => updateEntityStatus(client, this.tenantId, input));
+	}
+
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => updateEntity(client, this.tenantId, input));
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
@@ -194,40 +193,24 @@ export class PgStore implements StorageDriver {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => getInitiativeBundle(client, this.tenantId, initiativeId));
 	}
 
-	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot> {
+	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
+		if (input) {
+			return withTenantTransaction(this.pool, this.tenantId, (client) =>
+				getDatabaseSnapshot(client, this.tenantId, this.projectIdentity, input)
+			);
+		}
+
 		return withTenantTransaction(this.pool, this.tenantId, (client) => getDatabaseSnapshot(client, this.tenantId, this.projectIdentity));
+	}
+
+	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => getProjectDiscovery(client, this.tenantId, input));
 	}
 
 	public async getSnapshotSignature(): Promise<string> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => getSnapshotSignature(client, this.tenantId));
-	}
-
-	public async createHandoff(input: { entityId: string; summary?: string; body: string }): Promise<HandoffRecord> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => createHandoff(client, this.tenantId, input));
-	}
-
-	public async updateHandoff(input: { handoffId: string; summary?: string; body?: string }): Promise<HandoffRecord> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => updateHandoff(client, this.tenantId, input));
-	}
-
-	public async deleteHandoff(input: { handoffId: string }): Promise<HandoffDeleteResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => deleteHandoff(client, this.tenantId, input));
-	}
-
-	public async getHandoffDetails(entityId: string): Promise<HandoffDetails> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getHandoffDetails(client, this.tenantId, entityId));
-	}
-
-	public async listHandoffs(filter?: { initiativeId?: string; entityId?: string }): Promise<HandoffRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listHandoffs(client, this.tenantId, filter));
-	}
-
-	public async listAllHandoffs(): Promise<HandoffRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listAllHandoffs(client, this.tenantId));
-	}
-
-	public async applyHandoffs(handoffs: HandoffRecord[]): Promise<{ inserted: number }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyHandoffs(client, this.tenantId, handoffs));
 	}
 
 	public async listContexts(): Promise<ContextListResult> {

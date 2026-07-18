@@ -111,31 +111,6 @@ export async function createContextTermsTenantContextKeyIndex(conn: MigrationCon
 	await conn.run(sql`CREATE INDEX IF NOT EXISTS context_terms_tenant_context_key_idx ON context_terms (tenant_id, context_key)`);
 }
 
-export async function createHandoffsTable(conn: MigrationConn): Promise<void> {
-	await conn.run(sql`
-		CREATE TABLE IF NOT EXISTS handoffs (
-			tenant_id TEXT NOT NULL,
-			id TEXT NOT NULL,
-			entity_id TEXT NOT NULL,
-			initiative_id TEXT,
-			summary TEXT NOT NULL DEFAULT '',
-			body TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			PRIMARY KEY (tenant_id, id),
-			FOREIGN KEY (tenant_id, entity_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE,
-			FOREIGN KEY (tenant_id, initiative_id) REFERENCES entities(tenant_id, id) ON DELETE CASCADE
-		)
-	`);
-}
-
-export async function createHandoffsTenantInitiativeIdIndex(conn: MigrationConn): Promise<void> {
-	await conn.run(sql`CREATE INDEX IF NOT EXISTS handoffs_tenant_initiative_id_idx ON handoffs (tenant_id, initiative_id)`);
-}
-
-export async function createHandoffsTenantEntityIdIndex(conn: MigrationConn): Promise<void> {
-	await conn.run(sql`CREATE INDEX IF NOT EXISTS handoffs_tenant_entity_id_idx ON handoffs (tenant_id, entity_id)`);
-}
-
 export async function createHistoryEntriesTable(conn: MigrationConn): Promise<void> {
 	await conn.run(sql`
 		CREATE TABLE IF NOT EXISTS history_entries (

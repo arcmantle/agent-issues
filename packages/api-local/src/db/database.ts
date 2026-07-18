@@ -23,9 +23,11 @@ import {
 	type TenantSummary
 } from "@agent-issues/core";
 import { runMigrations } from "./migration-runner.js";
+import { createSqliteExecutor, type SqliteExecutor } from "./sqlite-executor.js";
 import { baselineV7Migration } from "../migrations/0000-baseline-v7.js";
 import { backfillTenantBootstrapMigration } from "../migrations/0004-backfill-tenant-bootstrap.js";
 import { addEntityProjectIdMigration } from "../migrations/0009-add-entity-project-id.js";
+import { migrateHandoffsToEntitiesMigration } from "../migrations/0010-migrate-handoffs-to-entities.js";
 import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/0008-consolidate-legacy-tenants-backfill.js";
 
 export {
@@ -66,6 +68,7 @@ export type DatabaseHandle = Database.Database & {
 
 export type OpenDatabaseResult = {
 	db: DatabaseHandle;
+	executor: SqliteExecutor;
 	dbPath: string;
 };
 
@@ -178,10 +181,11 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	// are attributed too. Subsequent raw writers stamp project_id directly;
 	// no per-open migration work is needed.
 	await runMigrations(db, [addEntityProjectIdMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [migrateHandoffsToEntitiesMigration], hadPreExistingData ? { dbPath } : undefined);
 
 	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory);
 
-	return { db, dbPath };
+	return { db, executor: createSqliteExecutor(db), dbPath };
 }
 
 export function resolveTenantDirectory(options?: DatabaseLocationOptions): string {
@@ -240,8 +244,6 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				UNION
 				SELECT tenant_id FROM context_terms
 				UNION
-				SELECT tenant_id FROM handoffs
-				UNION
 				SELECT tenant_id FROM history_entries
 			)
 			SELECT tenant_ids.tenant_id,
@@ -249,7 +251,6 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				COALESCE(relation_counts.relation_count, 0) AS relation_count,
 				COALESCE(context_counts.context_count, 0) AS context_count,
 				COALESCE(context_term_counts.context_term_count, 0) AS context_term_count,
-				COALESCE(handoff_counts.handoff_count, 0) AS handoff_count,
 				COALESCE(history_entry_counts.history_entry_count, 0) AS history_entry_count
 			FROM tenant_ids
 			LEFT JOIN (
@@ -273,11 +274,6 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				GROUP BY tenant_id
 			) AS context_term_counts ON context_term_counts.tenant_id = tenant_ids.tenant_id
 			LEFT JOIN (
-				SELECT tenant_id, COUNT(*) AS handoff_count
-				FROM handoffs
-				GROUP BY tenant_id
-			) AS handoff_counts ON handoff_counts.tenant_id = tenant_ids.tenant_id
-			LEFT JOIN (
 				SELECT tenant_id, COUNT(*) AS history_entry_count
 				FROM history_entries
 				GROUP BY tenant_id
@@ -290,7 +286,6 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 			relation_count: number;
 			context_count: number;
 			context_term_count: number;
-			handoff_count: number;
 			history_entry_count: number;
 		}>;
 
@@ -299,7 +294,6 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 			contexts: row.context_count,
 			contextTerms: row.context_term_count,
 			entities: row.entity_count,
-			handoffs: row.handoff_count,
 			historyEntries: row.history_entry_count,
 			relations: row.relation_count
 		},
@@ -310,7 +304,6 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 
 export function deleteTenant(db: Database.Database, tenantId: string): DeleteTenantResult {
 	const counts = getTenantRecordCounts(db, tenantId);
-	const deleteHandoffs = db.prepare(`DELETE FROM handoffs WHERE tenant_id = ?`);
 	const deleteHistoryEntries = db.prepare(`DELETE FROM history_entries WHERE tenant_id = ?`);
 	const deleteContextTerms = db.prepare(`DELETE FROM context_terms WHERE tenant_id = ?`);
 	const deleteRelations = db.prepare(`DELETE FROM relations WHERE tenant_id = ?`);
@@ -319,7 +312,6 @@ export function deleteTenant(db: Database.Database, tenantId: string): DeleteTen
 	const deleteCounters = db.prepare(`DELETE FROM counters WHERE tenant_id = ?`);
 
 	const counters = db.transaction(() => {
-		deleteHandoffs.run(tenantId);
 		deleteHistoryEntries.run(tenantId);
 		deleteContextTerms.run(tenantId);
 		deleteRelations.run(tenantId);
@@ -367,7 +359,6 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 	const renameRelations = db.prepare(`UPDATE relations SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameContexts = db.prepare(`UPDATE contexts SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameContextTerms = db.prepare(`UPDATE context_terms SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameHandoffs = db.prepare(`UPDATE handoffs SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameHistoryEntries = db.prepare(`UPDATE history_entries SET tenant_id = ? WHERE tenant_id = ?`);
 
 	db.pragma("defer_foreign_keys = ON");
@@ -378,7 +369,6 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 			renameRelations.run(newTenantId, previousTenantId);
 			renameContexts.run(newTenantId, previousTenantId);
 			renameContextTerms.run(newTenantId, previousTenantId);
-			renameHandoffs.run(newTenantId, previousTenantId);
 			renameHistoryEntries.run(newTenantId, previousTenantId);
 		})();
 	} finally {
@@ -440,7 +430,6 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 				(SELECT COUNT(*) FROM relations WHERE tenant_id = @tenantId) AS relation_count,
 				(SELECT COUNT(*) FROM contexts WHERE tenant_id = @tenantId) AS context_count,
 				(SELECT COUNT(*) FROM context_terms WHERE tenant_id = @tenantId) AS context_term_count,
-				(SELECT COUNT(*) FROM handoffs WHERE tenant_id = @tenantId) AS handoff_count,
 				(SELECT COUNT(*) FROM history_entries WHERE tenant_id = @tenantId) AS history_entry_count`
 		)
 		.get({ tenantId }) as {
@@ -448,7 +437,6 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 			relation_count: number;
 			context_count: number;
 			context_term_count: number;
-			handoff_count: number;
 			history_entry_count: number;
 		};
 
@@ -456,7 +444,6 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 		contexts: row.context_count,
 		contextTerms: row.context_term_count,
 		entities: row.entity_count,
-		handoffs: row.handoff_count,
 		historyEntries: row.history_entry_count,
 		relations: row.relation_count
 	};
@@ -479,7 +466,6 @@ function tenantHasAnyRows(db: Database.Database, tenantId: string): boolean {
 				UNION SELECT 1 FROM relations WHERE tenant_id = @tenantId
 				UNION SELECT 1 FROM contexts WHERE tenant_id = @tenantId
 				UNION SELECT 1 FROM context_terms WHERE tenant_id = @tenantId
-				UNION SELECT 1 FROM handoffs WHERE tenant_id = @tenantId
 			) AS has_rows`
 		)
 		.get({ tenantId }) as { has_rows: number };
@@ -503,7 +489,6 @@ function databaseHasAnyData(db: DatabaseHandle): boolean {
 				UNION SELECT 1 FROM relations
 				UNION SELECT 1 FROM contexts
 				UNION SELECT 1 FROM context_terms
-				UNION SELECT 1 FROM handoffs
 				UNION SELECT 1 FROM history_entries
 			) AS has_rows`
 		)

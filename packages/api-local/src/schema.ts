@@ -100,32 +100,6 @@ export const contextTerms = sqliteTable(
 	]
 );
 
-export const handoffs = sqliteTable(
-	"handoffs",
-	{
-		tenantId: text("tenant_id").notNull(),
-		id: text("id").notNull(),
-		entityId: text("entity_id").notNull(),
-		initiativeId: text("initiative_id"),
-		summary: text("summary").notNull().default(""),
-		body: text("body").notNull(),
-		createdAt: text("created_at").notNull()
-	},
-	(table) => [
-		primaryKey({ columns: [table.tenantId, table.id] }),
-		foreignKey({
-			columns: [table.tenantId, table.entityId],
-			foreignColumns: [entities.tenantId, entities.id]
-		}).onDelete("cascade"),
-		foreignKey({
-			columns: [table.tenantId, table.initiativeId],
-			foreignColumns: [entities.tenantId, entities.id]
-		}).onDelete("cascade"),
-		index("handoffs_tenant_initiative_id_idx").on(table.tenantId, table.initiativeId),
-		index("handoffs_tenant_entity_id_idx").on(table.tenantId, table.entityId)
-	]
-);
-
 // Append-only audit log (ADR8/ADR16). Deliberately has NO foreign key to
 // `entities`: a history entry must survive deletion of the entity it
 // documents, so an audit trail remains queryable even for deleted entities.
@@ -178,7 +152,6 @@ export const schema = {
 	relations,
 	contexts,
 	contextTerms,
-	handoffs,
 	historyEntries,
 	projectMigrations
 };
@@ -187,7 +160,6 @@ export type EntityRow = typeof entities.$inferSelect;
 export type RelationRow = typeof relations.$inferSelect;
 export type ContextRow = typeof contexts.$inferSelect;
 export type ContextTermRow = typeof contextTerms.$inferSelect;
-export type HandoffRow = typeof handoffs.$inferSelect;
 export type CounterRow = typeof counters.$inferSelect;
 export type MetadataRow = typeof metadata.$inferSelect;
 export type HistoryEntryRow = typeof historyEntries.$inferSelect;

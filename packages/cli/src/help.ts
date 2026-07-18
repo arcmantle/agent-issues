@@ -438,6 +438,10 @@ const COMMAND_SPECS: CommandSpec[] = [
 				description: "Structural parent ID when one is required by the workflow."
 			},
 			{
+				name: "--link <relationType> <targetId>",
+				description: "Create a relation from the new entity to a target. Repeat for each link."
+			},
+			{
 				name: "--status <status>",
 				description: "Override the default initial status.",
 				allowedValues: STATUS_VALUES
@@ -455,6 +459,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			'agent-issues create initiative --title "Workflow tooling"',
 			'agent-issues create prd --title "Handoff support" --parent INIT1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1',
+			'agent-issues create handoff --title "Resume export work" --body-file - --link handsOff ISS1',
 			'agent-issues create issue --title "Split parser edge cases" --parent ISS1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1 --body-file /tmp/iss1.md'
 		],
@@ -462,7 +467,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"Valid structural parent-child pairs are exposed by `agent-issues schema --json`.",
 			"Issues can be created under initiatives as tracked work, or under other issues as structural sub-issues.",
 			"If no status is supplied, the CLI uses the first status in the workflow for that kind.",
-			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
+			"Use `--body-file` for multiline markdown to avoid shell quoting problems.",
+			"Use `--link` to create graph relations atomically with the entity.",
+			"Create a handoff with `--title`, `--body` or `--body-file`, and `--link handsOff <focusId>`."
 		],
 		output: {
 			human: ["<id> <kind> <status> <title>"],
@@ -558,72 +565,17 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues export INIT1 --json"
 		],
 		notes: [
-			"Grouped export is the default: it creates a folder tree that mirrors initiative, entity-kind, handoff, and relation groupings in the database.",
+			"Grouped export is the default: it creates a folder tree that mirrors entity-kind and relation groupings in the database.",
 			"Single-file export remains available with `--single-file` for piping or ad hoc capture.",
 			"The YAML frontmatter summarizes counts, context, and relation edges so connections remain machine-readable.",
-			"Project export includes project-scoped ADRs, orphans, all saved handoffs, top-level relation groups, and one nested initiative export per initiative."
+			"Project export includes normal entity and relation output, plus one nested initiative export per initiative."
 		],
 		output: {
 			human: [
 				"Default: export summary with output path and file count for a grouped folder export",
-				"With `--single-file`: one markdown document with YAML frontmatter, entity sections, relation summaries, context sections, and handoffs"
+				"With `--single-file`: one markdown document with YAML frontmatter, entity sections, relation summaries, and context sections"
 			],
 			json: ["mode", "scope", "initiativeId", "generatedAt", "markdown", "outputPath", "files"]
-		}
-	},
-	{
-		name: "handoff",
-		summary: "Show tracked handoff context for one entity, or create, edit, and delete saved handoffs.",
-		usage: [
-			"agent-issues handoff <id>",
-			"agent-issues handoff show <id>",
-			"agent-issues handoff create <id> (--body <markdown> | --body-file <path|->) [--summary <text>]",
-			"agent-issues handoff edit <handoffId> [--summary <text>] [--body <markdown> | --body-file <path|->]",
-			"agent-issues handoff delete <handoffId>"
-		],
-		positionals: [
-			{ name: "subcommand", description: "Handoff action. Defaults to show.", allowedValues: ["show", "create", "edit", "delete"] },
-			{ name: "id", description: "Focus entity ID for show/create, or handoff ID for edit/delete.", required: true }
-		],
-		options: [
-			{
-				name: "--body <markdown>",
-				description: "Markdown handoff content to persist for `handoff create`, or replacement content for `handoff edit`."
-			},
-			{
-				name: "--body-file <path|->",
-				description: "Read markdown handoff content from a file, or from stdin when the value is `-`."
-			},
-			{
-				name: "--summary <text>",
-				description: "Short label shown in handoff lists. For `handoff edit`, omitting it preserves the current summary and an empty string clears it."
-			}
-		],
-		examples: [
-			"agent-issues handoff show ISS1",
-			"agent-issues handoff ISS1 --json",
-			'agent-issues handoff create ISS1 --summary "Paused mid-refactor" --body "## State\\n..."',
-			'agent-issues handoff edit HO1 --summary "Ready for pickup" --body-file /tmp/handoff.md',
-			"agent-issues handoff delete HO1"
-		],
-		notes: [
-			"Reading returns the focus entity, structural path, active blockers, orphaned flag, owning initiative bundle, and any saved handoffs.",
-			"`handoff create` persists a handoff into the tracker, anchored to the focus entity and its owning initiative, so the next session can resume from the initiative view.",
-			"`handoff edit` updates an existing saved handoff in place, and `handoff delete` removes one by handoff id.",
-			"`handoff write` remains accepted as a compatibility alias for `handoff create`.",
-			"Use `--body-file` for multiline handoffs to avoid shell quoting problems."
-		],
-		output: {
-			human: [
-				"Focus: <id> <kind> <status> <title>",
-				"Path section",
-				"Orphaned flag",
-				"Active blockers section",
-				"Initiative summary",
-				"Saved handoffs section",
-				"Indented relations block"
-			],
-			json: ["focus", "structuralPath", "initiative", "orphaned", "activeBlockers", "handoffs"]
 		}
 	},
 	{
@@ -702,14 +654,17 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "edit",
-		summary: "Update the authored markdown body of a record.",
-		usage: ["agent-issues edit <id> (--body <markdown> | --body-file <path|->)"],
+		summary: "Update an entity title and/or authored markdown body.",
+		usage: ["agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
 		options: [
 			{
+				name: "--title <title>",
+				description: "Replacement entity title."
+			},
+			{
 				name: "--body <markdown>",
-				description: "Authored markdown body for the record.",
-				required: true
+				description: "Replacement authored markdown body for the record."
 			},
 			{
 				name: "--body-file <path|->",
@@ -718,14 +673,15 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		examples: [
 			'agent-issues edit ISS1 --body "# Plan\\n\\nDetails here."',
-			'agent-issues edit ISS1 --body-file /tmp/iss1.md'
+			'agent-issues edit ISS1 --body-file /tmp/iss1.md',
+			'agent-issues edit HO1 --title "Resume export work" --body-file -'
 		],
 		notes: [
-			"The body replaces any previously stored body for the record.",
+			"Supply at least one of `--title`, `--body`, or `--body-file`; supplied fields replace their previously stored values.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
 		],
 		output: {
-			human: ["Updated body for <id> <kind> <title>"],
+			human: ["Updated <id> <kind> <title>"],
 			json: ["id", "kind", "title", "status", "body", "createdAt", "updatedAt"]
 		}
 	},
@@ -1030,7 +986,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues uninstall-skills --target ./tmp/skills --json"
 		],
 		notes: [
-			"Only the packaged `ai-*` skill directories are removed.",
+					"Packaged `ai-*` skill directories are removed. Shared skill files are removed only when they still match the packaged copies.",
 			"Missing skill directories are reported but do not cause the command to fail."
 		],
 		output: {

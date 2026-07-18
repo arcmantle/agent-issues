@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Entity, InitiativeBundle, Relation, Snapshot } from "../models.js";
 import { AgentIssuesStore } from "./agent-issues-store.js";
@@ -20,8 +20,8 @@ function makeBundle(initiative: Entity, overrides: Partial<InitiativeBundle> = {
 		adrs: [],
 		blockerLinks: [],
 		constrainsLinks: [],
+		entities: [initiative],
 		fixLinks: [],
-		handoffs: [],
 		initiative,
 		issues: [],
 		prds: [],
@@ -59,6 +59,23 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 		...overrides
 	};
 }
+
+function stubEventSource(): void {
+	vi.stubGlobal(
+		"EventSource",
+		class {
+			public close() {}
+		}
+	);
+}
+
+beforeEach(() => {
+	stubEventSource();
+});
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe("initiative relationship graph model", () => {
 	it("lays the initiative, its PRDs/ADRs, stories, and issues into ordered columns", () => {
@@ -125,38 +142,61 @@ describe("initiative relationship graph model", () => {
 });
 
 describe("project relationship graph model", () => {
-	it("lays the project, its initiatives, and their PRDs/ADRs into ordered columns", () => {
+	it("lays project decisions beneath the project and work beneath each epic", () => {
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", status: "active", title: "Viewer experience" });
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
-		const adr = makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" });
-		const bundle = makeBundle(initiative, { adrs: [adr], prds: [prd] });
+		const initiativeAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" });
+		const projectAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Use project snapshots" });
+		const bundle = makeBundle(initiative, { adrs: [initiativeAdr], prds: [prd] });
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("content-hub");
-		store.snapshot.set(makeSnapshot({ initiatives: [bundle] }));
+		store.selectedProjectId.set("PROJ1");
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [epic],
+				initiatives: [bundle],
+				projectAdrs: [projectAdr],
+				relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: initiative.id, type: "contains" }]
+			})
+		);
 
 		const graph = store.buildProjectGraph();
 
-		expect(graph.columns).toEqual(["Project", "Initiatives", "PRDs & ADRs"]);
+		expect(graph.columns).toEqual(["Project", "Epics", "Initiatives", "PRDs & ADRs"]);
 		const projectNode = graph.nodes.find((node) => node.kind === "project");
 		expect(projectNode?.col).toBe(0);
 		const nodeColumns = new Map(graph.nodes.map((node) => [node.id, node.col]));
-		expect(nodeColumns.get("INIT1")).toBe(1);
-		expect(nodeColumns.get("PRD1")).toBe(2);
-		expect(nodeColumns.get("ADR1")).toBe(2);
+		expect(nodeColumns.get("EPIC1")).toBe(1);
+		expect(nodeColumns.get("INIT1")).toBe(2);
+		expect(nodeColumns.get("PRD1")).toBe(3);
+		expect(nodeColumns.get("ADR1")).toBe(3);
+		expect(nodeColumns.get("ADR2")).toBe(1);
+		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "EPIC1" });
+		expect(graph.edges).toContainEqual({ from: "EPIC1", to: "INIT1" });
+		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "ADR2" });
 	});
 
-	it("connects the project to each initiative and each initiative to its PRDs and ADRs", () => {
+	it("connects the project to each epic, epics to initiatives, and initiatives to their records", () => {
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", status: "active", title: "Viewer experience" });
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
 		const bundle = makeBundle(initiative, { prds: [prd] });
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("content-hub");
-		store.snapshot.set(makeSnapshot({ initiatives: [bundle] }));
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [epic],
+				initiatives: [bundle],
+				relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: initiative.id, type: "contains" }]
+			})
+		);
 
 		const graph = store.buildProjectGraph();
 		const projectNode = graph.nodes.find((node) => node.kind === "project");
 
-		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "INIT1" });
+		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "EPIC1" });
+		expect(graph.edges).toContainEqual({ from: "EPIC1", to: "INIT1" });
 		expect(graph.edges).toContainEqual({ from: "INIT1", to: "INIT1:PRD1" });
 	});
 });
@@ -440,6 +480,195 @@ describe("cascade URL round-trip", () => {
 		store.onHashChange();
 
 		expect(store.cascadePath.get()).toEqual(["INIT4", "ISS18"]);
+	});
+});
+
+describe("tenant and project route scope", () => {
+	afterEach(() => {
+		window.location.hash = "";
+	});
+
+	it("opens tenant-only hash links in project chooser scope", () => {
+		const store = new AgentIssuesStore();
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		window.location.hash = "tenant=demo";
+
+		store.onHashChange();
+
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedProjectId.get()).toBeNull();
+		expect(store.selectedId.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=demo");
+	});
+
+	it("preserves tenant and project while removing unavailable detail route keys", () => {
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [makeEntity({ id: "ISS1" })] }));
+		window.location.hash = "tenant=demo&project=PROJ1&entity=ISS2&initiative=INIT2&cascade=INIT2~ISS2";
+
+		store.onHashChange();
+
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedProjectId.get()).toBe("PROJ1");
+		expect(store.selectedId.get()).toBeNull();
+		expect(store.selectedInitiativeId.get()).toBeNull();
+		expect(store.cascadePath.get()).toEqual([]);
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1");
+	});
+
+	it("migrates legacy tenant query links and existing detail hashes into the shared hash route", () => {
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [makeEntity({ id: "ISS1" })] }));
+		window.history.replaceState({}, "", "?tenant=demo#entity=ISS1");
+
+		store.onHashChange();
+
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedId.get()).toBe("ISS1");
+		expect(window.location.search).toBe("");
+		expect(window.location.hash).toBe("#tenant=demo&entity=ISS1");
+	});
+
+	it("clears project and all detail when the viewer chooses another tenant", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.selectedInitiativeId.set("INIT1");
+		store.cascadePath.set(["INIT1", "ISS1"]);
+		store.reRootTrail.set([["INIT1", "ISS1"]]);
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", projects: [] }), { status: 200 })
+		);
+
+		await store.selectTenant("content-hub");
+
+		expect(store.selectedTenant.get()).toBe("content-hub");
+		expect(store.selectedProjectId.get()).toBeNull();
+		expect(store.selectedId.get()).toBeNull();
+		expect(store.selectedInitiativeId.get()).toBeNull();
+		expect(store.cascadePath.get()).toEqual([]);
+		expect(store.reRootTrail.get()).toEqual([]);
+		expect(store.activeSection.get()).toBe("initiatives");
+		expect(window.location.hash).toBe("#tenant=content-hub");
+		fetchMock.mockRestore();
+	});
+
+	it("loads an explicitly selected project after clearing previous detail", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.selectedInitiativeId.set("INIT1");
+		store.cascadePath.set(["INIT1", "ISS1"]);
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot() }), { status: 200 })
+		);
+
+		await store.selectProject("PROJ2");
+
+		expect(store.selectedProjectId.get()).toBe("PROJ2");
+		expect(store.selectedId.get()).toBeNull();
+		expect(store.selectedInitiativeId.get()).toBeNull();
+		expect(store.cascadePath.get()).toEqual([]);
+		expect(store.activeSection.get()).toBe("initiatives");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2");
+		fetchMock.mockRestore();
+	});
+
+	it("retains the tenant chooser when an explicitly selected project is unavailable", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "unavailable" }), { status: 200 })
+		);
+
+		await store.selectProject("PROJ404");
+
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedProjectId.get()).toBeNull();
+		expect(store.syncLabel.get()).toBe("project unavailable");
+		expect(window.location.hash).toBe("#tenant=demo");
+		fetchMock.mockRestore();
+	});
+
+	it("reloads a project hash navigation after discarding prior detail scope", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.selectedInitiativeId.set("INIT1");
+		store.cascadePath.set(["INIT1", "ISS1"]);
+		window.location.hash = "tenant=demo&project=PROJ2&entity=ISS2";
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot() }), { status: 200 })
+		);
+
+		await store.onBrowserNavigation();
+
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedProjectId.get()).toBe("PROJ2");
+		expect(store.selectedId.get()).toBeNull();
+		expect(store.selectedInitiativeId.get()).toBeNull();
+		expect(store.cascadePath.get()).toEqual([]);
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2");
+		fetchMock.mockRestore();
+	});
+
+	it("reloads tenant and project scope when browser history changes", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		window.location.hash = "tenant=content-hub&project=PROJ2";
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot() }), { status: 200 })
+		);
+
+		await store.onPopState();
+
+		expect(store.selectedTenant.get()).toBe("content-hub");
+		expect(store.selectedProjectId.get()).toBe("PROJ2");
+		expect(store.selectedId.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=content-hub&project=PROJ2");
+		fetchMock.mockRestore();
+	});
+
+	it("keeps an unavailable tenant in route state until the viewer chooses a replacement", () => {
+		const store = new AgentIssuesStore();
+		store.config.set({
+			availableTenants: [{ displayName: "Demo", id: "demo" }],
+			currentTenant: "demo",
+			dbPath: "/tmp/agent-issues.db"
+		});
+		window.location.hash = "tenant=missing";
+
+		store.onHashChange();
+
+		expect(store.selectedTenant.get()).toBe("missing");
+		expect(store.tenantOptions.get().map((tenant) => tenant.id)).toEqual(["demo", "missing"]);
+		expect(window.location.hash).toBe("#tenant=missing");
+	});
+});
+
+describe("epic section state", () => {
+	it("keeps collapse state per selected project while a newly selected project starts expanded", () => {
+		const store = new AgentIssuesStore();
+		store.selectedProjectId.set("PROJ1");
+
+		expect(store.isEpicExpanded("EPIC1")).toBe(true);
+		store.toggleEpicExpanded("EPIC1");
+		expect(store.isEpicExpanded("EPIC1")).toBe(false);
+
+		store.selectedProjectId.set("PROJ2");
+		expect(store.isEpicExpanded("EPIC1")).toBe(true);
+		store.toggleEpicExpanded("EPIC2");
+		expect(store.isEpicExpanded("EPIC2")).toBe(false);
+
+		store.selectedProjectId.set("PROJ1");
+		expect(store.isEpicExpanded("EPIC1")).toBe(false);
+		expect(store.isEpicExpanded("EPIC2")).toBe(true);
 	});
 });
 

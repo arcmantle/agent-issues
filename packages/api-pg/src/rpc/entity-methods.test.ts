@@ -127,6 +127,16 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 		expect(updated.body).toBe("Detailed plan.");
 	});
 
+	it("updateEntity", async () => {
+		const { tenantId, token } = await tenantAndToken();
+		const store = new PgStore(appPool, tenantId);
+		const issue = await store.createEntity({ kind: "issue", title: "Initial title" });
+
+		const updated = await call(token, "updateEntity", { entityId: issue.id, title: "Final title", body: "Final body" });
+		expect(updated).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
+		expect(await store.listEntityHistory(issue.id)).toHaveLength(2);
+	});
+
 	it("archiveEntity", async () => {
 		const { tenantId, token } = await tenantAndToken();
 		const store = new PgStore(appPool, tenantId);

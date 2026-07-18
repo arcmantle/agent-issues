@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import type { Pool } from "pg";
 
-import { createPgPool, migratePgDatabase } from "../../db/connection.js";
+import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
 import { PgStore } from "../../pg-store.js";
+import { entities } from "../../schema.js";
 
 const ADMIN_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";
@@ -89,6 +91,36 @@ describe("PgStore entity lifecycle", () => {
 		} finally {
 			client.release();
 		}
+	});
+
+	it("runs Drizzle executor queries in the RLS-scoped tenant transaction", async () => {
+		const tenantA = createTestTenantId();
+		const tenantB = createTestTenantId();
+		const storeA = new PgStore(appPool, tenantA);
+		const storeB = new PgStore(appPool, tenantB);
+
+		await storeA.createEntity({ kind: "initiative", title: "Tenant A's executor-visible initiative" });
+		await storeB.createEntity({ kind: "initiative", title: "Tenant B's executor-hidden initiative" });
+
+		const rows = await withTenantTransaction(appPool, tenantA, (executor) =>
+			executor.select({ title: entities.title }).from(entities).where(eq(entities.kind, "initiative"))
+		);
+
+		expect(rows).toEqual([{ title: "Tenant A's executor-visible initiative" }]);
+	});
+
+	it("creates, reads, updates, and deletes an entity through the tenant executor", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+
+		const created = await store.createEntity({ kind: "initiative", title: "Executor CRUD" });
+		const read = await store.getEntityDetails(created.id);
+		const updated = await store.updateEntity({ entityId: created.id, title: "Executor CRUD updated" });
+		const deleted = await store.deleteEntity({ entityId: created.id });
+
+		expect(read.entity).toMatchObject({ id: created.id, title: "Executor CRUD" });
+		expect(updated).toMatchObject({ id: created.id, title: "Executor CRUD updated" });
+		expect(deleted).toMatchObject({ entity: updated, removed: true });
+		await expect(store.getEntityDetails(created.id)).rejects.toThrow("Entity not found");
 	});
 
 	it("links and unlinks two entities", async () => {
@@ -200,6 +232,30 @@ describe("PgStore entity lifecycle", () => {
 		await expect(store.moveEntity({ entityId: issue.id, newParentId: issue.id })).rejects.toThrow("under itself");
 	});
 
+	it("refreshes project ownership when moving an ADR between projects", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const firstProject = await store.createEntity({ kind: "project", title: "First project" });
+		const firstEpic = await store.createEntity({ kind: "epic", title: "First epic", parentId: firstProject.id });
+		const firstInitiative = await store.createEntity({ kind: "initiative", title: "First initiative", parentId: firstEpic.id });
+		const secondProject = await store.createEntity({ kind: "project", title: "Second project" });
+		const secondEpic = await store.createEntity({ kind: "epic", title: "Second epic", parentId: secondProject.id });
+		const secondInitiative = await store.createEntity({ kind: "initiative", title: "Second initiative", parentId: secondEpic.id });
+		const adr = await store.createEntity({ kind: "adr", title: "Movable ADR", parentId: firstInitiative.id });
+
+		await store.moveEntity({ entityId: adr.id, newParentId: secondInitiative.id });
+
+		const firstSnapshot = await store.getDatabaseSnapshot({ projectId: firstProject.id });
+		const secondSnapshot = await store.getDatabaseSnapshot({ projectId: secondProject.id });
+		expect(firstSnapshot).toEqual(expect.objectContaining({ kind: "available" }));
+		expect(secondSnapshot).toEqual(expect.objectContaining({ kind: "available" }));
+		if (firstSnapshot.kind !== "available" || secondSnapshot.kind !== "available") {
+			return;
+		}
+
+		expect(firstSnapshot.snapshot.entities.map((entity) => entity.id)).not.toContain(adr.id);
+		expect(secondSnapshot.snapshot.entities.map((entity) => entity.id)).toContain(adr.id);
+	});
+
 	it("rejects deleting an entity that still has outgoing relations", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
@@ -240,6 +296,26 @@ describe("PgStore entity lifecycle", () => {
 		expect(projectAdrs.map((entity) => entity.id)).not.toContain(initiativeAdr.id);
 	});
 
+	it("keeps project-level ADRs within the explicitly selected project snapshot", async () => {
+		const tenantId = createTestTenantId();
+		const selectedStore = new PgStore(appPool, tenantId, "Selected project");
+		const selectedProject = await selectedStore.createEntity({ kind: "project", title: "Selected project" });
+		const selectedAdr = await selectedStore.createEntity({ kind: "adr", title: "Selected project ADR" });
+
+		const otherStore = new PgStore(appPool, tenantId, "Other project");
+		await otherStore.createEntity({ kind: "project", title: "Other project" });
+		const otherAdr = await otherStore.createEntity({ kind: "adr", title: "Other project ADR" });
+
+		const result = await selectedStore.getDatabaseSnapshot({ projectId: selectedProject.id });
+		expect(result).toEqual(expect.objectContaining({ kind: "available" }));
+		if (result.kind !== "available") {
+			return;
+		}
+
+		expect(result.snapshot.projectAdrs.map((entity) => entity.id)).toContain(selectedAdr.id);
+		expect(result.snapshot.projectAdrs.map((entity) => entity.id)).not.toContain(otherAdr.id);
+	});
+
 	it("builds an initiative bundle with prds, stories, issues, adrs, and link groups", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
@@ -265,7 +341,6 @@ describe("PgStore entity lifecycle", () => {
 		expect(bundle.subIssueLinks).toEqual([{ parent: expect.objectContaining({ id: issue.id }), issue: expect.objectContaining({ id: subIssue.id }) }]);
 		expect(bundle.blockerLinks).toEqual([{ source: expect.objectContaining({ id: blocker.id }), target: expect.objectContaining({ id: issue.id }) }]);
 		expect(bundle.constrainsLinks).toEqual([{ adr: expect.objectContaining({ id: adr.id }), issue: expect.objectContaining({ id: issue.id }) }]);
-		expect(bundle.handoffs).toEqual([]);
 
 		await expect(store.getInitiativeBundle(issue.id)).rejects.toThrow("not an initiative");
 	});
@@ -284,137 +359,4 @@ describe("PgStore entity lifecycle", () => {
 		expect(snapshot.contexts.shared.context.exists).toBe(false);
 	});
 
-	describe("handoffs", () => {
-		it("persists a handoff anchored to the focus entity and its owning initiative", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Add handoff persistence" });
-
-			const handoff = await store.createHandoff({
-				entityId: issue.id,
-				summary: "Paused mid-refactor",
-				body: "## State\n\nStore layer done, UI pending."
-			});
-
-			expect(handoff.id).toMatch(/^HO\d+$/);
-			expect(handoff.entityId).toBe(issue.id);
-			expect(handoff.initiativeId).toBe(initiative.id);
-			expect(handoff.summary).toBe("Paused mid-refactor");
-			expect(handoff.body).toBe("## State\n\nStore layer done, UI pending.");
-		});
-
-		it("resolves the owning initiative when the focus is the initiative itself", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-
-			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Initiative-level handoff." });
-
-			expect(handoff.initiativeId).toBe(initiative.id);
-		});
-
-		it("rejects an empty handoff body", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-
-			await expect(store.createHandoff({ entityId: initiative.id, body: "   " })).rejects.toThrow(/body/i);
-		});
-
-		it("lists handoffs for an initiative newest first", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const first = await store.createHandoff({ entityId: initiative.id, body: "First handoff." });
-			const second = await store.createHandoff({ entityId: initiative.id, body: "Second handoff." });
-
-			const listed = await store.listHandoffs({ initiativeId: initiative.id });
-
-			expect(listed.map((handoff) => handoff.id)).toEqual([second.id, first.id]);
-		});
-
-		it("updates an existing handoff body and summary", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, summary: "Paused mid-refactor", body: "Initial draft." });
-
-			const updated = await store.updateHandoff({ handoffId: handoff.id, summary: "Ready for pickup", body: "Updated draft." });
-
-			expect(updated.id).toBe(handoff.id);
-			expect(updated.summary).toBe("Ready for pickup");
-			expect(updated.body).toBe("Updated draft.");
-		});
-
-		it("allows clearing a handoff summary while preserving the current body", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, summary: "Temporary summary", body: "Resume here." });
-
-			const updated = await store.updateHandoff({ handoffId: handoff.id, summary: "" });
-
-			expect(updated.summary).toBe("");
-			expect(updated.body).toBe("Resume here.");
-		});
-
-		it("rejects handoff updates that do not supply any mutable fields", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
-
-			await expect(store.updateHandoff({ handoffId: handoff.id })).rejects.toThrow(/provide/i);
-		});
-
-		it("deletes a handoff by id", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
-
-			const removed = await store.deleteHandoff({ handoffId: handoff.id });
-
-			expect(removed.handoff.id).toBe(handoff.id);
-			expect(removed.removed).toBe(true);
-			expect(await store.listHandoffs({ initiativeId: initiative.id })).toHaveLength(0);
-		});
-
-		it("exposes handoffs in the initiative bundle and snapshot", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
-			const handoff = await store.createHandoff({ entityId: issue.id, body: "Resume from the failing test." });
-
-			const bundle = await store.getInitiativeBundle(initiative.id);
-			expect(bundle.handoffs.map((entry) => entry.id)).toContain(handoff.id);
-
-			const snapshot = await store.getDatabaseSnapshot();
-			const bundled = snapshot.initiatives.find((entry) => entry.initiative.id === initiative.id);
-			expect(bundled?.handoffs.map((entry) => entry.id)).toContain(handoff.id);
-		});
-
-		it("returns saved handoffs, the owning initiative bundle, and active blockers from getHandoffDetails", async () => {
-			const store = new PgStore(appPool, createTestTenantId());
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Ship it" });
-			const blocker = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Blocker" });
-			await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
-			const handoff = await store.createHandoff({ entityId: issue.id, body: "Resume here." });
-
-			const details = await store.getHandoffDetails(issue.id);
-
-			expect(details.handoffs.map((entry) => entry.id)).toContain(handoff.id);
-			expect(details.initiative?.initiative.id).toBe(initiative.id);
-			expect(details.orphaned).toBe(false);
-			expect(details.activeBlockers.map((entity) => entity.id)).toEqual([blocker.id]);
-		});
-
-		it("keeps handoffs isolated per tenant even for an unfiltered listHandoffs call", async () => {
-			const tenantA = createTestTenantId();
-			const tenantB = createTestTenantId();
-			const storeA = new PgStore(appPool, tenantA);
-			const storeB = new PgStore(appPool, tenantB);
-
-			const initiativeA = await storeA.createEntity({ kind: "initiative", title: "Tenant A initiative" });
-			await storeA.createHandoff({ entityId: initiativeA.id, body: "Tenant A handoff." });
-			const initiativeB = await storeB.createEntity({ kind: "initiative", title: "Tenant B initiative" });
-
-			expect(await storeB.listHandoffs({ initiativeId: initiativeB.id })).toHaveLength(0);
-			expect(await storeA.listHandoffs({ initiativeId: initiativeA.id })).toHaveLength(1);
-		});
-	});
 });

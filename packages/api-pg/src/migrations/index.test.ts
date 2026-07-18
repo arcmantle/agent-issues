@@ -34,7 +34,7 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(tableRows.map((row) => row.table_name)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "handoffs", "history_entries", "metadata", "relations", "schema_migrations"].sort()
+				["context_terms", "contexts", "counters", "entities", "history_entries", "metadata", "relations", "schema_migrations"].sort()
 			);
 
 			const { rows: indexRows } = await schemaPool.query(
@@ -44,8 +44,6 @@ describe("api migrations chain", () => {
 			expect(indexRows.map((row) => row.indexname)).toEqual([
 				"context_terms_tenant_context_key_idx",
 				"contexts_tenant_scope_entity_id_idx",
-				"handoffs_tenant_entity_id_idx",
-				"handoffs_tenant_initiative_id_idx",
 				"history_entries_tenant_entity_version_idx",
 				"relations_tenant_to_id_idx"
 			]);
@@ -61,7 +59,7 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(policyRows.map((row) => row.tablename)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "handoffs", "history_entries", "relations"].sort()
+				["context_terms", "contexts", "counters", "entities", "history_entries", "relations"].sort()
 			);
 
 			const { rows: appliedRows } = await schemaPool.query(`SELECT id FROM schema_migrations ORDER BY applied_at`);

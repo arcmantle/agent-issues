@@ -15,12 +15,11 @@ import type {
 	DatabaseSnapshot,
 	DeleteResult,
 	EntityDetails,
-	HandoffDeleteResult,
-	HandoffDetails,
-	HandoffRecord,
 	InitiativeBundle,
 	LinkResult,
 	MoveResult,
+	ProjectDiscovery,
+	ProjectSnapshot,
 	StatusUpdateResult,
 	UnlinkResult
 } from "../entity-store/store-types.js";
@@ -35,7 +34,15 @@ export interface StorageDriver {
 	readonly tenantId: string;
 
 	// Entities
-	createEntity(input: { kind: string; title: string; parentId?: string; status?: string; body?: string; author?: string }): Promise<EntityRecord>;
+	createEntity(input: {
+		kind: string;
+		title: string;
+		parentId?: string;
+		status?: string;
+		body?: string;
+		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
+	}): Promise<EntityRecord>;
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
 	listEntities(kind: string): Promise<EntityRecord[]>;
 	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
@@ -48,6 +55,7 @@ export interface StorageDriver {
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
 	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;
+	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord>;
 	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord>;
 	archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult>;
 	deleteEntity(input: { entityId: string }): Promise<DeleteResult>;
@@ -55,6 +63,8 @@ export interface StorageDriver {
 	linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult>;
 	unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult>;
 	getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery>;
 	getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle>;
 	/**
 	 * A cheap, opaque string that changes whenever this tenant's own data
@@ -66,16 +76,6 @@ export interface StorageDriver {
 	 * equality across two calls is meaningful.
 	 */
 	getSnapshotSignature(): Promise<string>;
-
-	// Handoffs
-	createHandoff(input: { entityId: string; summary?: string; body: string }): Promise<HandoffRecord>;
-	updateHandoff(input: { handoffId: string; summary?: string; body?: string }): Promise<HandoffRecord>;
-	deleteHandoff(input: { handoffId: string }): Promise<HandoffDeleteResult>;
-	getHandoffDetails(entityId: string): Promise<HandoffDetails>;
-	listHandoffs(filter?: { initiativeId?: string; entityId?: string }): Promise<HandoffRecord[]>;
-	/** All handoffs, unfiltered (ISS62/ADR16) - the read half of synchronize's handoff sync. */
-	listAllHandoffs(): Promise<HandoffRecord[]>;
-	applyHandoffs(handoffs: HandoffRecord[]): Promise<{ inserted: number }>;
 
 	// Context / glossary
 	listContexts(): Promise<ContextListResult>;

@@ -2,7 +2,6 @@ import type { ContextSyncRecord, ContextTermSyncRecord } from "../context/contex
 import type { HistoryEntryRecord, RelationRecord } from "../entity-store/domain.js";
 import { mergeHistoryLogs } from "./history-merge.js";
 import type { StorageDriver } from "../storage-driver/storage-driver.js";
-import type { HandoffRecord } from "../entity-store/store-types.js";
 
 export type SynchronizeSummary = {
 	entriesAppliedToLocal: number;
@@ -16,9 +15,6 @@ export type SynchronizeSummary = {
 	/** Non-structural relations (e.g. "blocks", "fixes") newly inserted on each side (ISS60/ADR16). Structural relations aren't counted here - they're already reconstructed by applyResolvedFacts. */
 	relationsAppliedToLocal: number;
 	relationsAppliedToCloud: number;
-	/** Handoffs newly inserted on each side (ISS62/ADR16). Edits to an already-synced handoff don't propagate - see `listAllHandoffs`. */
-	handoffsAppliedToLocal: number;
-	handoffsAppliedToCloud: number;
 	/** Contexts/terms upserted on each side via last-writer-wins by `updatedAt` (ISS62/ADR16). Counts every context/term applied, including no-op re-applies of a side's own already-current row. */
 	contextsAppliedToLocal: number;
 	contextsAppliedToCloud: number;
@@ -46,11 +42,7 @@ function unionRelations(a: RelationRecord[], b: RelationRecord[]): RelationRecor
 	return unionByKey(a, b, (relation) => `${relation.fromId}\u0000${relation.toId}\u0000${relation.type}`);
 }
 
-function unionHandoffs(a: HandoffRecord[], b: HandoffRecord[]): HandoffRecord[] {
-	return unionByKey(a, b, (handoff) => handoff.id);
-}
-
-// Unlike relations/handoffs, contexts and their terms are actively
+// Unlike relations, contexts and their terms are actively
 // re-edited over their lifetime (title/summary/definitions), so a plain
 // "first occurrence wins" union would stop propagating edits made after a
 // context's first sync. Instead this keeps whichever side's row has the
@@ -120,9 +112,9 @@ function countConcurrentEditConflicts(union: HistoryEntryRecord[], latestByEntit
  * missing (`applyHistoryEntries`, ISS57), then converges both sides'
  * live-cache facts to the resolved-latest entry per entity
  * (`applyResolvedFacts`, ISS59), and finally converges non-structural
- * relations, handoffs, and contexts/terms (`applyRelations`/`applyHandoffs`/
- * `applyContexts`/`applyContextTerms`, ISS60/ISS62) - which must run last,
- * after every entity a relation/handoff/context could reference already
+ * relations and contexts/terms (`applyRelations`/`applyContexts`/
+ * `applyContextTerms`, ISS60/ISS62) - which must run last, after every
+ * entity a relation/context could reference already
  * exists on both sides. Contexts are applied before their terms so each
  * term's `context_key` FK target already exists. Operates on two
  * already-open `StorageDriver`s - opening them (requiring a cloud binding
@@ -145,13 +137,6 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 		cloud.applyRelations(relationUnion)
 	]);
 
-	const [localHandoffs, cloudHandoffs] = await Promise.all([local.listAllHandoffs(), cloud.listAllHandoffs()]);
-	const handoffUnion = unionHandoffs(localHandoffs, cloudHandoffs);
-	const [localHandoffsApplied, cloudHandoffsApplied] = await Promise.all([
-		local.applyHandoffs(handoffUnion),
-		cloud.applyHandoffs(handoffUnion)
-	]);
-
 	const [localContexts, cloudContexts] = await Promise.all([local.listAllContexts(), cloud.listAllContexts()]);
 	const contextUnion = unionContexts(localContexts, cloudContexts);
 	const [localContextsApplied, cloudContextsApplied] = await Promise.all([
@@ -171,8 +156,6 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 		entriesAppliedToCloud: appliedToCloud.inserted,
 		relationsAppliedToLocal: localRelationsApplied.inserted,
 		relationsAppliedToCloud: cloudRelationsApplied.inserted,
-		handoffsAppliedToLocal: localHandoffsApplied.inserted,
-		handoffsAppliedToCloud: cloudHandoffsApplied.inserted,
 		contextsAppliedToLocal: localContextsApplied.applied,
 		contextsAppliedToCloud: cloudContextsApplied.applied,
 		contextTermsAppliedToLocal: localContextTermsApplied.applied,

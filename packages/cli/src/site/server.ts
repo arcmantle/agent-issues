@@ -255,7 +255,29 @@ async function handleRequest(input: {
 	if (requestUrl.pathname === "/api/snapshot") {
 		writeJson(
 			input.response,
-			await readSnapshot(input.dbPath, requestedTenant, input.currentWorkingDirectory, input.credentialStoreOptions)
+			await readSnapshot(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions,
+				requestUrl.searchParams.get("project")?.trim() || undefined
+			)
+		);
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/projects") {
+		writeJson(
+			input.response,
+			await readProjectDiscovery(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions,
+				requestUrl.searchParams.get("project")?.trim() || undefined
+			)
 		);
 		return;
 	}
@@ -316,10 +338,53 @@ async function readSiteConfig(
 async function readSnapshot(
 	dbPath: string,
 	tenant: string,
+	defaultTenant: string,
 	currentWorkingDirectory: string | undefined,
-	credentialStoreOptions: AuthSessionStoreOptions | undefined
+	credentialStoreOptions: AuthSessionStoreOptions | undefined,
+	projectId: string | undefined
 ) {
-	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getDatabaseSnapshot());
+	if (!projectId) {
+		return { kind: "unavailable" } as const;
+	}
+
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" } as const;
+		}
+	}
+
+	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getDatabaseSnapshot({ projectId }));
+}
+
+async function readProjectDiscovery(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: AuthSessionStoreOptions | undefined,
+	projectId: string | undefined
+) {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, tenant },
+		(store) => store.getProjectDiscovery(projectId ? { projectId } : undefined)
+	);
 }
 
 async function readSnapshotSignature(

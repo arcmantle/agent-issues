@@ -92,10 +92,6 @@ async function dispatch(store: SqliteStore, method: string, params: unknown): Pr
 			return store.listAllRelations();
 		case "applyRelations":
 			return store.applyRelations(args.relations as Parameters<SqliteStore["applyRelations"]>[0]);
-		case "listAllHandoffs":
-			return store.listAllHandoffs();
-		case "applyHandoffs":
-			return store.applyHandoffs(args.handoffs as Parameters<SqliteStore["applyHandoffs"]>[0]);
 		case "listAllContexts":
 			return store.listAllContexts();
 		case "applyContexts":

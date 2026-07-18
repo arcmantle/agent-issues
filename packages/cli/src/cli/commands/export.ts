@@ -22,8 +22,7 @@ export class ExportCommand extends MutableTenantCommand {
 			const snapshot = await store.getDatabaseSnapshot();
 
 			if (target === "project") {
-				const handoffs = await store.listHandoffs();
-				const markdown = renderProjectMarkdownExport({ handoffs, snapshot });
+				const markdown = renderProjectMarkdownExport({ snapshot });
 
 				if (this.singleFile) {
 					return this.emitSingleFileExport({
@@ -40,7 +39,6 @@ export class ExportCommand extends MutableTenantCommand {
 
 				const result = writeProjectDirectoryExport({
 					snapshot,
-					handoffs,
 					outputPath: this.resolveOutputPath(target),
 					force: this.force
 				});

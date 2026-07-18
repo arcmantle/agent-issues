@@ -94,7 +94,8 @@ agent-issues create userStory --title "Story one" --parent PRD1
 agent-issues create issue --title "Implement CLI" --parent INIT1
 agent-issues create issue --title "Handle parser edge cases" --parent ISS1
 agent-issues bundle INIT1
-agent-issues handoff show ISS1 --json
+agent-issues create handoff --title "Resume parser work" --body-file - --link handsOff ISS1
+agent-issues edit HO1 --title "Resume parser work" --body-file -
 agent-issues move US1 PRD2
 agent-issues move ISS7 ISS1
 agent-issues relations ISS1
@@ -119,6 +120,7 @@ agent-issues auth logout
 - Issues fix user stories.
 - ADRs constrain issues.
 - Issues block other issues.
+- Handoffs are entities linked to their active focus with `handsOff`.
 
 ## Output
 
@@ -243,7 +245,8 @@ The live server exposes the viewer assets together with `site-config.json`, `/ap
 
 - `bundle <initiativeId>` returns one initiative bundle directly.
 - Initiative bundles include structural sub-issue links so issue trees can be reconstructed in the CLI and UI.
-- `handoff <entityId>` returns focused handoff context for one entity, including its structural path, active blockers, and owning initiative bundle when one exists.
+- `create handoff --title ... --body-file - --link handsOff <focusId>` records a handoff as a graph entity.
+- `list handoff`, `show HOx`, `relations HOx`, and `edit HOx --title ... --body-file -` read and update handoffs through the generic entity commands.
 - `relations <entityId>` returns incoming and outgoing relations for one entity.
 - `orphans [kind]` returns entities not reachable from any initiative.
 

@@ -51,6 +51,13 @@ type LegacyHandoffRow = {
 	created_at: string;
 };
 
+async function hasHandoffsTable(conn: MigrationConn): Promise<boolean> {
+	const tables = await conn.all<{ name: string }>(sql`
+		SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'
+	`);
+	return tables.length > 0;
+}
+
 /**
  * The target tenant here is always the well-known local tenant
  * (`resolveWellKnownLocalTenantId()`, per this migration's caller in
@@ -173,6 +180,7 @@ export async function consolidateLegacyTenantData(
 	params: { legacyTenantId: string; targetTenantId: string; projectTitle: string }
 ): Promise<void> {
 	const { legacyTenantId, targetTenantId, projectTitle } = params;
+	const legacyHandoffsExist = await hasHandoffsTable(conn);
 
 	// Mirrors the pre-ISS180 function's own `defer_foreign_keys = ON`:
 	// automatically turned back off by SQLite at this migration's own
@@ -336,17 +344,19 @@ export async function consolidateLegacyTenantData(
 		`);
 	}
 
-	const legacyHandoffs = await conn.all<LegacyHandoffRow>(sql`SELECT * FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
-	for (const handoff of legacyHandoffs) {
-		const newHandoffId = await mintHandoffId(conn, targetTenantId);
-		await conn.run(sql`
-			INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
-			VALUES (
-				${targetTenantId}, ${newHandoffId}, ${idMap.get(handoff.entity_id) ?? handoff.entity_id},
-				${handoff.initiative_id ? (idMap.get(handoff.initiative_id) ?? null) : null},
-				${handoff.summary}, ${handoff.body}, ${handoff.created_at}
-			)
-		`);
+	if (legacyHandoffsExist) {
+		const legacyHandoffs = await conn.all<LegacyHandoffRow>(sql`SELECT * FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
+		for (const handoff of legacyHandoffs) {
+			const newHandoffId = await mintHandoffId(conn, targetTenantId);
+			await conn.run(sql`
+				INSERT INTO handoffs (tenant_id, id, entity_id, initiative_id, summary, body, created_at)
+				VALUES (
+					${targetTenantId}, ${newHandoffId}, ${idMap.get(handoff.entity_id) ?? handoff.entity_id},
+					${handoff.initiative_id ? (idMap.get(handoff.initiative_id) ?? null) : null},
+					${handoff.summary}, ${handoff.body}, ${handoff.created_at}
+				)
+			`);
+		}
 	}
 
 	await conn.run(sql`
@@ -358,7 +368,9 @@ export async function consolidateLegacyTenantData(
 	// order (mirrors `database.ts`'s `deleteTenant`). History was
 	// already relocated above (its rows now carry `targetTenantId`), so
 	// this DELETE cannot touch them.
-	await conn.run(sql`DELETE FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
+	if (legacyHandoffsExist) {
+		await conn.run(sql`DELETE FROM handoffs WHERE tenant_id = ${legacyTenantId}`);
+	}
 	await conn.run(sql`DELETE FROM history_entries WHERE tenant_id = ${legacyTenantId}`);
 	await conn.run(sql`DELETE FROM context_terms WHERE tenant_id = ${legacyTenantId}`);
 	await conn.run(sql`DELETE FROM relations WHERE tenant_id = ${legacyTenantId}`);

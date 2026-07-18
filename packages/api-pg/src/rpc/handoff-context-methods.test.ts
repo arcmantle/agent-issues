@@ -17,13 +17,13 @@ const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";
 
 /**
  * ISS51 mechanically extends the ISS49 tracer bullet's dispatcher to cover
- * the handoffs and context/glossary `StorageDriver` methods. These tests
+ * the context/glossary `StorageDriver` methods. These tests
  * prove each method is reachable through the gate and dispatches to the
  * auth-seam-resolved tenant's `PgStore` - the underlying business logic
  * itself is already proven by `pg-store.test.ts` and the shared
  * `storage-driver-contract.test.ts` suite.
  */
-describe("JSON-RPC gate: handoffs and context/glossary methods", () => {
+describe("JSON-RPC gate: context/glossary methods", () => {
 	let adminPool: Pool;
 	let appPool: Pool;
 	let authProvider: LocalAuthProvider;
@@ -60,52 +60,6 @@ describe("JSON-RPC gate: handoffs and context/glossary methods", () => {
 		expect(response.status).toBe(200);
 		return response.body.result;
 	}
-
-	describe("handoffs", () => {
-		it("createHandoff and getHandoffDetails", async () => {
-			const { tenantId, token } = await tenantAndToken();
-			const store = new PgStore(appPool, tenantId);
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Add handoff persistence" });
-
-			const handoff = await call(token, "createHandoff", { entityId: issue.id, summary: "Paused", body: "State: mid-refactor." });
-			expect(handoff.id).toMatch(/^HO\d+$/);
-			expect(handoff.entityId).toBe(issue.id);
-
-			const details = await call(token, "getHandoffDetails", { entityId: issue.id });
-			expect(details.handoffs.map((entry: { id: string }) => entry.id)).toContain(handoff.id);
-		});
-
-		it("updateHandoff", async () => {
-			const { tenantId, token } = await tenantAndToken();
-			const store = new PgStore(appPool, tenantId);
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Initial draft." });
-
-			const updated = await call(token, "updateHandoff", { handoffId: handoff.id, body: "Updated draft." });
-			expect(updated.body).toBe("Updated draft.");
-		});
-
-		it("listHandoffs", async () => {
-			const { tenantId, token } = await tenantAndToken();
-			const store = new PgStore(appPool, tenantId);
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
-
-			const listed = await call(token, "listHandoffs", { initiativeId: initiative.id });
-			expect(listed.map((entry: { id: string }) => entry.id)).toEqual([handoff.id]);
-		});
-
-		it("deleteHandoff", async () => {
-			const { tenantId, token } = await tenantAndToken();
-			const store = new PgStore(appPool, tenantId);
-			const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
-			const handoff = await store.createHandoff({ entityId: initiative.id, body: "Resume here." });
-
-			const deleted = await call(token, "deleteHandoff", { handoffId: handoff.id });
-			expect(deleted.removed).toBe(true);
-		});
-	});
 
 	describe("context and glossary", () => {
 		it("upsertContext and getContextDetails", async () => {

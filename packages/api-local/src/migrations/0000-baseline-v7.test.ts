@@ -74,7 +74,7 @@ describe("baselineV7Migration", () => {
 		]);
 	});
 
-	it("creates the full v7 table set (plus history_entries and project_migrations) and named indexes on a fresh install", async () => {
+	it("creates the current table set without legacy handoffs storage on a fresh install", async () => {
 		const db = new Database(":memory:");
 
 		await runMigrations(db, [baselineV7Migration]);
@@ -90,7 +90,6 @@ describe("baselineV7Migration", () => {
 				"contexts",
 				"counters",
 				"entities",
-				"handoffs",
 				"history_entries",
 				"metadata",
 				"project_migrations",
@@ -107,14 +106,12 @@ describe("baselineV7Migration", () => {
 		expect(indexes).toEqual([
 			"context_terms_tenant_context_key_idx",
 			"contexts_tenant_scope_entity_id_idx",
-			"handoffs_tenant_entity_id_idx",
-			"handoffs_tenant_initiative_id_idx",
 			"history_entries_tenant_entity_version_idx",
 			"relations_tenant_to_id_idx"
 		]);
 	});
 
-	it("reproduces the exact column shape of every v7 table", async () => {
+	it("reproduces the exact column shape of every current table", async () => {
 		const db = new Database(":memory:");
 
 		await runMigrations(db, [baselineV7Migration]);
@@ -143,15 +140,6 @@ describe("baselineV7Migration", () => {
 			{ name: "avoid_terms", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
 			{ name: "created_at", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
 			{ name: "updated_at", type: "TEXT", notnull: 1, dflt: null, pk: 0 }
-		]);
-		expect(describeTable(db, "handoffs")).toEqual([
-			{ name: "tenant_id", type: "TEXT", notnull: 1, dflt: null, pk: 1 },
-			{ name: "id", type: "TEXT", notnull: 1, dflt: null, pk: 2 },
-			{ name: "entity_id", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
-			{ name: "initiative_id", type: "TEXT", notnull: 0, dflt: null, pk: 0 },
-			{ name: "summary", type: "TEXT", notnull: 1, dflt: "''", pk: 0 },
-			{ name: "body", type: "TEXT", notnull: 1, dflt: null, pk: 0 },
-			{ name: "created_at", type: "TEXT", notnull: 1, dflt: null, pk: 0 }
 		]);
 		expect(describeTable(db, "metadata")).toEqual([
 			{ name: "key", type: "TEXT", notnull: 0, dflt: null, pk: 1 },

@@ -10,7 +10,7 @@ import "./components/context-view.js";
 import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
 import "./components/relationship-graph.js";
-import type { AdrRailEntry, ConsoleSection, ContextPageTab, Entity, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource } from "./models.js";
+import type { AdrRailEntry, ConsoleSection, ContextPageTab, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectRollup } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
@@ -46,6 +46,19 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		this.store.selectInitiative(initiativeId);
 	};
 
+	protected onSelectProject = (event: Event) => {
+		const projectId = (event.currentTarget as HTMLElement).dataset.project;
+		if (!projectId) {
+			return;
+		}
+
+		void this.store.selectProject(projectId);
+	};
+
+	protected onReturnToProjects = () => {
+		void this.store.returnToProjectChooser();
+	};
+
 	protected onSelectEntity = (event: Event) => {
 		const entityId = (event.currentTarget as HTMLElement).dataset.id;
 		if (!entityId) {
@@ -65,6 +78,15 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	protected onToggleMaster = () => {
 		this.store.toggleMaster();
+	};
+
+	protected onToggleEpic = (event: Event) => {
+		const epicId = (event.currentTarget as HTMLElement).dataset.epicToggle;
+		if (!epicId) {
+			return;
+		}
+
+		this.store.toggleEpicExpanded(epicId);
 	};
 
 	protected onContextSearchInput = (event: Event) => {
@@ -140,7 +162,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	protected renderRail() {
 		const store = this.store;
-		const projectName = store.selectedTenantDisplayName.get() ?? "Project";
+		const projectName = store.selectedProjectDisplayName.get() ?? "Project";
 		const section = store.activeSection.get();
 		const navItems: Array<{ count: string; icon: string; label: string; section: ConsoleSection }> = [
 			{ count: String(store.projectInitiatives.get().length), icon: "📁", label: "Initiatives", section: "initiatives" },
@@ -173,6 +195,12 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				</button>
 				${this.renderSwitcherMenu()}
 			</div>
+			<button
+				class="projects-button"
+				@click=${this.onReturnToProjects}
+			>
+				Projects
+			</button>
 			<nav class="rail-nav">
 				<div class="nav-group-label">Plan</div>
 				${map(
@@ -207,6 +235,75 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		`;
 	}
 
+	protected renderProjectCard(rollup: ProjectRollup) {
+		const progress = rollup.initiativeCount > 0 ? Math.round((rollup.completedInitiativeCount / rollup.initiativeCount) * 100) : 0;
+
+		return html`
+		<button
+			class="project-card"
+			data-project=${rollup.project.id}
+			@click=${this.onSelectProject}
+		>
+			<div class="project-card-head">
+				<div>
+					<h2>${rollup.project.title}</h2>
+					<p>${rollup.project.id}</p>
+				</div>
+				<span class="badge ${this.store.badgeTone(rollup.project.status)}">${rollup.project.status}</span>
+			</div>
+			<div class="project-counts">
+				<span>${rollup.epicCount} epics</span>
+				<span>${rollup.initiativeCount} initiatives</span>
+				<span>${rollup.completedInitiativeCount}/${rollup.initiativeCount} completed</span>
+			</div>
+			<div
+				aria-label=${`${progress}% of initiatives completed`}
+				class="project-progress"
+				role="progressbar"
+				aria-valuemax="100"
+				aria-valuemin="0"
+				aria-valuenow=${String(progress)}
+			>
+				<span style=${`width:${progress}%`}></span>
+			</div>
+		</button>
+		`;
+	}
+
+	protected renderProjectChooser() {
+		const store = this.store;
+		const tenantName = store.selectedTenantDisplayName.get() ?? "Selected tenant";
+		const discovery = store.projectDiscovery.get();
+		const availableProjects = discovery?.kind === "available" ? discovery.projects : [];
+
+		return html`
+		<main class="project-chooser" data-view="project-chooser">
+			<div class="project-chooser-inner">
+				<div class="ai-crumbs">${tenantName}</div>
+				<h1>Projects</h1>
+				${when(
+					availableProjects.length > 0,
+					() => html`
+					<p class="project-chooser-copy">Choose a project to open its console.</p>
+					<div class="project-grid">
+						${repeat(availableProjects, (entry) => entry.project.id, (entry) => this.renderProjectCard(entry))}
+					</div>
+					`,
+					() => when(
+						discovery?.kind === "unavailable",
+						() => html`<div class="project-state unavailable">This tenant is unavailable. Choose an available tenant from the switcher.</div>`,
+						() => when(
+							discovery?.kind === "available",
+							() => html`<div class="project-state">This tenant has no available projects.</div>`,
+							() => html`<div class="project-state">Loading projects…</div>`
+						)
+					)
+				)}
+			</div>
+		</main>
+		`;
+	}
+
 	protected renderInitiativeCard(bundle: InitiativeBundle) {
 		const store = this.store;
 		const stats = store.initiativeStats(bundle);
@@ -230,6 +327,49 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			</div>
 			<div class="miniprog"><span style=${`width:${stats.pct}%`}></span></div>
 		</button>
+		`;
+	}
+
+	protected renderEpicInitiativeGroup(group: EpicInitiativeGroup) {
+		const expanded = this.store.isEpicExpanded(group.epic.id);
+		const label = group.epic.id === "EPIC0" ? "Uncategorized work" : group.epic.title;
+		const completionPercentage = group.initiatives.length > 0 ? Math.round((group.completedInitiativeCount / group.initiatives.length) * 100) : 0;
+
+		return html`
+		<section
+			class="epic-group"
+			data-epic=${group.epic.id}
+		>
+			<button
+				aria-expanded=${String(expanded)}
+				class="epic-group-head"
+				data-epic-toggle=${group.epic.id}
+				@click=${this.onToggleEpic}
+			>
+				<h2>${label}</h2>
+				<span>${group.initiatives.length} initiatives</span>
+				<span>${group.completedInitiativeCount}/${group.initiatives.length} completed</span>
+			</button>
+			<div
+				aria-label=${`${completionPercentage}% of ${label} initiatives completed`}
+				class="epic-progress"
+				role="progressbar"
+				aria-valuemax="100"
+				aria-valuemin="0"
+				aria-valuenow=${String(completionPercentage)}
+			>
+				<span style=${`width:${completionPercentage}%`}></span>
+			</div>
+			${when(
+				expanded,
+				() => html`
+				<div class="epic-group-items">
+					${repeat(group.initiatives, (bundle) => bundle.initiative.id, (bundle) => this.renderInitiativeCard(bundle))}
+				</div>
+				`,
+				() => nothing
+			)}
+		</section>
 		`;
 	}
 
@@ -369,10 +509,12 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const query = store.search.get().trim().toLowerCase();
 		const isAdrs = section === "adrs";
 
-		const initiatives = store
-			.projectInitiatives
-			.get()
-			.filter((bundle) => `${bundle.initiative.title} ${bundle.initiative.id}`.toLowerCase().includes(query));
+		const epicGroups = store.epicInitiativeGroups.get().map((group) => ({
+			...group,
+			initiatives: group.initiatives.filter((bundle) =>
+				`${bundle.initiative.title} ${bundle.initiative.id}`.toLowerCase().includes(query)
+			)
+		})).filter((group) => group.initiatives.length > 0);
 		const adrEntries = store.adrRailEntries.get().filter((entry) => `${entry.adr.title} ${entry.adr.id}`.toLowerCase().includes(query));
 
 		return html`
@@ -403,7 +545,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				${when(
 					isAdrs,
 					() => html`${repeat(adrEntries, (entry) => entry.adr.id, (entry) => this.renderAdrCard(entry))}`,
-					() => html`${repeat(initiatives, (bundle) => bundle.initiative.id, (bundle) => this.renderInitiativeCard(bundle))}`
+					() => html`${repeat(epicGroups, (group) => group.epic.id, (group) => this.renderEpicInitiativeGroup(group))}`
 				)}
 			</div>
 		</section>
@@ -476,10 +618,11 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				<div class="detail-inner wide-inner">
 					<div class="ai-crumbs">${store.selectedTenantDisplayName.get()} · Graph</div>
 					<h1 class="d-title">Project relationship graph</h1>
-					<p class="d-sub">Every initiative and its PRDs &amp; ADRs. Click an initiative or record to open it.</p>
+					<p class="d-sub">Project decisions, epics, initiatives, and their PRDs &amp; ADRs. Click an initiative or record to open it.</p>
 					<div class="ai-graph-wrap">
 						<div class="ai-graph-legend">
 							<span class="lg"><span class="sw" style="background:#24292f"></span>Project</span>
+							<span class="lg"><span class="sw" style="background:#9a6700"></span>Epic</span>
 							<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
 							<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
 							<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
@@ -535,6 +678,10 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	render() {
 		const store = this.store;
+		if (store.selectedTenant.get() && !store.selectedProjectId.get()) {
+			return this.renderProjectChooser();
+		}
+
 		const section = store.activeSection.get();
 		const wide = section === "graph" || section === "context";
 		const railCollapsed = store.railCollapsed.get();
@@ -625,6 +772,22 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			position: relative;
 			padding: 12px;
 			border-bottom: 1px solid var(--border-muted);
+		}
+		.projects-button {
+			margin: 0 12px 8px;
+			padding: 7px 10px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--text);
+			cursor: pointer;
+			font: inherit;
+			font-size: 13px;
+			font-weight: 600;
+			text-align: left;
+		}
+		.projects-button:hover {
+			background: var(--surface-muted);
 		}
 		.switcher-button {
 			display: flex;
@@ -803,6 +966,45 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			background: transparent;
 			cursor: pointer;
 			text-align: left;
+		}
+		.epic-group + .epic-group {
+			border-top: 1px solid var(--border);
+		}
+		.epic-group-head {
+			display: flex;
+			gap: 8px;
+			align-items: baseline;
+			width: stretch;
+			padding: 12px 16px;
+			border: 0;
+			background: var(--surface-muted);
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+			font-size: 12px;
+			text-align: left;
+		}
+		.epic-group-head:hover {
+			background: var(--accent-soft);
+		}
+		.epic-group-head:focus-visible {
+			outline: 2px solid rgba(9, 105, 218, 0.45);
+			outline-offset: -2px;
+		}
+		.epic-group-head h2 {
+			flex: 1;
+			margin: 0;
+			color: var(--text);
+			font-size: 13px;
+		}
+		.epic-progress {
+			height: 3px;
+			background: var(--border-muted);
+		}
+		.epic-progress span {
+			display: block;
+			height: 100%;
+			background: var(--done);
 		}
 		.m-item:hover {
 			background: var(--surface-muted);
@@ -1076,12 +1278,106 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		.empty-glyph {
 			font-size: 40px;
 		}
+		.project-chooser {
+			min-height: 100%;
+			overflow-y: auto;
+			background: var(--page-bg);
+		}
+		.project-chooser-inner {
+			max-width: 1040px;
+			margin: 0 auto;
+			padding: 40px 32px 64px;
+		}
+		.project-chooser h1 {
+			margin-top: 6px;
+			font-size: 28px;
+		}
+		.project-chooser-copy {
+			margin: 10px 0 0;
+			color: var(--muted);
+		}
+		.project-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+			gap: 12px;
+			margin-top: 24px;
+		}
+		.project-card {
+			display: grid;
+			gap: 16px;
+			min-height: 180px;
+			padding: 18px;
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			background: var(--surface);
+			cursor: pointer;
+			text-align: left;
+		}
+		.project-card:hover {
+			border-color: var(--accent);
+			box-shadow: 0 2px 8px rgba(31, 35, 40, 0.1);
+		}
+		.project-card:focus-visible,
+		.projects-button:focus-visible {
+			outline: 2px solid rgba(9, 105, 218, 0.45);
+			outline-offset: 2px;
+		}
+		.project-card-head {
+			display: flex;
+			gap: 12px;
+			justify-content: space-between;
+			align-items: start;
+		}
+		.project-card h2 {
+			font-size: 16px;
+		}
+		.project-card p {
+			margin: 4px 0 0;
+			color: var(--muted);
+			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+			font-size: 12px;
+		}
+		.project-counts {
+			display: flex;
+			gap: 8px;
+			flex-wrap: wrap;
+			color: var(--muted);
+			font-size: 13px;
+		}
+		.project-progress {
+			overflow: hidden;
+			height: 6px;
+			border-radius: 3px;
+			background: var(--border-muted);
+		}
+		.project-progress span {
+			display: block;
+			height: 100%;
+			background: var(--done);
+		}
+		.project-state {
+			max-width: 560px;
+			margin-top: 24px;
+			padding: 18px;
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			background: var(--surface);
+			color: var(--muted);
+		}
+		.project-state.unavailable {
+			border-color: rgba(207, 34, 46, 0.25);
+			background: var(--danger-bg);
+			color: var(--danger);
+		}
 		@media (max-width: 900px) {
 			.console,
 			.console.wide {
 				grid-template-columns: 1fr;
 				height: auto;
 				overflow: visible;
+			}
+			.project-chooser-inner {
+				padding: 28px 16px 40px;
 			}
 		}
 		`

@@ -1,7 +1,7 @@
 import type { installAgent, listAgent, uninstallAgent } from "../agent-installer.js";
 import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
 import type { SynchronizeSummary } from "@agent-issues/core";
-import type { listTenants, createHandoff, deleteHandoff, getHandoffDetails, updateHandoff } from "@agent-issues/api-local";
+import type { listTenants } from "@agent-issues/api-local";
 import type { AuthSessionView } from "../auth-session.js";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
@@ -68,74 +68,6 @@ export function renderInitiativeBundle(bundle: {
 		`Blockers: ${bundle.blockerLinks.length ? bundle.blockerLinks.map((link) => `${link.source.id} -> ${link.target.id}`).join(", ") : "none"}`,
 		`Constrains: ${bundle.constrainsLinks.length ? bundle.constrainsLinks.map((link) => `${link.adr.id} -> ${link.issue.id}`).join(", ") : "none"}`
 	].join("\n");
-}
-
-export function renderHandoffDetails(handoff: ReturnType<typeof getHandoffDetails>): string {
-	const lines = [`Focus: ${renderEntityLine(handoff.focus.entity)}`];
-
-	lines.push("Path:");
-	if (handoff.structuralPath.length === 0) {
-		lines.push("none");
-	} else {
-		for (const entry of handoff.structuralPath) {
-			lines.push(`${entry.relationType} ${renderEntityLine(entry.entity)}`);
-		}
-	}
-
-	lines.push(`Orphaned: ${handoff.orphaned ? "yes" : "no"}`);
-
-	lines.push("Active blockers:");
-	if (handoff.activeBlockers.length === 0) {
-		lines.push("none");
-	} else {
-		for (const blocker of handoff.activeBlockers) {
-			lines.push(renderEntityLine(blocker));
-		}
-	}
-
-	lines.push(
-		handoff.initiative
-			? `Initiative: ${renderEntityLine(handoff.initiative.initiative)}`
-			: "Initiative: none"
-	);
-
-	if (handoff.initiative) {
-		lines.push(
-			`Bundle: prds=${handoff.initiative.prds.length} stories=${handoff.initiative.userStories.length} adrs=${handoff.initiative.adrs.length} issues=${handoff.initiative.issues.length}`
-		);
-	}
-
-	lines.push("Saved handoffs:");
-	if (handoff.handoffs.length === 0) {
-		lines.push("none");
-	} else {
-		for (const saved of handoff.handoffs) {
-			lines.push(`${saved.id} ${saved.createdAt}${saved.summary ? ` ${saved.summary}` : ""}`);
-		}
-	}
-
-	lines.push("Relations:");
-	lines.push(indentBlock(renderEntityDetails(handoff.focus)));
-
-	return lines.join("\n");
-}
-
-export function renderHandoffCreateResult(handoff: ReturnType<typeof createHandoff>): string {
-	const scope = handoff.initiativeId ? `initiative ${handoff.initiativeId}` : "no initiative";
-	const label = handoff.summary ? ` ${handoff.summary}` : "";
-	return `Saved handoff ${handoff.id} for ${handoff.entityId} (${scope})${label}`;
-}
-
-export function renderHandoffEditResult(handoff: ReturnType<typeof updateHandoff>): string {
-	const scope = handoff.initiativeId ? `initiative ${handoff.initiativeId}` : "no initiative";
-	const label = handoff.summary ? ` ${handoff.summary}` : "";
-	return `Updated handoff ${handoff.id} for ${handoff.entityId} (${scope})${label}`;
-}
-
-export function renderHandoffDeleteResult(result: ReturnType<typeof deleteHandoff>): string {
-	const scope = result.handoff.initiativeId ? `initiative ${result.handoff.initiativeId}` : "no initiative";
-	const label = result.handoff.summary ? ` ${result.handoff.summary}` : "";
-	return `Deleted handoff ${result.handoff.id} for ${result.handoff.entityId} (${scope})${label}`;
 }
 
 export function renderInstallSkills(result: ReturnType<typeof installSkills>): string {
@@ -221,7 +153,7 @@ export function renderTenantList(result: {
 	for (const tenant of result.tenants) {
 		const marker = tenant.id === result.currentTenantId ? "*" : "-";
 		lines.push(
-			`${marker} ${tenant.id} (${tenant.displayName}) entities=${tenant.counts.entities} relations=${tenant.counts.relations} contexts=${tenant.counts.contexts} terms=${tenant.counts.contextTerms} handoffs=${tenant.counts.handoffs} history=${tenant.counts.historyEntries}`
+			`${marker} ${tenant.id} (${tenant.displayName}) entities=${tenant.counts.entities} relations=${tenant.counts.relations} contexts=${tenant.counts.contexts} terms=${tenant.counts.contextTerms} history=${tenant.counts.historyEntries}`
 		);
 	}
 
@@ -239,7 +171,6 @@ export function renderDeleteTenant(result: {
 		relations: number;
 		contexts: number;
 		contextTerms: number;
-		handoffs: number;
 		historyEntries: number;
 	};
 	counters: number;
@@ -251,7 +182,7 @@ export function renderDeleteTenant(result: {
 	return [
 		`Deleted tenant ${result.tenantId} (${result.displayName})`,
 		`Database: ${result.dbPath}`,
-		`Removed rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} history=${result.counts.historyEntries} counters=${result.counters}`
+		`Removed rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} history=${result.counts.historyEntries} counters=${result.counters}`
 	].join("\n");
 }
 
@@ -268,7 +199,6 @@ export function renderRenameTenant(result: {
 		relations: number;
 		contexts: number;
 		contextTerms: number;
-		handoffs: number;
 		historyEntries: number;
 	};
 	counters: number;
@@ -280,7 +210,7 @@ export function renderRenameTenant(result: {
 	return [
 		`Renamed tenant ${result.previousTenantId} (${result.previousDisplayName}) to ${result.newTenantId} (${result.newDisplayName})`,
 		`Database: ${result.dbPath}`,
-		`Moved rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} handoffs=${result.counts.handoffs} history=${result.counts.historyEntries} counters=${result.counters}`
+		`Moved rows: entities=${result.counts.entities} relations=${result.counts.relations} contexts=${result.counts.contexts} terms=${result.counts.contextTerms} history=${result.counts.historyEntries} counters=${result.counters}`
 	].join("\n");
 }
 
@@ -416,7 +346,6 @@ export function renderSynchronize(result: {
 	const createdTotal = summary.entitiesCreatedLocal.length + summary.entitiesCreatedCloud.length;
 	const updatedTotal = summary.entitiesUpdatedLocal.length + summary.entitiesUpdatedCloud.length;
 	const relationsTotal = summary.relationsAppliedToLocal + summary.relationsAppliedToCloud;
-	const handoffsTotal = summary.handoffsAppliedToLocal + summary.handoffsAppliedToCloud;
 	const contextsTotal =
 		summary.contextsAppliedToLocal +
 		summary.contextsAppliedToCloud +
@@ -428,7 +357,6 @@ export function renderSynchronize(result: {
 		createdTotal === 0 &&
 		updatedTotal === 0 &&
 		relationsTotal === 0 &&
-		handoffsTotal === 0 &&
 		contextsTotal === 0 &&
 		summary.concurrentEditConflicts === 0
 	) {
@@ -441,7 +369,6 @@ export function renderSynchronize(result: {
 		`Entities created: ${summary.entitiesCreatedLocal.length} local, ${summary.entitiesCreatedCloud.length} cloud`,
 		`Entities updated: ${summary.entitiesUpdatedLocal.length} local, ${summary.entitiesUpdatedCloud.length} cloud`,
 		`Relations applied: ${summary.relationsAppliedToLocal} to local, ${summary.relationsAppliedToCloud} to cloud`,
-		`Handoffs applied: ${summary.handoffsAppliedToLocal} to local, ${summary.handoffsAppliedToCloud} to cloud`,
 		`Contexts applied: ${summary.contextsAppliedToLocal} to local, ${summary.contextsAppliedToCloud} to cloud`,
 		`Context terms applied: ${summary.contextTermsAppliedToLocal} to local, ${summary.contextTermsAppliedToCloud} to cloud`
 	];

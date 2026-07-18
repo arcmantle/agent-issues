@@ -27,7 +27,6 @@ async function listDistinctTenantIds(conn: MigrationConn): Promise<string[]> {
 		UNION SELECT tenant_id FROM relations
 		UNION SELECT tenant_id FROM contexts
 		UNION SELECT tenant_id FROM context_terms
-		UNION SELECT tenant_id FROM handoffs
 		UNION SELECT tenant_id FROM history_entries
 		ORDER BY tenant_id
 	`);

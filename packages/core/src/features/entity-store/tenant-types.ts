@@ -11,7 +11,6 @@ export type TenantRecordCounts = {
 	relations: number;
 	contexts: number;
 	contextTerms: number;
-	handoffs: number;
 	historyEntries: number;
 };
 

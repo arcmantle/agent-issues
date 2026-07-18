@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runMigrations } from "../db/migration-runner.js";
 import { migrations as coreMigrations } from "./index.js";
 import { buildConsolidateLegacyTenantMigration } from "./0007-consolidate-legacy-tenant.js";
+import { migrateHandoffsToEntitiesMigration } from "./0010-migrate-handoffs-to-entities.js";
 
 const dbs: Database.Database[] = [];
 
@@ -18,7 +19,7 @@ afterEach(() => {
 // those, and running them too would manufacture PROJ0/EPIC0 sentinels/
 // counters/history for every seeded tenant before the test gets to assert
 // on this migration's own effects.
-const schemaMigrations = coreMigrations.slice(0, 4);
+const schemaMigrations = coreMigrations.slice(0, 3);
 
 async function freshDatabase(): Promise<Database.Database> {
 	const db = new Database(":memory:");
@@ -64,6 +65,18 @@ describe("buildConsolidateLegacyTenantMigration (ISS180)", () => {
 		seedEntity(db, "legacy-team", "INIT1", "initiative", "Legacy initiative");
 		seedEntity(db, "legacy-team", "ISS1", "issue", "Legacy issue");
 		seedRelation(db, "legacy-team", "INIT1", "ISS1", "tracks");
+		db.exec(`
+			CREATE TABLE handoffs (
+				tenant_id TEXT NOT NULL,
+				id TEXT NOT NULL,
+				entity_id TEXT NOT NULL,
+				initiative_id TEXT,
+				summary TEXT NOT NULL DEFAULT '',
+				body TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (tenant_id, id)
+			)
+		`);
 		db.prepare(
 			`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
 			 VALUES ('legacy-team', 'INIT1', 'INIT1', '', '', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z')`
@@ -91,6 +104,7 @@ describe("buildConsolidateLegacyTenantMigration (ISS180)", () => {
 			targetTenantId: "well-known-tenant"
 		});
 		await runMigrations(db, [migration]);
+		await runMigrations(db, [migrateHandoffsToEntitiesMigration]);
 
 		const remainingLegacyRows = db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = 'legacy-team'`).get() as {
 			count: number;
@@ -133,12 +147,19 @@ describe("buildConsolidateLegacyTenantMigration (ISS180)", () => {
 		expect(terms).toContainEqual({ context_key: migratedInitiative!.id, term: "Legacy term" });
 		expect(terms).toContainEqual({ context_key: `default:${migratedProject!.id}`, term: "Legacy shared term" });
 
-		const handoffs = db.prepare(`SELECT id, entity_id, summary FROM handoffs WHERE tenant_id = 'well-known-tenant'`).all() as Array<{
-			id: string;
-			entity_id: string;
-			summary: string;
-		}>;
-		expect(handoffs).toEqual([{ entity_id: migratedInitiative!.id, id: expect.stringMatching(/^HO\d+$/), summary: "Legacy handoff" }]);
+		const handoff = db
+			.prepare(`SELECT id, kind, title, body FROM entities WHERE tenant_id = 'well-known-tenant' AND kind = 'handoff'`)
+			.get() as { id: string; kind: string; title: string; body: string };
+		expect(handoff).toMatchObject({ id: expect.stringMatching(/^HO\d+$/), kind: "handoff", title: "Legacy handoff", body: "Legacy handoff body." });
+		expect(
+			db
+				.prepare(`SELECT from_id, to_id, type FROM relations WHERE tenant_id = 'well-known-tenant' AND from_id = ?`)
+				.get(handoff.id)
+		).toEqual({ from_id: handoff.id, to_id: migratedInitiative!.id, type: "handsOff" });
+		expect(
+			db.prepare(`SELECT title, body FROM history_entries WHERE tenant_id = 'well-known-tenant' AND entity_id = ?`).get(handoff.id)
+		).toEqual({ title: "Legacy handoff", body: "Legacy handoff body." });
+		expect(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'`).get()).toBeUndefined();
 
 		const projectMigrationRow = db
 			.prepare(`SELECT legacy_tenant_id AS legacyTenantId, project_id AS projectId FROM project_migrations WHERE tenant_id = 'well-known-tenant'`)

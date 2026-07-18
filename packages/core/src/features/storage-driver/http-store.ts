@@ -18,12 +18,11 @@ import type {
 	DatabaseSnapshot,
 	DeleteResult,
 	EntityDetails,
-	HandoffDeleteResult,
-	HandoffDetails,
-	HandoffRecord,
 	InitiativeBundle,
 	LinkResult,
 	MoveResult,
+	ProjectDiscovery,
+	ProjectSnapshot,
 	StatusUpdateResult,
 	UnlinkResult
 } from "../entity-store/store-types.js";
@@ -215,6 +214,7 @@ export class HttpStore implements StorageDriver {
 		status?: string;
 		body?: string;
 		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord> {
 		return this.call("createEntity", input);
 	}
@@ -263,6 +263,10 @@ export class HttpStore implements StorageDriver {
 		return this.call("updateEntityStatus", input);
 	}
 
+	public updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
+		return this.call("updateEntity", input);
+	}
+
 	public setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
 		return this.call("setEntityBody", input);
 	}
@@ -287,8 +291,14 @@ export class HttpStore implements StorageDriver {
 		return this.call("unlinkEntities", input);
 	}
 
-	public getDatabaseSnapshot(): Promise<DatabaseSnapshot> {
-		return this.call("getDatabaseSnapshot");
+	public getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	public getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	public getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
+		return this.call("getDatabaseSnapshot", input);
+	}
+
+	public getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
+		return this.call("getProjectDiscovery", input);
 	}
 
 	public getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
@@ -297,35 +307,6 @@ export class HttpStore implements StorageDriver {
 
 	public getSnapshotSignature(): Promise<string> {
 		return this.call("getSnapshotSignature");
-	}
-
-	// Handoffs
-	public createHandoff(input: { entityId: string; summary?: string; body: string }): Promise<HandoffRecord> {
-		return this.call("createHandoff", input);
-	}
-
-	public updateHandoff(input: { handoffId: string; summary?: string; body?: string }): Promise<HandoffRecord> {
-		return this.call("updateHandoff", input);
-	}
-
-	public deleteHandoff(input: { handoffId: string }): Promise<HandoffDeleteResult> {
-		return this.call("deleteHandoff", input);
-	}
-
-	public getHandoffDetails(entityId: string): Promise<HandoffDetails> {
-		return this.call("getHandoffDetails", { entityId });
-	}
-
-	public listHandoffs(filter?: { initiativeId?: string; entityId?: string }): Promise<HandoffRecord[]> {
-		return this.call("listHandoffs", filter);
-	}
-
-	public listAllHandoffs(): Promise<HandoffRecord[]> {
-		return this.call("listAllHandoffs");
-	}
-
-	public applyHandoffs(handoffs: HandoffRecord[]): Promise<{ inserted: number }> {
-		return this.call("applyHandoffs", { handoffs });
 	}
 
 	// Context / glossary

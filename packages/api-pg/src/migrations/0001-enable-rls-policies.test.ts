@@ -60,7 +60,7 @@ describe("enableRlsPoliciesMigration", () => {
 				[schemaName]
 			);
 			expect(rows.map((row) => row.tablename)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "handoffs", "history_entries", "relations"].sort()
+				["context_terms", "contexts", "counters", "entities", "history_entries", "relations"].sort()
 			);
 
 			const { rows: metadataPolicies } = await schemaPool.query(

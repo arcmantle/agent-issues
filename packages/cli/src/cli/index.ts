@@ -21,7 +21,6 @@ import {
 } from "./commands/entities.js";
 import { ExportCommand } from "./commands/export.js";
 import { FallbackCommand } from "./commands/fallback.js";
-import { HandoffCommand } from "./commands/handoff.js";
 import {
 	InstallAgentCommand,
 	InstallSkillsCommand,
@@ -79,7 +78,6 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(StatusCommand);
 	cli.register(BundleCommand);
 	cli.register(ExportCommand);
-	cli.register(HandoffCommand);
 	cli.register(RelationsCommand);
 	cli.register(OrphansCommand);
 	cli.register(ShowCommand);

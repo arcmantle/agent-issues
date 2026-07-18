@@ -9,7 +9,7 @@ import { ensureDatabase, resolveWellKnownLocalTenantId } from "../db/database.js
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN_FIXTURE = path.join(here, "__fixtures__", "schema-v7.db");
-const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "handoffs", "metadata"] as const;
+const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "metadata"] as const;
 
 // A real (not synthetic) pre-ADR43 backup of a personal `agent-issues.db`,
 // scrubbed of the counters-only ghost tenants left behind by an unrelated,
@@ -63,6 +63,9 @@ describe("golden-fixture migration wall", () => {
 	it("preserves every record when a pre-Drizzle v7 database is opened", async () => {
 		const staged = stageFixture();
 		const before = snapshotTables(staged);
+		const legacyHandoffs = new Database(staged, { readonly: true, fileMustExist: true });
+		const handoffs = legacyHandoffs.prepare("SELECT * FROM handoffs ORDER BY rowid").all() as Array<{ id: string; entity_id: string; summary: string; body: string }>;
+		legacyHandoffs.close();
 
 		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
 		db.close();
@@ -70,7 +73,7 @@ describe("golden-fixture migration wall", () => {
 		const after = snapshotTables(staged);
 
 		// Tables untouched by the full-chain-invariant bootstrap (ISS34) stay byte-for-byte identical.
-		for (const table of ["contexts", "context_terms", "handoffs", "metadata"] as const) {
+		for (const table of ["contexts", "context_terms", "metadata"] as const) {
 			expect(after[table]).toEqual(before[table]);
 		}
 
@@ -81,7 +84,7 @@ describe("golden-fixture migration wall", () => {
 			expect(after[table]).toEqual(
 				expect.arrayContaining((before[table] as Record<string, unknown>[]).map((row) => expect.objectContaining(row)))
 			);
-			expect(after[table]).toHaveLength(before[table].length + 2);
+			expect(after[table]).toHaveLength(before[table].length + 2 + handoffs.length);
 		}
 
 		// counters gains one row per newly-recognized entity kind (project, epic,
@@ -108,6 +111,9 @@ describe("golden-fixture migration wall", () => {
 				expect.objectContaining({ tenant_id: "fixture", kind: "version", next_value: 1 })
 			])
 		);
+		expect(handoffs).toHaveLength(1);
+		expect(after.entities).toContainEqual(expect.objectContaining({ id: handoffs[0]!.id, kind: "handoff", title: handoffs[0]!.summary, body: handoffs[0]!.body }));
+		expect(after.relations).toContainEqual(expect.objectContaining({ from_id: handoffs[0]!.id, to_id: handoffs[0]!.entity_id, type: "handsOff" }));
 	});
 
 	it("backfills a synthetic version-1 history entry for every pre-existing record and the new sentinels", async () => {
@@ -125,7 +131,7 @@ describe("golden-fixture migration wall", () => {
 
 			const preExistingIds = (before.entities as Array<{ id: string }>).map((entity) => entity.id);
 			const seededIds = historyRows.map((row) => row.entity_id);
-			expect(seededIds.sort()).toEqual([...preExistingIds, "EPIC0", "PROJ0"].sort());
+			expect(seededIds.sort()).toEqual([...preExistingIds, "HO1", "EPIC0", "PROJ0"].sort());
 			expect(historyRows.every((row) => row.version === 1)).toBe(true);
 			expect(historyRows.every((row) => row.author === "system")).toBe(true);
 
@@ -150,7 +156,8 @@ describe("golden-fixture migration wall", () => {
 				{ id: "0000-baseline-v7" },
 				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" },
-				{ id: "0009-add-entity-project-id" }
+				{ id: "0009-add-entity-project-id" },
+				{ id: "0010-migrate-handoffs-to-entities" }
 			]);
 		} finally {
 			db2.close();
@@ -179,10 +186,14 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 
 	it("consolidates every genuine legacy tenant into its own project, manufacturing no phantom projects", async () => {
 		const before = new Database(dbPath, { readonly: true, fileMustExist: true });
-		const entityCountBefore = REAL_WORLD_LEGACY_TENANT_IDS.reduce((sum, tenantId) => {
+			const entityCountBefore = REAL_WORLD_LEGACY_TENANT_IDS.reduce((sum, tenantId) => {
 			const row = before.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(tenantId) as { count: number };
 			return sum + row.count;
 		}, 0);
+			const handoffCountBefore = REAL_WORLD_LEGACY_TENANT_IDS.reduce((sum, tenantId) => {
+				const row = before.prepare(`SELECT COUNT(*) AS count FROM handoffs WHERE tenant_id = ?`).get(tenantId) as { count: number };
+				return sum + row.count;
+			}, 0);
 		before.close();
 
 		const { db } = await ensureDatabase(undefined, {});
@@ -211,7 +222,7 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 			const entityCountAfter = (
 				db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(wellKnownTenantId) as { count: number }
 			).count;
-			expect(entityCountAfter).toBe(entityCountBefore + (REAL_WORLD_LEGACY_TENANT_IDS.length + 1) * 2);
+			expect(entityCountAfter).toBe(entityCountBefore + handoffCountBefore + (REAL_WORLD_LEGACY_TENANT_IDS.length + 1) * 2);
 
 			// No tenant id survives outside the well-known tenant - full
 			// consolidation, no residue left behind.
@@ -243,7 +254,8 @@ describe("fresh install schema parity", () => {
 				{ id: "0000-baseline-v7" },
 				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" },
-				{ id: "0009-add-entity-project-id" }
+				{ id: "0009-add-entity-project-id" },
+				{ id: "0010-migrate-handoffs-to-entities" }
 			]);
 		} finally {
 			db2.close();
@@ -348,7 +360,8 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 				{ id: "0000-baseline-v7" },
 				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" },
-				{ id: "0009-add-entity-project-id" }
+				{ id: "0009-add-entity-project-id" },
+				{ id: "0010-migrate-handoffs-to-entities" }
 			]);
 
 			const legacyTables = db2

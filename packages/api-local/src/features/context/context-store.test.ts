@@ -5,15 +5,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { formatTenantDisplayName } from "@agent-issues/core";
 import { defineContextTerm, getContextDetails, getContextDirectory, queryContextDirectory } from "./context-store.js";
-import { ensureDatabase, resolveCurrentProjectId, resolveLegacyWorkspaceTenantId, type DatabaseHandle } from "../../db/database.js";
+import { ensureDatabase, resolveCurrentProjectId, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
+import type { SqliteExecutor } from "../../db/sqlite-executor.js";
 import { createEntity } from "../entity-store/store.js";
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<DatabaseHandle> {
+async function openTestDatabase(): Promise<SqliteExecutor> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-"));
-	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
-	return db;
+	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	return executor;
 }
 
 async function seedProjectContext(
@@ -237,20 +238,20 @@ describe("project-aware default context (ISS166)", () => {
 
 			// Re-opening as if standing in workspaceA resolves the bare
 			// (no --scope) context to that project's `default:<projectId>` row.
-			const { db: dbFromWorkspaceA } = await ensureDatabase(dbPath, { currentWorkingDirectory: workspaceA });
+			const { executor: dbFromWorkspaceA } = await ensureDatabase(dbPath, { currentWorkingDirectory: workspaceA });
 			const details = getContextDetails(dbFromWorkspaceA, {});
 
 			expect(details.context.key).toBe(`default:${projectId}`);
 			expect(details.context.scopeLabel).toBe(projectTitle);
 			expect(details.terms.map((term) => term.term)).toEqual(["Widget"]);
-			dbFromWorkspaceA.close();
+			dbFromWorkspaceA.db.close();
 
 			// A workspace without a mapping resolves the tenant's sentinel default.
-			const { db: dbElsewhere } = await ensureDatabase(dbPath, {});
+			const { executor: dbElsewhere } = await ensureDatabase(dbPath, {});
 			const elsewhereDetails = getContextDetails(dbElsewhere, {});
 			expect(elsewhereDetails.context.key).toBe("default");
 			expect(elsewhereDetails.context.scopeLabel).toBe("Shared");
-			dbElsewhere.close();
+			dbElsewhere.db.close();
 		} finally {
 			rmSync(workspaceA, { force: true, recursive: true });
 		}
@@ -266,14 +267,14 @@ describe("project-aware default context (ISS166)", () => {
 			const projectTitle = formatTenantDisplayName(workspaceMappingId);
 			await seedProjectContext(dbPath, workspaceMappingId, projectTitle);
 
-			const { db: sharedDb } = await ensureDatabase(dbPath, {});
-			const projectId = resolveCurrentProjectId(sharedDb, workspaceB);
+			const { executor: sharedDb } = await ensureDatabase(dbPath, {});
+			const projectId = resolveCurrentProjectId(sharedDb.db, workspaceB);
 
 			const details = getContextDetails(sharedDb, { scopeRef: projectId });
 
 			expect(details.context.key).toBe(`default:${projectId}`);
 			expect(details.context.scopeLabel).toBe(projectTitle);
-			sharedDb.close();
+			sharedDb.db.close();
 		} finally {
 			rmSync(workspaceB, { force: true, recursive: true });
 		}

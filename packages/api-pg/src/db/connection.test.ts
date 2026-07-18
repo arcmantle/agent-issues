@@ -26,4 +26,29 @@ describe("Postgres connection + migration bootstrap", () => {
 
 		expect(tenantId).toBe("tenant-connection-test");
 	});
+
+	it("rolls back and releases the connection when tenant work fails", async () => {
+		const queries: string[] = [];
+		let released = false;
+		const testPool = {
+			connect: async () => ({
+				query: async (query: string) => {
+					queries.push(query);
+					return { rows: [] };
+				},
+				release: () => {
+					released = true;
+				}
+			})
+		} as unknown as Pool;
+
+		await expect(
+			withTenantTransaction(testPool, "tenant-failure-test", async () => {
+				throw new Error("expected tenant failure");
+			})
+		).rejects.toThrow("expected tenant failure");
+
+		expect(queries).toEqual(["BEGIN", "SELECT set_config('app.tenant_id', $1, true)", "ROLLBACK"]);
+		expect(released).toBe(true);
+	});
 });

@@ -21,8 +21,8 @@ function makeBundle(initiative: Entity, overrides: Partial<InitiativeBundle> = {
 		adrs: [],
 		blockerLinks: [],
 		constrainsLinks: [],
+		entities: [initiative],
 		fixLinks: [],
-		handoffs: [],
 		initiative,
 		issues: [],
 		prds: [],
@@ -169,6 +169,31 @@ describe("initiative detail overview tab", () => {
 		expect(view.shadowRoot?.querySelector(".issue-branch-children .child")?.getAttribute("data-id")).toBe("ISS2");
 	});
 
+	it("renders unassigned issues that are not linked to a user story", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
+		const directIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Direct initiative issue" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Direct issue child" });
+		const storyIssue = makeEntity({ id: "ISS3", kind: "issue", status: "todo", title: "Story issue" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue: storyIssue, userStory: story }],
+			issues: [directIssue, childIssue, storyIssue],
+			subIssueLinks: [{ issue: childIssue, parent: directIssue }],
+			userStories: [story]
+		});
+		const store = makeStore(bundle);
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const directIssueButtons = [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".direct-issues .child") ?? [])];
+		expect(directIssueButtons.map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2"]);
+		expect(view.shadowRoot?.textContent).toContain("Unassigned issues");
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>(".direct-issues .branch-toggle")?.getAttribute("aria-label")).toBe(
+			"Collapse sub-issues for Direct initiative issue"
+		);
+	});
+
 	it("shows child issues when the parent issue itself fixes the story", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
@@ -259,7 +284,6 @@ describe("initiative detail overview tab", () => {
 		expect(view.shadowRoot?.querySelector('.line[data-id="PRD1"]')).not.toBeNull();
 	});
 });
-
 describe("initiative detail graph tab", () => {
 	it("renders the relationship graph with a node per record on the graph subtab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
@@ -365,49 +389,3 @@ describe("initiative detail context tab", () => {
 		expect(text).toContain("dashboard");
 	});
 });
-
-describe("initiative detail handoffs tab", () => {
-	it("renders saved handoffs with their summary and rendered body on the handoffs subtab", async () => {
-		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "in-progress", title: "Add handoff persistence" });
-		const bundle = makeBundle(initiative, {
-			issues: [issue],
-			handoffs: [
-				{
-					id: "HO1",
-					entityId: "ISS1",
-					initiativeId: "INIT1",
-					summary: "Paused mid-refactor",
-					body: "Store layer done. Resume from the failing UI test.",
-					createdAt: "2026-06-11T10:00:00.000Z"
-				}
-			]
-		});
-		const store = makeStore(bundle);
-		store.setInitTab("handoffs");
-
-		const view = await mountView(store);
-		await view.updateComplete;
-
-		const handoff = view.shadowRoot?.querySelector('[data-handoff="HO1"]');
-		expect(handoff).not.toBeNull();
-		const text = handoff?.textContent ?? "";
-		expect(text).toContain("Paused mid-refactor");
-		expect(text).toContain("Store layer done.");
-		expect(text).toContain("Add handoff persistence");
-	});
-
-	it("shows an empty message when no handoffs are saved", async () => {
-		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const bundle = makeBundle(initiative);
-		const store = makeStore(bundle);
-		store.setInitTab("handoffs");
-
-		const view = await mountView(store);
-		await view.updateComplete;
-
-		const text = view.shadowRoot?.textContent ?? "";
-		expect(text).toContain("No handoffs have been saved");
-	});
-});
-

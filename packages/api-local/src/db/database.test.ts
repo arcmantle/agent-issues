@@ -14,16 +14,16 @@ import {
 	resolveLegacyWorkspaceTenantId,
 	resolveTenantRootPath,
 	resolveTenantSlug,
-	resolveWellKnownLocalTenantId,
-	type DatabaseHandle
+	resolveWellKnownLocalTenantId
 } from "./database.js";
-import { createEntity, createHandoff } from "../features/entity-store/store.js";
+import type { SqliteExecutor } from "./sqlite-executor.js";
+import { createEntity } from "../features/entity-store/store.js";
 
 
 const tempDirs: string[] = [];
 
-async function openTestDatabase(dbPath: string, tenant: string): Promise<DatabaseHandle> {
-	return (await ensureDatabase(dbPath, { tenant })).db;
+async function openTestDatabase(dbPath: string, tenant: string): Promise<SqliteExecutor> {
+	return (await ensureDatabase(dbPath, { tenant })).executor;
 }
 
 function backupsDirectoryFor(dbPath: string): string {
@@ -91,20 +91,19 @@ describe("tenant resolution", () => {
 				scopeRef: alphaInitiative.id,
 				term: "Alpha term"
 			});
-			createHandoff(alphaDb, { body: "Ready for handoff.", entityId: alphaInitiative.id, summary: "Alpha handoff" });
+			createEntity(alphaDb, { kind: "handoff", title: "Alpha handoff", body: "Ready for handoff.", links: [{ relationType: "handsOff", targetId: alphaInitiative.id }] });
 
 			createEntity(betaDb, { kind: "initiative", title: "Beta" });
 
-			const listed = listTenants(alphaDb);
+			const listed = listTenants(alphaDb.db);
 			expect(listed).toEqual([
 				{
 					counts: {
 						contexts: 1,
 						contextTerms: 1,
-						entities: 4,
-						handoffs: 1,
-						historyEntries: 4,
-						relations: 3
+						entities: 5,
+						historyEntries: 5,
+						relations: 4
 					},
 					displayName: "Alpha Team",
 					id: "alpha-team"
@@ -114,7 +113,6 @@ describe("tenant resolution", () => {
 						contexts: 0,
 						contextTerms: 0,
 						entities: 3,
-						handoffs: 0,
 						historyEntries: 3,
 						relations: 2
 					},
@@ -123,15 +121,14 @@ describe("tenant resolution", () => {
 				}
 			]);
 
-			const removed = deleteTenant(alphaDb, "alpha-team");
+			const removed = deleteTenant(alphaDb.db, "alpha-team");
 			expect(removed).toMatchObject({
 				counts: {
 					contexts: 1,
 					contextTerms: 1,
-					entities: 4,
-					handoffs: 1,
-					historyEntries: 4,
-					relations: 3
+					entities: 5,
+					historyEntries: 5,
+					relations: 4
 				},
 				counters: 9,
 				displayName: "Alpha Team",
@@ -139,13 +136,12 @@ describe("tenant resolution", () => {
 				tenantId: "alpha-team"
 			});
 
-			expect(listTenants(betaDb)).toEqual([
+			expect(listTenants(betaDb.db)).toEqual([
 				{
 					counts: {
 						contexts: 0,
 						contextTerms: 0,
 						entities: 3,
-						handoffs: 0,
 						historyEntries: 3,
 						relations: 2
 					},
@@ -154,8 +150,8 @@ describe("tenant resolution", () => {
 				}
 			]);
 		} finally {
-			alphaDb.close();
-			betaDb.close();
+			alphaDb.db.close();
+			betaDb.db.close();
 		}
 	});
 
@@ -175,19 +171,18 @@ describe("tenant resolution", () => {
 				scopeRef: initiative.id,
 				term: "Source term"
 			});
-			createHandoff(sourceDb, { body: "Source handoff.", entityId: initiative.id, summary: "Source handoff" });
+			createEntity(sourceDb, { kind: "handoff", title: "Source handoff", body: "Source handoff.", links: [{ relationType: "handsOff", targetId: initiative.id }] });
 
 			createEntity(otherDb, { kind: "initiative", title: "Other initiative" });
 
-			const renamed = renameTenant(sourceDb, "source-team", "renamed-team");
+			const renamed = renameTenant(sourceDb.db, "source-team", "renamed-team");
 			expect(renamed).toEqual({
 				counts: {
 					contexts: 1,
 					contextTerms: 1,
-					entities: 4,
-					handoffs: 1,
-					historyEntries: 4,
-					relations: 3
+					entities: 5,
+					historyEntries: 5,
+					relations: 4
 				},
 				counters: 9,
 				newDisplayName: "Renamed Team",
@@ -197,16 +192,15 @@ describe("tenant resolution", () => {
 				renamed: true
 			});
 
-			expect(listTenants(otherDb).map((tenant) => tenant.id)).toEqual(["other-team", "renamed-team"]);
+			expect(listTenants(otherDb.db).map((tenant) => tenant.id)).toEqual(["other-team", "renamed-team"]);
 
-			const sourceCounts = sourceDb.prepare(
+			const sourceCounts = sourceDb.db.prepare(
 				`SELECT
 					(SELECT COUNT(*) FROM counters WHERE tenant_id = 'source-team') AS counters,
 					(SELECT COUNT(*) FROM entities WHERE tenant_id = 'source-team') AS entities,
 					(SELECT COUNT(*) FROM relations WHERE tenant_id = 'source-team') AS relations,
 					(SELECT COUNT(*) FROM contexts WHERE tenant_id = 'source-team') AS contexts,
 					(SELECT COUNT(*) FROM context_terms WHERE tenant_id = 'source-team') AS context_terms,
-					(SELECT COUNT(*) FROM handoffs WHERE tenant_id = 'source-team') AS handoffs,
 					(SELECT COUNT(*) FROM history_entries WHERE tenant_id = 'source-team') AS history_entries`
 			).get() as {
 				counters: number;
@@ -214,7 +208,6 @@ describe("tenant resolution", () => {
 				relations: number;
 				contexts: number;
 				context_terms: number;
-				handoffs: number;
 				history_entries: number;
 			};
 			expect(sourceCounts).toEqual({
@@ -222,15 +215,14 @@ describe("tenant resolution", () => {
 				contexts: 0,
 				counters: 0,
 				entities: 0,
-				handoffs: 0,
 				history_entries: 0,
 				relations: 0
 			});
 
-			expect(() => renameTenant(sourceDb, "other-team", "renamed-team")).toThrow("Target tenant already exists: renamed-team");
+			expect(() => renameTenant(sourceDb.db, "other-team", "renamed-team")).toThrow("Target tenant already exists: renamed-team");
 		} finally {
-			sourceDb.close();
-			otherDb.close();
+			sourceDb.db.close();
+			otherDb.db.close();
 		}
 	});
 });
@@ -274,7 +266,7 @@ describe("full-chain invariant backup", () => {
 		const dbPath = path.join(tempDir, "test.db");
 
 		const db = await openTestDatabase(dbPath, "fresh-tenant");
-		db.close();
+		db.db.close();
 
 		expect(listBackupFiles(dbPath)).toEqual([]);
 	});

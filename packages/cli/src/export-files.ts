@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import type { ContextDetails, DatabaseSnapshot, HandoffRecord, InitiativeBundle } from "@agent-issues/api-local";
+import type { ContextDetails, DatabaseSnapshot, InitiativeBundle } from "@agent-issues/api-local";
 import type { EntityRecord, RelationRecord } from "@agent-issues/core";
 import { renderFrontmatter, renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "./export-markdown.js";
 
@@ -45,7 +45,7 @@ export function writeInitiativeDirectoryExport(input: {
 	writeEntityGroup(input.outputPath, "user-stories", input.bundle.userStories, scopedRelations, files);
 	writeEntityGroup(input.outputPath, "adrs", input.bundle.adrs, scopedRelations, files);
 	writeEntityGroup(input.outputPath, "issues", input.bundle.issues, scopedRelations, files);
-	writeHandoffGroup(input.outputPath, input.bundle.handoffs, files);
+	writeEntityGroup(input.outputPath, "entities", input.bundle.entities.filter((entity) => entity.id !== input.bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), scopedRelations, files);
 	writeRelationGroups(input.outputPath, scopedRelations, files);
 
 	return {
@@ -58,7 +58,6 @@ export function writeInitiativeDirectoryExport(input: {
 
 export function writeProjectDirectoryExport(input: {
 	snapshot: DatabaseSnapshot;
-	handoffs: HandoffRecord[];
 	outputPath: string;
 	force?: boolean;
 }): DirectoryExportResult {
@@ -68,9 +67,7 @@ export function writeProjectDirectoryExport(input: {
 
 	writeMarkdownFile(input.outputPath, "project.md", renderProjectMarkdownExport(input), files);
 	writeMarkdownFile(input.outputPath, "shared-context.md", renderContextMarkdown(input.snapshot.contexts.shared), files);
-	writeEntityGroup(input.outputPath, "project-adrs", input.snapshot.projectAdrs, input.snapshot.relations, files);
-	writeEntityGroup(input.outputPath, "orphans", input.snapshot.orphans, input.snapshot.relations, files);
-	writeHandoffGroup(input.outputPath, input.handoffs, files);
+	writeEntityGroup(input.outputPath, "entities", input.snapshot.entities, input.snapshot.relations, files);
 	writeRelationGroups(input.outputPath, input.snapshot.relations, files);
 
 	const initiativesRoot = path.join(input.outputPath, "initiatives");
@@ -138,19 +135,6 @@ function renderContextMarkdown(context: ContextDetails): string {
 	return [renderFrontmatter(frontmatter), `# ${context.context.title}`, context.context.summary || "No summary.", "## Terms", ...termLines].join("\n\n");
 }
 
-function renderHandoffMarkdown(handoff: HandoffRecord): string {
-	const frontmatter = {
-		id: handoff.id,
-		entityId: handoff.entityId,
-		initiativeId: handoff.initiativeId,
-		summary: handoff.summary,
-		createdAt: handoff.createdAt
-	};
-	const heading = handoff.summary.trim().length > 0 ? handoff.summary : handoff.id;
-
-	return [renderFrontmatter(frontmatter), `# ${heading}`, `Entity: ${handoff.entityId}`, handoff.body].join("\n\n");
-}
-
 function renderRelationGroupMarkdown(relationType: string, relations: RelationRecord[]): string {
 	const frontmatter = {
 		relationType,
@@ -171,16 +155,6 @@ function writeEntityGroup(rootPath: string, groupName: string, entities: EntityR
 
 	for (const entity of entities) {
 		writeMarkdownFile(rootPath, path.join(groupName, `${entity.id}.md`), renderEntityMarkdown(entity, relations), files);
-	}
-}
-
-function writeHandoffGroup(rootPath: string, handoffs: HandoffRecord[], files: string[]) {
-	if (handoffs.length === 0) {
-		return;
-	}
-
-	for (const handoff of handoffs) {
-		writeMarkdownFile(rootPath, path.join("handoffs", `${handoff.id}.md`), renderHandoffMarkdown(handoff), files);
 	}
 }
 
@@ -231,13 +205,7 @@ function summarizeRelation(relation: RelationRecord) {
 }
 
 function collectBundleEntityIds(bundle: InitiativeBundle): Set<string> {
-	return new Set([
-		bundle.initiative.id,
-		...bundle.prds.map((entity) => entity.id),
-		...bundle.userStories.map((entity) => entity.id),
-		...bundle.adrs.map((entity) => entity.id),
-		...bundle.issues.map((entity) => entity.id)
-	]);
+	return new Set(bundle.entities.map((entity) => entity.id));
 }
 
 function emptyInitiativeContext(initiative: EntityRecord): ContextDetails {

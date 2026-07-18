@@ -53,8 +53,6 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 			concurrentEditConflicts: 0,
 			relationsAppliedToLocal: 0,
 			relationsAppliedToCloud: 0,
-			handoffsAppliedToLocal: 0,
-			handoffsAppliedToCloud: 0,
 			contextsAppliedToLocal: 0,
 			contextsAppliedToCloud: 0,
 			contextTermsAppliedToLocal: 0,
@@ -142,22 +140,30 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 		expect(summary.entitiesUpdatedCloud).toEqual([]);
 	});
 
-	it("propagates a handoff created on one side to the other, without duplicating it on repeated runs (ISS62)", async () => {
+	it("propagates a handoff entity and handsOff relation without duplication on repeated runs", async () => {
 		const initiative = await local.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		await synchronizeStores(local, cloud);
 
-		const handoff = await local.createHandoff({ entityId: initiative.id, body: "Picking up from here." });
+		const handoff = await local.createEntity({
+			kind: "handoff",
+			title: "Resume platform work",
+			body: "Picking up from here.",
+			links: [{ relationType: "handsOff", targetId: initiative.id }]
+		});
 
 		const summary = await synchronizeStores(local, cloud);
-		expect(summary.handoffsAppliedToCloud).toBe(1);
-		expect(summary.handoffsAppliedToLocal).toBe(0);
-
-		const cloudHandoffs = await cloud.listAllHandoffs();
-		expect(cloudHandoffs).toContainEqual(expect.objectContaining({ id: handoff.id, entityId: initiative.id, body: "Picking up from here." }));
+		expect(summary.entitiesCreatedCloud).toContain(handoff.id);
+		expect(summary.relationsAppliedToCloud).toBe(1);
+		expect(await cloud.listEntities("handoff")).toContainEqual(expect.objectContaining({ id: handoff.id, body: "Picking up from here." }));
+		expect((await cloud.getEntityDetails(handoff.id)).outgoing).toContainEqual(
+			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: initiative.id }) })
+		);
 
 		const repeatSummary = await synchronizeStores(local, cloud);
-		expect(repeatSummary.handoffsAppliedToLocal).toBe(0);
-		expect(repeatSummary.handoffsAppliedToCloud).toBe(0);
+		expect(repeatSummary.entriesAppliedToLocal).toBe(0);
+		expect(repeatSummary.entriesAppliedToCloud).toBe(0);
+		expect(repeatSummary.relationsAppliedToLocal).toBe(0);
+		expect(repeatSummary.relationsAppliedToCloud).toBe(0);
 	});
 
 	it("propagates a context/term created on one side and converges on whichever side's edit is newer (ISS62)", async () => {

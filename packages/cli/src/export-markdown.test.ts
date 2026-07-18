@@ -3,13 +3,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "./export-markdown.js";
 import {
 	createEntity,
-	createHandoff,
 	defineContextTerm,
 	ensureDatabase,
 	getDatabaseSnapshot,
 	getInitiativeBundle,
 	linkEntities,
-	listHandoffs,
 	upsertContext
 } from "@agent-issues/api-local";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -38,7 +36,8 @@ describe("markdown export", () => {
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "Inspect Record", body: "Story body" });
 		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view", body: "Issue body" });
 		linkEntities(db, { fromId: issue.id, toId: story.id, relationType: "fixes" });
-		createHandoff(db, { entityId: issue.id, summary: "Resume here", body: "Continue from the failing test." });
+		const handoff = createEntity(db, { kind: "handoff", title: "Resume here", body: "Continue from the failing test." });
+		linkEntities(db, { fromId: handoff.id, toId: issue.id, relationType: "handsOff" });
 		upsertContext(db, { scopeRef: initiative.id, title: "Viewer Context", summary: "Shared language for the viewer." });
 		defineContextTerm(db, { scopeRef: initiative.id, term: "Record Rail", definition: "The fixed navigation lane." });
 
@@ -58,7 +57,9 @@ describe("markdown export", () => {
 		expect(markdown).toContain(`# ${initiative.id} Console Viewer`);
 		expect(markdown).toContain("## Context");
 		expect(markdown).toContain("Record Rail: The fixed navigation lane.");
-		expect(markdown).toContain("## Handoffs");
+		expect(markdown).toContain(`### ${handoff.id} Resume here`);
+		expect(markdown).toContain(`from: \"${handoff.id}\"`);
+		expect(markdown).toContain(`to: \"${issue.id}\"`);
 		expect(markdown).toContain("Continue from the failing test.");
 	});
 
@@ -69,23 +70,21 @@ describe("markdown export", () => {
 		const adr = createEntity(db, { kind: "adr", title: "Use SVG graphs" });
 		const orphanIssue = createEntity(db, { kind: "issue", title: "Loose end" });
 		linkEntities(db, { fromId: initiative.id, toId: issue.id, relationType: "tracks" });
-		createHandoff(db, { entityId: issue.id, body: "Resume project export." });
+		const handoff = createEntity(db, { kind: "handoff", title: "Resume project export.", body: "Resume project export." });
+		linkEntities(db, { fromId: handoff.id, toId: issue.id, relationType: "handsOff" });
 		upsertContext(db, { title: "Shared Context", summary: "Project-wide terminology." });
 		defineContextTerm(db, { term: "Rail", definition: "Primary navigation band." });
 
 		const markdown = renderProjectMarkdownExport({
-			snapshot: getDatabaseSnapshot(db),
-			handoffs: listHandoffs(db)
+			snapshot: getDatabaseSnapshot(db)
 		});
 
 		expect(markdown).toContain("type: \"project-export\"");
 		expect(markdown).toContain("# Project Export");
-		expect(markdown).toContain("## Project ADRs");
+		expect(markdown).toContain("## Entities");
 		expect(markdown).toContain(adr.id);
-		expect(markdown).toContain("## Orphans");
 		expect(markdown).toContain(orphanIssue.id);
-		expect(markdown).toContain("## Handoffs");
-		expect(markdown).toContain("Resume project export.");
+		expect(markdown).toContain(handoff.id);
 		expect(markdown).toContain(`## ${initiative.id} Console Viewer`);
 	});
 });

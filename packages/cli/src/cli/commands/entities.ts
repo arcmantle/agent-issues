@@ -12,6 +12,7 @@ abstract class PositionalsTenantCommand extends TenantCommand {
 export class CreateCommand extends BodyTenantCommand {
 	public static paths = [["create"]];
 
+	public links = Option.Array("--link", { arity: 2 });
 	public parent = Option.String("--parent");
 	public positionals = Option.Rest();
 	public statusValue = Option.String("--status");
@@ -27,6 +28,7 @@ export class CreateCommand extends BodyTenantCommand {
 			const entity = await store.createEntity({
 				body: this.resolveBody(),
 				kind,
+				links: this.links?.map(([relationType, targetId]) => ({ relationType, targetId })),
 				parentId: this.parent,
 				status: this.statusValue,
 				title: requireOption(this.title, "--title is required for create.")
@@ -42,16 +44,18 @@ export class EditCommand extends BodyTenantCommand {
 	public static paths = [["edit"]];
 
 	public positionals = Option.Rest();
+	public title = Option.String("--title");
 
 	public async execute(): Promise<number> {
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
-			const entityId = requirePositional(this.positionals, 0, "edit <id> (--body <markdown> | --body-file <path|->)");
-			const entity = await store.setEntityBody({
-				body: this.requireBody("--body or --body-file is required for edit."),
-				entityId
-			});
+			const entityId = requirePositional(this.positionals, 0, "edit <id> (--title <text> | --body <markdown> | --body-file <path|->)");
+			const body = this.resolveBody();
+			if (this.title === undefined && body === undefined) {
+				throw new Error("--title or --body is required for edit.");
+			}
+			const entity = await store.updateEntity({ body, entityId, title: this.title });
 
-			this.print(entity, `Updated body for ${entity.id} ${entity.kind} ${entity.title}`);
+			this.print(entity, `Updated ${entity.id} ${entity.kind} ${entity.title}`);
 			return 0;
 		});
 	}

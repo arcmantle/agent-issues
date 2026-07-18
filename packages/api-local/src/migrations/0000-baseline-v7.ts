@@ -7,9 +7,6 @@ import {
 	createContextTermsTenantContextKeyIndex,
 	createCountersTable,
 	createEntitiesTable,
-	createHandoffsTable,
-	createHandoffsTenantEntityIdIndex,
-	createHandoffsTenantInitiativeIdIndex,
 	createHistoryEntriesTable,
 	createHistoryEntriesVersionIndex,
 	createMetadataTable,
@@ -21,7 +18,7 @@ import {
 /**
  * Recreates the full core schema in one step through the ADR43 runner:
  * the v7 baseline tables (metadata/counters/entities/relations/contexts/
- * context_terms/handoffs), `history_entries` (ADR8's append-only history),
+ * context_terms), `history_entries` (ADR8's append-only history),
  * and `project_migrations` (ISS63's tenant-to-project consolidation
  * ledger). Every statement is `IF NOT EXISTS`-guarded, so this module is a
  * no-op against a database that already has this shape (existing installs)
@@ -52,9 +49,6 @@ export const baselineV7Migration: Migration = {
 		await createContextsTenantScopeEntityIdIndex(conn);
 		await createContextTermsTable(conn);
 		await createContextTermsTenantContextKeyIndex(conn);
-		await createHandoffsTable(conn);
-		await createHandoffsTenantInitiativeIdIndex(conn);
-		await createHandoffsTenantEntityIdIndex(conn);
 		await createHistoryEntriesTable(conn);
 		await createHistoryEntriesVersionIndex(conn);
 		await conn.run(sql`

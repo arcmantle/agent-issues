@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 
 import type { Migration } from "../db/migration-runner.js";
 
-const TENANT_SCOPED_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "handoffs", "history_entries"] as const;
+const TENANT_SCOPED_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "history_entries"] as const;
 
 /**
  * Enables Postgres row-level security as defense-in-depth on every

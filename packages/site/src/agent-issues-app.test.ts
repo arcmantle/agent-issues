@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "./agent-issues-app.js";
-import type { ContextDetails, Entity, InitiativeBundle, SiteConfig, Snapshot } from "./models.js";
+import type { ContextDetails, Entity, InitiativeBundle, ProjectDiscovery, ProjectRollup, SiteConfig, Snapshot } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 
 function makeEntity(overrides: Partial<Entity> & Pick<Entity, "id">): Entity {
@@ -21,8 +21,8 @@ function makeBundle(initiative: Entity, overrides: Partial<InitiativeBundle> = {
 		adrs: [],
 		blockerLinks: [],
 		constrainsLinks: [],
+		entities: [initiative],
 		fixLinks: [],
-		handoffs: [],
 		initiative,
 		issues: [],
 		prds: [],
@@ -50,15 +50,29 @@ function makeSharedContext(): ContextDetails {
 }
 
 function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
+	const initiatives = overrides.initiatives ?? [];
+	const relations = overrides.relations ?? [];
+	const ownedInitiativeIds = new Set(relations.filter((relation) => relation.type === "contains").map((relation) => relation.toId));
+	const defaultEpic = makeEntity({ id: "EPIC0", kind: "epic", status: "active", title: "Default Epic" });
+	const defaultEpicRelations = initiatives
+		.filter((bundle) => !ownedInitiativeIds.has(bundle.initiative.id))
+		.map((bundle) => ({
+			createdAt: "2026-01-01T00:00:00.000Z",
+			fromId: defaultEpic.id,
+			toId: bundle.initiative.id,
+			type: "contains"
+		}));
+	const entities = defaultEpicRelations.length > 0 ? [defaultEpic, ...(overrides.entities ?? [])] : overrides.entities ?? [];
+
 	return {
-		contexts: { initiatives: [], shared: makeSharedContext() },
-		entities: [],
-		generatedAt: "2026-01-01T00:00:00.000Z",
-		initiatives: [],
-		orphans: [],
-		projectAdrs: [],
-		relations: [],
-		...overrides
+		...overrides,
+		contexts: overrides.contexts ?? { initiatives: [], shared: makeSharedContext() },
+		entities,
+		generatedAt: overrides.generatedAt ?? "2026-01-01T00:00:00.000Z",
+		initiatives,
+		orphans: overrides.orphans ?? [],
+		projectAdrs: overrides.projectAdrs ?? [],
+		relations: [...relations, ...defaultEpicRelations]
 	};
 }
 
@@ -71,12 +85,17 @@ function makeConfig(overrides: Partial<SiteConfig> = {}): SiteConfig {
 	};
 }
 
+function makeProjectDiscovery(projects: ProjectRollup[]): ProjectDiscovery {
+	return { kind: "available", projects };
+}
+
 function makeStore(config: SiteConfig, snapshot: Snapshot): AgentIssuesStore {
 	const store = new AgentIssuesStore();
 	store.connected = true;
 	store.config.set(config);
 	store.snapshot.set(snapshot);
 	store.selectedTenant.set(config.currentTenant);
+	store.selectedProjectId.set("PROJ1");
 	return store;
 }
 
@@ -90,9 +109,113 @@ async function mountApp(store: AgentIssuesStore) {
 
 afterEach(() => {
 	document.body.replaceChildren();
+	vi.unstubAllGlobals();
 });
 
 describe("three-pane console shell", () => {
+	it("renders the selected tenant's project chooser when no project is selected", async () => {
+		const store = makeStore(makeConfig(), makeSnapshot());
+		store.selectedProjectId.set(null);
+		const app = await mountApp(store);
+
+		expect(app.shadowRoot?.querySelector('[data-view="project-chooser"]')).not.toBeNull();
+		expect(app.shadowRoot?.querySelector('[data-pane="rail"]')).toBeNull();
+	});
+
+	it("shows each discovered project with its epic, initiative, and completion rollups", async () => {
+		const store = makeStore(makeConfig(), makeSnapshot());
+		store.selectedProjectId.set(null);
+		store.projectDiscovery.set(
+			makeProjectDiscovery([
+				{
+					completedInitiativeCount: 3,
+					epicCount: 2,
+					initiativeCount: 4,
+					project: makeEntity({ id: "PROJ1", kind: "project", status: "active", title: "Console Viewer" })
+				}
+			])
+		);
+		const app = await mountApp(store);
+
+		const card = app.shadowRoot?.querySelector<HTMLElement>('[data-project="PROJ1"]');
+		expect(card?.textContent).toContain("2 epics");
+		expect(card?.textContent).toContain("4 initiatives");
+		expect(card?.textContent).toContain("3/4 completed");
+		expect(card?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("75");
+	});
+
+	it("keeps empty and unavailable tenants distinct without offering a project to open", async () => {
+		const emptyStore = makeStore(makeConfig(), makeSnapshot());
+		emptyStore.selectedProjectId.set(null);
+		emptyStore.projectDiscovery.set(makeProjectDiscovery([]));
+		const emptyApp = await mountApp(emptyStore);
+
+		expect(emptyApp.shadowRoot?.textContent).toContain("has no available projects");
+		expect(emptyApp.shadowRoot?.querySelector("[data-project]")).toBeNull();
+
+		const unavailableStore = makeStore(makeConfig(), makeSnapshot());
+		unavailableStore.selectedProjectId.set(null);
+		unavailableStore.projectDiscovery.set({ kind: "unavailable" });
+		const unavailableApp = await mountApp(unavailableStore);
+
+		expect(unavailableApp.shadowRoot?.textContent).toContain("tenant is unavailable");
+		expect(unavailableApp.shadowRoot?.querySelector("[data-project]")).toBeNull();
+	});
+
+	it("opens a chosen project and returns to the same tenant's chooser from Projects", async () => {
+		vi.stubGlobal(
+			"EventSource",
+			class {
+				public close() {}
+			}
+		);
+		const store = makeStore(makeConfig(), makeSnapshot());
+		store.selectedProjectId.set(null);
+		store.projectDiscovery.set(
+			makeProjectDiscovery([
+				{
+					completedInitiativeCount: 0,
+					epicCount: 1,
+					initiativeCount: 1,
+					project: makeEntity({ id: "PROJ2", kind: "project", status: "active", title: "Payments" })
+				}
+			])
+		);
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot() }), { status: 200 }))
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify(
+						makeProjectDiscovery([
+							{
+								completedInitiativeCount: 0,
+								epicCount: 1,
+								initiativeCount: 1,
+								project: makeEntity({ id: "PROJ2", kind: "project", status: "active", title: "Payments" })
+							}
+						])
+					),
+					{ status: 200 }
+				)
+			);
+		const app = await mountApp(store);
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-project="PROJ2"]')?.click();
+		await vi.waitFor(() => expect(store.selectedProjectId.get()).toBe("PROJ2"));
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector('[data-pane="rail"]')).not.toBeNull();
+		app.shadowRoot?.querySelector<HTMLButtonElement>(".projects-button")?.click();
+		await app.updateComplete;
+
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedProjectId.get()).toBeNull();
+		expect(app.shadowRoot?.querySelector('[data-view="project-chooser"]')).not.toBeNull();
+		await vi.waitFor(() => expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/projects?tenant=demo"));
+		fetchMock.mockRestore();
+	});
+
 	it("renders a project rail, an initiative master list, and a detail pane simultaneously", async () => {
 		const store = makeStore(makeConfig(), makeSnapshot());
 		const app = await mountApp(store);
@@ -132,6 +255,73 @@ describe("three-pane console shell", () => {
 		const masterItems = app.shadowRoot?.querySelectorAll('[data-pane="master"] [data-initiative]');
 		const initiativeIds = [...(masterItems ?? [])].map((element) => element.getAttribute("data-initiative"));
 		expect(initiativeIds).toEqual(["INIT1", "INIT2"]);
+	});
+
+	it("groups initiatives beneath their owning epic", async () => {
+		const discovery = makeProjectDiscovery([
+			{
+				completedInitiativeCount: 0,
+				epicCount: 2,
+				initiativeCount: 2,
+				project: makeEntity({ id: "PROJ1", kind: "project", status: "active", title: "Console Viewer" })
+			}
+		]);
+		const platformEpic = makeEntity({ id: "EPIC1", kind: "epic", status: "active", title: "Platform" });
+		const deliveryEpic = makeEntity({ id: "EPIC2", kind: "epic", status: "active", title: "Delivery" });
+		const platformInitiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
+		const deliveryInitiative = makeEntity({ id: "INIT2", title: "Search" });
+		const store = makeStore(
+			makeConfig(),
+			makeSnapshot({
+				entities: [platformEpic, deliveryEpic, platformInitiative, deliveryInitiative],
+				initiatives: [makeBundle(platformInitiative), makeBundle(deliveryInitiative)],
+				relations: [
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: "EPIC1", toId: "INIT1", type: "contains" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: "EPIC2", toId: "INIT2", type: "contains" }
+				]
+			})
+		);
+		store.projectDiscovery.set(discovery);
+		const app = await mountApp(store);
+
+		const platformSection = app.shadowRoot?.querySelector<HTMLElement>('[data-epic="EPIC1"]');
+		const deliverySection = app.shadowRoot?.querySelector<HTMLElement>('[data-epic="EPIC2"]');
+		expect(platformSection?.querySelector('[data-initiative="INIT1"]')).not.toBeNull();
+		expect(platformSection?.querySelector('[data-initiative="INIT2"]')).toBeNull();
+		expect(deliverySection?.querySelector('[data-initiative="INIT2"]')).not.toBeNull();
+		expect(deliverySection?.querySelector('[data-initiative="INIT1"]')).toBeNull();
+	});
+
+	it("shows epic rollups, names the default epic, and collapses its initiative list", async () => {
+		const completedInitiative = makeEntity({ id: "INIT1", status: "done", title: "Closed work" });
+		const openInitiative = makeEntity({ id: "INIT2", title: "Open work" });
+		const defaultEpic = makeEntity({ id: "EPIC0", kind: "epic", status: "active", title: "Default Epic" });
+		const store = makeStore(
+			makeConfig(),
+			makeSnapshot({
+				entities: [defaultEpic, completedInitiative, openInitiative],
+				initiatives: [makeBundle(completedInitiative), makeBundle(openInitiative)],
+				relations: [
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: "EPIC0", toId: "INIT1", type: "contains" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: "EPIC0", toId: "INIT2", type: "contains" }
+				]
+			})
+		);
+		const app = await mountApp(store);
+
+		const epicSection = app.shadowRoot?.querySelector<HTMLElement>('[data-epic="EPIC0"]');
+		const toggle = epicSection?.querySelector<HTMLButtonElement>('[data-epic-toggle="EPIC0"]');
+		expect(epicSection?.textContent).toContain("Uncategorized work");
+		expect(epicSection?.textContent).toContain("2 initiatives");
+		expect(epicSection?.textContent).toContain("1/2 completed");
+		expect(epicSection?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("50");
+		expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+
+		toggle?.click();
+		await app.updateComplete;
+
+		expect(epicSection?.querySelector('[data-initiative]')).toBeNull();
+		expect(toggle?.getAttribute("aria-expanded")).toBe("false");
 	});
 
 	it("opens the selected initiative in the detail pane while keeping the rail and master list", async () => {
@@ -221,9 +411,9 @@ describe("three-pane console shell", () => {
 			],
 			currentTenant: "demo"
 		});
-		const fetchMock = vi
-			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(new Response(JSON.stringify(makeSnapshot()), { status: 200 }));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", projects: [] }), { status: 200 })
+		);
 		const store = makeStore(config, makeSnapshot());
 		const app = await mountApp(store);
 
@@ -232,7 +422,8 @@ describe("three-pane console shell", () => {
 		await app.updateComplete;
 
 		expect(store.selectedTenant.get()).toBe("content-hub");
-		expect(app.shadowRoot?.querySelector('[data-pane="master"]')).not.toBeNull();
+		expect(store.selectedProjectId.get()).toBeNull();
+		expect(app.shadowRoot?.querySelector('[data-view="project-chooser"]')).not.toBeNull();
 		fetchMock.mockRestore();
 	});
 
@@ -329,7 +520,7 @@ describe("three-pane console shell", () => {
 		const kpis = detail?.querySelectorAll(".kpi");
 		const subtabs = [...(detail?.querySelectorAll(".subtab") ?? [])].map((element) => element.textContent?.trim());
 		expect(kpis?.length).toBe(4);
-		expect(subtabs).toEqual(["Overview", "Graph", "Context", "Handoffs"]);
+		expect(subtabs).toEqual(["Overview", "Graph", "Context"]);
 	});
 
 	it("keeps the owning initiative highlighted in the master rail while one of its records is open", async () => {
@@ -422,14 +613,19 @@ describe("collapse toggles", () => {
 });
 
 describe("project relationship graph section", () => {
-	it("renders a node for the project, each initiative, and their PRDs and ADRs", async () => {
+	it("renders project decisions and project-scoped epic hierarchy nodes only", async () => {
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", title: "Viewer experience" });
+		const projectAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Use project snapshots" });
 		const snapshot = makeSnapshot({
+			entities: [epic],
 			initiatives: [
 				makeBundle(makeEntity({ id: "INIT1", title: "Console Viewer" }), {
 					adrs: [makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" })],
 					prds: [makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" })]
 				})
-			]
+			],
+			projectAdrs: [projectAdr],
+			relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: "INIT1", type: "contains" }]
 		});
 		const store = makeStore(makeConfig(), snapshot);
 		const app = await mountApp(store);
@@ -440,17 +636,21 @@ describe("project relationship graph section", () => {
 		const graph = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
 		expect(graph).not.toBeNull();
 		const nodes = graph?.shadowRoot?.querySelectorAll(".ai-node") ?? [];
-		expect(nodes.length).toBe(4);
+		expect([...nodes].map((node) => node.getAttribute("data-id")).sort()).toEqual(["", "ADR1", "ADR2", "EPIC1", "INIT1", "PRD1"]);
 	});
 
-	it("opens an initiative when its node is clicked and a record when a PRD node is clicked", async () => {
+	it("opens graph nodes while preserving the selected tenant and project route", async () => {
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", title: "Viewer experience" });
+		const projectAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Use project snapshots" });
 		const snapshot = makeSnapshot({
-			entities: [makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" })],
+			entities: [epic, makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" })],
 			initiatives: [
 				makeBundle(makeEntity({ id: "INIT1", title: "Console Viewer" }), {
 					prds: [makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" })]
 				})
-			]
+			],
+			projectAdrs: [projectAdr],
+			relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: "INIT1", type: "contains" }]
 		});
 		const store = makeStore(makeConfig(), snapshot);
 		const app = await mountApp(store);
@@ -462,6 +662,9 @@ describe("project relationship graph section", () => {
 		const initiativeNode = graph?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="INIT1"]');
 		initiativeNode?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
 		expect(store.selectedInitiativeId.get()).toBe("INIT1");
+		expect(window.location.hash).toContain("tenant=demo");
+		expect(window.location.hash).toContain("project=PROJ1");
+		expect(window.location.hash).toContain("initiative=INIT1");
 
 		store.selectSection("graph");
 		await app.updateComplete;
@@ -469,6 +672,29 @@ describe("project relationship graph section", () => {
 		const prdNode = graphAgain?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="PRD1"]');
 		prdNode?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
 		expect(store.selectedId.get()).toBe("PRD1");
+		expect(window.location.hash).toContain("tenant=demo");
+		expect(window.location.hash).toContain("project=PROJ1");
+		expect(window.location.hash).toContain("entity=PRD1");
+
+		store.selectSection("graph");
+		await app.updateComplete;
+		const graphWithProjectAdr = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		const projectAdrNode = graphWithProjectAdr?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="ADR2"]');
+		projectAdrNode?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+		expect(store.selectedId.get()).toBe("ADR2");
+		expect(window.location.hash).toContain("tenant=demo");
+		expect(window.location.hash).toContain("project=PROJ1");
+		expect(window.location.hash).toContain("entity=ADR2");
+
+		store.selectSection("graph");
+		await app.updateComplete;
+		const graphWithEpic = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		const epicNode = graphWithEpic?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="EPIC1"]');
+		epicNode?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+		expect(store.selectedId.get()).toBe("EPIC1");
+		expect(window.location.hash).toContain("tenant=demo");
+		expect(window.location.hash).toContain("project=PROJ1");
+		expect(window.location.hash).toContain("entity=EPIC1");
 	});
 });
 

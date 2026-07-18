@@ -65,14 +65,13 @@ describe("tenant administration", () => {
 		const store = new PgStore(appPool, tenantId);
 		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 		await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Canonical order." });
-		await store.createHandoff({ entityId: initiative.id, body: "Handoff body." });
+		await store.createEntity({ kind: "handoff", title: "Handoff", links: [{ relationType: "handsOff", targetId: initiative.id }] });
 
 		const result = await store.deleteTenant(tenantId);
 
 		expect(result.removed).toBe(true);
 		expect(result.counts.entities).toBeGreaterThan(0);
 		expect(result.counts.contextTerms).toBe(1);
-		expect(result.counts.handoffs).toBe(1);
 		expect(await store.listTenants()).toEqual([]);
 		await expect(store.getEntityDetails(initiative.id)).rejects.toThrow();
 	});
@@ -85,13 +84,13 @@ describe("tenant administration", () => {
 		await expect(store.deleteTenant(otherTenantId)).rejects.toThrow(/own tenant/);
 	});
 
-	it("renames the tenant, moving entities, contexts, and handoffs to the new id", async () => {
+	it("renames the tenant, moving entities, contexts, and graph handoffs to the new id", async () => {
 		const previousTenantId = createTestTenantId();
 		const newTenantId = createTestTenantId();
 		const store = new PgStore(appPool, previousTenantId);
 		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
 		await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Canonical order." });
-		await store.createHandoff({ entityId: initiative.id, body: "Handoff body." });
+		const handoff = await store.createEntity({ kind: "handoff", title: "Handoff", links: [{ relationType: "handsOff", targetId: initiative.id }] });
 
 		const result = await store.renameTenant(previousTenantId, newTenantId);
 
@@ -104,8 +103,10 @@ describe("tenant administration", () => {
 		expect(details.entity.title).toBe("Payments");
 		const context = await renamedStore.getContextDetails({ scopeRef: initiative.id });
 		expect(context.terms.map((term) => term.term)).toEqual(["Order"]);
-		const handoffs = await renamedStore.listHandoffs({ entityId: initiative.id });
-		expect(handoffs).toHaveLength(1);
+		const handoffDetails = await renamedStore.getEntityDetails(handoff.id);
+		expect(handoffDetails.outgoing).toEqual(expect.arrayContaining([
+			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: initiative.id }) })
+		]));
 
 		expect(await store.listTenants()).toEqual([]);
 	});

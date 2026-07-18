@@ -34,24 +34,17 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	listOrphans: async (store, params) => store.listOrphans((params as { kind?: string } | undefined)?.kind),
 	listProjectAdrs: async (store) => store.listProjectAdrs(),
 	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<StorageDriver["updateEntityStatus"]>[0]),
+	updateEntity: async (store, params) => store.updateEntity(params as Parameters<StorageDriver["updateEntity"]>[0]),
 	setEntityBody: async (store, params) => store.setEntityBody(params as Parameters<StorageDriver["setEntityBody"]>[0]),
 	archiveEntity: async (store, params) => store.archiveEntity(params as Parameters<StorageDriver["archiveEntity"]>[0]),
 	deleteEntity: async (store, params) => store.deleteEntity(params as Parameters<StorageDriver["deleteEntity"]>[0]),
 	moveEntity: async (store, params) => store.moveEntity(params as Parameters<StorageDriver["moveEntity"]>[0]),
 	linkEntities: async (store, params) => store.linkEntities(params as Parameters<StorageDriver["linkEntities"]>[0]),
 	unlinkEntities: async (store, params) => store.unlinkEntities(params as Parameters<StorageDriver["unlinkEntities"]>[0]),
-	getDatabaseSnapshot: async (store) => store.getDatabaseSnapshot(),
+	getDatabaseSnapshot: async (store, params) => store.getDatabaseSnapshot(params as Parameters<StorageDriver["getDatabaseSnapshot"]>[0]),
+	getProjectDiscovery: async (store, params) => store.getProjectDiscovery(params as Parameters<StorageDriver["getProjectDiscovery"]>[0]),
 	getInitiativeBundle: async (store, params) => store.getInitiativeBundle((params as { initiativeId: string }).initiativeId),
 	getSnapshotSignature: async (store) => store.getSnapshotSignature(),
-
-	// Handoffs and context/glossary (ISS51), same wrapping convention as ISS50.
-	createHandoff: async (store, params) => store.createHandoff(params as Parameters<StorageDriver["createHandoff"]>[0]),
-	updateHandoff: async (store, params) => store.updateHandoff(params as Parameters<StorageDriver["updateHandoff"]>[0]),
-	deleteHandoff: async (store, params) => store.deleteHandoff(params as Parameters<StorageDriver["deleteHandoff"]>[0]),
-	getHandoffDetails: async (store, params) => store.getHandoffDetails((params as { entityId: string }).entityId),
-	listHandoffs: async (store, params) => store.listHandoffs(params as Parameters<StorageDriver["listHandoffs"]>[0]),
-	listAllHandoffs: async (store) => store.listAllHandoffs(),
-	applyHandoffs: async (store, params) => store.applyHandoffs((params as { handoffs: Parameters<StorageDriver["applyHandoffs"]>[0] }).handoffs),
 
 	listContexts: async (store) => store.listContexts(),
 	getContextDetails: async (store, params) => store.getContextDetails(params as Parameters<StorageDriver["getContextDetails"]>[0]),
@@ -85,15 +78,13 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 export const writeMethods = new Set<string>([
 	"createEntity",
 	"updateEntityStatus",
+	"updateEntity",
 	"setEntityBody",
 	"archiveEntity",
 	"deleteEntity",
 	"moveEntity",
 	"linkEntities",
 	"unlinkEntities",
-	"createHandoff",
-	"updateHandoff",
-	"deleteHandoff",
 	"upsertContext",
 	"defineContextTerm",
 	"forgetContextTerm",
@@ -108,11 +99,6 @@ export const writeMethods = new Set<string>([
 	// reads the `relations` table directly, so bulk-applying relations
 	// (ISS60) must broadcast too.
 	"applyRelations",
-	// `getDatabaseSnapshot`'s per-initiative `InitiativeBundle` includes
-	// `handoffs`, and its top-level `contexts` field is built straight from
-	// the `contexts`/`context_terms` tables - so bulk-applying any of these
-	// (ISS62) must broadcast too, same as `applyRelations` above.
-	"applyHandoffs",
 	"applyContexts",
 	"applyContextTerms"
 ]);

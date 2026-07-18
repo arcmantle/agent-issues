@@ -33,7 +33,6 @@ export async function cleanupTestTenants(pool: Pool): Promise<void> {
 	const tenantIds = [...trackedTenantIds];
 	trackedTenantIds.clear();
 
-	await pool.query(`DELETE FROM handoffs WHERE tenant_id = ANY($1)`, [tenantIds]);
 	await pool.query(`DELETE FROM history_entries WHERE tenant_id = ANY($1)`, [tenantIds]);
 	await pool.query(`DELETE FROM context_terms WHERE tenant_id = ANY($1)`, [tenantIds]);
 	await pool.query(`DELETE FROM relations WHERE tenant_id = ANY($1)`, [tenantIds]);

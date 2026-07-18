@@ -156,7 +156,10 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 				return [{ id: "tenant-a", displayName: "tenant-a", counts: { entities: 0, relations: 0, contexts: 0, contextTerms: 0, handoffs: 0, historyEntries: 0 } }];
 			}
 			if (method === "getDatabaseSnapshot") {
-				return { entities: [{ id: "iss-1", kind: "initiative", title: "Cloud Viewer" }], relations: [] };
+				return {
+					kind: "available",
+					snapshot: { entities: [{ id: "iss-1", kind: "initiative", title: "Cloud Viewer" }], relations: [] }
+				};
 			}
 			return {};
 		});
@@ -179,9 +182,9 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 			expect(config.dbPath).toBe(gate.url);
 			expect(config.currentTenant).toBe("tenant-a");
 
-			const snapshotResponse = await fetch(`http://127.0.0.1:${port}/api/snapshot`);
+			const snapshotResponse = await fetch(`http://127.0.0.1:${port}/api/snapshot?project=PROJ1`);
 			const snapshot = await snapshotResponse.json();
-			expect(snapshot.entities.map((entity: { id: string }) => entity.id)).toContain("iss-1");
+			expect(snapshot.snapshot.entities.map((entity: { id: string }) => entity.id)).toContain("iss-1");
 
 			expect(gate.requests.every((request) => request.authorization === "Bearer token-a")).toBe(true);
 		} finally {

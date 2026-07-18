@@ -7,9 +7,6 @@ import {
 	createContextTermsTenantContextKeyIndex,
 	createCountersTable,
 	createEntitiesTable,
-	createHandoffsTable,
-	createHandoffsTenantEntityIdIndex,
-	createHandoffsTenantInitiativeIdIndex,
 	createHistoryEntriesTable,
 	createHistoryEntriesVersionIndex,
 	createMetadataTable,
@@ -55,9 +52,6 @@ export const baselineV7Migration: Migration = {
 		await createContextsTenantScopeEntityIdIndex(conn);
 		await createContextTermsTable(conn);
 		await createContextTermsTenantContextKeyIndex(conn);
-		await createHandoffsTable(conn);
-		await createHandoffsTenantInitiativeIdIndex(conn);
-		await createHandoffsTenantEntityIdIndex(conn);
 		await createHistoryEntriesTable(conn);
 		await createHistoryEntriesVersionIndex(conn);
 	}

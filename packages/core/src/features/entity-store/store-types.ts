@@ -22,6 +22,7 @@ export type EntityDetails = {
 
 export type InitiativeBundle = {
 	initiative: EntityRecord;
+	entities: EntityRecord[];
 	prds: EntityRecord[];
 	userStories: EntityRecord[];
 	adrs: EntityRecord[];
@@ -30,30 +31,22 @@ export type InitiativeBundle = {
 	subIssueLinks: Array<{ parent: EntityRecord; issue: EntityRecord }>;
 	blockerLinks: Array<{ source: EntityRecord; target: EntityRecord }>;
 	constrainsLinks: Array<{ adr: EntityRecord; issue: EntityRecord }>;
-	handoffs: HandoffRecord[];
 };
 
-export type HandoffRecord = {
-	id: string;
-	entityId: string;
-	initiativeId: string | null;
-	summary: string;
-	body: string;
-	createdAt: string;
-};
+export type ProjectDiscovery =
+	| {
+			kind: "available";
+			projects: ProjectRollup[];
+	  }
+	| {
+			kind: "unavailable";
+	  };
 
-export type HandoffDetails = {
-	focus: EntityDetails;
-	structuralPath: Array<{ relationType: RelationType; entity: EntityRecord }>;
-	initiative: InitiativeBundle | null;
-	orphaned: boolean;
-	activeBlockers: EntityRecord[];
-	handoffs: HandoffRecord[];
-};
-
-export type HandoffDeleteResult = {
-	handoff: HandoffRecord;
-	removed: boolean;
+export type ProjectRollup = {
+	project: EntityRecord;
+	epicCount: number;
+	initiativeCount: number;
+	completedInitiativeCount: number;
 };
 
 export type DatabaseSnapshot = {
@@ -68,6 +61,15 @@ export type DatabaseSnapshot = {
 		initiatives: ContextDetails[];
 	};
 };
+
+export type ProjectSnapshot =
+	| {
+			kind: "available";
+			snapshot: DatabaseSnapshot;
+	  }
+	| {
+			kind: "unavailable";
+	  };
 
 export type StatusUpdateResult = {
 	entity: EntityRecord;

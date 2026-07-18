@@ -23,7 +23,9 @@ import {
 	type QueryContextDirectoryInput,
 	type QueryContextDirectoryResult
 } from "@agent-issues/core";
-import type { DatabaseHandle } from "../../db/database.js";
+import { sql } from "drizzle-orm";
+import type { SqliteExecutor } from "../../db/sqlite-executor.js";
+
 
 export {
 	DEFAULT_CONTEXT_KEY,
@@ -86,8 +88,8 @@ type ResolvedContextScope = {
 	defaultSummary: string;
 };
 
-export function listContexts(db: DatabaseHandle): ContextListResult {
-	const rows = db.prepare(`SELECT * FROM contexts WHERE tenant_id = ? ORDER BY key`).all(db.tenantId) as ContextRow[];
+export function listContexts(db: SqliteExecutor): ContextListResult {
+	const rows = db.drizzle.all(sql`SELECT * FROM contexts WHERE tenant_id = ${db.tenantId} ORDER BY key`) as ContextRow[];
 	const rowByScopeEntityId = new Map<string, ContextRow>();
 	const rowByKey = new Map<string, ContextRow>();
 
@@ -103,9 +105,9 @@ export function listContexts(db: DatabaseHandle): ContextListResult {
 		createContextListItem(defaultScope, rowByKey.get(defaultScope.key), getContextTermCount(db, defaultScope.key))
 	];
 
-	const initiativeRows = db
-		.prepare(`SELECT * FROM entities WHERE tenant_id = ? AND kind = 'initiative' ORDER BY id`)
-		.all(db.tenantId) as EntityRow[];
+	const initiativeRows = db.drizzle.all(
+		sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND kind = 'initiative' ORDER BY id`
+	) as EntityRow[];
 
 	for (const initiativeRow of initiativeRows) {
 		const initiative = mapEntityRow(initiativeRow);
@@ -117,19 +119,19 @@ export function listContexts(db: DatabaseHandle): ContextListResult {
 	return { contexts };
 }
 
-export function getContextDetails(db: DatabaseHandle, input?: { scopeRef?: string }): ContextDetails {
+export function getContextDetails(db: SqliteExecutor, input?: { scopeRef?: string }): ContextDetails {
 	const scope = resolveContextScope(db, input?.scopeRef);
-	const contextRow = db.prepare(`SELECT * FROM contexts WHERE tenant_id = ? AND key = ?`).get(db.tenantId, scope.key) as ContextRow | undefined;
+	const contextRow = db.drizzle.all(
+		sql`SELECT * FROM contexts WHERE tenant_id = ${db.tenantId} AND key = ${scope.key}`
+	)[0] as ContextRow | undefined;
 	const termRows = contextRow
-		? (db
-				.prepare(
-					`SELECT term, definition, avoid_terms, created_at, updated_at
-					 FROM context_terms
-					 WHERE tenant_id = ?
-					   AND context_key = ?
-					 ORDER BY lower(term), term`
-				)
-				.all(db.tenantId, scope.key) as ContextTermRow[])
+		? (db.drizzle.all(
+				sql`SELECT term, definition, avoid_terms, created_at, updated_at
+					FROM context_terms
+					WHERE tenant_id = ${db.tenantId}
+						AND context_key = ${scope.key}
+					ORDER BY lower(term), term`
+			) as ContextTermRow[])
 		: [];
 
 	return {
@@ -138,22 +140,22 @@ export function getContextDetails(db: DatabaseHandle, input?: { scopeRef?: strin
 	};
 }
 
-export function getContextDirectory(db: DatabaseHandle): ContextDirectory {
+export function getContextDirectory(db: SqliteExecutor): ContextDirectory {
 	const shared = getContextDetails(db);
-	const initiativeRows = db
-		.prepare(`SELECT * FROM entities WHERE tenant_id = ? AND kind = 'initiative' ORDER BY id`)
-		.all(db.tenantId) as EntityRow[];
+	const initiativeRows = db.drizzle.all(
+		sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND kind = 'initiative' ORDER BY id`
+	) as EntityRow[];
 	const initiatives = initiativeRows.map((row) => getContextDetails(db, { scopeRef: row.id }));
 
 	return mergeContextDirectory(shared, initiatives);
 }
 
-export function queryContextDirectory(db: DatabaseHandle, input: QueryContextDirectoryInput = {}): QueryContextDirectoryResult {
+export function queryContextDirectory(db: SqliteExecutor, input: QueryContextDirectoryInput = {}): QueryContextDirectoryResult {
 	const directory = getContextDirectory(db);
 	return filterContextDirectory(directory, input);
 }
 
-export function upsertContext(db: DatabaseHandle, input: { scopeRef?: string; title: string; summary: string }): ContextDetails {
+export function upsertContext(db: SqliteExecutor, input: { scopeRef?: string; title: string; summary: string }): ContextDetails {
 	const title = input.title.trim();
 	const summary = input.summary.trim();
 
@@ -169,28 +171,19 @@ export function upsertContext(db: DatabaseHandle, input: { scopeRef?: string; ti
 	const existing = getContextDetails(db, { scopeRef: input.scopeRef }).context;
 	const now = new Date().toISOString();
 
-	db.prepare(
-		`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-		 VALUES (@tenantId, @key, @scopeEntityId, @title, @summary, @createdAt, @updatedAt)
-		 ON CONFLICT(tenant_id, key) DO UPDATE SET
-		 	scope_entity_id = excluded.scope_entity_id,
-		 	title = excluded.title,
-		 	summary = excluded.summary,
-		 	updated_at = excluded.updated_at`
-	).run(tenantParams(db, {
-		key: scope.key,
-		scopeEntityId: scope.scopeEntityId,
-		title,
-		summary,
-		createdAt: existing.createdAt ?? now,
-		updatedAt: now
-	}));
+	db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+		VALUES (${db.tenantId}, ${scope.key}, ${scope.scopeEntityId}, ${title}, ${summary}, ${existing.createdAt ?? now}, ${now})
+		ON CONFLICT(tenant_id, key) DO UPDATE SET
+			scope_entity_id = excluded.scope_entity_id,
+			title = excluded.title,
+			summary = excluded.summary,
+			updated_at = excluded.updated_at`);
 
 	return getContextDetails(db, { scopeRef: input.scopeRef });
 }
 
 export function defineContextTerm(
-	db: DatabaseHandle,
+	db: SqliteExecutor,
 	input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }
 ): DefineContextTermResult {
 	const term = input.term.trim();
@@ -210,21 +203,12 @@ export function defineContextTerm(
 	const existing = getContextTerm(db, scope.key, term);
 	const now = new Date().toISOString();
 
-	db.prepare(
-		`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-		 VALUES (@tenantId, @contextKey, @term, @definition, @avoidTerms, @createdAt, @updatedAt)
-		 ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
-		 	definition = excluded.definition,
-		 	avoid_terms = excluded.avoid_terms,
-		 	updated_at = excluded.updated_at`
-	).run(tenantParams(db, {
-		contextKey: scope.key,
-		term,
-		definition,
-		avoidTerms: JSON.stringify(normalizedAvoid),
-		createdAt: existing?.createdAt ?? now,
-		updatedAt: now
-	}));
+	db.drizzle.run(sql`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+		VALUES (${db.tenantId}, ${scope.key}, ${term}, ${definition}, ${JSON.stringify(normalizedAvoid)}, ${existing?.createdAt ?? now}, ${now})
+		ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
+			definition = excluded.definition,
+			avoid_terms = excluded.avoid_terms,
+			updated_at = excluded.updated_at`);
 
 	const storedTerm = getContextTerm(db, scope.key, term);
 	if (!storedTerm) {
@@ -238,7 +222,7 @@ export function defineContextTerm(
 	};
 }
 
-export function forgetContextTerm(db: DatabaseHandle, input: { scopeRef?: string; term: string }): ForgetContextTermResult {
+export function forgetContextTerm(db: SqliteExecutor, input: { scopeRef?: string; term: string }): ForgetContextTermResult {
 	const term = input.term.trim();
 	if (term.length === 0) {
 		throw new Error("Context term must not be empty.");
@@ -246,7 +230,9 @@ export function forgetContextTerm(db: DatabaseHandle, input: { scopeRef?: string
 
 	const scope = resolveContextScope(db, input.scopeRef);
 
-	const result = db.prepare(`DELETE FROM context_terms WHERE tenant_id = ? AND context_key = ? AND term = ?`).run(db.tenantId, scope.key, term);
+	const result = db.drizzle.run(
+		sql`DELETE FROM context_terms WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${term}`
+	);
 
 	return {
 		context: getContextDetails(db, { scopeRef: input.scopeRef }).context,
@@ -263,8 +249,8 @@ export function forgetContextTerm(db: DatabaseHandle, input: { scopeRef?: string
 // union would stop propagating edits made after a context's first sync;
 // comparing `updatedAt` keeps both sides converging on whichever side has
 // the more recent edit instead.
-export function listAllContexts(db: DatabaseHandle): ContextSyncRecord[] {
-	const rows = db.prepare(`SELECT * FROM contexts WHERE tenant_id = ?`).all(db.tenantId) as ContextRow[];
+export function listAllContexts(db: SqliteExecutor): ContextSyncRecord[] {
+	const rows = db.drizzle.all(sql`SELECT * FROM contexts WHERE tenant_id = ${db.tenantId}`) as ContextRow[];
 	return rows.map((row) => ({
 		key: row.key,
 		scopeEntityId: row.scope_entity_id,
@@ -282,21 +268,17 @@ export function listAllContexts(db: DatabaseHandle): ContextSyncRecord[] {
 // re-applying it must be a no-op. Must run after `applyResolvedFacts` in
 // synchronize's orchestration, so an initiative-scoped context's
 // `scope_entity_id` FK target already exists as an entity on this side.
-export function applyContexts(db: DatabaseHandle, contexts: ContextSyncRecord[]): { applied: number } {
+export function applyContexts(db: SqliteExecutor, contexts: ContextSyncRecord[]): { applied: number } {
 	let applied = 0;
 	for (const context of contexts) {
-		const result = db
-			.prepare(
-				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-				 VALUES (@tenantId, @key, @scopeEntityId, @title, @summary, @createdAt, @updatedAt)
-				 ON CONFLICT(tenant_id, key) DO UPDATE SET
-				   scope_entity_id = excluded.scope_entity_id,
-				   title = excluded.title,
-				   summary = excluded.summary,
-				   updated_at = excluded.updated_at
-				 WHERE excluded.updated_at > contexts.updated_at`
-			)
-			.run(tenantParams(db, context));
+		const result = db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+			VALUES (${db.tenantId}, ${context.key}, ${context.scopeEntityId}, ${context.title}, ${context.summary}, ${context.createdAt}, ${context.updatedAt})
+			ON CONFLICT(tenant_id, key) DO UPDATE SET
+				scope_entity_id = excluded.scope_entity_id,
+				title = excluded.title,
+				summary = excluded.summary,
+				updated_at = excluded.updated_at
+			WHERE excluded.updated_at > contexts.updated_at`);
 		applied += result.changes;
 	}
 
@@ -306,8 +288,8 @@ export function applyContexts(db: DatabaseHandle, contexts: ContextSyncRecord[])
 // The read half for context terms (ISS62/ADR16), same last-writer-wins
 // merge rationale as `listAllContexts`: term definitions are actively
 // re-edited via `defineContextTerm`.
-export function listAllContextTerms(db: DatabaseHandle): ContextTermSyncRecord[] {
-	const rows = db.prepare(`SELECT * FROM context_terms WHERE tenant_id = ?`).all(db.tenantId) as ContextTermSyncRow[];
+export function listAllContextTerms(db: SqliteExecutor): ContextTermSyncRecord[] {
+	const rows = db.drizzle.all(sql`SELECT * FROM context_terms WHERE tenant_id = ${db.tenantId}`) as ContextTermSyncRow[];
 	return rows.map((row) => ({
 		contextKey: row.context_key,
 		term: row.term,
@@ -322,57 +304,42 @@ export function listAllContextTerms(db: DatabaseHandle): ContextTermSyncRecord[]
 // overwriting an existing row if the incoming one is strictly newer. Must
 // run after `applyContexts` in synchronize's orchestration, so each term's
 // `context_key` FK target already exists as a context on this side.
-export function applyContextTerms(db: DatabaseHandle, terms: ContextTermSyncRecord[]): { applied: number } {
+export function applyContextTerms(db: SqliteExecutor, terms: ContextTermSyncRecord[]): { applied: number } {
 	let applied = 0;
 	for (const term of terms) {
-		const result = db
-			.prepare(
-				`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-				 VALUES (@tenantId, @contextKey, @term, @definition, @avoidTerms, @createdAt, @updatedAt)
-				 ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
-				   definition = excluded.definition,
-				   avoid_terms = excluded.avoid_terms,
-				   updated_at = excluded.updated_at
-				 WHERE excluded.updated_at > context_terms.updated_at`
-			)
-			.run(tenantParams(db, {
-				contextKey: term.contextKey,
-				term: term.term,
-				definition: term.definition,
-				avoidTerms: JSON.stringify(term.avoid),
-				createdAt: term.createdAt,
-				updatedAt: term.updatedAt
-			}));
+		const result = db.drizzle.run(sql`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+			VALUES (${db.tenantId}, ${term.contextKey}, ${term.term}, ${term.definition}, ${JSON.stringify(term.avoid)}, ${term.createdAt}, ${term.updatedAt})
+			ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
+				definition = excluded.definition,
+				avoid_terms = excluded.avoid_terms,
+				updated_at = excluded.updated_at
+			WHERE excluded.updated_at > context_terms.updated_at`);
 		applied += result.changes;
 	}
 
 	return { applied };
 }
 
-function ensureContextExists(db: DatabaseHandle, scopeRef?: string): ResolvedContextScope {
+function ensureContextExists(db: SqliteExecutor, scopeRef?: string): ResolvedContextScope {
 	const scope = resolveContextScope(db, scopeRef);
-	const existing = db.prepare(`SELECT key FROM contexts WHERE tenant_id = ? AND key = ?`).get(db.tenantId, scope.key) as { key: string } | undefined;
+	const existing = db.drizzle.all(
+		sql`SELECT key FROM contexts WHERE tenant_id = ${db.tenantId} AND key = ${scope.key}`
+	)[0] as { key: string } | undefined;
 	if (existing) {
 		return scope;
 	}
 
 	const now = new Date().toISOString();
-	db.prepare(
-		`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`
-	).run(db.tenantId, scope.key, scope.scopeEntityId, scope.defaultTitle, scope.defaultSummary, now, now);
+	db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+		VALUES (${db.tenantId}, ${scope.key}, ${scope.scopeEntityId}, ${scope.defaultTitle}, ${scope.defaultSummary}, ${now}, ${now})`);
 
 	return scope;
 }
 
-function getContextTerm(db: DatabaseHandle, contextKey: string, term: string): ContextTermRecord | null {
-	const row = db
-		.prepare(
-			`SELECT term, definition, avoid_terms, created_at, updated_at
-			 FROM context_terms
-			 WHERE tenant_id = ? AND context_key = ? AND term = ?`
-		)
-		.get(db.tenantId, contextKey, term) as ContextTermRow | undefined;
+function getContextTerm(db: SqliteExecutor, contextKey: string, term: string): ContextTermRecord | null {
+	const row = db.drizzle.all(sql`SELECT term, definition, avoid_terms, created_at, updated_at
+		FROM context_terms
+		WHERE tenant_id = ${db.tenantId} AND context_key = ${contextKey} AND term = ${term}`)[0] as ContextTermRow | undefined;
 
 	return row ? mapContextTermRow(row) : null;
 }
@@ -450,7 +417,7 @@ function normalizeAvoidTerms(avoid: string[], term: string): string[] {
 	return normalized;
 }
 
-function resolveContextScope(db: DatabaseHandle, scopeRef?: string): ResolvedContextScope {
+function resolveContextScope(db: SqliteExecutor, scopeRef?: string): ResolvedContextScope {
 	if (!scopeRef || scopeRef === DEFAULT_CONTEXT_KEY) {
 		return getDefaultContextScope(db);
 	}
@@ -514,7 +481,7 @@ function createProjectScope(project: EntityRecord): ResolvedContextScope {
  * resolved once per open from `currentWorkingDirectory` - instead of the
  * one tenant-wide literal "default" every project used to collide on.
  */
-function getDefaultContextScope(db: DatabaseHandle): ResolvedContextScope {
+function getDefaultContextScope(db: SqliteExecutor): ResolvedContextScope {
 	if (db.currentProjectId === DEFAULT_PROJECT_ID) {
 		return createSentinelDefaultScope();
 	}
@@ -540,8 +507,10 @@ function createContextListItem(scope: ResolvedContextScope, row: ContextRow | un
 	};
 }
 
-function getContextTermCount(db: DatabaseHandle, contextKey: string): number {
-	const row = db.prepare(`SELECT COUNT(*) as count FROM context_terms WHERE tenant_id = ? AND context_key = ?`).get(db.tenantId, contextKey) as { count: number };
+function getContextTermCount(db: SqliteExecutor, contextKey: string): number {
+	const row = db.drizzle.all(
+		sql`SELECT COUNT(*) as count FROM context_terms WHERE tenant_id = ${db.tenantId} AND context_key = ${contextKey}`
+	)[0] as { count: number };
 	return row.count;
 }
 
@@ -554,8 +523,10 @@ type EntityRecord = {
 	updatedAt: string;
 };
 
-function getEntityOrThrow(db: DatabaseHandle, entityId: string): EntityRecord {
-	const row = db.prepare(`SELECT * FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) as EntityRow | undefined;
+function getEntityOrThrow(db: SqliteExecutor, entityId: string): EntityRecord {
+	const row = db.drizzle.all(
+		sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`
+	)[0] as EntityRow | undefined;
 	if (!row) {
 		throw new Error(`Entity not found: ${entityId}`);
 	}
@@ -563,22 +534,18 @@ function getEntityOrThrow(db: DatabaseHandle, entityId: string): EntityRecord {
 	return mapEntityRow(row);
 }
 
-function getOwningInitiativeOrThrow(db: DatabaseHandle, entityId: string): EntityRecord {
+function getOwningInitiativeOrThrow(db: SqliteExecutor, entityId: string): EntityRecord {
 	let currentId = entityId;
 	const seen = new Set<string>([entityId]);
 
 	while (true) {
-		const parents = db
-			.prepare(
-				`SELECT entities.*
-				 FROM relations
-				 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-				 WHERE relations.tenant_id = @tenantId
-				   AND relations.to_id = @entityId
-				   AND relations.type IN ('owns', 'records', 'tracks', 'creates')
-				 ORDER BY entities.id`
-			)
-			.all(tenantParams(db, { entityId: currentId })) as EntityRow[];
+		const parents = db.drizzle.all(sql`SELECT entities.*
+			FROM relations
+			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+			WHERE relations.tenant_id = ${db.tenantId}
+				AND relations.to_id = ${currentId}
+				AND relations.type IN ('owns', 'records', 'tracks', 'creates')
+			ORDER BY entities.id`) as EntityRow[];
 
 		if (parents.length === 0) {
 			throw new Error(`No owning initiative found for ${entityId}.`);
@@ -617,7 +584,7 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 	};
 }
 
-function tenantParams<T extends Record<string, unknown>>(db: DatabaseHandle, values: T): T & { tenantId: string } {
+function tenantParams<T extends Record<string, unknown>>(db: SqliteExecutor, values: T): T & { tenantId: string } {
 	return {
 		tenantId: db.tenantId,
 		...values

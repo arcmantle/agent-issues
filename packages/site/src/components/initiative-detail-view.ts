@@ -10,7 +10,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import "./context-view.js";
 import "./relationship-graph.js";
-import type { Entity, HandoffRecord, InitiativeTab } from "../models.js";
+import type { Entity, InitiativeBundle, InitiativeTab } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
@@ -126,6 +126,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 
 		const isCollapsed = this.collapsedIssueIds.has(node.issue.id);
+		const childListId = `issue-children-${node.issue.id}`;
 
 		return html`
 		<div class="issue-branch">
@@ -134,9 +135,11 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					node.children.length > 0,
 					() => html`
 					<button
+						aria-controls=${childListId}
 						class="branch-toggle"
 						data-id=${node.issue.id}
 						aria-expanded=${String(!isCollapsed)}
+						aria-label=${`${isCollapsed ? "Expand" : "Collapse"} sub-issues for ${node.issue.title}`}
 						@click=${this.onToggleIssueBranch}
 					>
 						${isCollapsed ? "+" : "-"}
@@ -158,7 +161,10 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			${when(
 				node.children.length > 0 && !isCollapsed,
 				() => html`
-				<div class="issue-branch-children">
+				<div
+					class="issue-branch-children"
+					id=${childListId}
+				>
 					${repeat(node.children, (child) => child.issue.id, (child) => this.renderIssueBranch(child))}
 				</div>
 				`,
@@ -193,6 +199,20 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				issueTree.length > 0,
 				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node))}</div>`,
 				() => html`<div class="children empty-children">No issues fix this story yet.</div>`
+			)}
+		</div>
+		`;
+	}
+
+	protected renderDirectIssues(bundle: InitiativeBundle) {
+		const issueTree = this.store?.issueTreeForDirectIssues(bundle) ?? [];
+
+		return html`
+		<div class="sec-body direct-issues">
+			${when(
+				issueTree.length > 0,
+				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node))}</div>`,
+							() => html`<div class="empty-children">No unassigned issues.</div>`
 			)}
 		</div>
 		`;
@@ -252,50 +272,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			<span class=${`badge ${store.badgeTone(entity.status)}`}>${entity.status}</span>
 		</button>
 		`;
-	}
-
-	protected renderHandoff(handoff: HandoffRecord) {
-		const store = this.store;
-		const bundle = this.activeBundle();
-		const focus = bundle
-			? [bundle.initiative, ...bundle.prds, ...bundle.userStories, ...bundle.adrs, ...bundle.issues].find(
-				(entity) => entity.id === handoff.entityId
-			) ?? null
-			: null;
-
-		return html`
-		<article class="handoff" data-handoff=${handoff.id}>
-			<header class="handoff-head">
-				<span class="idtag">${handoff.id}</span>
-				${when(
-					handoff.summary.length > 0,
-					() => html`<span class="handoff-summary">${handoff.summary}</span>`,
-					() => nothing
-				)}
-				<time class="handoff-time" datetime=${handoff.createdAt}>${this.formatTimestamp(handoff.createdAt)}</time>
-			</header>
-			${when(
-				focus !== null,
-				() => html`
-				<button class=${`handoff-focus ${handoff.entityId === this.activeChildId ? "is-active-ref" : ""}`} data-id=${handoff.entityId} @click=${this.onSelectEntityClick}>
-					<span class="idtag">${focus!.id}</span>
-					<span class="handoff-focus-title">${focus!.title}</span>
-				</button>
-				`,
-				() => nothing
-			)}
-			<div class="handoff-body ai-body">${unsafeHTML(renderMarkdownBody(handoff.body))}</div>
-		</article>
-		`;
-	}
-
-	protected formatTimestamp(value: string): string {
-		const parsed = new Date(value);
-		if (Number.isNaN(parsed.getTime())) {
-			return value;
-		}
-
-		return parsed.toLocaleString();
 	}
 
 	render() {
@@ -370,13 +346,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				>
 					Context
 				</button>
-				<button
-					class=${classMap({ active: tab === "handoffs", subtab: true })}
-					data-tab="handoffs"
-					@click=${this.onSetTab}
-				>
-					Handoffs${when(bundle.handoffs.length > 0, () => html` <span class="subtab-count">${bundle.handoffs.length}</span>`, () => nothing)}
-				</button>
 			</div>
 
 			${choose(
@@ -406,6 +375,11 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 						</div>
 						`,
 						{ count: `${stats.stories} stories · ${stats.issues} issues` }
+					)}
+					${this.renderOverviewSection(
+						"direct-issues",
+						"Unassigned issues",
+						this.renderDirectIssues(bundle)
 					)}
 					${this.renderOverviewSection(
 						"prds",
@@ -440,18 +414,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 							.context=${context}
 							.emptyMessage=${"No context has been defined for this initiative yet."}
 						></agent-issues-context-view>
-					</section>
-					`],
-					["handoffs", () => html`
-					<section class="sec">
-						<div class="sec-head">🤝 Handoffs <span class="sec-count">${bundle.handoffs.length}</span></div>
-						<div class="sec-body">
-							${when(
-								bundle.handoffs.length > 0,
-								() => repeat(bundle.handoffs, (handoff) => handoff.id, (handoff) => this.renderHandoff(handoff)),
-								() => html`<div class="empty-children">No handoffs have been saved for this initiative yet.</div>`
-							)}
-						</div>
 					</section>
 					`],
 					["graph", () => html`

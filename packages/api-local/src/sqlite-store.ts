@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 
-import type { BodySource, HistoryEntryRecord, RelationRecord, StorageDriver } from "@agent-issues/core";
+import type { BodySource, DatabaseSnapshot, HistoryEntryRecord, ProjectSnapshot, RelationRecord, StorageDriver } from "@agent-issues/core";
 import type {
 	ContextDetails,
 	ContextDirectory,
@@ -24,35 +24,30 @@ import {
 } from "./features/context/context-store.js";
 import type { DatabaseHandle, DatabaseLocationOptions } from "./db/database.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./db/database.js";
-import type { HandoffRecord } from "./features/entity-store/store.js";
+import type { SqliteExecutor } from "./db/sqlite-executor.js";
 import {
-	applyHandoffs,
 	applyHistoryEntries,
 	applyRelations,
 	applyResolvedFacts,
 	archiveEntity,
 	createEntity,
-	createHandoff,
 	deleteEntity,
-	deleteHandoff,
 	getDatabaseSnapshot,
+	getProjectDiscovery,
 	getEntityDetails,
-	getHandoffDetails,
 	getInitiativeBundle,
 	linkEntities,
-	listAllHandoffs,
 	listAllHistoryEntries,
 	listAllRelations,
 	listEntities,
 	listEntityHistory,
-	listHandoffs,
 	listOrphans,
 	listProjectAdrs,
 	moveEntity,
 	setEntityBody,
 	unlinkEntities,
-	updateEntityStatus,
-	updateHandoff
+	updateEntity,
+	updateEntityStatus
 } from "./features/entity-store/store.js";
 
 export type OpenSqliteStoreResult = {
@@ -91,166 +86,164 @@ function computeFileStatSignature(dbPath: string): string {
  * can slot in without callers branching on backend.
  */
 export class SqliteStore implements StorageDriver {
-	public constructor(private readonly db: DatabaseHandle) {}
+	public constructor(executor: SqliteExecutor) {
+		this.executor = executor;
+	}
+
+	protected executor: SqliteExecutor;
+
+	protected get db(): DatabaseHandle {
+		return this.executor.db;
+	}
 
 	public get tenantId(): string {
 		return this.db.tenantId;
 	}
 
-	public async createEntity(input: { kind: string; title: string; parentId?: string; status?: string; body?: string; author?: string }) {
-		return createEntity(this.db, input);
+	public async createEntity(input: {
+		kind: string;
+		title: string;
+		parentId?: string;
+		status?: string;
+		body?: string;
+		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
+	}) {
+		return createEntity(this.executor, input);
 	}
 
 	public async getEntityDetails(entityId: string) {
-		return getEntityDetails(this.db, entityId);
+		return getEntityDetails(this.executor, entityId);
 	}
 
 	public async listEntities(kind: string) {
-		return listEntities(this.db, kind);
+		return listEntities(this.executor, kind);
 	}
 
 	public async listEntityHistory(entityId: string) {
-		return listEntityHistory(this.db, entityId);
+		return listEntityHistory(this.executor, entityId);
 	}
 
 	public async listAllHistoryEntries() {
-		return listAllHistoryEntries(this.db);
+		return listAllHistoryEntries(this.executor);
 	}
 
 	public async applyHistoryEntries(entries: HistoryEntryRecord[]) {
-		return applyHistoryEntries(this.db, entries);
+		return applyHistoryEntries(this.executor, entries);
 	}
 
 	public async applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]) {
-		return applyResolvedFacts(this.db, resolvedEntries);
+		return applyResolvedFacts(this.executor, resolvedEntries);
 	}
 
 	public async listAllRelations() {
-		return listAllRelations(this.db);
+		return listAllRelations(this.executor);
 	}
 
 	public async applyRelations(relations: RelationRecord[]) {
-		return applyRelations(this.db, relations);
+		return applyRelations(this.executor, relations);
 	}
 
 	public async listAllContexts() {
-		return listAllContexts(this.db);
+		return listAllContexts(this.executor);
 	}
 
 	public async applyContexts(contexts: ContextSyncRecord[]) {
-		return applyContexts(this.db, contexts);
+		return applyContexts(this.executor, contexts);
 	}
 
 	public async listAllContextTerms() {
-		return listAllContextTerms(this.db);
+		return listAllContextTerms(this.executor);
 	}
 
 	public async applyContextTerms(terms: ContextTermSyncRecord[]) {
-		return applyContextTerms(this.db, terms);
-	}
-
-	public async listAllHandoffs() {
-		return listAllHandoffs(this.db);
-	}
-
-	public async applyHandoffs(handoffs: HandoffRecord[]) {
-		return applyHandoffs(this.db, handoffs);
+		return applyContextTerms(this.executor, terms);
 	}
 
 	public async listOrphans(kind?: string) {
-		return kind ? listOrphans(this.db, kind) : listOrphans(this.db);
+		return kind ? listOrphans(this.executor, kind) : listOrphans(this.executor);
 	}
 
 	public async listProjectAdrs() {
-		return listProjectAdrs(this.db);
+		return listProjectAdrs(this.executor);
 	}
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }) {
-		return updateEntityStatus(this.db, input);
+		return updateEntityStatus(this.executor, input);
+	}
+
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }) {
+		return updateEntity(this.executor, input);
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }) {
-		return setEntityBody(this.db, input);
+		return setEntityBody(this.executor, input);
 	}
 
 	public async archiveEntity(input: { entityId: string }) {
-		return archiveEntity(this.db, input);
+		return archiveEntity(this.executor, input);
 	}
 
 	public async deleteEntity(input: { entityId: string }) {
-		return deleteEntity(this.db, input);
+		return deleteEntity(this.executor, input);
 	}
 
 	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }) {
-		return moveEntity(this.db, input);
+		return moveEntity(this.executor, input);
 	}
 
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }) {
-		return linkEntities(this.db, input);
+		return linkEntities(this.executor, input);
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }) {
-		return unlinkEntities(this.db, input);
+		return unlinkEntities(this.executor, input);
 	}
 
-	public async getDatabaseSnapshot() {
-		return getDatabaseSnapshot(this.db);
+	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
+		return input ? getDatabaseSnapshot(this.executor, input) : getDatabaseSnapshot(this.executor);
+	}
+
+	public async getProjectDiscovery(input?: { projectId?: string }) {
+		return getProjectDiscovery(this.executor, input);
 	}
 
 	public async getInitiativeBundle(initiativeId: string) {
-		return getInitiativeBundle(this.db, initiativeId);
+		return getInitiativeBundle(this.executor, initiativeId);
 	}
 
 	public async getSnapshotSignature(): Promise<string> {
 		return computeFileStatSignature(this.db.name);
 	}
 
-	public async createHandoff(input: { entityId: string; summary?: string; body: string }) {
-		return createHandoff(this.db, input);
-	}
-
-	public async updateHandoff(input: { handoffId: string; summary?: string; body?: string }) {
-		return updateHandoff(this.db, input);
-	}
-
-	public async deleteHandoff(input: { handoffId: string }) {
-		return deleteHandoff(this.db, input);
-	}
-
-	public async getHandoffDetails(entityId: string) {
-		return getHandoffDetails(this.db, entityId);
-	}
-
-	public async listHandoffs(filter?: { initiativeId?: string; entityId?: string }) {
-		return listHandoffs(this.db, filter);
-	}
-
 	public async listContexts(): Promise<ContextListResult> {
-		return listContexts(this.db);
+		return listContexts(this.executor);
 	}
 
 	public async getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails> {
-		return getContextDetails(this.db, input);
+		return getContextDetails(this.executor, input);
 	}
 
 	public async getContextDirectory(): Promise<ContextDirectory> {
-		return getContextDirectory(this.db);
+		return getContextDirectory(this.executor);
 	}
 
 	public async queryContextDirectory(input?: QueryContextDirectoryInput) {
-		return queryContextDirectory(this.db, input);
+		return queryContextDirectory(this.executor, input);
 	}
 
 	public async upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails> {
-		return upsertContext(this.db, input);
+		return upsertContext(this.executor, input);
 	}
 
 	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }) {
-		return defineContextTerm(this.db, input);
+		return defineContextTerm(this.executor, input);
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string }) {
-		return forgetContextTerm(this.db, input);
+		return forgetContextTerm(this.executor, input);
 	}
 
 	public async listTenants() {
@@ -271,6 +264,6 @@ export class SqliteStore implements StorageDriver {
 }
 
 export async function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenSqliteStoreResult> {
-	const { db, dbPath } = await ensureDatabase(inputPath, options);
-	return { store: new SqliteStore(db), dbPath };
+	const { executor, dbPath } = await ensureDatabase(inputPath, options);
+	return { store: new SqliteStore(executor), dbPath };
 }

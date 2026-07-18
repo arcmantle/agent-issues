@@ -18,7 +18,9 @@ import {
 	type QueryContextDirectoryInput,
 	type QueryContextDirectoryResult
 } from "@agent-issues/core";
-import type { PoolClient } from "pg";
+import { and, asc, eq, sql } from "drizzle-orm";
+import type { TenantExecutor as PoolClient } from "../../db/connection.js";
+import { contextTerms, contexts, entities, relations } from "../../schema.js";
 
 import {
 	ensurePgTenant,
@@ -99,34 +101,51 @@ async function getOrCreateProjectByIdentity(client: PoolClient, tenantId: string
 	// request can arrive before any entity has ever been created for this tenant.
 	await ensurePgTenant(client, tenantId);
 
-	const existing = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'project' AND title = $2`, [
-		tenantId,
-		projectIdentity
-	]);
-	const existingRow = existing.rows[0];
+	const [existingRow] = await client
+		.select()
+		.from(entities)
+		.where(and(eq(entities.tenantId, tenantId), eq(entities.kind, "project"), eq(entities.title, projectIdentity)))
+		.limit(1);
 	if (existingRow) {
-		return mapEntityRow(existingRow);
+		return {
+			id: existingRow.id,
+			kind: "project",
+			title: existingRow.title,
+			status: existingRow.status,
+			body: existingRow.body,
+			bodySource: existingRow.bodySource === "generated" ? "generated" : "authored",
+			createdAt: existingRow.createdAt,
+			updatedAt: existingRow.updatedAt
+		};
 	}
 
 	const now = new Date().toISOString();
 	const projectId = await nextEntityId(client, tenantId, "project");
 	const epicId = await nextEntityId(client, tenantId, "epic");
 
-	await client.query(
-		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
-		 VALUES ($1, $2, 'project', $3, 'active', '', 'generated', $4, $4)`,
-		[tenantId, projectId, projectIdentity, now]
-	);
-	await client.query(
-		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
-		 VALUES ($1, $2, 'epic', $3, 'active', '', 'generated', $4, $4)`,
-		[tenantId, epicId, DEFAULT_EPIC_TITLE, now]
-	);
-	await client.query(
-		`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
-		 VALUES ($1, $2, $3, 'contains', $4)`,
-		[tenantId, projectId, epicId, now]
-	);
+	await client.insert(entities).values({
+		tenantId,
+		id: projectId,
+		kind: "project",
+		title: projectIdentity,
+		status: "active",
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		updatedAt: now
+	});
+	await client.insert(entities).values({
+		tenantId,
+		id: epicId,
+		kind: "epic",
+		title: DEFAULT_EPIC_TITLE,
+		status: "active",
+		body: "",
+		bodySource: "generated",
+		createdAt: now,
+		updatedAt: now
+	});
+	await client.insert(relations).values({ tenantId, fromId: projectId, toId: epicId, type: "contains", createdAt: now });
 
 	return {
 		id: projectId,
@@ -249,26 +268,26 @@ async function getOwningInitiativeOrThrow(client: PoolClient, tenantId: string, 
 	const seen = new Set<string>([entityId]);
 
 	while (true) {
-		const result = await client.query<EntityRow>(
-			`SELECT entities.*
-			 FROM relations
-			 JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			 WHERE relations.tenant_id = $1
-			   AND relations.to_id = $2
-			   AND relations.type IN ('owns', 'records', 'tracks', 'creates')
-			 ORDER BY entities.id`,
-			[tenantId, currentId]
-		);
+		const result = await client.execute(sql`
+			SELECT entities.*
+			FROM relations
+			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+			WHERE relations.tenant_id = ${tenantId}
+				AND relations.to_id = ${currentId}
+				AND relations.type IN ('owns', 'records', 'tracks', 'creates')
+			ORDER BY entities.id
+		`);
+		const rows = result.rows as EntityRow[];
 
-		if (result.rows.length === 0) {
+		if (rows.length === 0) {
 			throw new Error(`No owning initiative found for ${entityId}.`);
 		}
 
-		if (result.rows.length > 1) {
+		if (rows.length > 1) {
 			throw new Error(`Cannot resolve owning initiative for ${entityId} because ${currentId} has multiple structural parents.`);
 		}
 
-		const parent = mapEntityRow(result.rows[0]!);
+		const parent = mapEntityRow(rows[0]!);
 		if (seen.has(parent.id)) {
 			throw new Error(`Cannot resolve owning initiative for ${entityId} because the structural graph contains a cycle.`);
 		}
@@ -302,16 +321,34 @@ async function resolveContextScope(
 }
 
 async function fetchContextRow(client: PoolClient, tenantId: string, key: string): Promise<ContextRow | undefined> {
-	const result = await client.query<ContextRow>(`SELECT * FROM contexts WHERE tenant_id = $1 AND key = $2`, [tenantId, key]);
-	return result.rows[0];
+	const [row] = await client
+		.select()
+		.from(contexts)
+		.where(and(eq(contexts.tenantId, tenantId), eq(contexts.key, key)))
+		.limit(1);
+	return row && {
+		key: row.key,
+		scope_entity_id: row.scopeEntityId,
+		title: row.title,
+		summary: row.summary,
+		created_at: row.createdAt,
+		updated_at: row.updatedAt
+	};
 }
 
 async function fetchContextTermRows(client: PoolClient, tenantId: string, key: string): Promise<ContextTermRow[]> {
-	const result = await client.query<ContextTermRow>(
-		`SELECT term, definition, avoid_terms, created_at, updated_at FROM context_terms WHERE tenant_id = $1 AND context_key = $2 ORDER BY lower(term), term`,
-		[tenantId, key]
-	);
-	return result.rows;
+	const rows = await client
+		.select()
+		.from(contextTerms)
+		.where(and(eq(contextTerms.tenantId, tenantId), eq(contextTerms.contextKey, key)))
+		.orderBy(sql`lower(${contextTerms.term})`, asc(contextTerms.term));
+	return rows.map((row) => ({
+		term: row.term,
+		definition: row.definition,
+		avoid_terms: row.avoidTerms,
+		created_at: row.createdAt,
+		updated_at: row.updatedAt
+	}));
 }
 
 async function queryContextDetails(
@@ -330,12 +367,28 @@ async function queryContextDetails(
 	};
 }
 
+export async function queryProjectContextDetails(
+	client: PoolClient,
+	tenantId: string,
+	project: EntityRecord,
+	scopeRef?: string
+): Promise<ContextDetails> {
+	const scope = scopeRef ? await resolveContextScope(client, tenantId, undefined, scopeRef) : createProjectScope(project);
+	const row = await fetchContextRow(client, tenantId, scope.key);
+	const termRows = row ? await fetchContextTermRows(client, tenantId, scope.key) : [];
+
+	return {
+		context: row ? mapContextRow(row, scope) : createContextRecord(scope),
+		terms: termRows.map(mapContextTermRow)
+	};
+}
+
 async function queryContextTermCount(client: PoolClient, tenantId: string, contextKey: string): Promise<number> {
-	const result = await client.query<{ count: string }>(`SELECT COUNT(*) AS count FROM context_terms WHERE tenant_id = $1 AND context_key = $2`, [
-		tenantId,
-		contextKey
-	]);
-	return Number(result.rows[0]?.count ?? "0");
+	const [result] = await client
+		.select({ count: sql<number>`count(*)` })
+		.from(contextTerms)
+		.where(and(eq(contextTerms.tenantId, tenantId), eq(contextTerms.contextKey, contextKey)));
+	return Number(result?.count ?? 0);
 }
 
 async function queryListContexts(client: PoolClient, tenantId: string, projectIdentity: string | undefined): Promise<ContextListResult> {
@@ -348,12 +401,23 @@ async function queryListContexts(client: PoolClient, tenantId: string, projectId
 		}
 	];
 
-	const initiativeRows = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'initiative' ORDER BY id`, [
-		tenantId
-	]);
+	const initiativeRows = await client
+		.select()
+		.from(entities)
+		.where(and(eq(entities.tenantId, tenantId), eq(entities.kind, "initiative")))
+		.orderBy(asc(entities.id));
 
-	for (const initiativeRow of initiativeRows.rows) {
-		const initiative = mapEntityRow(initiativeRow);
+	for (const initiativeRow of initiativeRows) {
+		const initiative = {
+			id: initiativeRow.id,
+			kind: "initiative" as const,
+			title: initiativeRow.title,
+			status: initiativeRow.status,
+			body: initiativeRow.body,
+			bodySource: initiativeRow.bodySource === "generated" ? ("generated" as const) : ("authored" as const),
+			createdAt: initiativeRow.createdAt,
+			updatedAt: initiativeRow.updatedAt
+		};
 		const scope = createInitiativeScope(initiative);
 		const row = await fetchContextRow(client, tenantId, scope.key);
 		contexts.push({
@@ -367,10 +431,12 @@ async function queryListContexts(client: PoolClient, tenantId: string, projectId
 
 async function buildContextDirectory(client: PoolClient, tenantId: string, projectIdentity: string | undefined): Promise<ContextDirectory> {
 	const shared = await queryContextDetails(client, tenantId, projectIdentity);
-	const initiativeRows = await client.query<EntityRow>(`SELECT * FROM entities WHERE tenant_id = $1 AND kind = 'initiative' ORDER BY id`, [
-		tenantId
-	]);
-	const initiatives = await Promise.all(initiativeRows.rows.map((row) => queryContextDetails(client, tenantId, projectIdentity, row.id)));
+	const initiativeRows = await client
+		.select({ id: entities.id })
+		.from(entities)
+		.where(and(eq(entities.tenantId, tenantId), eq(entities.kind, "initiative")))
+		.orderBy(asc(entities.id));
+	const initiatives = await Promise.all(initiativeRows.map((row) => queryContextDetails(client, tenantId, projectIdentity, row.id)));
 
 	return mergeContextDirectory(shared, initiatives);
 }
@@ -388,22 +454,34 @@ async function ensureContextExists(
 	}
 
 	const now = new Date().toISOString();
-	await client.query(
-		`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $6)`,
-		[tenantId, scope.key, scope.scopeEntityId, scope.defaultTitle, scope.defaultSummary, now]
-	);
+	await client.insert(contexts).values({
+		tenantId,
+		key: scope.key,
+		scopeEntityId: scope.scopeEntityId,
+		title: scope.defaultTitle,
+		summary: scope.defaultSummary,
+		createdAt: now,
+		updatedAt: now
+	});
 
 	return scope;
 }
 
 async function getContextTermRecord(client: PoolClient, tenantId: string, contextKey: string, term: string): Promise<ContextTermRecord | null> {
-	const result = await client.query<ContextTermRow>(
-		`SELECT term, definition, avoid_terms, created_at, updated_at FROM context_terms WHERE tenant_id = $1 AND context_key = $2 AND term = $3`,
-		[tenantId, contextKey, term]
-	);
-	const row = result.rows[0];
-	return row ? mapContextTermRow(row) : null;
+	const [row] = await client
+		.select()
+		.from(contextTerms)
+		.where(and(eq(contextTerms.tenantId, tenantId), eq(contextTerms.contextKey, contextKey), eq(contextTerms.term, term)))
+		.limit(1);
+	return row
+		? mapContextTermRow({
+			term: row.term,
+			definition: row.definition,
+			avoid_terms: row.avoidTerms,
+			created_at: row.createdAt,
+			updated_at: row.updatedAt
+		})
+		: null;
 }
 
 /**
@@ -463,16 +541,21 @@ export async function upsertContext(
 	const existing = await queryContextDetails(client, tenantId, projectIdentity, input.scopeRef);
 	const now = new Date().toISOString();
 
-	await client.query(
-		`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (tenant_id, key) DO UPDATE SET
-		   scope_entity_id = excluded.scope_entity_id,
-		   title = excluded.title,
-		   summary = excluded.summary,
-		   updated_at = excluded.updated_at`,
-		[tenantId, scope.key, scope.scopeEntityId, title, summary, existing.context.createdAt ?? now, now]
-	);
+	await client
+		.insert(contexts)
+		.values({
+			tenantId,
+			key: scope.key,
+			scopeEntityId: scope.scopeEntityId,
+			title,
+			summary,
+			createdAt: existing.context.createdAt ?? now,
+			updatedAt: now
+		})
+		.onConflictDoUpdate({
+			target: [contexts.tenantId, contexts.key],
+			set: { scopeEntityId: scope.scopeEntityId, title, summary, updatedAt: now }
+		});
 
 	return queryContextDetails(client, tenantId, projectIdentity, input.scopeRef);
 }
@@ -499,15 +582,21 @@ export async function defineContextTerm(
 	const existing = await getContextTermRecord(client, tenantId, scope.key, term);
 	const now = new Date().toISOString();
 
-	await client.query(
-		`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (tenant_id, context_key, term) DO UPDATE SET
-		   definition = excluded.definition,
-		   avoid_terms = excluded.avoid_terms,
-		   updated_at = excluded.updated_at`,
-		[tenantId, scope.key, term, definition, JSON.stringify(normalizedAvoid), existing?.createdAt ?? now, now]
-	);
+	await client
+		.insert(contextTerms)
+		.values({
+			tenantId,
+			contextKey: scope.key,
+			term,
+			definition,
+			avoidTerms: JSON.stringify(normalizedAvoid),
+			createdAt: existing?.createdAt ?? now,
+			updatedAt: now
+		})
+		.onConflictDoUpdate({
+			target: [contextTerms.tenantId, contextTerms.contextKey, contextTerms.term],
+			set: { definition, avoidTerms: JSON.stringify(normalizedAvoid), updatedAt: now }
+		});
 
 	const storedTerm = await getContextTermRecord(client, tenantId, scope.key, term);
 	if (!storedTerm) {
@@ -533,16 +622,15 @@ export async function forgetContextTerm(
 	}
 
 	const scope = await resolveContextScope(client, tenantId, projectIdentity, input.scopeRef);
-	const result = await client.query(`DELETE FROM context_terms WHERE tenant_id = $1 AND context_key = $2 AND term = $3`, [
-		tenantId,
-		scope.key,
-		term
-	]);
+	const result = await client
+		.delete(contextTerms)
+		.where(and(eq(contextTerms.tenantId, tenantId), eq(contextTerms.contextKey, scope.key), eq(contextTerms.term, term)))
+		.returning({ term: contextTerms.term });
 
 	return {
 		context: (await queryContextDetails(client, tenantId, projectIdentity, input.scopeRef)).context,
 		term,
-		removed: (result.rowCount ?? 0) > 0
+		removed: result.length > 0
 	};
 }
 
@@ -552,8 +640,8 @@ export async function forgetContextTerm(
 // for the rationale (contexts are actively re-edited via `upsertContext`,
 // unlike relations/handoffs).
 export async function listAllContexts(client: PoolClient, tenantId: string): Promise<ContextSyncRecord[]> {
-	const result = await client.query<ContextRow>(`SELECT * FROM contexts WHERE tenant_id = $1`, [tenantId]);
-	return result.rows.map((row) => ({
+	const result = await client.execute(sql`SELECT * FROM contexts WHERE tenant_id = ${tenantId}`);
+	return (result.rows as ContextRow[]).map((row) => ({
 		key: row.key,
 		scopeEntityId: row.scope_entity_id,
 		title: row.title,
@@ -572,17 +660,16 @@ export async function listAllContexts(client: PoolClient, tenantId: string): Pro
 export async function applyContexts(client: PoolClient, tenantId: string, contexts: ContextSyncRecord[]): Promise<{ applied: number }> {
 	let applied = 0;
 	for (const context of contexts) {
-		const result = await client.query(
-			`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
-			 ON CONFLICT (tenant_id, key) DO UPDATE SET
-			   scope_entity_id = excluded.scope_entity_id,
-			   title = excluded.title,
-			   summary = excluded.summary,
-			   updated_at = excluded.updated_at
-			 WHERE excluded.updated_at > contexts.updated_at`,
-			[tenantId, context.key, context.scopeEntityId, context.title, context.summary, context.createdAt, context.updatedAt]
-		);
+		const result = await client.execute(sql`
+			INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
+			VALUES (${tenantId}, ${context.key}, ${context.scopeEntityId}, ${context.title}, ${context.summary}, ${context.createdAt}, ${context.updatedAt})
+			ON CONFLICT (tenant_id, key) DO UPDATE SET
+				scope_entity_id = excluded.scope_entity_id,
+				title = excluded.title,
+				summary = excluded.summary,
+				updated_at = excluded.updated_at
+			WHERE excluded.updated_at > contexts.updated_at
+		`);
 		applied += result.rowCount ?? 0;
 	}
 	return { applied };
@@ -591,8 +678,8 @@ export async function applyContexts(client: PoolClient, tenantId: string, contex
 // The read half for context terms (ISS62/ADR16), same last-writer-wins merge
 // rationale as `listAllContexts`.
 export async function listAllContextTerms(client: PoolClient, tenantId: string): Promise<ContextTermSyncRecord[]> {
-	const result = await client.query<ContextTermRow & { context_key: string }>(`SELECT * FROM context_terms WHERE tenant_id = $1`, [tenantId]);
-	return result.rows.map((row) => ({
+	const result = await client.execute(sql`SELECT * FROM context_terms WHERE tenant_id = ${tenantId}`);
+	return (result.rows as Array<ContextTermRow & { context_key: string }>).map((row) => ({
 		contextKey: row.context_key,
 		term: row.term,
 		definition: row.definition,
@@ -609,16 +696,15 @@ export async function listAllContextTerms(client: PoolClient, tenantId: string):
 export async function applyContextTerms(client: PoolClient, tenantId: string, terms: ContextTermSyncRecord[]): Promise<{ applied: number }> {
 	let applied = 0;
 	for (const term of terms) {
-		const result = await client.query(
-			`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
-			 ON CONFLICT (tenant_id, context_key, term) DO UPDATE SET
-			   definition = excluded.definition,
-			   avoid_terms = excluded.avoid_terms,
-			   updated_at = excluded.updated_at
-			 WHERE excluded.updated_at > context_terms.updated_at`,
-			[tenantId, term.contextKey, term.term, term.definition, JSON.stringify(term.avoid), term.createdAt, term.updatedAt]
-		);
+		const result = await client.execute(sql`
+			INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
+			VALUES (${tenantId}, ${term.contextKey}, ${term.term}, ${term.definition}, ${JSON.stringify(term.avoid)}, ${term.createdAt}, ${term.updatedAt})
+			ON CONFLICT (tenant_id, context_key, term) DO UPDATE SET
+				definition = excluded.definition,
+				avoid_terms = excluded.avoid_terms,
+				updated_at = excluded.updated_at
+			WHERE excluded.updated_at > context_terms.updated_at
+		`);
 		applied += result.rowCount ?? 0;
 	}
 	return { applied };

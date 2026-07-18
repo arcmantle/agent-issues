@@ -30,6 +30,120 @@ export type StorageDriverContractOptions = {
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore } = options;
 
+	describe(`storage-driver seam: project discovery (${label})`, () => {
+		it("returns an empty visible-project list for a sentinel-only tenant without changing its snapshot signature", async () => {
+			const store = await openStore();
+
+			try {
+				const before = await store.getSnapshotSignature();
+				const discovery = await store.getProjectDiscovery();
+				const after = await store.getSnapshotSignature();
+
+				expect(discovery).toEqual({ kind: "available", projects: [] });
+				expect(after).toBe(before);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns visible projects with isolated epic, initiative, and completion rollups", async () => {
+			const store = await openStore();
+
+			try {
+				const firstProject = await store.createEntity({ kind: "project", title: "First project" });
+				const firstEpic = await store.createEntity({ kind: "epic", title: "First epic", parentId: firstProject.id });
+				const completedInitiative = await store.createEntity({ kind: "initiative", title: "Completed", parentId: firstEpic.id });
+				await store.updateEntityStatus({ entityId: completedInitiative.id, status: "done" });
+				await store.createEntity({ kind: "initiative", title: "Open", parentId: firstEpic.id });
+				const secondProject = await store.createEntity({ kind: "project", title: "Second project" });
+				await store.createEntity({ kind: "epic", title: "Second epic", parentId: secondProject.id });
+
+				const discovery = await store.getProjectDiscovery();
+
+				expect(discovery).toEqual({
+					kind: "available",
+					projects: expect.arrayContaining([
+						expect.objectContaining({
+							project: expect.objectContaining({ id: firstProject.id }),
+							epicCount: 1,
+							initiativeCount: 2,
+							completedInitiativeCount: 1
+						}),
+						expect.objectContaining({
+							project: expect.objectContaining({ id: secondProject.id }),
+							epicCount: 1,
+							initiativeCount: 0,
+							completedInitiativeCount: 0
+						})
+					])
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns a typed unavailable result for a missing project without changing its snapshot signature", async () => {
+			const store = await openStore();
+
+			try {
+				const before = await store.getSnapshotSignature();
+				const discovery = await store.getProjectDiscovery({ projectId: "PROJ404" });
+				const after = await store.getSnapshotSignature();
+
+				expect(discovery).toEqual({ kind: "unavailable" });
+				expect(after).toBe(before);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: project-scoped snapshots (${label})`, () => {
+		it("returns only the selected project's snapshot data and rejects unavailable projects", async () => {
+			const store = await openStore();
+
+			try {
+				const selectedProject = await store.createEntity({ kind: "project", title: "Selected project" });
+				const selectedEpic = await store.createEntity({ kind: "epic", title: "Selected epic", parentId: selectedProject.id });
+				const selectedInitiative = await store.createEntity({ kind: "initiative", title: "Selected initiative", parentId: selectedEpic.id });
+				const selectedIssue = await store.createEntity({ kind: "issue", title: "Selected issue", parentId: selectedInitiative.id });
+				const selectedAdr = await store.createEntity({ kind: "adr", title: "Selected ADR", parentId: selectedInitiative.id });
+				await store.upsertContext({ scopeRef: selectedInitiative.id, title: "Selected context", summary: "Only selected project" });
+
+				const otherProject = await store.createEntity({ kind: "project", title: "Other project" });
+				const otherEpic = await store.createEntity({ kind: "epic", title: "Other epic", parentId: otherProject.id });
+				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative", parentId: otherEpic.id });
+				const otherIssue = await store.createEntity({ kind: "issue", title: "Other issue", parentId: otherInitiative.id });
+				const otherAdr = await store.createEntity({ kind: "adr", title: "Other ADR", parentId: otherInitiative.id });
+				const otherPrd = await store.createEntity({ kind: "prd", title: "Other PRD", parentId: otherInitiative.id });
+				const otherStory = await store.createEntity({ kind: "userStory", title: "Other story", parentId: otherPrd.id });
+				await store.linkEntities({ fromId: selectedIssue.id, toId: otherIssue.id, relationType: "blocks" });
+				await store.upsertContext({ scopeRef: otherInitiative.id, title: "Other context", summary: "Must not leak" });
+
+				const snapshot = await store.getDatabaseSnapshot({ projectId: selectedProject.id });
+				expect(snapshot).toEqual(expect.objectContaining({ kind: "available" }));
+				if (snapshot.kind !== "available") {
+					return;
+				}
+
+				const selectedIds = [selectedProject.id, selectedEpic.id, selectedInitiative.id, selectedIssue.id, selectedAdr.id];
+				const otherIds = [otherProject.id, otherEpic.id, otherInitiative.id, otherIssue.id, otherAdr.id];
+				expect(snapshot.snapshot.entities.map((entity) => entity.id)).toEqual(expect.arrayContaining(selectedIds));
+				expect(snapshot.snapshot.entities.map((entity) => entity.id)).not.toEqual(expect.arrayContaining(otherIds));
+				expect(snapshot.snapshot.relations.every((relation) => !otherIds.includes(relation.fromId) && !otherIds.includes(relation.toId))).toBe(true);
+				expect(snapshot.snapshot.projectAdrs).toEqual([]);
+				expect(snapshot.snapshot.initiatives.map((bundle) => bundle.initiative.id)).toEqual([selectedInitiative.id]);
+				expect(snapshot.snapshot.initiatives[0]?.userStories.map((story) => story.id)).not.toContain(otherStory.id);
+				expect(snapshot.snapshot.initiatives[0]?.blockerLinks).toEqual([]);
+				expect(snapshot.snapshot.contexts.initiatives.map((context) => context.context.scopeEntityId)).toEqual([selectedInitiative.id]);
+
+				expect(await store.getDatabaseSnapshot({ projectId: "PROJ404" })).toEqual({ kind: "unavailable" });
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: entity lifecycle (${label})`, () => {
 		it("creates an entity and reads it back through the async seam", async () => {
 			const store = await openStore();
@@ -39,6 +153,96 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const details = await store.getEntityDetails(created.id);
 
 				expect(details.entity).toEqual(created);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("creates a handoff as an ordinary entity with handsOff links only to ADR50 focus kinds", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Initiative focus" });
+				const prd = await store.createEntity({ kind: "prd", parentId: initiative.id, title: "PRD focus" });
+				const story = await store.createEntity({ kind: "userStory", parentId: prd.id, title: "Story focus" });
+				const adr = await store.createEntity({ kind: "adr", parentId: initiative.id, title: "ADR focus" });
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Issue focus" });
+				const allowedTargets = [initiative, prd, story, adr, issue];
+
+				for (const target of allowedTargets) {
+					const handoff = await store.createEntity({
+						kind: "handoff",
+						title: `Resume ${target.kind}`,
+						body: "The migration test is green.",
+						links: [{ relationType: "handsOff", targetId: target.id }]
+					});
+
+					expect(handoff).toEqual(expect.objectContaining({ id: expect.stringMatching(/^HO\d+$/), kind: "handoff" }));
+					expect(await store.listEntityHistory(handoff.id)).toEqual([
+						expect.objectContaining({ title: `Resume ${target.kind}`, body: "The migration test is green." })
+					]);
+					expect(await store.listAllRelations()).toEqual(expect.arrayContaining([
+						expect.objectContaining({ fromId: handoff.id, toId: target.id, type: "handsOff" })
+					]));
+				}
+
+				const project = await store.createEntity({ kind: "project", title: "Forbidden project" });
+				const version = await store.createEntity({ kind: "version", parentId: project.id, title: "Forbidden version" });
+				const standaloneHandoff = await store.createEntity({ kind: "handoff", title: "Standalone handoff" });
+				for (const targetId of [project.id, "EPIC0", version.id, standaloneHandoff.id]) {
+					await expect(store.createEntity({
+						kind: "handoff",
+						title: "Invalid target",
+						links: [{ relationType: "handsOff", targetId }]
+					})).rejects.toThrow("not allowed");
+				}
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("creates initial links atomically and records one complete revision for a generic edit", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+				const blocker = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Blocking issue" });
+				const dependency = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Dependency issue" });
+				const created = await store.createEntity({
+					kind: "issue",
+					parentId: initiative.id,
+					title: "Created with links",
+					links: [
+						{ relationType: "blocks", targetId: blocker.id },
+						{ relationType: "blocks", targetId: dependency.id }
+					]
+				});
+
+				expect(await store.listAllRelations()).toEqual(expect.arrayContaining([
+					expect.objectContaining({ fromId: created.id, toId: blocker.id, type: "blocks" }),
+					expect.objectContaining({ fromId: created.id, toId: dependency.id, type: "blocks" })
+				]));
+				const relationsBeforeRejectedCreate = await store.listAllRelations();
+				const signatureBeforeRejectedCreate = await store.getSnapshotSignature();
+
+				await expect(store.createEntity({
+					kind: "issue",
+					parentId: initiative.id,
+					title: "Rejected atomically",
+					links: [
+						{ relationType: "blocks", targetId: blocker.id },
+						{ relationType: "blocks", targetId: "ISS404" }
+					]
+				})).rejects.toThrow("Entity not found: ISS404");
+				expect((await store.listEntities("issue")).map((entity) => entity.title)).not.toContain("Rejected atomically");
+				expect(await store.listAllRelations()).toEqual(relationsBeforeRejectedCreate);
+				expect(await store.getSnapshotSignature()).toBe(signatureBeforeRejectedCreate);
+
+				const edited = await store.updateEntity({ entityId: created.id, body: "Final body", title: "Final title" });
+				expect(edited).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
+				const history = await store.listEntityHistory(created.id);
+				expect(history).toHaveLength(2);
+				expect(history[1]).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
 			} finally {
 				await store.close();
 			}
@@ -78,13 +282,22 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
-		it("lists entities, orphans, project ADRs, and reads the snapshot and initiative bundle", async () => {
+		it("lists entities, orphans, project ADRs, and a complete initiative bundle through the seam", async () => {
 			const store = await openStore();
 
 			try {
 				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
-				await store.createEntity({ kind: "issue", title: "Tracked issue", parentId: initiative.id });
+				const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
+				const story = await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
+				const issue = await store.createEntity({ kind: "issue", title: "Fixing issue", parentId: initiative.id });
+				const subIssue = await store.createEntity({ kind: "issue", title: "Sub issue", parentId: initiative.id });
+				const blocker = await store.createEntity({ kind: "issue", title: "Blocker", parentId: initiative.id });
+				const adr = await store.createEntity({ kind: "adr", title: "ADR", parentId: initiative.id });
 				const orphanAdr = await store.createEntity({ kind: "adr", title: "Project-scoped ADR" });
+				await store.linkEntities({ fromId: issue.id, toId: story.id, relationType: "fixes" });
+				await store.linkEntities({ fromId: issue.id, toId: subIssue.id, relationType: "decomposes" });
+				await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
+				await store.linkEntities({ fromId: adr.id, toId: issue.id, relationType: "constrains" });
 
 				expect((await store.listEntities("initiative")).map((entity) => entity.id)).toContain(initiative.id);
 				expect((await store.listOrphans()).map((entity) => entity.id)).not.toContain(orphanAdr.id);
@@ -94,7 +307,14 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(snapshot.entities.map((entity) => entity.id)).toContain(initiative.id);
 
 				const bundle = await store.getInitiativeBundle(initiative.id);
-				expect(bundle.issues.map((entity) => entity.id)).toEqual(expect.arrayContaining([expect.stringMatching(/^ISS/)]));
+				expect(bundle.prds.map((entity) => entity.id)).toEqual([prd.id]);
+				expect(bundle.userStories.map((entity) => entity.id)).toEqual([story.id]);
+				expect(bundle.issues.map((entity) => entity.id).sort()).toEqual([blocker.id, issue.id, subIssue.id].sort());
+				expect(bundle.adrs.map((entity) => entity.id)).toEqual([adr.id]);
+				expect(bundle.fixLinks).toEqual([{ issue: expect.objectContaining({ id: issue.id }), userStory: expect.objectContaining({ id: story.id }) }]);
+				expect(bundle.subIssueLinks).toEqual([{ parent: expect.objectContaining({ id: issue.id }), issue: expect.objectContaining({ id: subIssue.id }) }]);
+				expect(bundle.blockerLinks).toEqual([{ source: expect.objectContaining({ id: blocker.id }), target: expect.objectContaining({ id: issue.id }) }]);
+				expect(bundle.constrainsLinks).toEqual([{ adr: expect.objectContaining({ id: adr.id }), issue: expect.objectContaining({ id: issue.id }) }]);
 			} finally {
 				await store.close();
 			}
@@ -129,32 +349,6 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				const after = await store.getSnapshotSignature();
 				expect(after).not.toBe(before);
-			} finally {
-				await store.close();
-			}
-		});
-	});
-
-	describe(`storage-driver seam: handoff lifecycle (${label})`, () => {
-		it("creates, updates, lists, and deletes a handoff through the seam", async () => {
-			const store = await openStore();
-
-			try {
-				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
-
-				const created = await store.createHandoff({ entityId: initiative.id, summary: "First pass", body: "Body." });
-				expect(created.entityId).toBe(initiative.id);
-
-				const updated = await store.updateHandoff({ handoffId: created.id, summary: "Revised" });
-				expect(updated.summary).toBe("Revised");
-
-				expect((await store.listHandoffs({ entityId: initiative.id })).map((handoff) => handoff.id)).toContain(created.id);
-
-				const details = await store.getHandoffDetails(initiative.id);
-				expect(details.handoffs.map((handoff) => handoff.id)).toContain(created.id);
-
-				const deleted = await store.deleteHandoff({ handoffId: created.id });
-				expect(deleted.removed).toBe(true);
 			} finally {
 				await store.close();
 			}
@@ -371,39 +565,6 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const relations = await store.listAllRelations();
 				expect(relations.some((relation) => relation.type === "tracks")).toBe(false);
 				expect(relations).toContainEqual(expect.objectContaining({ fromId: issueA.id, toId: issueB.id, type: "decomposes" }));
-			} finally {
-				await store.close();
-			}
-		});
-	});
-
-	describe(`storage-driver seam: bulk handoffs (${label})`, () => {
-		it("lists every handoff and idempotently applies a batch (ISS62/ADR16)", async () => {
-			const store = await openStore();
-
-			try {
-				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
-				const handoff = await store.createHandoff({ entityId: initiative.id, body: "Picking up from here." });
-
-				const handoffs = await store.listAllHandoffs();
-				expect(handoffs).toContainEqual(expect.objectContaining({ id: handoff.id, entityId: initiative.id, body: "Picking up from here." }));
-
-				const reapplied = await store.applyHandoffs(handoffs);
-				expect(reapplied.inserted).toBe(0);
-
-				const foreignHandoff = {
-					id: `HANDOFF-${randomUUID()}`,
-					entityId: initiative.id,
-					initiativeId: initiative.id,
-					summary: "",
-					body: "A handoff synced in from another store.",
-					createdAt: new Date().toISOString()
-				};
-				const appliedForeign = await store.applyHandoffs([foreignHandoff, ...handoffs]);
-				expect(appliedForeign.inserted).toBe(1);
-
-				const afterApply = await store.listAllHandoffs();
-				expect(afterApply).toContainEqual(expect.objectContaining({ id: foreignHandoff.id, body: "A handoff synced in from another store." }));
 			} finally {
 				await store.close();
 			}
