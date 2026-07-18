@@ -8,14 +8,19 @@ import { fileURLToPath } from "node:url";
 // source folder and the installed skill impossible.
 const SKILL_NAMES = [
 	"ai-agent-issues",
+	"ai-domain-modeling",
 	"ai-grill-with-docs",
 	"ai-handoff",
 	"ai-migrate-docs",
+	"ai-plan",
 	"ai-start-work",
 	"ai-tdd",
 	"ai-to-issues",
 	"ai-to-prd"
 ] as const;
+
+const SHARED_SKILL_FILES = ["agent-issues-language.md", "agent-issues-operating-contract.md"] as const;
+const SHARED_FILES_MANIFEST = ".agent-issues-shared-files.json";
 
 const SKILL_INSTALLS = SKILL_NAMES.map((name) => ({ sourceDir: name, installedName: name }));
 
@@ -53,6 +58,15 @@ export function installSkills(input: { targetDir?: string; force?: boolean }): I
 	}
 
 	mkdirSync(targetDir, { recursive: true });
+	const ownedSharedFiles = readOwnedSharedFiles(targetDir);
+	for (const fileName of SHARED_SKILL_FILES) {
+		const destinationFile = path.join(targetDir, fileName);
+		if (input.force || !existsSync(destinationFile)) {
+			cpSync(path.join(sourceRoot, fileName), destinationFile);
+			ownedSharedFiles.add(fileName);
+		}
+	}
+	writeOwnedSharedFiles(targetDir, ownedSharedFiles);
 
 	const installed = SKILL_INSTALLS.map((skill) => {
 		const sourceDir = path.join(sourceRoot, skill.sourceDir);
@@ -91,6 +105,8 @@ export function installSkills(input: { targetDir?: string; force?: boolean }): I
 
 export function uninstallSkills(input: { targetDir?: string }): UninstallSkillsResult {
 	const targetDir = path.resolve(input.targetDir ?? getDefaultSkillsInstallDir());
+	const ownedSharedFiles = readOwnedSharedFiles(targetDir);
+	let removedInstalledSkill = false;
 
 	const removed = SKILL_INSTALLS.map((skill) => {
 		const destinationDir = path.join(targetDir, skill.installedName);
@@ -98,6 +114,7 @@ export function uninstallSkills(input: { targetDir?: string }): UninstallSkillsR
 
 		if (existed) {
 			rmSync(destinationDir, { recursive: true, force: true });
+			removedInstalledSkill = true;
 		}
 
 		return {
@@ -107,6 +124,12 @@ export function uninstallSkills(input: { targetDir?: string }): UninstallSkillsR
 			status: existed ? ("removed" as const) : ("missing" as const)
 		};
 	});
+	if (removedInstalledSkill) {
+		for (const fileName of ownedSharedFiles) {
+			rmSync(path.join(targetDir, fileName), { force: true });
+		}
+		rmSync(path.join(targetDir, SHARED_FILES_MANIFEST), { force: true });
+	}
 
 	return {
 		targetDir,
@@ -136,4 +159,25 @@ function rewriteSkillName(skillFilePath: string, installedName: string): void {
 	const current = readFileSync(skillFilePath, "utf8");
 	const updated = current.replace(/^name:\s+.+$/m, `name: ${installedName}`);
 	writeFileSync(skillFilePath, updated, "utf8");
+}
+
+function readOwnedSharedFiles(targetDir: string): Set<string> {
+	const manifestPath = path.join(targetDir, SHARED_FILES_MANIFEST);
+	if (!existsSync(manifestPath)) {
+		return new Set();
+	}
+
+	const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { sharedFiles?: unknown };
+	if (!Array.isArray(parsed.sharedFiles)) {
+		return new Set();
+	}
+
+	return new Set(parsed.sharedFiles.filter((fileName): fileName is string => typeof fileName === "string"));
+}
+
+function writeOwnedSharedFiles(targetDir: string, sharedFiles: Set<string>): void {
+	writeFileSync(
+		path.join(targetDir, SHARED_FILES_MANIFEST),
+		`${JSON.stringify({ sharedFiles: [...sharedFiles].sort() }, null, "\t")}\n`
+	);
 }

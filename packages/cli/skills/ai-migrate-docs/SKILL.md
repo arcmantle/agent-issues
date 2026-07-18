@@ -3,9 +3,12 @@ name: ai-migrate-docs
 description: Migrates existing project documentation into tracked agent-issues records and relationships. Use when importing or backfilling PRDs, ADRs, glossary docs, planning notes, or issue lists into agent-issues.
 ---
 
+Follow the shared [language standard](../agent-issues-language.md).
+Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+
 # Migrate Docs
 
-`agent-issues` is the canonical tracker. Existing markdown docs, tickets, and notes are source material to interpret, not the final source of truth.
+Existing markdown docs, tickets, and notes are source material to interpret, not the final source of truth.
 
 ## Process
 
@@ -13,19 +16,8 @@ description: Migrates existing project documentation into tracked agent-issues r
 
 - Identify the specific documents or notes the user wants migrated.
 - Classify each source as glossary/context, initiative or roadmap, PRD or spec, ADR, or issue or task breakdown.
-- Reuse an existing initiative when the fit is clear. Use `agent-issues list initiative --json` to discover candidates, then prefer `agent-issues bundle <initiativeId> --json` as the main read to avoid creating duplicates. Fall back to `agent-issues show <id> --json` only when you need a narrower check on one candidate.
-- If the target initiative is ambiguous, ask one short routing question before creating anything.
 
-### 2. Load tracked context first
-
-- Read the existing glossary with `agent-issues context show <initiativeId> --json` immediately after the bundle read before rephrasing domain terms.
-- If the source docs use shared or cross-initiative language that is not obviously local to the initiative, use `agent-issues context search <query> --json` before you coin or migrate a term.
-- If the source docs appear to redefine an existing term, run `agent-issues context conflicts --json` so you can either preserve the established label or call out the collision explicitly.
-- If the initiative context does not exist yet and the source docs define shared language, initialize it with `agent-issues context set --scope <initiativeId|default> --title ... --summary ... --json`.
-- Persist canonical terms immediately with `agent-issues context define <term> --scope <initiativeId|default> --definition ... [--avoid ...] --json`.
-- Do not leave glossary truth in a raw `CONTEXT.md` alone.
-
-### 3. Map source docs to tracked entities
+### 2. Map source docs to tracked entities
 
 - Initiative or roadmap doc: create or reuse one `initiative`.
 - PRD or feature spec: create or reuse one `prd` under the initiative.
@@ -36,7 +28,7 @@ description: Migrates existing project documentation into tracked agent-issues r
 
 If one document mixes multiple concerns, split it into the smallest set of tracked records that preserves the original intent.
 
-### 4. Publish records in dependency order
+### 3. Publish records in dependency order
 
 1. Create or reuse the parent initiative.
 2. Migrate glossary and context terms.
@@ -52,14 +44,14 @@ Publish blockers before blocked issues so every relationship points at a real re
 
 When migrating markdown docs, store the source prose in the record body rather than collapsing it into a title. Drop only the duplicated top-level heading when the record title already captures it. Prefer `--body-file` for these migrations so multiline markdown lands exactly as written.
 
-### 5. Handle gaps and ambiguities carefully
+### 4. Handle gaps and ambiguities carefully
 
 - Do not create placeholder records for claims the source docs do not support.
 - When the source material is stale or contradictory, migrate only the parts you can defend and call out the unresolved pieces explicitly.
 - If a source task list is too coarse, break it into thin vertical slices before creating issues.
 - If a doc appears to describe an existing record with a different title, prefer reusing the existing record and report the mapping instead of duplicating it.
 
-### 6. Return a migration report
+### 5. Return a migration report
 
 Return a concise report that includes:
 

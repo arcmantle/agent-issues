@@ -29,12 +29,12 @@ agent-issues context define "Order" --scope INIT1 --definition "A customer reque
 ```json
 {
 	"context": {
-			"key": "INIT1",
-			"scopeKind": "initiative",
-			"scopeEntityId": "INIT1",
-			"scopeLabel": "Payments",
-			"title": "Payments Context",
-			"summary": "Glossary of initiative-specific terms for Payments.",
+		"key": "INIT1",
+		"scopeKind": "initiative",
+		"scopeEntityId": "INIT1",
+		"scopeLabel": "Payments",
+		"title": "Payments Context",
+		"summary": "Glossary of initiative-specific terms for Payments.",
 		"exists": true
 	},
 	"terms": [

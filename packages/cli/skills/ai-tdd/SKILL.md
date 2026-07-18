@@ -3,13 +3,12 @@ name: ai-tdd
 description: Test-driven development with a red-green-refactor loop, anchored to the active agent-issues issue.
 ---
 
+Follow the shared [language standard](../agent-issues-language.md).
+Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+
 # Test-Driven Development
 
-## Tracking contract
-
-`agent-issues` is the canonical tracker for the work. Before writing tests or code, identify the active `issue` record with `agent-issues show` and `agent-issues relations` using `--json`, then resolve the parent initiative and read `agent-issues bundle <initiativeId> --json` plus `agent-issues context show <initiativeId> --json` so the issue sits in its full initiative context. If interface or test names depend on ambiguous terminology, use `agent-issues context search <query> --json` or `agent-issues context conflicts --json` before you encode that language in tests.
-
-If the task is not already tracked, create the missing issue under the correct initiative and link it to the user stories it fixes before you start implementing. If the parent initiative is ambiguous, ask one routing question.
+## Issue lifecycle
 
 Move the active issue through its lifecycle in the tracker:
 
@@ -17,9 +16,8 @@ Move the active issue through its lifecycle in the tracker:
 - If you discover a true blocker, create or reuse the blocking issue and link it with `agent-issues link BLOCKER_ISS blocks ISS1`.
 - When the behavior is implemented and validated, mark the issue done with `agent-issues status ISS1 done`.
 
-Do not treat test files, scratch notes, or a chat plan as the work tracker. The issue record is the unit of execution.
-
 Statuses cascade automatically — do not hand-set them on user stories, PRDs, or ADRs. They are derived at read-time from the issues underneath them, so closing (or reopening) an issue is enough:
+
 - A **user story** is `ready` once it has issues, `in-progress` once any `fixes` issue is in-progress/done, and `done` once they are all done.
 - A **PRD** moves to `in-progress` once any of its user stories is in progress, and `approved` once they are all done.
 - An **ADR** moves to `accepted` once any issue it `constrains` is in-progress/done, and `superseded` once another ADR `supersedes` it.
@@ -36,6 +34,12 @@ Good tests are integration-style. They exercise real code paths through public A
 Bad tests are coupled to implementation. They mock internal collaborators, test private methods, or verify through external means instead of using the interface.
 
 See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
+
+## Tests follow the current contract
+
+Do not preserve obsolete code, features, compatibility paths, or public APIs solely because an existing test expects them. When the active issue, approved interface, or relevant ADR deliberately replaces behavior, remove the superseded implementation and update or delete the tests that specify it. Keep old behavior only when an explicit current requirement, compatibility commitment, or migration plan requires it.
+
+Treat a failing old test as evidence to investigate, not automatic proof that the old feature must survive. Decide whether it verifies a still-required behavior; if it does not, change or remove the test in the same slice. The final test suite must specify the intended system after the refactor, not preserve its entire history.
 
 ## Anti-pattern: horizontal slices
 
@@ -58,7 +62,7 @@ RIGHT (vertical):
 
 ### 1. Planning
 
-When exploring the codebase, prefer the initiative fast path: if you are resuming an issue, read any available `agent-issues handoff <id> --json`, then `agent-issues bundle <initiativeId> --json`, then `agent-issues context show <initiativeId> --json`. If terminology still looks ambiguous across scopes, run `agent-issues context search <query> --json` or `agent-issues context conflicts --json` before you design tests. This gives you the issue's PRDs, user stories, ADRs, and glossary before you design tests, so test names and interface vocabulary match the project's language and constraints.
+When exploring the codebase, prefer the initiative fast path: if you are resuming an issue, find its handoff with `agent-issues list handoff --json`, inspect candidates with `agent-issues show HOx --json`, and verify the `handsOff` relation with `agent-issues relations HOx --json`; then read `agent-issues bundle <initiativeId> --json` and `agent-issues context show <initiativeId> --json`. If terminology still looks ambiguous across scopes, run `agent-issues context search <query> --json` or `agent-issues context conflicts --json` before you design tests. This gives you the issue's PRDs, user stories, ADRs, and glossary before you design tests, so test names and interface vocabulary match the project's language and constraints.
 
 Before writing any code:
 
@@ -109,6 +113,33 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 - Run tests after each refactor step.
 
 Never refactor while red.
+
+### 5. Implementation review gate
+
+`ai-tdd` delegates the confirmed issue to one implementation subagent. That subagent implements the issue through the tracer-bullet and incremental TDD cycles, runs focused validation, and reports the changed-file diff plus validation results to `ai-tdd`. Do not treat a report immediately after the first passing test run as completion.
+
+After the implementation subagent's initial validation, the visible `ai-tdd` orchestrator must launch these two read-only review subagents in parallel. Do not delegate this gate to the implementation subagent: the orchestrator must retain the reviewer reports as auditable evidence.
+
+- **Behavior and contract review:** Compare the implementation and tests against the active issue, linked user stories, relevant ADRs, and observable public behavior. Identify missing behaviors, incorrect semantics, and insufficient behavior coverage.
+- **Code and regression review:** Inspect the changed code for correctness defects, unintended scope, regressions, error handling gaps, maintainability concerns, and validation gaps.
+
+Give each reviewer the active issue context, the changed-file diff, and the validation already run. Reviewers must not edit files. They must return either no findings or a structured finding with severity, file and location, evidence, and a concrete correction.
+
+`ai-tdd` consolidates duplicate findings and rejects only findings it can explain as invalid or out of scope. It gives every valid material finding to the implementation subagent for repair, then requires the focused validation that covers the repair. If no material findings exist, `ai-tdd` records both reviewer reports before final validation. Do not mark the issue done until this gate is complete.
+
+### 6. Report the next workable issue
+
+After the implementation review gate passes, final validation succeeds, and the active issue is marked `done`, reload the initiative with `agent-issues bundle <initiativeId> --json`. Use the refreshed graph rather than the state captured before implementation.
+
+Select the next **workable** issue: it is not `done`, and no `blockerLinks` entry targets it from a source issue that is still open. Rank every workable leaf issue ahead of every parent issue. Within that ordering, prefer the issue that is the source for the most open targets in `blockerLinks`, then the thinnest tracer-bullet slice.
+
+Report the selected issue's ID, title, whether it is a parent or leaf issue, the user stories it `fixes`, and its blockers. Do not set it to `in-progress` or begin implementation; the user or `ai-start-work` chooses whether to continue.
+
+If no issue is workable, treat the initiative's issue work as complete when the refreshed bundle contains no issue whose status is not `done`, regardless of the initiative's manual status. If unfinished issues remain blocked, report the blocker chain instead of recommending a blocked issue.
+
+## Implementer standards
+
+If you need a paragraph-long comment to justify why the workaround is OK, the code is wrong — fix the code.
 
 ## Checklist per cycle
 

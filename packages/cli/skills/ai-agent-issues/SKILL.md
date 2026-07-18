@@ -4,6 +4,9 @@ description: Internal orientation guide for agents working in repos that use age
 argument-hint: What part of agent-issues do you need to orient on before proceeding?
 ---
 
+Follow the shared [language standard](../agent-issues-language.md).
+Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+
 # Agent-Issues Tooling Guide
 
 This is an internal reference skill for the agent.
@@ -47,7 +50,7 @@ For real work, prefer an initiative-first read instead of piecing the graph toge
 
 Treat `bundle` as the main quality-of-life command for getting most of what you need in one read:
 
-- Start with `agent-issues handoff <id> --json` if you are resuming an existing workstream and want the last known stopping point.
+- To resume an existing workstream, run `agent-issues list handoff --json`, inspect each candidate with `agent-issues show HOx --json` and `agent-issues relations HOx --json`, and choose the handoff whose `handsOff` relation targets the active scope.
 - Then use `agent-issues bundle <initiativeId> --json` to load the initiative, PRDs, user stories, ADRs, and issues together.
 - Read `agent-issues context show <initiativeId> --json` immediately after that so your language and planning match the initiative glossary.
 - If the right term is still unclear after the initiative read, use `agent-issues context search <query> --view <all|global|initiatives> --json` for project-wide discovery and `agent-issues context conflicts --json` when you suspect the same label is defined in more than one scope.
@@ -57,7 +60,7 @@ Default heuristic:
 
 1. If you know the initiative, read `bundle` first.
 2. If you only know an issue or ADR, use `show` to resolve the parent initiative, then read `bundle`.
-3. If the work is being resumed, prefer `handoff` first, then `bundle`, then `context show`.
+3. If the work is being resumed, find its `handoff` entity with `list handoff`, `show`, and `relations` first, then read `bundle` and `context show`.
 
 Do not explore an initiative by manually listing every child kind unless you specifically need a cross-initiative search. `bundle` is the normal entry point.
 
@@ -65,8 +68,8 @@ Do not explore an initiative by manually listing every child kind unless you spe
 
 Use the right command family for the job:
 
-- Discover entities: `list`, `show`, `relations`, `bundle`, `handoff`
-- Change tracking data: `create`, `link`, `status`
+- Discover entities: `list`, `show`, `relations`, `bundle`
+- Change tracking data: `create`, `edit`, `link`, `status`
 - Manage vocabulary: `context list`, `context show`, `context search`, `context conflicts`, `context set`, `context define`, `context forget`
 - Inspect the live graph visually: `serve-site`, `open-site`, `stop-site`
 - Discover agent integration surfaces: `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `capabilities`
@@ -77,15 +80,19 @@ Prefer `--json` whenever you are reading output programmatically or using the re
 
 When you need to choose the next packaged skill, route yourself explicitly:
 
-1. `ai-grill-with-docs` to challenge and sharpen a plan.
-2. `ai-to-prd` to capture the plan as a PRD and user stories.
-3. `ai-to-issues` to break the plan into executable issues.
-4. `ai-handoff` to capture where the work stands for the next session.
-5. `ai-start-work` to pick the next workable issue and prepare execution.
-6. `ai-tdd` to implement one issue through a red-green-refactor loop.
-7. `ai-migrate-docs` when importing existing documentation into the tracker.
+1. `ai-domain-modeling` to actively sharpen terminology, boundaries, glossary context, and architectural decisions.
+2. `ai-grill-with-docs` to challenge and sharpen a plan one question at a time using domain modeling.
+3. `ai-plan` for the same domain-modeling outcome at a faster pace through batches of questions.
+4. `ai-to-prd` to capture the plan as a PRD and user stories.
+5. `ai-to-issues` to break the plan into executable issues.
+6. `ai-handoff` to capture where the work stands for the next session.
+7. `ai-start-work` to pick the next workable issue and prepare execution.
+8. `ai-tdd` to implement one issue through a red-green-refactor loop.
+9. `ai-migrate-docs` when importing existing documentation into the tracker.
 
 If you are unsure where the work sits in the workflow, inspect the initiative first with `agent-issues bundle <initiativeId> --json` and infer the next missing artifact from the graph.
+
+To persist a handoff, create it as an ordinary graph entity: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>`. Use `agent-issues edit HOx --title "<title>" --body-file -` to correct its title or body.
 
 ## Initiative default
 

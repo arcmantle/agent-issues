@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const AGENT_FILE_NAME = "agent-issues.agent.md";
 const HOOK_FILE_NAME = "agent-issues-enforcer.mjs";
+const LANGUAGE_FILE_NAME = "agent-issues-language.md";
 const INSTALLED_AGENT_NAME = "agent-issues";
 
 type AgentInstallRecord = {
@@ -52,11 +53,13 @@ export function installAgent(input: { targetDir?: string; force?: boolean }): In
 	const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".github");
 	const sourceAgentFile = path.join(sourceRoot, "agents", AGENT_FILE_NAME);
 	const sourceHookFile = path.join(sourceRoot, "hooks", HOOK_FILE_NAME);
+	const sourceLanguageFile = path.join(sourceRoot, "..", "skills", LANGUAGE_FILE_NAME);
 	const destinationAgentFile = path.join(targetDir, AGENT_FILE_NAME);
 	const destinationHookFile = path.join(targetDir, HOOK_FILE_NAME);
+	const destinationLanguageFile = path.join(targetDir, LANGUAGE_FILE_NAME);
 	const existed = existsSync(destinationAgentFile) || existsSync(destinationHookFile);
 
-	if (!existsSync(sourceAgentFile) || !existsSync(sourceHookFile)) {
+	if (!existsSync(sourceAgentFile) || !existsSync(sourceHookFile) || !existsSync(sourceLanguageFile)) {
 		throw new Error(`Packaged agent assets not found under ${sourceRoot}`);
 	}
 
@@ -76,6 +79,7 @@ export function installAgent(input: { targetDir?: string; force?: boolean }): In
 
 	cpSync(sourceAgentFile, destinationAgentFile);
 	cpSync(sourceHookFile, destinationHookFile);
+	cpSync(sourceLanguageFile, destinationLanguageFile);
 	rewriteInstalledAgentHooks(destinationAgentFile, destinationHookFile);
 
 	return {
@@ -93,6 +97,7 @@ export function uninstallAgent(input: { targetDir?: string }): UninstallAgentRes
 	const targetDir = path.resolve(input.targetDir ?? getDefaultAgentInstallDir());
 	const destinationAgentFile = path.join(targetDir, AGENT_FILE_NAME);
 	const destinationHookFile = path.join(targetDir, HOOK_FILE_NAME);
+	const destinationLanguageFile = path.join(targetDir, LANGUAGE_FILE_NAME);
 	const existed = existsSync(destinationAgentFile) || existsSync(destinationHookFile);
 
 	if (existsSync(destinationAgentFile)) {
@@ -101,6 +106,10 @@ export function uninstallAgent(input: { targetDir?: string }): UninstallAgentRes
 
 	if (existsSync(destinationHookFile)) {
 		rmSync(destinationHookFile, { force: true });
+	}
+
+	if (existsSync(destinationLanguageFile)) {
+		rmSync(destinationLanguageFile, { force: true });
 	}
 
 	return {

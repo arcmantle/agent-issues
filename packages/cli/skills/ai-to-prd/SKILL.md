@@ -3,15 +3,18 @@ name: ai-to-prd
 description: Turn the current conversation context into a PRD, create the tracked PRD in agent-issues, and create the user stories that the PRD commits to.
 ---
 
-This skill takes the current conversation context and codebase understanding and produces a PRD. Synthesize what you already know. Do not run an open-ended interview. For new feature work, default to a new initiative unless the user explicitly says this PRD belongs under an existing initiative. If you cannot determine the parent initiative or whether a matching PRD already exists, ask one short routing question.
+Follow the shared [language standard](../agent-issues-language.md).
+Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
 
-`agent-issues` is the canonical PRD tracker. A PRD is not considered created until the `prd` entity exists and its user stories have been created as child `userStory` entities.
+This skill takes the current conversation context and codebase understanding and produces a PRD. Synthesize what you already know. Do not run an open-ended interview.
+
+A PRD is not considered created until the `prd` entity exists and its user stories have been created as child `userStory` entities.
 
 ## Process
 
-1. Explore the repo to understand the current state of the codebase if you have not already. Prefer the initiative fast path: once you know the initiative, read `agent-issues bundle <initiativeId> --json`, then `agent-issues context show <initiativeId> --json`. If you only know a lower-level entity, resolve its parent initiative first. If the PRD needs terminology that may be shared or overloaded, use `agent-issues context search <query> --json` or `agent-issues context conflicts --json` before you lock in names. Use that vocabulary throughout the PRD and respect any ADRs in the area you are touching.
+1. Explore the repo to understand the current state of the codebase if you have not already. Use the established vocabulary throughout the PRD and respect any ADRs in the area you are touching.
 
-2. Find the parent initiative in `agent-issues`. For new feature work, create a new initiative by default. Reuse an existing initiative only when the user explicitly routes the work there or the conversation makes it unambiguously clear that this PRD is continuing an already-tracked initiative. If the parent is not obvious, ask one short routing question instead of guessing.
+2. Find the parent initiative in `agent-issues`.
 
 3. Sketch the seams at which you are going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can.
 

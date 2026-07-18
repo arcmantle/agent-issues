@@ -4,11 +4,10 @@ description: Compact the current conversation into a handoff document for anothe
 argument-hint: What will the next session be used for?
 ---
 
+Follow the shared [language standard](../agent-issues-language.md).
+Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+
 Write a handoff that lets a fresh agent continue the work without reconstructing the state from scratch. Do not create any file, including temp files or workspace artifacts.
-
-Use `agent-issues` as the canonical tracker for the work. Before writing the handoff, identify the active tracked scope with `agent-issues handoff show <id> --json`. If you need a narrower or lower-level read after that, use `agent-issues show`, `agent-issues relations`, or `agent-issues bundle` as follow-up queries.
-
-Do not write an untracked handoff. If there is no matching issue, PRD, ADR, or initiative for the workstream, create the missing record first when the parent is obvious. If the parent is ambiguous, ask one routing question.
 
 The handoff must include:
 
@@ -31,7 +30,7 @@ Once the handoff body is written, save it into `agent-issues` so the next agent 
 Persist it with:
 
 ```
-agent-issues handoff create <id> --summary "<one-line summary>" --body-file -
+agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>
 ```
 
 Pipe the handoff markdown to stdin using your current shell. Examples:
@@ -39,7 +38,7 @@ Pipe the handoff markdown to stdin using your current shell. Examples:
 POSIX shells:
 
 ```sh
-cat <<'EOF' | agent-issues handoff create <id> --summary "<one-line summary>" --body-file -
+cat <<'EOF' | agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>
 <handoff markdown>
 EOF
 ```
@@ -49,13 +48,15 @@ PowerShell:
 ```powershell
 @'
 <handoff markdown>
-'@ | agent-issues handoff create <id> --summary "<one-line summary>" --body-file -
+'@ | agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>
 ```
 
-- `<id>` is the tracked entity that anchors the handoff (the active issue, PRD, ADR, or initiative). The tool resolves and records the owning initiative automatically, so the handoff appears on that initiative's page.
+- `<focusId>` is the tracked entity that anchors the handoff (the active issue, PRD, ADR, or initiative). The `handsOff` link records that focus in the graph.
 - `--body-file -` is required and reads the full handoff markdown from stdin, which avoids shell quoting problems and does not require a temp file.
-- `--summary` is optional but recommended — it is the one-line label shown in handoff listings.
+- `--title` is required and is the one-line label shown in handoff listings.
 
 After saving, confirm the returned handoff ID (e.g. `HO7`) in your response.
 
-Tracking must remain in `agent-issues`. Do not create a sidecar handoff document in `/tmp`, the workspace, or any other file location. If extra prose is needed beyond the persisted handoff, return it in the response only.
+To correct a persisted handoff, use the generic entity editor: `agent-issues edit HOx --title "<title>" --body-file -`.
+
+If extra prose is needed beyond the persisted handoff, return it in the response only.

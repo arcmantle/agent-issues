@@ -25,12 +25,17 @@ describe("agent installer", () => {
 		const result = installAgent({ targetDir });
 		const installedAgent = readFileSync(result.installed.agentFile, "utf8");
 		const expectedHookCommand = JSON.stringify(`node \"${result.installed.hookFile}\"`);
+		const languageFile = path.join(targetDir, "agent-issues-language.md");
 
 		expect(result.installed.status).toBe("installed");
 		expect(existsSync(result.installed.agentFile)).toBe(true);
 		expect(existsSync(result.installed.hookFile)).toBe(true);
 		expect(installedAgent).toContain(`command: ${expectedHookCommand}`);
 		expect(installedAgent).not.toContain("node .github/hooks/agent-issues-enforcer.mjs");
+		expect(installedAgent).toContain("agent");
+		expect(installedAgent).toContain("web");
+		expect(installedAgent).toContain("./agent-issues-language.md");
+		expect(readFileSync(languageFile, "utf8")).toContain("# Language standard");
 	});
 
 	it("reports a partial install when only one installed file exists", () => {
@@ -49,6 +54,7 @@ describe("agent installer", () => {
 		expect(removed.removed.status).toBe("removed");
 		expect(existsSync(result.installed.agentFile)).toBe(false);
 		expect(existsSync(result.installed.hookFile)).toBe(false);
+		expect(existsSync(path.join(targetDir, "agent-issues-language.md"))).toBe(false);
 		expect(listAgent({ targetDir }).agent.status).toBe("missing");
 	});
 });

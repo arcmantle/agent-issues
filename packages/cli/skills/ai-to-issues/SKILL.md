@@ -3,11 +3,12 @@ name: ai-to-issues
 description: Break a plan or PRD into independently grabbable issues, then create and link those issues in agent-issues.
 ---
 
+Follow the shared [language standard](../agent-issues-language.md).
+Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+
 # To Issues
 
 Break a plan into independently grabbable issues using tracer-bullet vertical slices.
-
-`agent-issues` is the canonical issue tracker for this workflow. Do not consider a slice published until the corresponding `issue` entity exists and its `fixes`, `blocks`, and structural parent relationships have been recorded.
 
 ## Process
 
@@ -15,17 +16,15 @@ Break a plan into independently grabbable issues using tracer-bullet vertical sl
 
 Work from whatever is already in the conversation context. If the user passes an entity ID or a file path as an argument, resolve it first.
 
-Prefer the initiative fast path. If the work is being resumed, start with `agent-issues handoff <id> --json`. Once you know the initiative, use `agent-issues bundle <initiativeId> --json` as the primary read, then fall back to `agent-issues show` or `agent-issues relations` only when you need a narrower read. Use those reads with `--json` to identify:
+Use the active initiative and its records to identify:
 
 - the parent initiative that should structurally own the new issues
 - the PRD and user stories the issues should satisfy
 - any existing issues or blockers that should be reused instead of duplicated
 
-If no suitable parent initiative can be identified, ask one routing question instead of creating orphan records.
-
 ### 2. Explore the codebase
 
-If you have not already explored the codebase, do so to understand the current state of the code. Read the initiative-scoped glossary with `agent-issues context show <initiativeId> --json` immediately after the bundle read. If issue names depend on terminology that may exist outside the initiative, use `agent-issues context search <query> --json` or `agent-issues context conflicts --json` before you publish titles. Issue titles and descriptions should use that vocabulary and respect ADRs in the area you are touching.
+If you have not already explored the codebase, do so to understand the current state of the code. Issue titles and descriptions should use the established vocabulary and respect ADRs in the area you are touching.
 
 ### 3. Draft vertical slices
 
@@ -67,5 +66,3 @@ For each approved slice:
 Publish blockers first so that later issues can link to real issue IDs.
 
 Return a concise summary that shows each created issue ID, its linked user stories, and its blockers.
-
-Do not create free-floating markdown issue checklists or external tracker issues before the local `agent-issues` graph is correct.
