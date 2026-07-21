@@ -4,14 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { backfillBodies } from "./body-backfill.js";
-import { createEntity, ensureDatabase, getDatabaseSnapshot, linkEntities, SqliteStore, type DatabaseHandle } from "@agent-issues/api-local";
+import { createEntity, ensureDatabase, getDatabaseSnapshot, linkEntities, SqliteStore, type SqliteExecutor } from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<DatabaseHandle> {
+async function openTestDatabase(): Promise<SqliteExecutor> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backfill-"));
-	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
-	return db;
+	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	return executor;
 }
 
 afterEach(() => {
@@ -85,7 +85,7 @@ describe("body backfill", () => {
 		const first = await backfillBodies(new SqliteStore(db), { kinds: ["issue"] });
 		expect(first.updated).toBe(1);
 
-		db.prepare(`UPDATE entities SET body_source = 'authored' WHERE tenant_id = @tenantId AND id = @entityId`).run({
+		db.db.prepare(`UPDATE entities SET body_source = 'authored' WHERE tenant_id = @tenantId AND id = @entityId`).run({
 			tenantId: db.tenantId,
 			entityId: issue.id
 		});

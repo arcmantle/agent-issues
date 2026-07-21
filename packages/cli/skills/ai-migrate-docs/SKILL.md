@@ -1,6 +1,7 @@
 ---
 name: ai-migrate-docs
 description: Migrates existing project documentation into tracked agent-issues records and relationships. Use when importing or backfilling PRDs, ADRs, glossary docs, planning notes, or issue lists into agent-issues.
+disable-model-invocation: true
 ---
 
 Follow the shared [language standard](../agent-issues-language.md).

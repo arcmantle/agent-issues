@@ -1,12 +1,20 @@
 import { Option } from "clipanion";
 
-import { isEntityKind } from "@agent-issues/core";
+import { computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind } from "@agent-issues/core";
 
 import { renderEntityDetails, renderEntityList, renderInitiativeBundle, renderOptionalEntityList } from "../renderers.js";
 import { BodyTenantCommand, TenantCommand, requireOption, requirePositional, withStore } from "../shared.js";
 
 abstract class PositionalsTenantCommand extends TenantCommand {
 	public positionals = Option.Rest();
+}
+
+function parseRevision(value: string): number {
+	const revision = Number(value);
+	if (!Number.isInteger(revision) || revision < 1) {
+		throw new Error(`Revision must be a positive integer: ${value}`);
+	}
+	return revision;
 }
 
 export class CreateCommand extends BodyTenantCommand {
@@ -53,9 +61,108 @@ export class EditCommand extends BodyTenantCommand {
 			if (this.title === undefined && body === undefined) {
 				throw new Error("--title or --body is required for edit.");
 			}
-			const entity = await store.updateEntity({ body, entityId, title: this.title });
+			const { entity: current } = await store.getEntityDetails(entityId);
+			const entity = await store.updateEntity({ body, entityId, title: this.title, expectedRevision: current.revision, expectedContentHash: current.contentHash });
 
 			this.print(entity, `Updated ${entity.id} ${entity.kind} ${entity.title}`);
+			return 0;
+		});
+	}
+}
+
+export class HistoryCommand extends TenantCommand {
+	public static paths = [["history"]];
+
+	public contextScope = Option.String("--context");
+	public positionals = Option.Rest();
+	public revisionValue = Option.String("--revision", { required: true });
+	public term = Option.String("--term");
+
+	public async execute(): Promise<number> {
+		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
+			const revision = parseRevision(this.revisionValue);
+			if (this.contextScope) {
+				if (this.positionals.length > 0) {
+					throw new Error("History accepts either an entity id or --context, not both.");
+				}
+				if (this.term) {
+					const materialized = await store.materializeContextTermRevision({ scopeRef: this.contextScope, term: this.term, revision });
+					this.print(materialized, `${materialized.contextKey} term ${materialized.term} revision ${materialized.targetRevision}/${materialized.headRevision}${materialized.tombstone ? " tombstoned" : ""}\n${materialized.definition}\nAvoid: ${materialized.avoid.join(", ") || "none"}`);
+					return 0;
+				}
+
+				const materialized = await store.materializeContextRevision({ scopeRef: this.contextScope, revision });
+				this.print(materialized, `${materialized.contextKey} context revision ${materialized.targetRevision}/${materialized.headRevision} ${materialized.title}\n${materialized.summary}`);
+				return 0;
+			}
+			if (this.term) {
+				throw new Error("--term requires --context <scope>.");
+			}
+
+			const entityId = requirePositional(this.positionals, 0, "history <id> --revision <revision>");
+			const materialized = await store.materializeEntityRevision({ entityId, revision });
+			this.print(
+				materialized,
+				`${materialized.entityId} revision ${materialized.targetRevision}/${materialized.headRevision} ${materialized.status} ${materialized.title}\n${materialized.body}`
+			);
+			return 0;
+		});
+	}
+}
+
+export class RestoreCommand extends PositionalsTenantCommand {
+	public static paths = [["restore"]];
+
+	public contextScope = Option.String("--context");
+	public revisionValue = Option.String("--revision", { required: true });
+	public term = Option.String("--term");
+
+	public async execute(): Promise<number> {
+		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
+			const revision = parseRevision(this.revisionValue);
+			if (this.contextScope) {
+				if (this.positionals.length > 0) {
+					throw new Error("Restore accepts either an entity id or --context, not both.");
+				}
+				if (this.term) {
+					const source = await store.materializeContextTermRevision({ scopeRef: this.contextScope, term: this.term, revision });
+					const head = await store.materializeContextTermRevision({ scopeRef: this.contextScope, term: this.term, revision: source.headRevision });
+					const restored = await store.restoreContextTermRevision({
+						scopeRef: this.contextScope,
+						term: this.term,
+						revision,
+						expectedRevision: head.headRevision,
+						expectedContentHash: computeContextTermContentHash(head.definition, head.avoid, head.tombstone)
+					});
+					this.print(restored, `Restored ${restored.contextKey} term ${restored.term} revision ${revision} as revision ${restored.headRevision}`);
+					return 0;
+				}
+
+				const source = await store.materializeContextRevision({ scopeRef: this.contextScope, revision });
+				const head = await store.materializeContextRevision({ scopeRef: this.contextScope, revision: source.headRevision });
+				const restored = await store.restoreContextRevision({
+					scopeRef: this.contextScope,
+					revision,
+					expectedRevision: head.headRevision,
+					expectedContentHash: computeContextContentHash(head.title, head.summary)
+				});
+				this.print(restored, `Restored ${restored.contextKey} context revision ${revision} as revision ${restored.headRevision}`);
+				return 0;
+			}
+			if (this.term) {
+				throw new Error("--term requires --context <scope>.");
+			}
+
+			const entityId = requirePositional(this.positionals, 0, "restore <id> --revision <revision>");
+			const source = await store.materializeEntityRevision({ entityId, revision });
+			const head = await store.materializeEntityRevision({ entityId, revision: source.headRevision });
+			const restored = await store.restoreEntityRevision({
+				entityId,
+				revision,
+				expectedRevision: head.headRevision,
+				expectedContentHash: computeEntityContentHash(head.title, head.body)
+			});
+			this.print(restored, `Restored ${entityId} revision ${revision} as revision ${restored.headRevision}`);
 			return 0;
 		});
 	}

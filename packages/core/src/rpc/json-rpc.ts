@@ -27,6 +27,7 @@ export type JsonRpcErrorResponse = {
 	error: {
 		code: number;
 		message: string;
+		data?: unknown;
 	};
 };
 

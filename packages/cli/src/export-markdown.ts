@@ -286,6 +286,8 @@ function emptyInitiativeContext(initiative: EntityRecord): ContextDetails {
 			scopeLabel: initiative.title,
 			title: `${initiative.title} Context`,
 			summary: "",
+			revision: 0,
+			contentHash: "",
 			createdAt: null,
 			updatedAt: null,
 			exists: false

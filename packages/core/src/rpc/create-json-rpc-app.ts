@@ -1,7 +1,10 @@
 import express, { type Express, type Request } from "express";
 
 import type { AuthIdentity, AuthProvider } from "../auth/auth-provider.js";
+import { EntityConflictError, EntityRevisionError } from "../features/entity-store/domain.js";
+import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../features/context/context-types.js";
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
+import { SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
 import { ChangeEventBroadcaster } from "./change-events.js";
 import { isJsonRpcRequest, JSON_RPC_ERROR_CODES, type JsonRpcErrorResponse, type JsonRpcSuccessResponse } from "./json-rpc.js";
 import { rpcMethods, writeMethods } from "./rpc-methods.js";
@@ -134,9 +137,7 @@ async function resolveIdentity(request: Request, authProvider: AuthProvider): Pr
 export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 	const { authProvider, createStore, versionHandshake } = options;
 	const app = express();
-	// Express's default 100kb body limit is too small for `applyHistoryEntries`
-	// (ISS57/ADR16): `synchronize` sends a whole project's history log in one
-	// request, which routinely exceeds that for any project with real content.
+	// Canonical synchronization can transfer a whole project's revision chains.
 	app.use(express.json({ limit: "50mb" }));
 	const changeEvents = new ChangeEventBroadcaster();
 
@@ -205,10 +206,23 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 				changeEvents.publishSnapshotChanged(identity.tenantId);
 			}
 		} catch (error) {
+			const data = error instanceof SynchronizeConflictError
+				? { recordKind: error.recordKind, recordId: error.recordId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
+				: error instanceof EntityConflictError
+				? { entityId: error.entityId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
+				: error instanceof EntityRevisionError
+					? { entityId: error.entityId, reason: error.reason, ...(error.headRevision !== undefined && { headRevision: error.headRevision }) }
+					: error instanceof ContextRevisionError
+						? { contextKey: error.contextKey, reason: error.reason, ...(error.term !== undefined && { term: error.term }), ...(error.headRevision !== undefined && { headRevision: error.headRevision }) }
+					: error instanceof ContextConflictError
+						? { contextKey: error.contextKey, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
+						: error instanceof ContextTermConflictError
+							? { contextKey: error.contextKey, term: error.term, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
+						: undefined;
 			const errorResponse: JsonRpcErrorResponse = {
 				jsonrpc: "2.0",
 				id: rpcRequest.id,
-				error: { code: JSON_RPC_ERROR_CODES.serverError, message: error instanceof Error ? error.message : "Internal error." }
+				error: { code: JSON_RPC_ERROR_CODES.serverError, message: error instanceof Error ? error.message : "Internal error.", ...(data !== undefined && { data }) }
 			};
 			response.status(200).json(errorResponse);
 		}

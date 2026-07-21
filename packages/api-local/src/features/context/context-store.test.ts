@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { formatTenantDisplayName } from "@agent-issues/core";
-import { defineContextTerm, getContextDetails, getContextDirectory, queryContextDirectory } from "./context-store.js";
+import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, queryContextDirectory, upsertContext } from "./context-store.js";
 import { ensureDatabase, resolveCurrentProjectId, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
 import type { SqliteExecutor } from "../../db/sqlite-executor.js";
 import { createEntity } from "../entity-store/store.js";
@@ -58,6 +58,54 @@ afterEach(() => {
 });
 
 describe("context directory", () => {
+	it("stores ordered context reverse deltas with predecessor facts and attribution", async () => {
+		const db = await openTestDatabase();
+		const created = upsertContext(db, { title: "Initial", summary: "First", author: "alice" });
+		upsertContext(db, {
+			title: "Updated",
+			summary: "Second",
+			author: "bob",
+			expectedRevision: created.context.revision,
+			expectedContentHash: created.context.contentHash
+		});
+
+		const deltas = db.db.prepare(`SELECT revision, author, prior_title, prior_summary, created_at
+			FROM context_delta_entries WHERE tenant_id = ? AND context_key = ? ORDER BY revision`).all(db.tenantId, created.context.key);
+		expect(deltas).toEqual([
+			expect.objectContaining({ revision: 1, author: "alice", prior_title: "Initial", prior_summary: "First", created_at: expect.any(String) }),
+			expect.objectContaining({ revision: 2, author: "bob", prior_title: "Initial", prior_summary: "First", created_at: expect.any(String) })
+		]);
+	});
+
+	it("stores one linear context-term reverse-delta chain through removal", async () => {
+		const db = await openTestDatabase();
+		const created = defineContextTerm(db, { term: "Order", definition: "Initial.", avoid: ["request"], author: "alice" });
+		const updated = defineContextTerm(db, {
+			term: "Order",
+			definition: "Updated.",
+			avoid: ["draft"],
+			author: "bob",
+			expectedRevision: created.term.revision,
+			expectedContentHash: created.term.contentHash
+		});
+		forgetContextTerm(db, {
+			term: "Order",
+			author: "carol",
+			expectedRevision: updated.term.revision,
+			expectedContentHash: updated.term.contentHash
+		});
+
+		const deltas = db.db.prepare(`SELECT revision, author, prior_definition, prior_avoid_terms, prior_tombstone
+			FROM context_term_delta_entries WHERE tenant_id = ? AND context_key = ? AND term = ? ORDER BY revision`)
+			.all(db.tenantId, created.context.key, "Order");
+		expect(deltas).toEqual([
+			{ revision: 1, author: "alice", prior_definition: "Initial.", prior_avoid_terms: '["request"]', prior_tombstone: 0 },
+			{ revision: 2, author: "bob", prior_definition: "Initial.", prior_avoid_terms: '["request"]', prior_tombstone: 0 },
+			{ revision: 3, author: "carol", prior_definition: "Updated.", prior_avoid_terms: '["draft"]', prior_tombstone: 0 }
+		]);
+		expect(getContextDetails(db).terms).toEqual([]);
+	});
+
 	it("includes the shared glossary and initiative-scoped discovery with duplicate detection", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });

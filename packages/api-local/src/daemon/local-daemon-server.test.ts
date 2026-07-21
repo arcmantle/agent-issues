@@ -177,7 +177,7 @@ describe("local daemon idle timeout (ISS189)", () => {
 			dbPath: path.join(tempDir, "test.db"),
 			port: 0,
 			homeDirectory,
-			idleTimeoutMs: 100,
+			idleTimeoutMs: 500,
 			onIdleExit
 		});
 		await new Promise<void>((resolve) => handle?.server.once("listening", resolve));
@@ -189,9 +189,9 @@ describe("local daemon idle timeout (ISS189)", () => {
 		const client = new HttpStore({ baseUrl, bearerToken, tenantId, buildHash: readBuildContentHash(), dbPath: path.join(tempDir, "test.db") });
 
 		// Keep the daemon "busy" well past the idle timeout by issuing requests more often than it elapses.
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; i < 6; i++) {
 			await client.listEntities("initiative");
-			await new Promise((resolve) => setTimeout(resolve, 60));
+			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 
 		expect(onIdleExit).not.toHaveBeenCalled();
@@ -241,15 +241,16 @@ describe("local daemon default auth via its own minted token (ISS184)", () => {
 	});
 
 	it("mints and stores its own token when no authProvider is supplied, accepting requests that carry it", async () => {
+		const dbPath = path.join(tempDir, "test.db");
 		handle = createLocalDaemonServer({
-			dbPath: path.join(tempDir, "test.db"),
+			dbPath,
 			port: 0,
 			homeDirectory,
 			credentialStoreOptions
 		});
 		await new Promise<void>((resolve) => handle?.server.once("listening", resolve));
 
-		const token = await readDaemonToken(credentialStoreOptions);
+		const token = await readDaemonToken({ ...credentialStoreOptions, dbPath });
 		expect(token).toBeTruthy();
 
 		const address = handle.server.address() as AddressInfo;
@@ -258,7 +259,7 @@ describe("local daemon default auth via its own minted token (ISS184)", () => {
 			bearerToken: token!,
 			tenantId: "irrelevant",
 			buildHash: readBuildContentHash(),
-			dbPath: path.join(tempDir, "test.db")
+			dbPath
 		});
 
 		const created = await client.createEntity({ kind: "initiative", title: "Reach the default-auth daemon" });
@@ -287,8 +288,9 @@ describe("local daemon default auth via its own minted token (ISS184)", () => {
 	});
 
 	it("clears its token once closed", async () => {
+		const dbPath = path.join(tempDir, "test.db");
 		handle = createLocalDaemonServer({
-			dbPath: path.join(tempDir, "test.db"),
+			dbPath,
 			port: 0,
 			homeDirectory,
 			credentialStoreOptions
@@ -298,7 +300,7 @@ describe("local daemon default auth via its own minted token (ISS184)", () => {
 		await handle.close();
 		handle = undefined;
 
-		await expect(readDaemonToken(credentialStoreOptions)).resolves.toBeUndefined();
+		await expect(readDaemonToken({ ...credentialStoreOptions, dbPath })).resolves.toBeUndefined();
 	});
 });
 

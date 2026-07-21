@@ -49,7 +49,7 @@ export function getSqliteEntityOrThrow(executor: SqliteExecutor, entityId: strin
 	const row = executor.drizzle
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.id, entityId)))
+		.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.id, entityId), eq(entities.tombstone, false)))
 		.get();
 
 	if (!row) {

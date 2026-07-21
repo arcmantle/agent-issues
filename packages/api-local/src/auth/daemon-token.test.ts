@@ -8,7 +8,7 @@ function fakeCredentialStore(): { runCommand: RunCredentialCommand } {
 	const store = new Map<string, string>();
 
 	const runCommand: RunCredentialCommand = async (command: CredentialCommand) => {
-		const [, account, , service] = command.args; // "-a" <account> "-s" <service> ...
+		const [, , account, , service] = command.args; // <action> "-a" <account> "-s" <service> ...
 		const key = `${service}:${account}`;
 
 		if (command.args[0] === "add-generic-password") {
@@ -45,6 +45,22 @@ describe("daemon token (ISS184)", () => {
 		await saveDaemonToken("my-daemon-token", options);
 
 		await expect(readDaemonToken(options)).resolves.toBe("my-daemon-token");
+	});
+
+	it("keeps tokens for different database daemon slots independent", async () => {
+		const { runCommand } = fakeCredentialStore();
+		const sharedOptions = { platform: "darwin" as const, runCommand };
+		const firstOptions = { ...sharedOptions, dbPath: "/tmp/first.db" };
+		const secondOptions = { ...sharedOptions, dbPath: "/tmp/second.db" };
+
+		await saveDaemonToken("first-token", firstOptions);
+		await saveDaemonToken("second-token", secondOptions);
+
+		await expect(readDaemonToken(firstOptions)).resolves.toBe("first-token");
+		await expect(readDaemonToken(secondOptions)).resolves.toBe("second-token");
+		await clearDaemonToken(firstOptions);
+		await expect(readDaemonToken(firstOptions)).resolves.toBeUndefined();
+		await expect(readDaemonToken(secondOptions)).resolves.toBe("second-token");
 	});
 
 	it("returns undefined when no token has ever been saved", async () => {

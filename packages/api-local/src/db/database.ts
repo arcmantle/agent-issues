@@ -28,6 +28,15 @@ import { baselineV7Migration } from "../migrations/0000-baseline-v7.js";
 import { backfillTenantBootstrapMigration } from "../migrations/0004-backfill-tenant-bootstrap.js";
 import { addEntityProjectIdMigration } from "../migrations/0009-add-entity-project-id.js";
 import { migrateHandoffsToEntitiesMigration } from "../migrations/0010-migrate-handoffs-to-entities.js";
+import { entityRevisionDeltaMigration } from "../migrations/0011-entity-revision-delta.js";
+import { entityLifecycleDeltaMigration } from "../migrations/0012-entity-lifecycle-delta.js";
+import { entityParentDeltaMarkerMigration } from "../migrations/0013-entity-parent-delta-marker.js";
+import { historyEntriesToDeltasMigration } from "../migrations/0014-history-entries-to-deltas.js";
+import { contextRevisionDeltaMigration } from "../migrations/0015-context-revision-delta.js";
+import { contextTermRevisionDeltaMigration } from "../migrations/0016-context-term-revision-delta.js";
+import { entityRestorationSourceMigration } from "../migrations/0017-entity-restoration-source.js";
+import { contextRestorationSourceMigration } from "../migrations/0018-context-restoration-source.js";
+import { contextRevisionBaselinesMigration } from "../migrations/0019-context-revision-baselines.js";
 import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/0008-consolidate-legacy-tenants-backfill.js";
 
 export {
@@ -182,6 +191,15 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	// no per-open migration work is needed.
 	await runMigrations(db, [addEntityProjectIdMigration], hadPreExistingData ? { dbPath } : undefined);
 	await runMigrations(db, [migrateHandoffsToEntitiesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [entityRevisionDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [entityLifecycleDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [entityParentDeltaMarkerMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [historyEntriesToDeltasMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [contextRevisionDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [contextTermRevisionDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [entityRestorationSourceMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [contextRestorationSourceMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [contextRevisionBaselinesMigration], hadPreExistingData ? { dbPath } : undefined);
 
 	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory);
 
@@ -244,7 +262,7 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				UNION
 				SELECT tenant_id FROM context_terms
 				UNION
-				SELECT tenant_id FROM history_entries
+				SELECT tenant_id FROM entity_delta_entries
 			)
 			SELECT tenant_ids.tenant_id,
 				COALESCE(entity_counts.entity_count, 0) AS entity_count,
@@ -274,8 +292,8 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				GROUP BY tenant_id
 			) AS context_term_counts ON context_term_counts.tenant_id = tenant_ids.tenant_id
 			LEFT JOIN (
-				SELECT tenant_id, COUNT(*) AS history_entry_count
-				FROM history_entries
+				SELECT tenant_id, SUM(revision) AS history_entry_count
+				FROM entities
 				GROUP BY tenant_id
 			) AS history_entry_counts ON history_entry_counts.tenant_id = tenant_ids.tenant_id
 			ORDER BY tenant_ids.tenant_id`
@@ -305,6 +323,9 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 export function deleteTenant(db: Database.Database, tenantId: string): DeleteTenantResult {
 	const counts = getTenantRecordCounts(db, tenantId);
 	const deleteHistoryEntries = db.prepare(`DELETE FROM history_entries WHERE tenant_id = ?`);
+	const deleteEntityDeltaEntries = db.prepare(`DELETE FROM entity_delta_entries WHERE tenant_id = ?`);
+	const deleteContextDeltaEntries = db.prepare(`DELETE FROM context_delta_entries WHERE tenant_id = ?`);
+	const deleteContextTermDeltaEntries = db.prepare(`DELETE FROM context_term_delta_entries WHERE tenant_id = ?`);
 	const deleteContextTerms = db.prepare(`DELETE FROM context_terms WHERE tenant_id = ?`);
 	const deleteRelations = db.prepare(`DELETE FROM relations WHERE tenant_id = ?`);
 	const deleteContexts = db.prepare(`DELETE FROM contexts WHERE tenant_id = ?`);
@@ -313,6 +334,9 @@ export function deleteTenant(db: Database.Database, tenantId: string): DeleteTen
 
 	const counters = db.transaction(() => {
 		deleteHistoryEntries.run(tenantId);
+		deleteEntityDeltaEntries.run(tenantId);
+		deleteContextDeltaEntries.run(tenantId);
+		deleteContextTermDeltaEntries.run(tenantId);
 		deleteContextTerms.run(tenantId);
 		deleteRelations.run(tenantId);
 		deleteContexts.run(tenantId);
@@ -360,6 +384,9 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 	const renameContexts = db.prepare(`UPDATE contexts SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameContextTerms = db.prepare(`UPDATE context_terms SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameHistoryEntries = db.prepare(`UPDATE history_entries SET tenant_id = ? WHERE tenant_id = ?`);
+	const renameEntityDeltaEntries = db.prepare(`UPDATE entity_delta_entries SET tenant_id = ? WHERE tenant_id = ?`);
+	const renameContextDeltaEntries = db.prepare(`UPDATE context_delta_entries SET tenant_id = ? WHERE tenant_id = ?`);
+	const renameContextTermDeltaEntries = db.prepare(`UPDATE context_term_delta_entries SET tenant_id = ? WHERE tenant_id = ?`);
 
 	db.pragma("defer_foreign_keys = ON");
 	try {
@@ -370,6 +397,9 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 			renameContexts.run(newTenantId, previousTenantId);
 			renameContextTerms.run(newTenantId, previousTenantId);
 			renameHistoryEntries.run(newTenantId, previousTenantId);
+			renameEntityDeltaEntries.run(newTenantId, previousTenantId);
+			renameContextDeltaEntries.run(newTenantId, previousTenantId);
+			renameContextTermDeltaEntries.run(newTenantId, previousTenantId);
 		})();
 	} finally {
 		db.pragma("defer_foreign_keys = OFF");
@@ -430,7 +460,7 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 				(SELECT COUNT(*) FROM relations WHERE tenant_id = @tenantId) AS relation_count,
 				(SELECT COUNT(*) FROM contexts WHERE tenant_id = @tenantId) AS context_count,
 				(SELECT COUNT(*) FROM context_terms WHERE tenant_id = @tenantId) AS context_term_count,
-				(SELECT COUNT(*) FROM history_entries WHERE tenant_id = @tenantId) AS history_entry_count`
+				(SELECT COALESCE(SUM(revision), 0) FROM entities WHERE tenant_id = @tenantId) AS history_entry_count`
 		)
 		.get({ tenantId }) as {
 			entity_count: number;

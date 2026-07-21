@@ -86,7 +86,12 @@ describe("JSON-RPC gate: context/glossary methods", () => {
 			});
 			expect(defined.created).toBe(true);
 
-			const forgotten = await call(token, "forgetContextTerm", { scopeRef: initiative.id, term: "storage-driver seam" });
+			const forgotten = await call(token, "forgetContextTerm", {
+				scopeRef: initiative.id,
+				term: "storage-driver seam",
+				expectedRevision: defined.term.revision,
+				expectedContentHash: defined.term.contentHash
+			});
 			expect(forgotten.removed).toBe(true);
 		});
 

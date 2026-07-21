@@ -2,15 +2,15 @@ import type {
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
-	ContextSyncRecord,
-	ContextTermSyncRecord,
 	DefineContextTermResult,
 	ForgetContextTermResult,
+	MaterializedContextRevision,
+	MaterializedContextTermRevision,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult
 } from "../context/context-types.js";
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../entity-store/tenant-types.js";
-import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "../entity-store/domain.js";
+import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord, MaterializedEntityRevision } from "../entity-store/domain.js";
 import type {
 	DatabaseSnapshot,
 	DeleteResult,
@@ -23,6 +23,8 @@ import type {
 	StatusUpdateResult,
 	UnlinkResult
 } from "../entity-store/store-types.js";
+import type { CanonicalChainBundle, CanonicalChainImportResult } from "../synchronize/canonical-chain.js";
+import type { HistoryDiagnostics } from "./history-diagnostics.js";
 
 /**
  * The engine-agnostic boundary the domain layer talks to (ADR11, ADR13):
@@ -32,6 +34,9 @@ import type {
  */
 export interface StorageDriver {
 	readonly tenantId: string;
+	exportCanonicalChains(): Promise<CanonicalChainBundle>;
+	importCanonicalChains(bundle: CanonicalChainBundle): Promise<CanonicalChainImportResult>;
+	getHistoryDiagnostics(): Promise<HistoryDiagnostics>;
 
 	// Entities
 	createEntity(input: {
@@ -46,17 +51,17 @@ export interface StorageDriver {
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
 	listEntities(kind: string): Promise<EntityRecord[]>;
 	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
-	listAllHistoryEntries(): Promise<HistoryEntryRecord[]>;
-	applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }>;
-	applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }>;
-	/** Non-structural relations only (ISS60/ADR16) - structural relations are reconstructed from `applyResolvedFacts`'s `parentId` handling. */
+	/** Non-structural relations transferred after canonical entity import. */
 	listAllRelations(): Promise<RelationRecord[]>;
 	applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }>;
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
 	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;
-	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord>;
-	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord>;
+	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
+	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
+	/** Materializes entity facts at a specific historical revision by walking the reverse-delta chain (ADR55/ISS261). */
+	materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision>;
+	restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedEntityRevision>;
 	archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult>;
 	deleteEntity(input: { entityId: string }): Promise<DeleteResult>;
 	moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult>;
@@ -82,14 +87,13 @@ export interface StorageDriver {
 	getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails>;
 	getContextDirectory(): Promise<ContextDirectory>;
 	queryContextDirectory(input?: QueryContextDirectoryInput): Promise<QueryContextDirectoryResult>;
-	upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails>;
-	defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }): Promise<DefineContextTermResult>;
-	forgetContextTerm(input: { scopeRef?: string; term: string }): Promise<ForgetContextTermResult>;
-	/** All contexts/terms, unfiltered (ISS62/ADR16) - the read/write halves of synchronize's context sync. */
-	listAllContexts(): Promise<ContextSyncRecord[]>;
-	applyContexts(contexts: ContextSyncRecord[]): Promise<{ applied: number }>;
-	listAllContextTerms(): Promise<ContextTermSyncRecord[]>;
-	applyContextTerms(terms: ContextTermSyncRecord[]): Promise<{ applied: number }>;
+	upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails>;
+	defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<DefineContextTermResult>;
+	forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult>;
+	materializeContextRevision(input: { scopeRef?: string; revision: number }): Promise<MaterializedContextRevision>;
+	materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }): Promise<MaterializedContextTermRevision>;
+	restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextRevision>;
+	restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextTermRevision>;
 
 	// Tenant administration
 	listTenants(): Promise<TenantSummary[]>;

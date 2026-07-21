@@ -1,6 +1,7 @@
 ---
 name: ai-grill-with-docs
 description: Grilling session that challenges a plan against the existing domain model, sharpens terminology, updates documentation inline, and keeps the work tracked in agent-issues.
+disable-model-invocation: true
 ---
 
 Follow the shared [language standard](../agent-issues-language.md).

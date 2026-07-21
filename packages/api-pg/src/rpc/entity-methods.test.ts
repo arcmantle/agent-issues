@@ -123,7 +123,7 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await store.createEntity({ kind: "issue", title: "Ship the seam", parentId: initiative.id });
 
-		const updated = await call(token, "setEntityBody", { entityId: issue.id, body: "Detailed plan." });
+		const updated = await call(token, "setEntityBody", { entityId: issue.id, body: "Detailed plan.", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
 		expect(updated.body).toBe("Detailed plan.");
 	});
 
@@ -132,9 +132,9 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 		const store = new PgStore(appPool, tenantId);
 		const issue = await store.createEntity({ kind: "issue", title: "Initial title" });
 
-		const updated = await call(token, "updateEntity", { entityId: issue.id, title: "Final title", body: "Final body" });
-		expect(updated).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
-		expect(await store.listEntityHistory(issue.id)).toHaveLength(2);
+		const updated = await call(token, "updateEntity", { entityId: issue.id, title: "Final title", body: "Final body", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
+		expect(updated).toEqual(expect.objectContaining({ body: "Final body", title: "Final title", revision: 2 }));
+		expect(await store.listEntityHistory(issue.id)).toHaveLength(1);
 	});
 
 	it("archiveEntity", async () => {

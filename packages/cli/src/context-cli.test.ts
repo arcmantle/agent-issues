@@ -8,14 +8,14 @@ import {
 	renderContextSearchTermsOnly,
 	toContextSearchTermsOnly
 } from "./context-cli.js";
-import { createEntity, defineContextTerm, ensureDatabase, queryContextDirectory, type DatabaseHandle } from "@agent-issues/api-local";
+import { createEntity, defineContextTerm, ensureDatabase, queryContextDirectory, type SqliteExecutor } from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<DatabaseHandle> {
+async function openTestDatabase(): Promise<SqliteExecutor> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-cli-"));
-	const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
-	return db;
+	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	return executor;
 }
 
 afterEach(() => {

@@ -82,24 +82,14 @@ async function dispatch(store: SqliteStore, method: string, params: unknown): Pr
 	switch (method) {
 		case "createEntity":
 			return store.createEntity(args as Parameters<SqliteStore["createEntity"]>[0]);
-		case "listAllHistoryEntries":
-			return store.listAllHistoryEntries();
-		case "applyHistoryEntries":
-			return store.applyHistoryEntries(args.entries as Parameters<SqliteStore["applyHistoryEntries"]>[0]);
-		case "applyResolvedFacts":
-			return store.applyResolvedFacts(args.resolvedEntries as Parameters<SqliteStore["applyResolvedFacts"]>[0]);
+		case "exportCanonicalChains":
+			return store.exportCanonicalChains();
+		case "importCanonicalChains":
+			return store.importCanonicalChains(args.bundle as Parameters<SqliteStore["importCanonicalChains"]>[0]);
 		case "listAllRelations":
 			return store.listAllRelations();
 		case "applyRelations":
 			return store.applyRelations(args.relations as Parameters<SqliteStore["applyRelations"]>[0]);
-		case "listAllContexts":
-			return store.listAllContexts();
-		case "applyContexts":
-			return store.applyContexts(args.contexts as Parameters<SqliteStore["applyContexts"]>[0]);
-		case "listAllContextTerms":
-			return store.listAllContextTerms();
-		case "applyContextTerms":
-			return store.applyContextTerms(args.terms as Parameters<SqliteStore["applyContextTerms"]>[0]);
 		case "getEntityDetails":
 			return store.getEntityDetails(args.entityId as string);
 		case "getDatabaseSnapshot":

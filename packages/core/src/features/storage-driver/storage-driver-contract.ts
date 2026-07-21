@@ -1,8 +1,7 @@
-import { randomUUID } from "node:crypto";
-
 import { describe, expect, it } from "vitest";
 
-import type { HistoryEntryRecord } from "../entity-store/domain.js";
+import { computeEntityContentHash, EntityConflictError, EntityRevisionError } from "../entity-store/domain.js";
+import { computeContextTermContentHash, ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
 export type StorageDriverContractOptions = {
@@ -29,6 +28,88 @@ export type StorageDriverContractOptions = {
  */
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore } = options;
+
+	describe(`storage-driver seam: history diagnostics (${label})`, () => {
+		it("measures empty, short, and multi-step chains without charging ordinary reads", async () => {
+			const store = await openStore();
+
+			try {
+				const initial = await store.getHistoryDiagnostics();
+				expect(initial.entity.maxMaterializationDepth).toBe(0);
+				expect(initial.context).toMatchObject({ historyBytes: 0, deltaCount: 0, maxChainLength: 0, maxMaterializationDepth: 0, records: [] });
+				expect(initial["context-term"]).toMatchObject({ historyBytes: 0, deltaCount: 0, maxChainLength: 0, maxMaterializationDepth: 0, records: [] });
+
+				const entityV1 = await store.createEntity({ kind: "initiative", title: "History diagnostics" });
+				const entityV2 = await store.updateEntity({ entityId: entityV1.id, body: "Second", expectedRevision: entityV1.revision, expectedContentHash: entityV1.contentHash });
+				await store.updateEntity({ entityId: entityV1.id, body: "Third", expectedRevision: entityV2.revision, expectedContentHash: entityV2.contentHash });
+				const contextV1 = await store.upsertContext({ title: "Initial context", summary: "First" });
+				await store.upsertContext({ title: "Current context", summary: "Second", expectedRevision: contextV1.context.revision, expectedContentHash: contextV1.context.contentHash });
+				const termV1 = await store.defineContextTerm({ term: "Diagnostic", definition: "Initial" });
+				await store.defineContextTerm({ term: "Diagnostic", definition: "Current", expectedRevision: termV1.term.revision, expectedContentHash: termV1.term.contentHash });
+
+				const beforeOrdinaryReads = await store.getHistoryDiagnostics();
+				expect(beforeOrdinaryReads.entity.deltaCount).toBe(initial.entity.deltaCount + 2);
+				expect(beforeOrdinaryReads.entity).toMatchObject({ maxChainLength: 2, maxMaterializationDepth: 0 });
+				expect(beforeOrdinaryReads.context).toMatchObject({ deltaCount: 2, maxChainLength: 2, maxMaterializationDepth: 0 });
+				expect(beforeOrdinaryReads["context-term"]).toMatchObject({ deltaCount: 2, maxChainLength: 2, maxMaterializationDepth: 0 });
+				expect(beforeOrdinaryReads.entity.records).toContainEqual({ recordId: entityV1.id, deltaCount: 2, historyBytes: expect.any(Number) });
+				expect(beforeOrdinaryReads.context.records).toContainEqual({ recordId: "default", deltaCount: 2, historyBytes: expect.any(Number) });
+				expect(beforeOrdinaryReads["context-term"].records).toContainEqual({ recordId: "default:Diagnostic", deltaCount: 2, historyBytes: expect.any(Number) });
+				expect(beforeOrdinaryReads.entity.historyBytes).toBeGreaterThan(0);
+				expect(beforeOrdinaryReads.context.historyBytes).toBeGreaterThan(0);
+				expect(beforeOrdinaryReads["context-term"].historyBytes).toBeGreaterThan(0);
+				for (const kind of ["entity", "context", "context-term"] as const) {
+					expect(beforeOrdinaryReads[kind].historyBytes).toBe(beforeOrdinaryReads[kind].records.reduce((total, record) => total + record.historyBytes, 0));
+					expect(beforeOrdinaryReads[kind].records.every((record) => record.historyBytes > 0)).toBe(true);
+				}
+
+				await store.listEntities("initiative");
+				await store.getEntityDetails(entityV1.id);
+				await store.listEntityHistory(entityV1.id);
+				await store.listAllRelations();
+				await store.listOrphans();
+				await store.listProjectAdrs();
+				await store.getInitiativeBundle(entityV1.id);
+				await store.getDatabaseSnapshot();
+				await store.getProjectDiscovery();
+				await store.listContexts();
+				await store.getContextDetails();
+				await store.getContextDirectory();
+				await store.queryContextDirectory({ query: "Diagnostic" });
+				await expect(store.updateEntity({ entityId: entityV1.id, title: "Stale", expectedRevision: entityV1.revision, expectedContentHash: entityV1.contentHash })).rejects.toBeInstanceOf(EntityConflictError);
+				await expect(store.upsertContext({ title: "Stale", summary: "Stale", expectedRevision: contextV1.context.revision, expectedContentHash: contextV1.context.contentHash })).rejects.toBeInstanceOf(ContextConflictError);
+				await expect(store.defineContextTerm({ term: "Diagnostic", definition: "Stale", expectedRevision: termV1.term.revision, expectedContentHash: termV1.term.contentHash })).rejects.toBeInstanceOf(ContextTermConflictError);
+				expect(await store.getHistoryDiagnostics()).toEqual(beforeOrdinaryReads);
+
+				await store.materializeEntityRevision({ entityId: entityV1.id, revision: 1 });
+				await store.materializeContextRevision({ revision: 1 });
+				await store.materializeContextTermRevision({ term: "Diagnostic", revision: 1 });
+				const afterHistoricalReads = await store.getHistoryDiagnostics();
+				expect(afterHistoricalReads.entity.maxMaterializationDepth).toBe(2);
+				expect(afterHistoricalReads.context.maxMaterializationDepth).toBe(1);
+				expect(afterHistoricalReads["context-term"].maxMaterializationDepth).toBe(1);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("records restore traversal without counting the appended live head", async () => {
+			const store = await openStore();
+
+			try {
+				const revision1 = await store.createEntity({ kind: "initiative", title: "Restore diagnostics" });
+				const revision2 = await store.updateEntity({ entityId: revision1.id, body: "Second", expectedRevision: revision1.revision, expectedContentHash: revision1.contentHash });
+				const revision3 = await store.updateEntity({ entityId: revision1.id, body: "Third", expectedRevision: revision2.revision, expectedContentHash: revision2.contentHash });
+				const revision4 = await store.updateEntity({ entityId: revision1.id, body: "Fourth", expectedRevision: revision3.revision, expectedContentHash: revision3.contentHash });
+
+				expect((await store.getHistoryDiagnostics()).entity.maxMaterializationDepth).toBe(0);
+				await store.restoreEntityRevision({ entityId: revision1.id, revision: 1, expectedRevision: revision4.revision, expectedContentHash: revision4.contentHash });
+				expect((await store.getHistoryDiagnostics()).entity.maxMaterializationDepth).toBe(3);
+			} finally {
+				await store.close();
+			}
+		});
+	});
 
 	describe(`storage-driver seam: project discovery (${label})`, () => {
 		it("returns an empty visible-project list for a sentinel-only tenant without changing its snapshot signature", async () => {
@@ -178,9 +259,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 					});
 
 					expect(handoff).toEqual(expect.objectContaining({ id: expect.stringMatching(/^HO\d+$/), kind: "handoff" }));
-					expect(await store.listEntityHistory(handoff.id)).toEqual([
-						expect.objectContaining({ title: `Resume ${target.kind}`, body: "The migration test is green." })
-					]);
+					await expect(store.materializeEntityRevision({ entityId: handoff.id, revision: 1 })).resolves.toEqual(
+						expect.objectContaining({ title: `Resume ${target.kind}`, body: "The migration test is green.", headRevision: 1 })
+					);
 					expect(await store.listAllRelations()).toEqual(expect.arrayContaining([
 						expect.objectContaining({ fromId: handoff.id, toId: target.id, type: "handsOff" })
 					]));
@@ -238,11 +319,11 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(await store.listAllRelations()).toEqual(relationsBeforeRejectedCreate);
 				expect(await store.getSnapshotSignature()).toBe(signatureBeforeRejectedCreate);
 
-				const edited = await store.updateEntity({ entityId: created.id, body: "Final body", title: "Final title" });
+				const edited = await store.updateEntity({ entityId: created.id, body: "Final body", title: "Final title", expectedRevision: created.revision, expectedContentHash: created.contentHash });
 				expect(edited).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
-				const history = await store.listEntityHistory(created.id);
-				expect(history).toHaveLength(2);
-				expect(history[1]).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
+				await expect(store.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toEqual(
+					expect.objectContaining({ title: "Created with links", body: "", headRevision: 2 })
+				);
 			} finally {
 				await store.close();
 			}
@@ -269,7 +350,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const moved = await store.moveEntity({ entityId: issue.id, newParentId: otherInitiative.id });
 				expect(moved.newParentId).toBe(otherInitiative.id);
 
-				const bodyUpdated = await store.setEntityBody({ entityId: issue.id, body: "Detailed plan." });
+				const bodyUpdated = await store.setEntityBody({ entityId: issue.id, body: "Detailed plan.", expectedRevision: moved.entity.revision, expectedContentHash: moved.entity.contentHash });
 				expect(bodyUpdated.body).toBe("Detailed plan.");
 
 				const archived = await store.archiveEntity({ entityId: issue.id });
@@ -320,16 +401,16 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
-		it("lists an entity's append-only history through the async seam", async () => {
+		it("records lifecycle revisions in the canonical reverse-delta chain", async () => {
 			const store = await openStore();
 
 			try {
 				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 				await store.updateEntityStatus({ entityId: initiative.id, status: "active" });
 
-				const history = await store.listEntityHistory(initiative.id);
-				expect(history.map((entry) => entry.version)).toEqual([1, 2]);
-				expect(history[1]?.status).toBe("active");
+				await expect(store.materializeEntityRevision({ entityId: initiative.id, revision: 1 })).resolves.toEqual(
+					expect.objectContaining({ status: "draft", headRevision: 2 })
+				);
 			} finally {
 				await store.close();
 			}
@@ -355,7 +436,173 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 		});
 	});
 
+	describe(`storage-driver seam: canonical-chain import (${label})`, () => {
+		it("imports new records, strict extensions, contexts, and terms exactly once", async () => {
+			const source = await openStore();
+			const target = await openStore();
+			try {
+				const created = await source.createEntity({ kind: "issue", title: "First", body: "First body" });
+				const revision2 = await source.updateEntity({ entityId: created.id, title: "Second", body: "Second body", expectedRevision: created.revision, expectedContentHash: created.contentHash });
+				await source.updateEntity({ entityId: created.id, title: "Third", body: "Third body", expectedRevision: revision2.revision, expectedContentHash: revision2.contentHash });
+				const context = await source.upsertContext({ title: "Language", summary: "Canonical terms." });
+				const term = await source.defineContextTerm({ term: "Order", definition: "Initial." });
+				await source.defineContextTerm({ term: "Order", definition: "Current.", expectedRevision: term.term.revision, expectedContentHash: term.term.contentHash });
+
+				const bundle = await source.exportCanonicalChains();
+				await source.deleteTenant(source.tenantId);
+				const imported = await target.importCanonicalChains(bundle);
+				expect(imported.entitiesCreated).toContain(created.id);
+				expect(imported.contextsCreated).toContain(context.context.key);
+				expect(imported.contextTermsCreated).toContain(`${context.context.key}:Order`);
+				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
+				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
+				await expect(target.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toMatchObject({ definition: "Initial.", headRevision: 2 });
+				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] });
+				const afterImport = await target.createEntity({ kind: "issue", title: "After import" });
+				expect(Number(afterImport.id.slice(3))).toBeGreaterThan(Number(created.id.slice(3)));
+			} finally {
+				await source.close();
+				await target.close();
+			}
+		});
+
+		it("rejects a divergent batch atomically with current head metadata", async () => {
+			const source = await openStore();
+			const target = await openStore();
+			try {
+				const shared = await source.createEntity({ kind: "issue", title: "Shared" });
+				await target.importCanonicalChains(await source.exportCanonicalChains());
+				await source.updateEntity({ entityId: shared.id, title: "Source", expectedRevision: shared.revision, expectedContentHash: shared.contentHash });
+				await target.updateEntity({ entityId: shared.id, title: "Target", expectedRevision: shared.revision, expectedContentHash: shared.contentHash });
+				const newRecord = await source.createEntity({ kind: "issue", title: "Must not import" });
+				const bundle = await source.exportCanonicalChains();
+				await source.deleteTenant(source.tenantId);
+				const signatureBefore = await target.getSnapshotSignature();
+
+				await expect(target.importCanonicalChains(bundle)).rejects.toMatchObject({ name: "SynchronizeConflictError", recordKind: "entity", recordId: shared.id, currentRevision: 2 });
+				await expect(target.getEntityDetails(newRecord.id)).rejects.toThrow(/not found/i);
+				expect(await target.getSnapshotSignature()).toBe(signatureBefore);
+			} finally {
+				await source.close();
+				await target.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: context lifecycle (${label})`, () => {
+		it("resolves a nested issue scope through its owning initiative", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Settlement" });
+				const subIssue = await store.createEntity({ kind: "issue", parentId: issue.id, title: "Retries" });
+
+				await store.defineContextTerm({ scopeRef: subIssue.id, term: "Capture", definition: "Confirmed funds." });
+
+				const details = await store.getContextDetails({ scopeRef: initiative.id });
+				expect(details.terms.map((term) => term.term)).toContain("Capture");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("context term creation establishes a revision-1 baseline with a canonical content hash", async () => {
+			const store = await openStore();
+
+			try {
+				const created = await store.defineContextTerm({
+					term: "Order",
+					definition: "A confirmed purchase.",
+					avoid: [" request ", "Request", "Order"]
+				});
+
+				expect(created.term.revision).toBe(1);
+				expect(created.term.contentHash).toBe(
+					computeContextTermContentHash("A confirmed purchase.", ["request"], false)
+				);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("context term edits use CAS and stale writes leave the current head unchanged", async () => {
+			const store = await openStore();
+
+			try {
+				const created = await store.defineContextTerm({ term: "Order", definition: "Initial definition." });
+				const updated = await store.defineContextTerm({
+					term: "Order",
+					definition: "Updated definition.",
+					avoid: ["request"],
+					author: "alice",
+					expectedRevision: created.term.revision,
+					expectedContentHash: created.term.contentHash
+				});
+
+				expect(updated.created).toBe(false);
+				expect(updated.term.revision).toBe(2);
+				expect(updated.term.contentHash).toBe(
+					computeContextTermContentHash("Updated definition.", ["request"], false)
+				);
+
+				await expect(store.defineContextTerm({
+					term: "Order",
+					definition: "Stale definition.",
+					expectedRevision: created.term.revision,
+					expectedContentHash: created.term.contentHash
+				})).rejects.toMatchObject({
+					name: "ContextTermConflictError",
+					term: "Order",
+					currentRevision: updated.term.revision,
+					currentContentHash: updated.term.contentHash
+				});
+
+				const head = (await store.getContextDetails()).terms.find((candidate) => candidate.term === "Order");
+				expect(head).toEqual(updated.term);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("context term removal tombstones the chain and a matching define resurrects it", async () => {
+			const store = await openStore();
+
+			try {
+				const created = await store.defineContextTerm({ term: "Order", definition: "Initial definition." });
+				const forgotten = await store.forgetContextTerm({
+					term: "Order",
+					author: "alice",
+					expectedRevision: created.term.revision,
+					expectedContentHash: created.term.contentHash
+				});
+
+				expect(forgotten).toMatchObject({ removed: true, currentRevision: 2 });
+				expect((await store.getContextDetails()).terms).toEqual([]);
+
+				let tombstoneHead: ContextTermConflictError | undefined;
+				try {
+					await store.defineContextTerm({ term: "Order", definition: "Restored definition." });
+				} catch (error) {
+					if (error instanceof ContextTermConflictError) {
+						tombstoneHead = error;
+					}
+				}
+				expect(tombstoneHead?.currentRevision).toBe(2);
+
+				const restored = await store.defineContextTerm({
+					term: "Order",
+					definition: "Restored definition.",
+					expectedRevision: tombstoneHead!.currentRevision,
+					expectedContentHash: tombstoneHead!.currentContentHash
+				});
+				expect(restored).toMatchObject({ created: false, term: { revision: 3, definition: "Restored definition." } });
+				expect((await store.getContextDetails()).terms).toEqual([restored.term]);
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("defines, reads, queries, and forgets a context term through the seam", async () => {
 			const store = await openStore();
 
@@ -382,7 +629,12 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				expect((await store.listContexts()).contexts.length).toBeGreaterThan(0);
 
-				const forgotten = await store.forgetContextTerm({ scopeRef: initiative.id, term: "storage-driver seam" });
+				const forgotten = await store.forgetContextTerm({
+					scopeRef: initiative.id,
+					term: "storage-driver seam",
+					expectedRevision: defineResult.term.revision,
+					expectedContentHash: defineResult.term.contentHash
+				});
 				expect(forgotten.removed).toBe(true);
 			} finally {
 				await store.close();
@@ -401,122 +653,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 		});
 	});
 
-	describe(`storage-driver seam: bulk history log (${label})`, () => {
-		it("lists every tenant history entry and idempotently applies a batch (ISS57/ADR16)", async () => {
-			const store = await openStore();
-
-			try {
-				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
-				await store.updateEntityStatus({ entityId: initiative.id, status: "active" });
-
-				const allEntries = await store.listAllHistoryEntries();
-				expect(allEntries.map((entry) => entry.entityId)).toContain(initiative.id);
-				expect(allEntries.length).toBeGreaterThanOrEqual(2);
-
-				const reapplied = await store.applyHistoryEntries(allEntries);
-				expect(reapplied.inserted).toBe(0);
-
-				const foreignEntry: HistoryEntryRecord = {
-					id: randomUUID(),
-					entityId: initiative.id,
-					version: 99,
-					author: "system",
-					title: "Imported from the other side",
-					body: "",
-					bodySource: "authored",
-					status: "active",
-					parentId: null,
-					createdAt: new Date().toISOString()
-				};
-
-				const appliedForeign = await store.applyHistoryEntries([foreignEntry, ...allEntries]);
-				expect(appliedForeign.inserted).toBe(1);
-
-				const afterApply = await store.listAllHistoryEntries();
-				expect(afterApply.map((entry) => entry.id)).toContain(foreignEntry.id);
-			} finally {
-				await store.close();
-			}
-		});
-	});
-
-	describe(`storage-driver seam: resolved-facts apply (${label})`, () => {
-		it("overwrites an existing entity's facts to match a resolved entry, without appending a new history entry", async () => {
-			const store = await openStore();
-
-			try {
-				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
-				const historyBefore = await store.listEntityHistory(initiative.id);
-
-				const resolved: HistoryEntryRecord = {
-					id: randomUUID(),
-					entityId: initiative.id,
-					version: 99,
-					author: "system",
-					title: "Resolved from the other side",
-					body: "merged body",
-					bodySource: "authored",
-					status: "active",
-					parentId: null,
-					createdAt: new Date().toISOString()
-				};
-
-				const result = await store.applyResolvedFacts([resolved]);
-				expect(result.updated).toEqual([initiative.id]);
-				expect(result.created).toEqual([]);
-
-				const { entity } = await store.getEntityDetails(initiative.id);
-				expect(entity.title).toBe("Resolved from the other side");
-				expect(entity.body).toBe("merged body");
-				expect(entity.status).toBe("active");
-
-				const historyAfter = await store.listEntityHistory(initiative.id);
-				expect(historyAfter).toHaveLength(historyBefore.length);
-
-				// Re-applying the same resolved facts is a no-op (idempotent).
-				const reapplied = await store.applyResolvedFacts([resolved]);
-				expect(reapplied.updated).toEqual([]);
-				expect(reapplied.created).toEqual([]);
-			} finally {
-				await store.close();
-			}
-		});
-
-		it("creates a live-cache row for an entity this side has never seen, deriving its kind from its id prefix", async () => {
-			const store = await openStore();
-
-			try {
-				const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
-
-				const newIssueId = "ISS999999";
-				const resolved: HistoryEntryRecord = {
-					id: randomUUID(),
-					entityId: newIssueId,
-					version: 1,
-					author: "system",
-					title: "Introduced by the other side",
-					body: "",
-					bodySource: "authored",
-					status: "todo",
-					parentId: initiative.id,
-					createdAt: new Date().toISOString()
-				};
-
-				const result = await store.applyResolvedFacts([resolved]);
-				expect(result.created).toEqual([newIssueId]);
-
-				const { entity, incoming } = await store.getEntityDetails(newIssueId);
-				expect(entity.kind).toBe("issue");
-				expect(entity.title).toBe("Introduced by the other side");
-				expect(incoming.some((relation) => relation.entity.id === initiative.id && relation.relationType === "tracks")).toBe(true);
-			} finally {
-				await store.close();
-			}
-		});
-	});
-
 	describe(`storage-driver seam: bulk relations (${label})`, () => {
-		it("lists only non-structural relations and idempotently applies a batch (ISS60/ADR16)", async () => {
+		it("lists every relation key and idempotently applies a batch (ISS267/ADR55)", async () => {
 			const store = await openStore();
 
 			try {
@@ -526,10 +664,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await store.linkEntities({ fromId: blocker.id, toId: blocked.id, relationType: "blocks" });
 
 				const relations = await store.listAllRelations();
-				// The "tracks" relations created by parentId above are structural
-				// and must be excluded - only the explicit "blocks" link should
-				// show up here.
-				expect(relations.some((relation) => relation.type === "tracks")).toBe(false);
+				expect(relations).toContainEqual(expect.objectContaining({ fromId: initiative.id, toId: blocker.id, type: "tracks" }));
+				expect(relations).toContainEqual(expect.objectContaining({ fromId: initiative.id, toId: blocked.id, type: "tracks" }));
 				expect(relations).toContainEqual(expect.objectContaining({ fromId: blocker.id, toId: blocked.id, type: "blocks" }));
 
 				const reapplied = await store.applyRelations(relations);
@@ -563,7 +699,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await store.linkEntities({ fromId: issueA.id, toId: issueB.id, relationType: "decomposes" });
 
 				const relations = await store.listAllRelations();
-				expect(relations.some((relation) => relation.type === "tracks")).toBe(false);
+				expect(relations).toContainEqual(expect.objectContaining({ fromId: initiative.id, toId: issueB.id, type: "tracks" }));
 				expect(relations).toContainEqual(expect.objectContaining({ fromId: issueA.id, toId: issueB.id, type: "decomposes" }));
 			} finally {
 				await store.close();
@@ -571,47 +707,646 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 		});
 	});
 
-	describe(`storage-driver seam: bulk contexts (${label})`, () => {
-		it("lists every context/term and idempotently applies a batch (ISS62/ADR16)", async () => {
+describe(`storage-driver seam: entity revision and reverse-delta chain (${label})`, () => {
+	it("creation establishes revision-1 baseline with a correct content hash", async () => {
+		const store = await openStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "issue", title: "Initial title", body: "Initial body." });
+
+			expect(entity.revision).toBe(1);
+			expect(entity.contentHash).toBe(computeEntityContentHash("Initial title", "Initial body."));
+
+			const details = await store.getEntityDetails(entity.id);
+			expect(details.entity.revision).toBe(1);
+			expect(details.entity.contentHash).toBe(entity.contentHash);
+
+			const listed = await store.listEntities("issue");
+			const found = listed.find((e) => e.id === entity.id);
+			expect(found?.revision).toBe(1);
+			expect(found?.contentHash).toBe(entity.contentHash);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("a matching edit atomically advances revision and appends a reverse delta", async () => {
+		const store = await openStore();
+
+		try {
+			const created = await store.createEntity({ kind: "issue", title: "Original title", body: "Original body." });
+			expect(created.revision).toBe(1);
+
+			const edited = await store.updateEntity({
+				entityId: created.id,
+				title: "Updated title",
+				body: "Updated body.",
+				expectedRevision: created.revision,
+				expectedContentHash: created.contentHash
+			});
+
+			expect(edited.revision).toBe(2);
+			expect(edited.contentHash).toBe(computeEntityContentHash("Updated title", "Updated body."));
+			expect(edited.title).toBe("Updated title");
+			expect(edited.body).toBe("Updated body.");
+
+			const details = await store.getEntityDetails(edited.id);
+			expect(details.entity.revision).toBe(2);
+			expect(details.entity.contentHash).toBe(edited.contentHash);
+
+			await expect(store.materializeEntityRevision({ entityId: edited.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({ title: "Original title", body: "Original body.", headRevision: 2 })
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("a stale revision rejects with current revision metadata and leaves head unchanged", async () => {
+		const store = await openStore();
+
+		try {
+			const created = await store.createEntity({ kind: "issue", title: "Original title", body: "Original body." });
+
+			await expect(
+				store.updateEntity({
+					entityId: created.id,
+					title: "Should not apply",
+					expectedRevision: 99,
+					expectedContentHash: created.contentHash
+				})
+			).rejects.toThrow(EntityConflictError);
+
+			try {
+				await store.updateEntity({
+					entityId: created.id,
+					title: "Should not apply",
+					expectedRevision: 99,
+					expectedContentHash: created.contentHash
+				});
+			} catch (err) {
+				expect(err).toBeInstanceOf(EntityConflictError);
+				expect((err as EntityConflictError).currentRevision).toBe(1);
+				expect((err as EntityConflictError).currentContentHash).toBe(created.contentHash);
+			}
+
+			const unchanged = await store.getEntityDetails(created.id);
+			expect(unchanged.entity.title).toBe("Original title");
+			expect(unchanged.entity.revision).toBe(1);
+
+			await expect(store.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({ targetRevision: 1, headRevision: 1, title: "Original title", body: "Original body." })
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("a stale content hash rejects even when revision matches", async () => {
+		const store = await openStore();
+
+		try {
+			const created = await store.createEntity({ kind: "issue", title: "Original title", body: "Original body." });
+
+			await expect(
+				store.updateEntity({
+					entityId: created.id,
+					title: "Should not apply",
+					expectedRevision: 1,
+					expectedContentHash: "wrong-hash-never-valid"
+				})
+			).rejects.toThrow(EntityConflictError);
+
+			const unchanged = await store.getEntityDetails(created.id);
+			expect(unchanged.entity.title).toBe("Original title");
+			expect(unchanged.entity.revision).toBe(1);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("setEntityBody also validates revision/hash and appends a delta on match", async () => {
+		const store = await openStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Plan", body: "" });
+			const issue = await store.createEntity({ kind: "issue", title: "Issue", parentId: initiative.id });
+
+			const updated = await store.setEntityBody({
+				entityId: issue.id,
+				body: "Detailed plan.",
+				expectedRevision: issue.revision,
+				expectedContentHash: issue.contentHash
+			});
+
+			expect(updated.revision).toBe(2);
+			expect(updated.body).toBe("Detailed plan.");
+			expect(updated.contentHash).toBe(computeEntityContentHash("Issue", "Detailed plan."));
+
+			await expect(
+				store.setEntityBody({
+					entityId: issue.id,
+					body: "Late arrival.",
+					expectedRevision: issue.revision,
+					expectedContentHash: issue.contentHash
+				})
+			).rejects.toThrow(EntityConflictError);
+
+			try {
+				await store.setEntityBody({
+					entityId: issue.id,
+					body: "Late arrival.",
+					expectedRevision: issue.revision,
+					expectedContentHash: issue.contentHash
+				});
+			} catch (error) {
+				expect(error).toBeInstanceOf(EntityConflictError);
+				expect((error as EntityConflictError).currentRevision).toBe(updated.revision);
+				expect((error as EntityConflictError).currentContentHash).toBe(updated.contentHash);
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("sequential edits build a chain where each revision's hash matches its head content", async () => {
+		const store = await openStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "issue", title: "v0 title", body: "v0 body." });
+
+			const v2 = await store.updateEntity({
+				entityId: entity.id,
+				title: "v1 title",
+				body: "v1 body.",
+				expectedRevision: entity.revision,
+				expectedContentHash: entity.contentHash
+			});
+
+			const v3 = await store.updateEntity({
+				entityId: entity.id,
+				title: "v2 title",
+				body: "v2 body.",
+				expectedRevision: v2.revision,
+				expectedContentHash: v2.contentHash
+			});
+
+			expect(v2.revision).toBe(2);
+			expect(v3.revision).toBe(3);
+			expect(v3.contentHash).toBe(computeEntityContentHash("v2 title", "v2 body."));
+
+			await expect(store.materializeEntityRevision({ entityId: entity.id, revision: 1 })).resolves.toEqual(expect.objectContaining({ title: "v0 title", body: "v0 body.", headRevision: 3 }));
+			await expect(store.materializeEntityRevision({ entityId: entity.id, revision: 2 })).resolves.toEqual(expect.objectContaining({ title: "v1 title", body: "v1 body.", headRevision: 3 }));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("materializes prior revisions without changing the current head or history", async () => {
+		const store = await openStore();
+
+		try {
+			const revision1 = await store.createEntity({ kind: "issue", title: "First title", body: "First body." });
+			const revision2 = await store.updateEntity({
+				entityId: revision1.id,
+				title: "Second title",
+				body: "Second body.",
+				expectedRevision: revision1.revision,
+				expectedContentHash: revision1.contentHash
+			});
+			const revision3 = await store.updateEntity({
+				entityId: revision1.id,
+				title: "Third title",
+				body: "Third body.",
+				expectedRevision: revision2.revision,
+				expectedContentHash: revision2.contentHash
+			});
+			const historyBefore = await store.listEntityHistory(revision1.id);
+
+			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 2 })).resolves.toEqual(
+				expect.objectContaining({
+					entityId: revision1.id,
+					targetRevision: 2,
+					headRevision: 3,
+					title: "Second title",
+					body: "Second body.",
+					bodySource: "authored"
+				})
+			);
+			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({
+					entityId: revision1.id,
+					targetRevision: 1,
+					headRevision: 3,
+					title: "First title",
+					body: "First body.",
+					bodySource: "authored"
+				})
+			);
+
+			const headAfter = await store.getEntityDetails(revision1.id);
+			expect(headAfter.entity).toEqual(revision3);
+			expect(await store.listEntityHistory(revision1.id)).toEqual(historyBefore);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("restores a prior revision as a new head and preserves the existing chain", async () => {
+		const store = await openStore();
+
+		try {
+			const revision1 = await store.createEntity({ kind: "issue", title: "First title", body: "First body." });
+			const revision2 = await store.updateEntity({ entityId: revision1.id, title: "Second title", body: "Second body.", expectedRevision: revision1.revision, expectedContentHash: revision1.contentHash });
+			const revision3 = await store.updateEntity({ entityId: revision1.id, title: "Third title", body: "Third body.", expectedRevision: revision2.revision, expectedContentHash: revision2.contentHash });
+
+			const restored = await store.restoreEntityRevision({ entityId: revision1.id, revision: 1, author: "restorer", expectedRevision: revision3.revision, expectedContentHash: revision3.contentHash });
+			expect(restored).toEqual(expect.objectContaining({ entityId: revision1.id, targetRevision: 4, headRevision: 4, title: "First title", body: "First body.", author: "restorer", restoredFromRevision: 1 }));
+			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 3 })).resolves.toEqual(expect.objectContaining({ title: "Third title", body: "Third body.", restoredFromRevision: null }));
+			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 1 })).resolves.toEqual(expect.objectContaining({ title: "First title", body: "First body.", restoredFromRevision: null }));
+
+			await expect(store.restoreEntityRevision({ entityId: revision1.id, revision: 2, expectedRevision: revision3.revision, expectedContentHash: revision3.contentHash })).rejects.toMatchObject({ name: "EntityConflictError", currentRevision: 4 });
+			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 4 })).resolves.toEqual(restored);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("restores active and tombstoned lifecycle states through new heads", async () => {
+		const store = await openStore();
+
+		try {
+			const parent = await store.createEntity({ kind: "initiative", title: "Parent" });
+			const created = await store.createEntity({ kind: "issue", title: "Recoverable", parentId: parent.id });
+			await store.deleteEntity({ entityId: created.id });
+
+			const active = await store.restoreEntityRevision({
+				entityId: created.id,
+				revision: 1,
+				expectedRevision: 2,
+				expectedContentHash: created.contentHash
+			});
+			expect(active).toEqual(expect.objectContaining({ targetRevision: 3, headRevision: 3, tombstone: false, parentId: parent.id, restoredFromRevision: 1 }));
+			await expect(store.getEntityDetails(created.id)).resolves.toEqual(expect.objectContaining({ entity: expect.objectContaining({ id: created.id, revision: 3 }) }));
+
+			const tombstoned = await store.restoreEntityRevision({
+				entityId: created.id,
+				revision: 2,
+				expectedRevision: 3,
+				expectedContentHash: computeEntityContentHash(active.title, active.body)
+			});
+			expect(tombstoned).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, tombstone: true, parentId: null, restoredFromRevision: 2 }));
+			await expect(store.getEntityDetails(created.id)).rejects.toThrow(`Entity not found: ${created.id}`);
+			await expect(store.materializeEntityRevision({ entityId: created.id, revision: 3 })).resolves.toEqual(expect.objectContaining({ tombstone: false, parentId: parent.id }));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("returns stable errors for missing entities and out-of-range revisions", async () => {
+		const store = await openStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "issue", title: "Only revision" });
+			const requests = [
+				{ input: { entityId: "ISS-does-not-exist", revision: 1 }, reason: "entity-not-found" },
+				{ input: { entityId: entity.id, revision: 0 }, reason: "revision-out-of-range" },
+				{ input: { entityId: entity.id, revision: 2 }, reason: "revision-out-of-range" }
+			] as const;
+
+			for (const request of requests) {
+				try {
+					await store.materializeEntityRevision(request.input);
+					expect.unreachable("Expected materialization to reject");
+				} catch (error) {
+					expect(error).toBeInstanceOf(EntityRevisionError);
+					expect((error as EntityRevisionError).reason).toBe(request.reason);
+				}
+			}
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("records status changes in the revision chain", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Lifecycle issue" });
+			const statusUpdate = await store.updateEntityStatus({ entityId: issue.id, status: "in-progress" });
+
+			expect(statusUpdate.entity).toEqual(expect.objectContaining({ status: "in-progress", revision: 2 }));
+			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({
+					entityId: issue.id,
+					targetRevision: 1,
+					headRevision: 2,
+					status: "todo"
+				})
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("records archive status in the revision chain", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Archivable" });
+			const archived = await store.archiveEntity({ entityId: issue.id });
+
+			expect(archived.entity).toEqual(expect.objectContaining({ status: "done", revision: 2 }));
+			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({ status: "todo", targetRevision: 1, headRevision: 2 })
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("failed lifecycle writes leave the head and revision chain unchanged", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Stable" });
+			const historyBefore = await store.listEntityHistory(issue.id);
+
+			await expect(store.updateEntityStatus({ entityId: issue.id, status: "not-a-status" })).rejects.toThrow();
+			await expect(store.moveEntity({ entityId: issue.id, newParentId: issue.id })).rejects.toThrow();
+
+			const unchanged = await store.getEntityDetails(issue.id);
+			expect(unchanged.entity).toEqual(issue);
+			expect(await store.listEntityHistory(issue.id)).toEqual(historyBefore);
+			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 2 })).rejects.toMatchObject({
+				reason: "revision-out-of-range",
+				headRevision: 1
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("records structural moves in the revision chain", async () => {
+		const store = await openStore();
+
+		try {
+			const firstParent = await store.createEntity({ kind: "initiative", title: "First parent" });
+			const secondParent = await store.createEntity({ kind: "initiative", title: "Second parent" });
+			const issue = await store.createEntity({ kind: "issue", title: "Movable", parentId: firstParent.id });
+			const moved = await store.moveEntity({ entityId: issue.id, newParentId: secondParent.id });
+
+			expect(moved.entity.revision).toBe(2);
+			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({ parentId: firstParent.id, targetRevision: 1, headRevision: 2 })
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("records deletion as a tombstone while hiding the live entity", async () => {
+		const store = await openStore();
+
+		try {
+			const parent = await store.createEntity({ kind: "initiative", title: "Parent" });
+			const issue = await store.createEntity({ kind: "issue", title: "Disposable", parentId: parent.id });
+			const deleted = await store.deleteEntity({ entityId: issue.id });
+
+			expect(deleted).toEqual(expect.objectContaining({ removed: true, entity: expect.objectContaining({ id: issue.id }) }));
+			await expect(store.getEntityDetails(issue.id)).rejects.toThrow(`Entity not found: ${issue.id}`);
+			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 1 })).resolves.toEqual(
+				expect.objectContaining({ targetRevision: 1, headRevision: 2, parentId: parent.id, tombstone: false })
+			);
+			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 2 })).resolves.toEqual(
+				expect.objectContaining({ targetRevision: 2, headRevision: 2, tombstone: true })
+			);
+		} finally {
+			await store.close();
+		}
+	});
+});
+
+	describe(`storage-driver seam: context revision history (${label})`, () => {
+		it("creation establishes a revision-1 baseline with a correct content hash", async () => {
 			const store = await openStore();
 
 			try {
-				await store.defineContextTerm({ term: "tenant", definition: "A workspace's isolated slice of data." });
+				const created = await store.upsertContext({ title: "Initial title", summary: "Initial summary" });
 
-				const contexts = await store.listAllContexts();
-				const terms = await store.listAllContextTerms();
-				expect(contexts).toContainEqual(expect.objectContaining({ key: "default" }));
-				expect(terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "A workspace's isolated slice of data." }));
+				expect(created.context.revision).toBe(1);
+				expect(created.context.contentHash).toMatch(/^[0-9a-f]{64}$/);
+				expect(created.context.exists).toBe(true);
 
-				const reappliedContexts = await store.applyContexts(contexts);
-				const reappliedTerms = await store.applyContextTerms(terms);
-				expect(reappliedContexts.applied).toBe(0);
-				expect(reappliedTerms.applied).toBe(0);
+				const direct = await store.getContextDetails();
+				expect(direct.context.revision).toBe(1);
+				expect(direct.context.contentHash).toBe(created.context.contentHash);
 			} finally {
 				await store.close();
 			}
 		});
 
-		it("converges on whichever side's context/term edit is strictly newer (ISS62/ADR16)", async () => {
+		it("a matching update atomically advances to revision 2 and appends a reverse delta", async () => {
 			const store = await openStore();
 
 			try {
-				await store.defineContextTerm({ term: "tenant", definition: "Original definition." });
-				const [original] = await store.listAllContextTerms();
+				const created = await store.upsertContext({ title: "Initial title", summary: "Initial summary" });
+				expect(created.context.revision).toBe(1);
 
-				const staleEdit = { ...original, definition: "A stale edit from before the winning one.", updatedAt: original.createdAt };
-				const applyStale = await store.applyContextTerms([staleEdit]);
-				expect(applyStale.applied).toBe(0);
+				const updated = await store.upsertContext({
+					title: "Updated title",
+					summary: "Updated summary",
+					expectedRevision: created.context.revision,
+					expectedContentHash: created.context.contentHash
+				});
 
-				const detailsAfterStale = await store.getContextDetails();
-				expect(detailsAfterStale.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Original definition." }));
+				expect(updated.context.revision).toBe(2);
+				expect(updated.context.contentHash).not.toBe(created.context.contentHash);
+				expect(updated.context.title).toBe("Updated title");
+				expect(updated.context.summary).toBe("Updated summary");
+				expect(updated.context.exists).toBe(true);
+			} finally {
+				await store.close();
+			}
+		});
 
-				const newerEdit = { ...original, definition: "A newer, winning edit.", updatedAt: new Date(Date.now() + 60_000).toISOString() };
-				const applyNewer = await store.applyContextTerms([newerEdit]);
-				expect(applyNewer.applied).toBe(1);
+		it("a stale revision rejects with ContextConflictError and leaves head unchanged", async () => {
+			const store = await openStore();
 
-				const detailsAfterNewer = await store.getContextDetails();
-				expect(detailsAfterNewer.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "A newer, winning edit." }));
+			try {
+				const created = await store.upsertContext({ title: "Initial title", summary: "Initial summary" });
+				const updated = await store.upsertContext({
+					title: "Updated title",
+					summary: "Updated summary",
+					expectedRevision: created.context.revision,
+					expectedContentHash: created.context.contentHash
+				});
+				expect(updated.context.revision).toBe(2);
+
+				// Stale: still at revision 1
+				let caughtError: unknown;
+				try {
+					await store.upsertContext({
+						title: "Stale title",
+						summary: "Stale summary",
+						expectedRevision: created.context.revision,
+						expectedContentHash: created.context.contentHash
+					});
+					expect.unreachable("Expected ContextConflictError to be thrown");
+				} catch (err) {
+					caughtError = err;
+				}
+
+				expect(caughtError).toBeInstanceOf(ContextConflictError);
+				expect((caughtError as ContextConflictError).contextKey).toBeDefined();
+				expect((caughtError as ContextConflictError).currentRevision).toBe(2);
+
+				// Head unchanged after rejected write
+				const head = await store.getContextDetails();
+				expect(head.context.revision).toBe(2);
+				expect(head.context.title).toBe("Updated title");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("an existing context cannot be updated without its expected head", async () => {
+			const store = await openStore();
+
+			try {
+				const created = await store.upsertContext({ title: "Initial title", summary: "Initial summary" });
+
+				await expect(store.upsertContext({ title: "Unguarded title", summary: "Unguarded summary" })).rejects.toMatchObject({
+					name: "ContextConflictError",
+					currentRevision: created.context.revision,
+					currentContentHash: created.context.contentHash
+				});
+
+				await expect(store.getContextDetails()).resolves.toEqual(created);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("direct reads (list/search/getContextDetails) remain direct and do not require revision tracking", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
+				await store.upsertContext({ scopeRef: initiative.id, title: "Payments context", summary: "Payments glossary" });
+
+				const details = await store.getContextDetails({ scopeRef: initiative.id });
+				expect(details.context.revision).toBe(1);
+
+				const list = await store.listContexts();
+				const found = list.contexts.find((item) => item.context.scopeEntityId === initiative.id);
+				expect(found?.context.revision).toBe(1);
+
+				const directory = await store.getContextDirectory();
+				const initiative_context = directory.initiatives.find((ctx) => ctx.context.scopeEntityId === initiative.id);
+				expect(initiative_context?.context.revision).toBe(1);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("author and timestamp are recorded on the delta and the context head preserves ordering", async () => {
+			const store = await openStore();
+
+			try {
+				const r1 = await store.upsertContext({ title: "v1", summary: "s1", author: "alice" });
+				const r2 = await store.upsertContext({
+					title: "v2",
+					summary: "s2",
+					author: "bob",
+					expectedRevision: r1.context.revision,
+					expectedContentHash: r1.context.contentHash
+				});
+
+				expect(r2.context.revision).toBe(2);
+				expect(r2.context.updatedAt).not.toBeNull();
+				expect(r2.context.updatedAt! >= r1.context.updatedAt!).toBe(true);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("materializes context revisions without changing the current head", async () => {
+			const store = await openStore();
+
+			try {
+				const revision1 = await store.upsertContext({ title: "First", summary: "First summary.", author: "alice" });
+				const revision2 = await store.upsertContext({ title: "Second", summary: "Second summary.", author: "bob", expectedRevision: revision1.context.revision, expectedContentHash: revision1.context.contentHash });
+				await store.upsertContext({ title: "Third", summary: "Third summary.", author: "carol", expectedRevision: revision2.context.revision, expectedContentHash: revision2.context.contentHash });
+
+				await expect(store.materializeContextRevision({ revision: 2 })).resolves.toEqual(expect.objectContaining({ contextKey: revision1.context.key, targetRevision: 2, headRevision: 3, title: "Second", summary: "Second summary.", author: "bob" }));
+				await expect(store.materializeContextRevision({ revision: 1 })).resolves.toEqual(expect.objectContaining({ targetRevision: 1, headRevision: 3, title: "First", summary: "First summary.", author: "alice" }));
+				await expect(store.getContextDetails()).resolves.toEqual(expect.objectContaining({ context: expect.objectContaining({ revision: 3, title: "Third" }) }));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("materializes context terms before and at their tombstone", async () => {
+			const store = await openStore();
+
+			try {
+				const revision1 = await store.defineContextTerm({ term: "Order", definition: "First definition.", author: "alice" });
+				const revision2 = await store.defineContextTerm({ term: "Order", definition: "Second definition.", avoid: ["purchase"], author: "bob", expectedRevision: revision1.term.revision, expectedContentHash: revision1.term.contentHash });
+				await store.forgetContextTerm({ term: "Order", author: "carol", expectedRevision: revision2.term.revision, expectedContentHash: revision2.term.contentHash });
+
+				await expect(store.getContextDetails()).resolves.toEqual(expect.objectContaining({ terms: [] }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toEqual(expect.objectContaining({ targetRevision: 1, headRevision: 3, definition: "First definition.", avoid: [], tombstone: false, author: "alice" }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 2 })).resolves.toEqual(expect.objectContaining({ targetRevision: 2, headRevision: 3, definition: "Second definition.", avoid: ["purchase"], tombstone: false, author: "bob" }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 3 })).resolves.toEqual(expect.objectContaining({ targetRevision: 3, headRevision: 3, tombstone: true, author: "carol" }));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("restores context revisions as new heads without replacing newer history", async () => {
+			const store = await openStore();
+
+			try {
+				const revision1 = await store.upsertContext({ title: "First", summary: "First summary.", author: "alice" });
+				const revision2 = await store.upsertContext({ title: "Second", summary: "Second summary.", author: "bob", expectedRevision: revision1.context.revision, expectedContentHash: revision1.context.contentHash });
+				const revision3 = await store.upsertContext({ title: "Third", summary: "Third summary.", author: "carol", expectedRevision: revision2.context.revision, expectedContentHash: revision2.context.contentHash });
+
+				const restored = await store.restoreContextRevision({ revision: 1, author: "restorer", expectedRevision: revision3.context.revision, expectedContentHash: revision3.context.contentHash });
+				expect(restored).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, title: "First", summary: "First summary.", author: "restorer", restoredFromRevision: 1 }));
+				await expect(store.materializeContextRevision({ revision: 3 })).resolves.toEqual(expect.objectContaining({ title: "Third", restoredFromRevision: null }));
+				await expect(store.restoreContextRevision({ revision: 2, expectedRevision: 3, expectedContentHash: revision3.context.contentHash })).rejects.toMatchObject({ name: "ContextConflictError", currentRevision: 4 });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("restores removed context terms on their existing revision chain", async () => {
+			const store = await openStore();
+
+			try {
+				const revision1 = await store.defineContextTerm({ term: "Order", definition: "First definition.", author: "alice" });
+				const revision2 = await store.defineContextTerm({ term: "Order", definition: "Second definition.", avoid: ["purchase"], author: "bob", expectedRevision: revision1.term.revision, expectedContentHash: revision1.term.contentHash });
+				const removed = await store.forgetContextTerm({ term: "Order", author: "carol", expectedRevision: revision2.term.revision, expectedContentHash: revision2.term.contentHash });
+
+				const restored = await store.restoreContextTermRevision({ term: "Order", revision: 1, author: "restorer", expectedRevision: removed.currentRevision!, expectedContentHash: removed.currentContentHash! });
+				expect(restored).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, definition: "First definition.", avoid: [], tombstone: false, author: "restorer", restoredFromRevision: 1 }));
+				await expect(store.getContextDetails()).resolves.toEqual(expect.objectContaining({ terms: [expect.objectContaining({ term: "Order", revision: 4 })] }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 3 })).resolves.toEqual(expect.objectContaining({ tombstone: true, restoredFromRevision: null }));
+				await expect(store.restoreContextTermRevision({ term: "Order", revision: 2, expectedRevision: 3, expectedContentHash: removed.currentContentHash! })).rejects.toMatchObject({ name: "ContextTermConflictError", currentRevision: 4 });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns typed errors for missing records and invalid context revisions", async () => {
+			const store = await openStore();
+
+			try {
+				await expect(store.materializeContextRevision({ revision: 1 })).rejects.toBeInstanceOf(ContextRevisionError);
+				await store.upsertContext({ title: "Only", summary: "Only revision." });
+				await expect(store.materializeContextRevision({ revision: 2 })).rejects.toMatchObject({ name: "ContextRevisionError", reason: "revision-out-of-range", headRevision: 1 });
+				await expect(store.materializeContextTermRevision({ term: "Missing", revision: 1 })).rejects.toMatchObject({ name: "ContextRevisionError", reason: "term-not-found" });
 			} finally {
 				await store.close();
 			}

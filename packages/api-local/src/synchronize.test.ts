@@ -5,16 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openSqliteStore } from "./sqlite-store.js";
 import type { SqliteStore } from "./sqlite-store.js";
-import { synchronizeStores } from "@agent-issues/core";
+import { synchronizeStores, SynchronizeConflictError } from "@agent-issues/core";
 
-// `synchronizeStores` only depends on the `StorageDriver` interface, so two
-// `SqliteStore`s stand in for "local" and "cloud" here - proving the
-// orchestration logic (union, resolve-latest, converge both sides) without
-// needing a real HTTP round-trip, matching how the merge algorithm (ISS58)
-// is tested purely. The underlying seam primitives this composes
-// (`listAllHistoryEntries`/`applyHistoryEntries`/`applyResolvedFacts`) are
-// separately proven against every real backend by `storage-driver-contract.ts`.
-describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
+// Two independent SQLite stores exercise the same StorageDriver orchestration
+// used for local/cloud synchronization without requiring an HTTP round trip.
+describe("synchronizeStores (ISS267/ADR55)", () => {
 	let localDirectory: string;
 	let cloudDirectory: string;
 	let local: SqliteStore;
@@ -60,6 +55,38 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 		});
 	});
 
+	it("imports a strict canonical extension with every reverse delta intact", async () => {
+		const created = await local.createEntity({ kind: "issue", title: "First", body: "First body" });
+		const revision2 = await local.updateEntity({ entityId: created.id, title: "Second", body: "Second body", expectedRevision: created.revision, expectedContentHash: created.contentHash });
+		await local.updateEntity({ entityId: created.id, title: "Third", body: "Third body", expectedRevision: revision2.revision, expectedContentHash: revision2.contentHash });
+
+		const result = await cloud.importCanonicalChains(await local.exportCanonicalChains());
+
+		expect(result.entitiesCreated).toContain(created.id);
+		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
+		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
+		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] });
+	});
+
+	it("rejects a divergent batch before mutating an earlier compatible record", async () => {
+		const shared = await local.createEntity({ kind: "issue", title: "Shared" });
+		await cloud.importCanonicalChains(await local.exportCanonicalChains());
+		const localShared = await local.updateEntity({ entityId: shared.id, title: "Local", expectedRevision: shared.revision, expectedContentHash: shared.contentHash });
+		await cloud.updateEntity({ entityId: shared.id, title: "Cloud", expectedRevision: shared.revision, expectedContentHash: shared.contentHash });
+		const newRecord = await local.createEntity({ kind: "issue", title: "Must roll back" });
+		const signatureBefore = await cloud.getSnapshotSignature();
+
+		await expect(cloud.importCanonicalChains(await local.exportCanonicalChains())).rejects.toMatchObject({
+			name: "SynchronizeConflictError",
+			recordKind: "entity",
+			recordId: shared.id,
+			currentRevision: 2
+		});
+		expect(localShared.revision).toBe(2);
+		await expect(cloud.getEntityDetails(newRecord.id)).rejects.toThrow(/not found/i);
+		expect(await cloud.getSnapshotSignature()).toBe(signatureBefore);
+	});
+
 	it("propagates a brand-new entity created on one side to the other", async () => {
 		const initiative = await local.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		const issue = await local.createEntity({ kind: "issue", title: "Local-only issue", parentId: initiative.id });
@@ -101,43 +128,54 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 		expect(repeatSummary.relationsAppliedToCloud).toBe(0);
 	});
 
-	it("resolves a concurrent same-record edit deterministically and preserves the losing edit in history on both sides", async () => {
+	it("preserves structural-type annotations alongside the canonical parent", async () => {
+		const canonicalParent = await local.createEntity({ kind: "initiative", title: "Canonical parent" });
+		const annotationSource = await local.createEntity({ kind: "initiative", title: "Annotation source" });
+		const issue = await local.createEntity({ kind: "issue", title: "Tracked issue", parentId: canonicalParent.id });
+		await synchronizeStores(local, cloud);
+
+		await local.linkEntities({ fromId: annotationSource.id, toId: issue.id, relationType: "tracks" });
+		const summary = await synchronizeStores(local, cloud);
+
+		expect(summary.relationsAppliedToCloud).toBe(1);
+		expect(await cloud.listAllRelations()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ fromId: canonicalParent.id, toId: issue.id, type: "tracks" }),
+			expect.objectContaining({ fromId: annotationSource.id, toId: issue.id, type: "tracks" })
+		]));
+		expect((await cloud.exportCanonicalChains()).entities.find((chain) => chain.head.id === issue.id)?.head.parentId).toBe(canonicalParent.id);
+	});
+
+	it("does not merge or overwrite divergent revisioned heads", async () => {
 		const initiative = await local.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		await synchronizeStores(local, cloud);
 
-		await local.setEntityBody({ entityId: initiative.id, body: "Edited locally, first" });
-		await new Promise((resolve) => setTimeout(resolve, 5));
-		await cloud.setEntityBody({ entityId: initiative.id, body: "Edited in the cloud, second" });
+		await local.setEntityBody({ entityId: initiative.id, body: "Edited locally, first", expectedRevision: initiative.revision, expectedContentHash: initiative.contentHash });
+		await cloud.setEntityBody({ entityId: initiative.id, body: "Edited in the cloud, second", expectedRevision: initiative.revision, expectedContentHash: initiative.contentHash });
+		const localBefore = await local.getEntityDetails(initiative.id);
+		const cloudBefore = await cloud.getEntityDetails(initiative.id);
 
-		const summary = await synchronizeStores(local, cloud);
-
-		expect(summary.concurrentEditConflicts).toBe(1);
+		await expect(synchronizeStores(local, cloud)).rejects.toMatchObject({
+			name: "SynchronizeConflictError",
+			recordKind: "entity",
+			recordId: initiative.id,
+			currentRevision: 2,
+			currentContentHash: localBefore.entity.contentHash
+		});
 
 		const localDetails = await local.getEntityDetails(initiative.id);
 		const cloudDetails = await cloud.getEntityDetails(initiative.id);
-		expect(localDetails.entity.body).toBe("Edited in the cloud, second");
-		expect(cloudDetails.entity.body).toBe("Edited in the cloud, second");
-
-		const localHistory = await local.listEntityHistory(initiative.id);
-		const cloudHistory = await cloud.listEntityHistory(initiative.id);
-		expect(localHistory.some((entry) => entry.body === "Edited locally, first")).toBe(true);
-		expect(cloudHistory.some((entry) => entry.body === "Edited locally, first")).toBe(true);
+		expect(localDetails.entity).toEqual(localBefore.entity);
+		expect(cloudDetails.entity).toEqual(cloudBefore.entity);
 	});
 
-	it("repeated synchronize after a resolved conflict applies no new writes (the conflict itself stays reported, since it's a permanent fact of history)", async () => {
+	it("repeated synchronize keeps rejecting unresolved divergent heads", async () => {
 		const initiative = await local.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 		await synchronizeStores(local, cloud);
-		await local.setEntityBody({ entityId: initiative.id, body: "Edited locally, first" });
-		await new Promise((resolve) => setTimeout(resolve, 5));
-		await cloud.setEntityBody({ entityId: initiative.id, body: "Edited in the cloud, second" });
-		await synchronizeStores(local, cloud);
+		await local.setEntityBody({ entityId: initiative.id, body: "Edited locally, first", expectedRevision: initiative.revision, expectedContentHash: initiative.contentHash });
+		await cloud.setEntityBody({ entityId: initiative.id, body: "Edited in the cloud, second", expectedRevision: initiative.revision, expectedContentHash: initiative.contentHash });
 
-		const summary = await synchronizeStores(local, cloud);
-
-		expect(summary.entriesAppliedToLocal).toBe(0);
-		expect(summary.entriesAppliedToCloud).toBe(0);
-		expect(summary.entitiesUpdatedLocal).toEqual([]);
-		expect(summary.entitiesUpdatedCloud).toEqual([]);
+		await expect(synchronizeStores(local, cloud)).rejects.toBeInstanceOf(SynchronizeConflictError);
+		await expect(synchronizeStores(local, cloud)).rejects.toMatchObject({ recordId: initiative.id, currentRevision: 2 });
 	});
 
 	it("propagates a handoff entity and handsOff relation without duplication on repeated runs", async () => {
@@ -166,32 +204,56 @@ describe("synchronizeStores (ISS59/ADR15, ADR16)", () => {
 		expect(repeatSummary.relationsAppliedToCloud).toBe(0);
 	});
 
-	it("propagates a context/term created on one side and converges on whichever side's edit is newer (ISS62)", async () => {
-		await local.defineContextTerm({ term: "tenant", definition: "A workspace's isolated slice of data." });
+	it("imports compatible context and tombstoned-term extensions in either direction", async () => {
+		const localContext = await local.upsertContext({ title: "Language", summary: "Initial summary." });
+		const localTerm = await local.defineContextTerm({ term: "tenant", definition: "A workspace's isolated slice of data." });
 		await synchronizeStores(local, cloud);
 
-		const cloudTermsAfterFirstSync = await cloud.getContextDetails();
-		expect(cloudTermsAfterFirstSync.terms).toContainEqual(
-			expect.objectContaining({ term: "tenant", definition: "A workspace's isolated slice of data." })
-		);
-
-		// Edit the same term on the cloud side, strictly later, so its
-		// `updatedAt` wins the next sync's last-writer-wins merge.
-		await new Promise((resolve) => setTimeout(resolve, 5));
-		await cloud.defineContextTerm({ term: "tenant", definition: "Cloud's newer definition." });
+		const cloudContext = (await cloud.getContextDetails()).context;
+		await cloud.upsertContext({ title: "Language", summary: "Cloud extension.", expectedRevision: cloudContext.revision, expectedContentHash: cloudContext.contentHash });
+		await local.forgetContextTerm({ term: "tenant", expectedRevision: localTerm.term.revision, expectedContentHash: localTerm.term.contentHash });
 
 		const summary = await synchronizeStores(local, cloud);
-		expect(summary.contextTermsAppliedToLocal).toBeGreaterThan(0);
+		expect(summary.contextsAppliedToLocal).toBe(1);
+		expect(summary.contextTermsAppliedToCloud).toBe(1);
 
 		const localDetails = await local.getContextDetails();
 		const cloudDetails = await cloud.getContextDetails();
-		expect(localDetails.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Cloud's newer definition." }));
-		expect(cloudDetails.terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Cloud's newer definition." }));
+		expect(localDetails.context).toEqual(expect.objectContaining({ summary: "Cloud extension.", revision: localContext.context.revision + 1 }));
+		expect(cloudDetails.context).toEqual(expect.objectContaining({ summary: "Cloud extension." }));
+		expect(localDetails.terms).toEqual([]);
+		expect(cloudDetails.terms).toEqual([]);
+		await expect(cloud.materializeContextTermRevision({ term: "tenant", revision: 1 })).resolves.toMatchObject({ definition: "A workspace's isolated slice of data.", headRevision: 2, tombstone: false });
+		await expect(cloud.materializeContextTermRevision({ term: "tenant", revision: 2 })).resolves.toMatchObject({ headRevision: 2, tombstone: true });
 
 		const repeatSummary = await synchronizeStores(local, cloud);
 		expect(repeatSummary.contextsAppliedToLocal).toBe(0);
 		expect(repeatSummary.contextsAppliedToCloud).toBe(0);
 		expect(repeatSummary.contextTermsAppliedToLocal).toBe(0);
 		expect(repeatSummary.contextTermsAppliedToCloud).toBe(0);
+	});
+
+	it("rejects divergent context heads without changing either side", async () => {
+		const initial = await local.upsertContext({ title: "Shared", summary: "Initial." });
+		await synchronizeStores(local, cloud);
+		const cloudInitial = (await cloud.getContextDetails()).context;
+		await local.upsertContext({ title: "Local", summary: "Local edit.", expectedRevision: initial.context.revision, expectedContentHash: initial.context.contentHash });
+		await cloud.upsertContext({ title: "Cloud", summary: "Cloud edit.", expectedRevision: cloudInitial.revision, expectedContentHash: cloudInitial.contentHash });
+
+		await expect(synchronizeStores(local, cloud)).rejects.toMatchObject({ name: "SynchronizeConflictError", recordKind: "context", recordId: "default", currentRevision: 2 });
+		expect((await local.getContextDetails()).context.title).toBe("Local");
+		expect((await cloud.getContextDetails()).context.title).toBe("Cloud");
+	});
+
+	it("rejects divergent context-term heads without changing either side", async () => {
+		const initial = await local.defineContextTerm({ term: "tenant", definition: "Initial." });
+		await synchronizeStores(local, cloud);
+		const cloudInitial = (await cloud.getContextDetails()).terms.find((term) => term.term === "tenant")!;
+		await local.defineContextTerm({ term: "tenant", definition: "Local edit.", expectedRevision: initial.term.revision, expectedContentHash: initial.term.contentHash });
+		await cloud.defineContextTerm({ term: "tenant", definition: "Cloud edit.", expectedRevision: cloudInitial.revision, expectedContentHash: cloudInitial.contentHash });
+
+		await expect(synchronizeStores(local, cloud)).rejects.toMatchObject({ name: "SynchronizeConflictError", recordKind: "context-term", recordId: "default:tenant", currentRevision: 2 });
+		expect((await local.getContextDetails()).terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Local edit." }));
+		expect((await cloud.getContextDetails()).terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Cloud edit." }));
 	});
 });

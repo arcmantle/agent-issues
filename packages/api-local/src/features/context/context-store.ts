@@ -1,4 +1,12 @@
+import { randomUUID } from "node:crypto";
+import { recordHistoryMaterialization } from "../history-diagnostics.js";
+
 import {
+	computeContextContentHash,
+	computeContextTermContentHash,
+	ContextConflictError,
+	ContextRevisionError,
+	ContextTermConflictError,
 	DEFAULT_CONTEXT_KEY,
 	DEFAULT_CONTEXT_SUMMARY,
 	DEFAULT_CONTEXT_TITLE,
@@ -6,6 +14,9 @@ import {
 	filterContextDirectory,
 	isEntityKind,
 	mergeContextDirectory,
+	materializeContextFromPatches,
+	materializeContextTermFromPatches,
+	RESERVED_SYSTEM_AUTHOR,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextDirectoryTerm,
@@ -14,9 +25,9 @@ import {
 	type ContextListItem,
 	type ContextListResult,
 	type ContextRecord,
-	type ContextSyncRecord,
 	type ContextTermRecord,
-	type ContextTermSyncRecord,
+	type MaterializedContextRevision,
+	type MaterializedContextTermRevision,
 	type DefineContextTermResult,
 	type EntityKind,
 	type ForgetContextTermResult,
@@ -39,22 +50,22 @@ export {
 	type ContextListItem,
 	type ContextListResult,
 	type ContextRecord,
-	type ContextSyncRecord,
 	type ContextTermRecord,
-	type ContextTermSyncRecord,
 	type DefineContextTermResult,
 	type ForgetContextTermResult,
 	type QueryContextDirectoryInput,
 	type QueryContextDirectoryResult
 };
 
-const STRUCTURAL_CONTEXT_RELATIONS = ["owns", "records", "tracks", "creates"] as const;
+const STRUCTURAL_CONTEXT_RELATIONS = ["owns", "records", "tracks", "creates", "decomposes"] as const;
 
 type ContextRow = {
 	key: string;
 	scope_entity_id: string | null;
 	title: string;
 	summary: string;
+	revision: number;
+	content_hash: string;
 	created_at: string;
 	updated_at: string;
 };
@@ -72,12 +83,33 @@ type ContextTermRow = {
 	term: string;
 	definition: string;
 	avoid_terms: string;
+	revision: number;
+	content_hash: string;
+	tombstone: number;
 	created_at: string;
 	updated_at: string;
 };
 
-/** Row shape for the bulk sync read path, which unlike `ContextTermRow` isn't scoped to a single already-known context and so needs `context_key` in the projection. */
-type ContextTermSyncRow = ContextTermRow & { context_key: string };
+type ContextTermHead = ContextTermRecord & { tombstone: boolean };
+
+type ContextDeltaRow = {
+	revision: number;
+	author: string;
+	prior_title: string;
+	prior_summary: string;
+	restored_from_revision: number | null;
+	created_at: string;
+};
+
+type ContextTermDeltaRow = {
+	revision: number;
+	author: string;
+	prior_definition: string;
+	prior_avoid_terms: string;
+	prior_tombstone: number;
+	restored_from_revision: number | null;
+	created_at: string;
+};
 
 type ResolvedContextScope = {
 	key: string;
@@ -126,10 +158,11 @@ export function getContextDetails(db: SqliteExecutor, input?: { scopeRef?: strin
 	)[0] as ContextRow | undefined;
 	const termRows = contextRow
 		? (db.drizzle.all(
-				sql`SELECT term, definition, avoid_terms, created_at, updated_at
+				sql`SELECT term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at
 					FROM context_terms
 					WHERE tenant_id = ${db.tenantId}
 						AND context_key = ${scope.key}
+						AND tombstone = FALSE
 					ORDER BY lower(term), term`
 			) as ContextTermRow[])
 		: [];
@@ -155,7 +188,7 @@ export function queryContextDirectory(db: SqliteExecutor, input: QueryContextDir
 	return filterContextDirectory(directory, input);
 }
 
-export function upsertContext(db: SqliteExecutor, input: { scopeRef?: string; title: string; summary: string }): ContextDetails {
+export function upsertContext(db: SqliteExecutor, input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): ContextDetails {
 	const title = input.title.trim();
 	const summary = input.summary.trim();
 
@@ -168,23 +201,49 @@ export function upsertContext(db: SqliteExecutor, input: { scopeRef?: string; ti
 	}
 
 	const scope = resolveContextScope(db, input.scopeRef);
-	const existing = getContextDetails(db, { scopeRef: input.scopeRef }).context;
-	const now = new Date().toISOString();
 
-	db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-		VALUES (${db.tenantId}, ${scope.key}, ${scope.scopeEntityId}, ${title}, ${summary}, ${existing.createdAt ?? now}, ${now})
-		ON CONFLICT(tenant_id, key) DO UPDATE SET
-			scope_entity_id = excluded.scope_entity_id,
-			title = excluded.title,
-			summary = excluded.summary,
-			updated_at = excluded.updated_at`);
+	return db.transaction(() => {
+		const existing = getContextDetails(db, { scopeRef: input.scopeRef }).context;
+		const now = new Date().toISOString();
+		const newContentHash = computeContextContentHash(title, summary);
 
-	return getContextDetails(db, { scopeRef: input.scopeRef });
+		if (existing.exists) {
+			const newRevision = existing.revision + 1;
+
+			if (input.expectedRevision === undefined || input.expectedContentHash === undefined) {
+				throw new ContextConflictError(scope.key, existing.revision, existing.contentHash);
+			}
+
+			if (existing.revision !== input.expectedRevision || existing.contentHash !== input.expectedContentHash) {
+				throw new ContextConflictError(scope.key, existing.revision, existing.contentHash);
+			}
+
+			const result = db.drizzle.run(
+				sql`UPDATE contexts SET title = ${title}, summary = ${summary}, revision = ${newRevision}, content_hash = ${newContentHash}, updated_at = ${now}
+					WHERE tenant_id = ${db.tenantId} AND key = ${scope.key} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`
+			);
+
+			if (result.changes === 0) {
+				const fresh = getContextDetails(db, { scopeRef: input.scopeRef }).context;
+				throw new ContextConflictError(scope.key, fresh.revision, fresh.contentHash);
+			}
+
+			appendContextDeltaEntry(db, scope.key, newRevision, existing.title, existing.summary, input.author, now);
+		} else {
+			db.drizzle.run(
+				sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
+					VALUES (${db.tenantId}, ${scope.key}, ${scope.scopeEntityId}, ${title}, ${summary}, 1, ${newContentHash}, ${now}, ${now})`
+			);
+			appendContextDeltaEntry(db, scope.key, 1, title, summary, input.author, now);
+		}
+
+		return getContextDetails(db, { scopeRef: input.scopeRef });
+	});
 }
 
 export function defineContextTerm(
 	db: SqliteExecutor,
-	input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }
+	input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }
 ): DefineContextTermResult {
 	const term = input.term.trim();
 	const definition = input.definition.trim();
@@ -203,122 +262,188 @@ export function defineContextTerm(
 	const existing = getContextTerm(db, scope.key, term);
 	const now = new Date().toISOString();
 
-	db.drizzle.run(sql`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-		VALUES (${db.tenantId}, ${scope.key}, ${term}, ${definition}, ${JSON.stringify(normalizedAvoid)}, ${existing?.createdAt ?? now}, ${now})
-		ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
-			definition = excluded.definition,
-			avoid_terms = excluded.avoid_terms,
-			updated_at = excluded.updated_at`);
+	const contentHash = computeContextTermContentHash(definition, normalizedAvoid, false);
+	db.transaction(() => {
+		if (existing) {
+			assertContextTermHead(scope.key, term, existing, input.expectedRevision, input.expectedContentHash);
+			const revision = existing.revision + 1;
+			const result = db.drizzle.run(sql`UPDATE context_terms
+				SET definition = ${definition}, avoid_terms = ${JSON.stringify(normalizedAvoid)}, revision = ${revision}, content_hash = ${contentHash}, tombstone = FALSE, updated_at = ${now}
+				WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
+			if (result.changes === 0) {
+				const fresh = getContextTerm(db, scope.key, term)!;
+				throw new ContextTermConflictError(scope.key, term, fresh.revision, fresh.contentHash);
+			}
+			appendContextTermDeltaEntry(db, scope.key, term, revision, existing, input.author, now);
+		} else {
+			db.drizzle.run(sql`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at)
+				VALUES (${db.tenantId}, ${scope.key}, ${term}, ${definition}, ${JSON.stringify(normalizedAvoid)}, 1, ${contentHash}, FALSE, ${now}, ${now})`);
+			db.drizzle.run(sql`INSERT INTO context_term_delta_entries (id, tenant_id, context_key, term, revision, author, prior_definition, prior_avoid_terms, prior_tombstone, created_at)
+				VALUES (${randomUUID()}, ${db.tenantId}, ${scope.key}, ${term}, 1, ${input.author?.trim() || RESERVED_SYSTEM_AUTHOR}, ${definition}, ${JSON.stringify(normalizedAvoid)}, FALSE, ${now})`);
+		}
+	});
 
 	const storedTerm = getContextTerm(db, scope.key, term);
 	if (!storedTerm) {
 		throw new Error(`Failed to persist context term: ${term}`);
 	}
+	const { tombstone: _tombstone, ...publicTerm } = storedTerm;
 
 	return {
 		context: getContextDetails(db, { scopeRef: input.scopeRef }).context,
-		term: storedTerm,
+		term: publicTerm,
 		created: existing === null
 	};
 }
 
-export function forgetContextTerm(db: SqliteExecutor, input: { scopeRef?: string; term: string }): ForgetContextTermResult {
+export function forgetContextTerm(db: SqliteExecutor, input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): ForgetContextTermResult {
 	const term = input.term.trim();
 	if (term.length === 0) {
 		throw new Error("Context term must not be empty.");
 	}
 
 	const scope = resolveContextScope(db, input.scopeRef);
+	const existing = getContextTerm(db, scope.key, term);
+	if (!existing) {
+		return { context: getContextDetails(db, { scopeRef: input.scopeRef }).context, term, removed: false };
+	}
 
-	const result = db.drizzle.run(
-		sql`DELETE FROM context_terms WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${term}`
-	);
+	assertContextTermHead(scope.key, term, existing, input.expectedRevision, input.expectedContentHash);
+	if (existing.tombstone) {
+		return {
+			context: getContextDetails(db, { scopeRef: input.scopeRef }).context,
+			term,
+			removed: false,
+			currentRevision: existing.revision,
+			currentContentHash: existing.contentHash
+		};
+	}
+
+	const revision = existing.revision + 1;
+	const contentHash = computeContextTermContentHash(existing.definition, existing.avoid, true);
+	const now = new Date().toISOString();
+	db.transaction(() => {
+		const result = db.drizzle.run(sql`UPDATE context_terms SET revision = ${revision}, content_hash = ${contentHash}, tombstone = TRUE, updated_at = ${now}
+			WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
+		if (result.changes === 0) {
+			const fresh = getContextTerm(db, scope.key, term)!;
+			throw new ContextTermConflictError(scope.key, term, fresh.revision, fresh.contentHash);
+		}
+		appendContextTermDeltaEntry(db, scope.key, term, revision, existing, input.author, now);
+	});
 
 	return {
 		context: getContextDetails(db, { scopeRef: input.scopeRef }).context,
 		term,
-		removed: result.changes > 0
+		removed: true,
+		currentRevision: revision,
+		currentContentHash: contentHash
 	};
 }
 
-// The read half of synchronize's context sync (ISS62/ADR16): every context
-// row this tenant has, for a last-writer-wins merge keyed on `key` and
-// driven by `updatedAt` (see synchronize.ts's `unionByLastWriter`). Unlike
-// relations/handoffs, a context's title/summary are actively re-edited over
-// its lifetime via `upsertContext`, so a plain "insert what's missing"
-// union would stop propagating edits made after a context's first sync;
-// comparing `updatedAt` keeps both sides converging on whichever side has
-// the more recent edit instead.
-export function listAllContexts(db: SqliteExecutor): ContextSyncRecord[] {
-	const rows = db.drizzle.all(sql`SELECT * FROM contexts WHERE tenant_id = ${db.tenantId}`) as ContextRow[];
-	return rows.map((row) => ({
-		key: row.key,
-		scopeEntityId: row.scope_entity_id,
-		title: row.title,
-		summary: row.summary,
-		createdAt: row.created_at,
-		updatedAt: row.updated_at
-	}));
-}
-
-// The write half: upserts the already-resolved (last-writer-wins) set of
-// contexts by their primary key (tenantId, key), only overwriting a row
-// that already exists here if the incoming one is strictly newer - the
-// resolved set can include this side's own current row unchanged, and
-// re-applying it must be a no-op. Must run after `applyResolvedFacts` in
-// synchronize's orchestration, so an initiative-scoped context's
-// `scope_entity_id` FK target already exists as an entity on this side.
-export function applyContexts(db: SqliteExecutor, contexts: ContextSyncRecord[]): { applied: number } {
-	let applied = 0;
-	for (const context of contexts) {
-		const result = db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-			VALUES (${db.tenantId}, ${context.key}, ${context.scopeEntityId}, ${context.title}, ${context.summary}, ${context.createdAt}, ${context.updatedAt})
-			ON CONFLICT(tenant_id, key) DO UPDATE SET
-				scope_entity_id = excluded.scope_entity_id,
-				title = excluded.title,
-				summary = excluded.summary,
-				updated_at = excluded.updated_at
-			WHERE excluded.updated_at > contexts.updated_at`);
-		applied += result.changes;
+export function materializeContextRevision(
+	db: SqliteExecutor,
+	input: { scopeRef?: string; revision: number }
+): MaterializedContextRevision {
+	const scope = resolveContextScope(db, input.scopeRef);
+	const head = db.drizzle.all(sql`SELECT * FROM contexts WHERE tenant_id = ${db.tenantId} AND key = ${scope.key}`)[0] as ContextRow | undefined;
+	if (!head) {
+		throw new ContextRevisionError(scope.key, "context-not-found", `Context not found: ${scope.key}`);
 	}
-
-	return { applied };
+	const rows = db.drizzle.all(sql`SELECT revision, author, prior_title, prior_summary, restored_from_revision, created_at
+		FROM context_delta_entries
+		WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key}
+		ORDER BY revision DESC`) as ContextDeltaRow[];
+	const result = materializeContextFromPatches(
+		{ key: head.key, title: head.title, summary: head.summary, revision: head.revision, createdAt: head.created_at },
+		rows.map((row) => ({ revision: row.revision, author: row.author, createdAt: row.created_at, priorTitle: row.prior_title, priorSummary: row.prior_summary, ...(row.restored_from_revision !== null && { restoredFromRevision: row.restored_from_revision }) })),
+		input.revision
+	);
+	recordHistoryMaterialization(db, "context", result.headRevision, result.targetRevision);
+	return result;
 }
 
-// The read half for context terms (ISS62/ADR16), same last-writer-wins
-// merge rationale as `listAllContexts`: term definitions are actively
-// re-edited via `defineContextTerm`.
-export function listAllContextTerms(db: SqliteExecutor): ContextTermSyncRecord[] {
-	const rows = db.drizzle.all(sql`SELECT * FROM context_terms WHERE tenant_id = ${db.tenantId}`) as ContextTermSyncRow[];
-	return rows.map((row) => ({
-		contextKey: row.context_key,
-		term: row.term,
-		definition: row.definition,
-		avoid: parseAvoidTerms(row.avoid_terms),
-		createdAt: row.created_at,
-		updatedAt: row.updated_at
-	}));
-}
-
-// The write half: upserts by primary key (tenantId, contextKey, term), only
-// overwriting an existing row if the incoming one is strictly newer. Must
-// run after `applyContexts` in synchronize's orchestration, so each term's
-// `context_key` FK target already exists as a context on this side.
-export function applyContextTerms(db: SqliteExecutor, terms: ContextTermSyncRecord[]): { applied: number } {
-	let applied = 0;
-	for (const term of terms) {
-		const result = db.drizzle.run(sql`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-			VALUES (${db.tenantId}, ${term.contextKey}, ${term.term}, ${term.definition}, ${JSON.stringify(term.avoid)}, ${term.createdAt}, ${term.updatedAt})
-			ON CONFLICT(tenant_id, context_key, term) DO UPDATE SET
-				definition = excluded.definition,
-				avoid_terms = excluded.avoid_terms,
-				updated_at = excluded.updated_at
-			WHERE excluded.updated_at > context_terms.updated_at`);
-		applied += result.changes;
+export function restoreContextRevision(
+	db: SqliteExecutor,
+	input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
+): MaterializedContextRevision {
+	const scope = resolveContextScope(db, input.scopeRef);
+	const current = getContextDetails(db, { scopeRef: input.scopeRef }).context;
+	if (!current.exists) {
+		throw new ContextRevisionError(scope.key, "context-not-found", `Context not found: ${scope.key}`);
 	}
+	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
+		throw new ContextConflictError(scope.key, current.revision, current.contentHash);
+	}
+	const source = materializeContextRevision(db, { scopeRef: input.scopeRef, revision: input.revision });
 
-	return { applied };
+	return db.transaction(() => {
+		const revision = current.revision + 1;
+		const contentHash = computeContextContentHash(source.title, source.summary);
+		const updatedAt = new Date().toISOString();
+		const result = db.drizzle.run(sql`UPDATE contexts
+			SET title = ${source.title}, summary = ${source.summary}, revision = ${revision}, content_hash = ${contentHash}, updated_at = ${updatedAt}
+			WHERE tenant_id = ${db.tenantId} AND key = ${scope.key} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
+		if (result.changes === 0) {
+			const fresh = getContextDetails(db, { scopeRef: input.scopeRef }).context;
+			throw new ContextConflictError(scope.key, fresh.revision, fresh.contentHash);
+		}
+		appendContextDeltaEntry(db, scope.key, revision, current.title, current.summary, input.author, updatedAt, input.revision);
+		return materializeContextRevision(db, { scopeRef: input.scopeRef, revision });
+	});
 }
+
+export function materializeContextTermRevision(
+	db: SqliteExecutor,
+	input: { scopeRef?: string; term: string; revision: number }
+): MaterializedContextTermRevision {
+	const scope = resolveContextScope(db, input.scopeRef);
+	const head = getContextTerm(db, scope.key, input.term.trim());
+	if (!head) {
+		throw new ContextRevisionError(scope.key, "term-not-found", `Context term not found: ${input.term}`, undefined, input.term);
+	}
+	const rows = db.drizzle.all(sql`SELECT revision, author, prior_definition, prior_avoid_terms, prior_tombstone, restored_from_revision, created_at
+		FROM context_term_delta_entries
+		WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${head.term}
+		ORDER BY revision DESC`) as ContextTermDeltaRow[];
+	const result = materializeContextTermFromPatches(
+		{ contextKey: scope.key, term: head.term, definition: head.definition, avoid: head.avoid, tombstone: head.tombstone, revision: head.revision, createdAt: head.createdAt },
+		rows.map((row) => ({ revision: row.revision, author: row.author, createdAt: row.created_at, priorDefinition: row.prior_definition, priorAvoid: parseAvoidTerms(row.prior_avoid_terms), priorTombstone: Boolean(row.prior_tombstone), ...(row.restored_from_revision !== null && { restoredFromRevision: row.restored_from_revision }) })),
+		input.revision
+	);
+	recordHistoryMaterialization(db, "context-term", result.headRevision, result.targetRevision);
+	return result;
+}
+
+export function restoreContextTermRevision(
+	db: SqliteExecutor,
+	input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
+): MaterializedContextTermRevision {
+	const scope = resolveContextScope(db, input.scopeRef);
+	const term = input.term.trim();
+	const current = getContextTerm(db, scope.key, term);
+	if (!current) {
+		throw new ContextRevisionError(scope.key, "term-not-found", `Context term not found: ${term}`, undefined, term);
+	}
+	assertContextTermHead(scope.key, term, current, input.expectedRevision, input.expectedContentHash);
+	const source = materializeContextTermRevision(db, { scopeRef: input.scopeRef, term, revision: input.revision });
+
+	return db.transaction(() => {
+		const revision = current.revision + 1;
+		const contentHash = computeContextTermContentHash(source.definition, source.avoid, source.tombstone);
+		const updatedAt = new Date().toISOString();
+		const result = db.drizzle.run(sql`UPDATE context_terms
+			SET definition = ${source.definition}, avoid_terms = ${JSON.stringify(source.avoid)}, revision = ${revision}, content_hash = ${contentHash}, tombstone = ${source.tombstone ? 1 : 0}, updated_at = ${updatedAt}
+			WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
+		if (result.changes === 0) {
+			const fresh = getContextTerm(db, scope.key, term)!;
+			throw new ContextTermConflictError(scope.key, term, fresh.revision, fresh.contentHash);
+		}
+		appendContextTermDeltaEntry(db, scope.key, term, revision, current, input.author, updatedAt, input.revision);
+		return materializeContextTermRevision(db, { scopeRef: input.scopeRef, term, revision });
+	});
+}
+
 
 function ensureContextExists(db: SqliteExecutor, scopeRef?: string): ResolvedContextScope {
 	const scope = resolveContextScope(db, scopeRef);
@@ -330,18 +455,64 @@ function ensureContextExists(db: SqliteExecutor, scopeRef?: string): ResolvedCon
 	}
 
 	const now = new Date().toISOString();
-	db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-		VALUES (${db.tenantId}, ${scope.key}, ${scope.scopeEntityId}, ${scope.defaultTitle}, ${scope.defaultSummary}, ${now}, ${now})`);
+	const contentHash = computeContextContentHash(scope.defaultTitle, scope.defaultSummary);
+	db.drizzle.run(sql`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
+		VALUES (${db.tenantId}, ${scope.key}, ${scope.scopeEntityId}, ${scope.defaultTitle}, ${scope.defaultSummary}, 1, ${contentHash}, ${now}, ${now})`);
+	appendContextDeltaEntry(db, scope.key, 1, scope.defaultTitle, scope.defaultSummary, undefined, now);
 
 	return scope;
 }
 
-function getContextTerm(db: SqliteExecutor, contextKey: string, term: string): ContextTermRecord | null {
-	const row = db.drizzle.all(sql`SELECT term, definition, avoid_terms, created_at, updated_at
+function appendContextDeltaEntry(
+	db: SqliteExecutor,
+	contextKey: string,
+	revision: number,
+	priorTitle: string,
+	priorSummary: string,
+	author: string | undefined,
+	createdAt: string,
+	restoredFromRevision?: number
+): void {
+	const id = randomUUID();
+	const authorValue = author?.trim() || RESERVED_SYSTEM_AUTHOR;
+	db.drizzle.run(
+		sql`INSERT INTO context_delta_entries (id, tenant_id, context_key, revision, author, prior_title, prior_summary, restored_from_revision, created_at)
+			VALUES (${id}, ${db.tenantId}, ${contextKey}, ${revision}, ${authorValue}, ${priorTitle}, ${priorSummary}, ${restoredFromRevision ?? null}, ${createdAt})`
+	);
+}
+
+function getContextTerm(db: SqliteExecutor, contextKey: string, term: string): ContextTermHead | null {
+	const row = db.drizzle.all(sql`SELECT term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at
 		FROM context_terms
 		WHERE tenant_id = ${db.tenantId} AND context_key = ${contextKey} AND term = ${term}`)[0] as ContextTermRow | undefined;
 
-	return row ? mapContextTermRow(row) : null;
+	return row ? { ...mapContextTermRow(row), tombstone: Boolean(row.tombstone) } : null;
+}
+
+function assertContextTermHead(
+	contextKey: string,
+	term: string,
+	existing: ContextTermHead,
+	expectedRevision: number | undefined,
+	expectedContentHash: string | undefined
+): void {
+	if (expectedRevision !== existing.revision || expectedContentHash !== existing.contentHash) {
+		throw new ContextTermConflictError(contextKey, term, existing.revision, existing.contentHash);
+	}
+}
+
+function appendContextTermDeltaEntry(
+	db: SqliteExecutor,
+	contextKey: string,
+	term: string,
+	revision: number,
+	prior: ContextTermHead,
+	author: string | undefined,
+	createdAt: string,
+	restoredFromRevision?: number
+): void {
+	db.drizzle.run(sql`INSERT INTO context_term_delta_entries (id, tenant_id, context_key, term, revision, author, prior_definition, prior_avoid_terms, prior_tombstone, restored_from_revision, created_at)
+		VALUES (${randomUUID()}, ${db.tenantId}, ${contextKey}, ${term}, ${revision}, ${author?.trim() || RESERVED_SYSTEM_AUTHOR}, ${prior.definition}, ${JSON.stringify(prior.avoid)}, ${prior.tombstone ? 1 : 0}, ${restoredFromRevision ?? null}, ${createdAt})`);
 }
 
 function createContextRecord(scope: ResolvedContextScope): ContextRecord {
@@ -352,6 +523,8 @@ function createContextRecord(scope: ResolvedContextScope): ContextRecord {
 		scopeLabel: scope.scopeLabel,
 		title: scope.defaultTitle,
 		summary: scope.defaultSummary,
+		revision: 0,
+		contentHash: "",
 		createdAt: null,
 		updatedAt: null,
 		exists: false
@@ -366,6 +539,8 @@ function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRec
 		scopeLabel: scope.scopeLabel,
 		title: row.title,
 		summary: row.summary,
+		revision: row.revision ?? 1,
+		contentHash: row.content_hash ?? "",
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		exists: true
@@ -377,6 +552,8 @@ function mapContextTermRow(row: ContextTermRow): ContextTermRecord {
 		term: row.term,
 		definition: row.definition,
 		avoid: parseAvoidTerms(row.avoid_terms),
+		revision: row.revision,
+		contentHash: row.content_hash,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
@@ -509,7 +686,7 @@ function createContextListItem(scope: ResolvedContextScope, row: ContextRow | un
 
 function getContextTermCount(db: SqliteExecutor, contextKey: string): number {
 	const row = db.drizzle.all(
-		sql`SELECT COUNT(*) as count FROM context_terms WHERE tenant_id = ${db.tenantId} AND context_key = ${contextKey}`
+		sql`SELECT COUNT(*) as count FROM context_terms WHERE tenant_id = ${db.tenantId} AND context_key = ${contextKey} AND tombstone = FALSE`
 	)[0] as { count: number };
 	return row.count;
 }
@@ -544,7 +721,7 @@ function getOwningInitiativeOrThrow(db: SqliteExecutor, entityId: string): Entit
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 			WHERE relations.tenant_id = ${db.tenantId}
 				AND relations.to_id = ${currentId}
-				AND relations.type IN ('owns', 'records', 'tracks', 'creates')
+				AND relations.type IN ('owns', 'records', 'tracks', 'creates', 'decomposes')
 			ORDER BY entities.id`) as EntityRow[];
 
 		if (parents.length === 0) {

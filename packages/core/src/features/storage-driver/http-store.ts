@@ -4,16 +4,21 @@ import type {
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
-	ContextSyncRecord,
-	ContextTermSyncRecord,
 	DefineContextTermResult,
 	ForgetContextTermResult,
+	MaterializedContextRevision,
+	MaterializedContextTermRevision,
+	ContextRevisionErrorReason,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult
 } from "../context/context-types.js";
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../entity-store/tenant-types.js";
-import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord } from "../entity-store/domain.js";
+import type { BodySource, EntityRecord, HistoryEntryRecord, MaterializedEntityRevision, RelationRecord } from "../entity-store/domain.js";
+import { EntityConflictError, EntityRevisionError, type EntityRevisionErrorReason } from "../entity-store/domain.js";
+import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import type { StorageDriver } from "./storage-driver.js";
+import type { HistoryDiagnostics } from "./history-diagnostics.js";
+import { SynchronizeConflictError, type CanonicalChainBundle, type CanonicalChainImportResult, type SynchronizeRecordKind } from "../synchronize/canonical-chain.js";
 import type {
 	DatabaseSnapshot,
 	DeleteResult,
@@ -77,7 +82,13 @@ const PROJECT_IDENTITY_HEADER = "x-agent-issues-project-identity";
 const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 
 type JsonRpcSuccessResponse = { jsonrpc: "2.0"; id: string; result: unknown };
-type JsonRpcErrorResponse = { jsonrpc: "2.0"; id: string; error: { code: number; message: string } };
+type JsonRpcErrorData = { entityId: string; currentRevision: number; currentContentHash: string };
+type JsonRpcContextConflictData = { contextKey: string; currentRevision: number; currentContentHash: string };
+type JsonRpcContextTermConflictData = JsonRpcContextConflictData & { term: string };
+type JsonRpcRevisionErrorData = { entityId: string; reason: EntityRevisionErrorReason; headRevision?: number };
+type JsonRpcContextRevisionErrorData = { contextKey: string; term?: string; reason: ContextRevisionErrorReason; headRevision?: number };
+type JsonRpcSynchronizeConflictData = { recordKind: SynchronizeRecordKind; recordId: string; currentRevision: number; currentContentHash: string };
+type JsonRpcErrorResponse = { jsonrpc: "2.0"; id: string; error: { code: number; message: string; data?: unknown } };
 type VersionMismatchResponseBody = { code: "daemon-version-mismatch"; expectedBuildHash: string; receivedBuildHash?: string };
 type DbPathMismatchResponseBody = { code: "daemon-db-mismatch"; expectedDbPath: string; receivedDbPath?: string };
 
@@ -134,6 +145,62 @@ function isDbPathMismatchBody(body: unknown): body is DbPathMismatchResponseBody
 	return typeof body === "object" && body !== null && (body as { code?: unknown }).code === "daemon-db-mismatch";
 }
 
+function isEntityConflictData(data: unknown): data is JsonRpcErrorData {
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as JsonRpcErrorData).entityId === "string" &&
+		typeof (data as JsonRpcErrorData).currentRevision === "number" &&
+		typeof (data as JsonRpcErrorData).currentContentHash === "string"
+	);
+}
+
+function isSynchronizeConflictData(data: unknown): data is JsonRpcSynchronizeConflictData {
+	const validRecordKinds: SynchronizeRecordKind[] = ["entity", "context", "context-term"];
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		validRecordKinds.includes((data as JsonRpcSynchronizeConflictData).recordKind) &&
+		typeof (data as JsonRpcSynchronizeConflictData).recordId === "string" &&
+		typeof (data as JsonRpcSynchronizeConflictData).currentRevision === "number" &&
+		typeof (data as JsonRpcSynchronizeConflictData).currentContentHash === "string"
+	);
+}
+
+function isContextConflictData(data: unknown): data is JsonRpcContextConflictData {
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as JsonRpcContextConflictData).contextKey === "string" &&
+		typeof (data as JsonRpcContextConflictData).currentRevision === "number" &&
+		typeof (data as JsonRpcContextConflictData).currentContentHash === "string"
+	);
+}
+
+function isContextTermConflictData(data: unknown): data is JsonRpcContextTermConflictData {
+	return isContextConflictData(data) && typeof (data as JsonRpcContextTermConflictData).term === "string";
+}
+
+function isEntityRevisionErrorData(data: unknown): data is JsonRpcRevisionErrorData {
+	const VALID_REASONS: EntityRevisionErrorReason[] = ["entity-not-found", "revision-out-of-range", "broken-chain"];
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as JsonRpcRevisionErrorData).entityId === "string" &&
+		VALID_REASONS.includes((data as JsonRpcRevisionErrorData).reason)
+	);
+}
+
+function isContextRevisionErrorData(data: unknown): data is JsonRpcContextRevisionErrorData {
+	const validReasons: ContextRevisionErrorReason[] = ["context-not-found", "term-not-found", "revision-out-of-range", "broken-chain"];
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as JsonRpcContextRevisionErrorData).contextKey === "string" &&
+		validReasons.includes((data as JsonRpcContextRevisionErrorData).reason)
+	);
+}
+
 /**
  * The cloud-mode implementation of the storage-driver seam (ADR13, ADR14):
  * turns every `StorageDriver` operation into a single JSON-RPC call to the
@@ -156,6 +223,18 @@ export class HttpStore implements StorageDriver {
 
 	public get tenantId(): string {
 		return this.options.tenantId;
+	}
+
+	public exportCanonicalChains(): Promise<CanonicalChainBundle> {
+		return this.call("exportCanonicalChains");
+	}
+
+	public importCanonicalChains(bundle: CanonicalChainBundle): Promise<CanonicalChainImportResult> {
+		return this.call("importCanonicalChains", { bundle });
+	}
+
+	public getHistoryDiagnostics(): Promise<HistoryDiagnostics> {
+		return this.call("getHistoryDiagnostics");
 	}
 
 	protected async call<T>(method: string, params?: unknown): Promise<T> {
@@ -200,7 +279,26 @@ export class HttpStore implements StorageDriver {
 
 		const body = (await response.json()) as JsonRpcSuccessResponse | JsonRpcErrorResponse;
 		if ("error" in body) {
-			throw new Error(body.error.message);
+			const { message, data } = body.error;
+			if (isSynchronizeConflictData(data)) {
+				throw new SynchronizeConflictError(data.recordKind, data.recordId, data.currentRevision, data.currentContentHash);
+			}
+			if (isEntityConflictData(data)) {
+				throw new EntityConflictError(data.entityId, data.currentRevision, data.currentContentHash);
+			}
+			if (isEntityRevisionErrorData(data)) {
+				throw new EntityRevisionError(data.entityId, data.reason, message, data.headRevision);
+			}
+			if (isContextRevisionErrorData(data)) {
+				throw new ContextRevisionError(data.contextKey, data.reason, message, data.headRevision, data.term);
+			}
+			if (isContextTermConflictData(data)) {
+				throw new ContextTermConflictError(data.contextKey, data.term, data.currentRevision, data.currentContentHash);
+			}
+			if (isContextConflictData(data)) {
+				throw new ContextConflictError(data.contextKey, data.currentRevision, data.currentContentHash);
+			}
+			throw new Error(message);
 		}
 
 		return body.result as T;
@@ -231,18 +329,6 @@ export class HttpStore implements StorageDriver {
 		return this.call("listEntityHistory", { entityId });
 	}
 
-	public listAllHistoryEntries(): Promise<HistoryEntryRecord[]> {
-		return this.call("listAllHistoryEntries");
-	}
-
-	public applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }> {
-		return this.call("applyHistoryEntries", { entries });
-	}
-
-	public applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }> {
-		return this.call("applyResolvedFacts", { resolvedEntries });
-	}
-
 	public listAllRelations(): Promise<RelationRecord[]> {
 		return this.call("listAllRelations");
 	}
@@ -263,12 +349,20 @@ export class HttpStore implements StorageDriver {
 		return this.call("updateEntityStatus", input);
 	}
 
-	public updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
+	public updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
 		return this.call("updateEntity", input);
 	}
 
-	public setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
+	public setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
 		return this.call("setEntityBody", input);
+	}
+
+	public materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision> {
+		return this.call("materializeEntityRevision", input);
+	}
+
+	public restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedEntityRevision> {
+		return this.call("restoreEntityRevision", input);
 	}
 
 	public archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
@@ -326,32 +420,32 @@ export class HttpStore implements StorageDriver {
 		return this.call("queryContextDirectory", input);
 	}
 
-	public upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails> {
+	public upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
 		return this.call("upsertContext", input);
 	}
 
-	public defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }): Promise<DefineContextTermResult> {
+	public defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<DefineContextTermResult> {
 		return this.call("defineContextTerm", input);
 	}
 
-	public forgetContextTerm(input: { scopeRef?: string; term: string }): Promise<ForgetContextTermResult> {
+	public forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {
 		return this.call("forgetContextTerm", input);
 	}
 
-	public listAllContexts(): Promise<ContextSyncRecord[]> {
-		return this.call("listAllContexts");
+	public materializeContextRevision(input: { scopeRef?: string; revision: number }): Promise<MaterializedContextRevision> {
+		return this.call("materializeContextRevision", input);
 	}
 
-	public applyContexts(contexts: ContextSyncRecord[]): Promise<{ applied: number }> {
-		return this.call("applyContexts", { contexts });
+	public materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }): Promise<MaterializedContextTermRevision> {
+		return this.call("materializeContextTermRevision", input);
 	}
 
-	public listAllContextTerms(): Promise<ContextTermSyncRecord[]> {
-		return this.call("listAllContextTerms");
+	public restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextRevision> {
+		return this.call("restoreContextRevision", input);
 	}
 
-	public applyContextTerms(terms: ContextTermSyncRecord[]): Promise<{ applied: number }> {
-		return this.call("applyContextTerms", { terms });
+	public restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextTermRevision> {
+		return this.call("restoreContextTermRevision", input);
 	}
 
 	// Tenant administration

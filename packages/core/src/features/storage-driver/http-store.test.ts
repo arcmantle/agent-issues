@@ -1,7 +1,35 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { SynchronizeConflictError } from "../synchronize/canonical-chain.js";
 import { DaemonDbPathMismatchError, DaemonHandshakeMismatchError, DaemonVersionMismatchError, HttpStore } from "./http-store.js";
+
+describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
+	it("recreates a typed conflict with current record metadata", async () => {
+		const fetchImpl: typeof fetch = async () =>
+			new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: "1",
+					error: {
+						code: -32603,
+						message: "Cannot synchronize divergent or stale context-term project:tenant: current revision is 3.",
+						data: { recordKind: "context-term", recordId: "project:tenant", currentRevision: 3, currentContentHash: "current-hash" }
+					}
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } }
+			);
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [] })).rejects.toMatchObject({
+			name: "SynchronizeConflictError",
+			recordKind: "context-term",
+			recordId: "project:tenant",
+			currentRevision: 3,
+			currentContentHash: "current-hash"
+		} satisfies Partial<SynchronizeConflictError>);
+	});
+});
 
 /**
  * `HttpStore`'s full behavioral contract runs against a real gate elsewhere

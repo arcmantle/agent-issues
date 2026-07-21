@@ -93,7 +93,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 	});
 
 	it("sends the configured db path on every call (ISS190)", async () => {
-		await saveDaemonToken("real-token", credentialStoreOptions);
+		await saveDaemonToken("real-token", { ...credentialStoreOptions, dbPath: "/tmp/other.db" });
 		let seenDbPath: string | string[] | undefined;
 		const port = await listenFakeDaemon((headers) => {
 			seenDbPath = headers["x-agent-issues-db-path"];
@@ -149,7 +149,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 	});
 
 	it("retries once against a freshly-spawned daemon when the current one reports a db-path mismatch (ISS190)", async () => {
-		await saveDaemonToken("real-token", credentialStoreOptions);
+		await saveDaemonToken("real-token", { ...credentialStoreOptions, dbPath: "/tmp/new.db" });
 		const oldPort = await listenFakeDaemon(() => {
 			setTimeout(() => servers[0]?.close(), 10);
 			return {
@@ -180,7 +180,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 	});
 
 	it("re-reads the daemon token before retrying, since a freshly-spawned daemon mints its own new one (ISS190)", async () => {
-		await saveDaemonToken("stale-token", credentialStoreOptions);
+		await saveDaemonToken("stale-token", { ...credentialStoreOptions, dbPath: "/tmp/new.db" });
 		const oldPort = await listenFakeDaemon(() => {
 			setTimeout(() => servers[0]?.close(), 10);
 			return {
@@ -193,7 +193,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 		const spawn = vi.fn(() => {
 			void (async () => {
 				// A freshly-spawned real daemon mints and persists its own new token independently of whatever the client already read.
-				await saveDaemonToken("freshly-minted-token", credentialStoreOptions);
+				await saveDaemonToken("freshly-minted-token", { ...credentialStoreOptions, dbPath: "/tmp/new.db" });
 				const newPort = await listenFakeDaemon((headers) => {
 					if (headers.authorization !== "Bearer freshly-minted-token") {
 						return { status: 401, body: { error: "unauthorized" } };

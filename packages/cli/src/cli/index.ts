@@ -10,11 +10,13 @@ import {
 	CreateCommand,
 	DeleteCommand,
 	EditCommand,
+	HistoryCommand,
 	LinkCommand,
 	ListCommand,
 	MoveCommand,
 	OrphansCommand,
 	RelationsCommand,
+	RestoreCommand,
 	ShowCommand,
 	StatusCommand,
 	UnlinkCommand
@@ -70,6 +72,8 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(ContextCommand);
 	cli.register(CreateCommand);
 	cli.register(EditCommand);
+	cli.register(HistoryCommand);
+	cli.register(RestoreCommand);
 	cli.register(ArchiveCommand);
 	cli.register(DeleteCommand);
 	cli.register(MoveCommand);

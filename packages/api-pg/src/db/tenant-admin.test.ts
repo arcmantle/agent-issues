@@ -39,12 +39,15 @@ describe("tenant administration", () => {
 
 		expect(await store.listTenants()).toEqual([]);
 
-		await store.createEntity({ kind: "initiative", title: "Payments" });
+		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
+		await store.updateEntity({ entityId: initiative.id, body: "Current", expectedRevision: initiative.revision, expectedContentHash: initiative.contentHash });
 
 		const tenants = await store.listTenants();
+		const snapshot = await store.getDatabaseSnapshot();
 		expect(tenants).toHaveLength(1);
 		expect(tenants[0]?.id).toBe(tenantId);
 		expect(tenants[0]?.counts.entities).toBeGreaterThan(0);
+		expect(tenants[0]?.counts.historyEntries).toBe(snapshot.entities.reduce((total, entity) => total + entity.revision, 0));
 	});
 
 	it("never lists a sibling tenant's summary", async () => {
@@ -89,7 +92,11 @@ describe("tenant administration", () => {
 		const newTenantId = createTestTenantId();
 		const store = new PgStore(appPool, previousTenantId);
 		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
-		await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Canonical order." });
+		await store.setEntityBody({ entityId: initiative.id, body: "Current body.", expectedRevision: initiative.revision, expectedContentHash: initiative.contentHash });
+		const contextV1 = await store.upsertContext({ scopeRef: initiative.id, title: "Payments terms", summary: "Initial summary." });
+		await store.upsertContext({ scopeRef: initiative.id, title: "Payments language", summary: "Current summary.", expectedRevision: contextV1.context.revision, expectedContentHash: contextV1.context.contentHash });
+		const termV1 = await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Initial order." });
+		await store.defineContextTerm({ scopeRef: initiative.id, term: "Order", definition: "Canonical order.", expectedRevision: termV1.term.revision, expectedContentHash: termV1.term.contentHash });
 		const handoff = await store.createEntity({ kind: "handoff", title: "Handoff", links: [{ relationType: "handsOff", targetId: initiative.id }] });
 
 		const result = await store.renameTenant(previousTenantId, newTenantId);
@@ -100,9 +107,13 @@ describe("tenant administration", () => {
 
 		const renamedStore = new PgStore(appPool, newTenantId);
 		const details = await renamedStore.getEntityDetails(initiative.id);
-		expect(details.entity.title).toBe("Payments");
+		expect(details.entity).toMatchObject({ title: "Payments", body: "Current body.", revision: 2 });
+		expect(await renamedStore.materializeEntityRevision({ entityId: initiative.id, revision: 1 })).toMatchObject({ body: "", title: "Payments" });
 		const context = await renamedStore.getContextDetails({ scopeRef: initiative.id });
-		expect(context.terms.map((term) => term.term)).toEqual(["Order"]);
+		expect(context.context).toMatchObject({ title: "Payments language", summary: "Current summary.", revision: 2 });
+		expect(context.terms).toEqual([expect.objectContaining({ term: "Order", definition: "Canonical order.", revision: 2 })]);
+		expect(await renamedStore.materializeContextRevision({ scopeRef: initiative.id, revision: 1 })).toMatchObject({ title: "Payments terms", summary: "Initial summary." });
+		expect(await renamedStore.materializeContextTermRevision({ scopeRef: initiative.id, term: "Order", revision: 1 })).toMatchObject({ definition: "Initial order." });
 		const handoffDetails = await renamedStore.getEntityDetails(handoff.id);
 		expect(handoffDetails.outgoing).toEqual(expect.arrayContaining([
 			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: initiative.id }) })

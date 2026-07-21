@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ensureDatabase } from "../../db/database.js";
 import type { SqliteExecutor } from "../../db/sqlite-executor.js";
-import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listOrphans, moveEntity, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
+import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
 
 function statusOf(db: SqliteExecutor, entityId: string): string {
 	return getEntityDetails(db, entityId).entity.status;
@@ -125,7 +125,7 @@ describe("record bodies", () => {
 		const db = await openTestDatabase();
 		const issue = createEntity(db, { kind: "issue", title: "Editable" });
 
-		const updated = setEntityBody(db, { entityId: issue.id, body: "## Rewritten body" });
+		const updated = setEntityBody(db, { entityId: issue.id, body: "## Rewritten body", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
 
 		expect(updated.body).toBe("## Rewritten body");
 		expect(updated.bodySource).toBe("authored");
@@ -137,7 +137,7 @@ describe("record bodies", () => {
 		const db = await openTestDatabase();
 		const issue = createEntity(db, { kind: "issue", title: "Clearable", body: "Original body" });
 
-		const cleared = setEntityBody(db, { entityId: issue.id, body: "" });
+		const cleared = setEntityBody(db, { entityId: issue.id, body: "", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
 
 		expect(cleared.body).toBe("");
 		expect(cleared.bodySource).toBe("authored");
@@ -163,12 +163,19 @@ describe("handoff graph entities", () => {
 		expect(getEntityDetails(db, handoff.id).outgoing).toEqual([
 			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: focus.id }) })
 		]);
-		expect(listEntityHistory(db, handoff.id)).toEqual([
-			expect.objectContaining({ title: "Resume migration", body: "Move legacy rows into graph entities.", version: 1 })
-		]);
+		expect(materializeEntityRevision(db, { entityId: handoff.id, revision: 1 })).toMatchObject({
+			title: "Resume migration",
+			body: "Move legacy rows into graph entities.",
+			targetRevision: 1
+		});
 
 		deleteEntity(db, { entityId: focus.id });
 		expect(() => getEntityDetails(db, handoff.id)).toThrow(/not found/i);
+		expect(materializeEntityRevision(db, { entityId: handoff.id, revision: 1 })).toMatchObject({
+			targetRevision: 1,
+			headRevision: 2,
+			tombstone: false
+		});
 	});
 });
 
@@ -708,16 +715,13 @@ describe("version as first-class entity", () => {
 	});
 });
 
-describe("append-only history", () => {
-	it("appends a version-1 history entry with a globally-unique id when an entity is created", async () => {
+describe("canonical revision history", () => {
+	it("materializes revision 1 from a newly created canonical head", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
 
-		const history = listEntityHistory(db, initiative.id);
-		expect(history).toHaveLength(1);
-		expect(history[0]?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-		expect(history[0]).toMatchObject({
-			version: 1,
+		expect(materializeEntityRevision(db, { entityId: initiative.id, revision: 1 })).toMatchObject({
+			targetRevision: 1,
 			author: "system",
 			title: "Payments",
 			status: "draft",
@@ -725,53 +729,79 @@ describe("append-only history", () => {
 		});
 	});
 
-	it("captures an explicit author instead of the reserved system default", async () => {
+	it("uses the reserved system author for a head-only revision", async () => {
 		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Payments", author: "kris" });
+		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
 
-		const history = listEntityHistory(db, initiative.id);
-		expect(history[0]?.author).toBe("kris");
+		expect(materializeEntityRevision(db, { entityId: initiative.id, revision: 1 }).author).toBe("system");
 	});
 
-	it("appends a new history version when an entity's status changes, carrying forward its other facts", async () => {
+	it("appends a status revision that materializes its predecessor", async () => {
 		const db = await openTestDatabase();
 		const issue = createEntity(db, { kind: "issue", title: "Fix bug" });
 
-		updateEntityStatus(db, { entityId: issue.id, status: "in-progress", author: "kris" });
+		const updated = updateEntityStatus(db, { entityId: issue.id, status: "in-progress", author: "kris" });
 
-		const history = listEntityHistory(db, issue.id);
-		expect(history).toHaveLength(2);
-		expect(history[0]).toMatchObject({ version: 1, status: "todo", author: "system" });
-		expect(history[1]).toMatchObject({ version: 2, status: "in-progress", author: "kris", title: "Fix bug" });
-		expect(history[0]?.id).not.toBe(history[1]?.id);
+		expect(updated.entity).toMatchObject({ revision: 2, status: "in-progress", title: "Fix bug" });
+		expect(materializeEntityRevision(db, { entityId: issue.id, revision: 1 })).toMatchObject({
+			targetRevision: 1,
+			headRevision: 2,
+			status: "todo",
+			title: "Fix bug"
+		});
 	});
 
 	it("appends a new history version when an entity's body changes", async () => {
 		const db = await openTestDatabase();
 		const issue = createEntity(db, { kind: "issue", title: "Fix bug" });
 
-		setEntityBody(db, { entityId: issue.id, body: "Repro steps here.", author: "kris" });
+		setEntityBody(db, { entityId: issue.id, body: "Repro steps here.", author: "kris", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
 
-		const history = listEntityHistory(db, issue.id);
-		expect(history).toHaveLength(2);
-		expect(history[1]).toMatchObject({ version: 2, body: "Repro steps here.", bodySource: "authored", author: "kris" });
+		const delta = db.db.prepare(`
+			SELECT revision, author, prior_title, prior_body, prior_body_source
+			FROM entity_delta_entries
+			WHERE tenant_id = ? AND entity_id = ?
+		`).get(db.tenantId, issue.id);
+		expect(delta).toEqual({
+			revision: 2,
+			author: "kris",
+			prior_title: "Fix bug",
+			prior_body: "",
+			prior_body_source: "authored"
+		});
 	});
 
-	it("appends a new history version capturing the new parent when an entity is moved, but not on a no-op move", async () => {
+	it("appends a move revision that materializes its predecessor, but not on a no-op move", async () => {
 		const db = await openTestDatabase();
 		const projectA = createEntity(db, { kind: "project", title: "Project A" });
 		const projectB = createEntity(db, { kind: "project", title: "Project B" });
 		const version = createEntity(db, { kind: "version", title: "2.0", parentId: projectA.id });
 
-		moveEntity(db, { entityId: version.id, newParentId: projectB.id, author: "kris" });
+		const moved = moveEntity(db, { entityId: version.id, newParentId: projectB.id, author: "kris" });
 
-		const history = listEntityHistory(db, version.id);
-		expect(history).toHaveLength(2);
-		expect(history[0]).toMatchObject({ version: 1, parentId: projectA.id });
-		expect(history[1]).toMatchObject({ version: 2, parentId: projectB.id, author: "kris" });
+		expect(moved.entity.revision).toBe(2);
+		expect(materializeEntityRevision(db, { entityId: version.id, revision: 2 })).toMatchObject({ parentId: projectB.id });
+		expect(materializeEntityRevision(db, { entityId: version.id, revision: 1 })).toMatchObject({
+			targetRevision: 1,
+			headRevision: 2,
+			parentId: projectA.id
+		});
 
-		moveEntity(db, { entityId: version.id, newParentId: projectB.id });
-		expect(listEntityHistory(db, version.id)).toHaveLength(2);
+		const unchanged = moveEntity(db, { entityId: version.id, newParentId: projectB.id });
+		expect(unchanged.entity.revision).toBe(2);
+	});
+
+	it("restoring a prior parent also restores the entity's project assignment", async () => {
+		const db = await openTestDatabase();
+		const projectA = createEntity(db, { kind: "project", title: "Project A" });
+		const projectB = createEntity(db, { kind: "project", title: "Project B" });
+		const version = createEntity(db, { kind: "version", title: "2.0", parentId: projectA.id });
+		const moved = moveEntity(db, { entityId: version.id, newParentId: projectB.id });
+
+		restoreEntityRevision(db, { entityId: version.id, revision: 1, expectedRevision: moved.entity.revision, expectedContentHash: moved.entity.contentHash });
+
+		const row = db.db.prepare("SELECT project_id FROM entities WHERE tenant_id = ? AND id = ?").get(db.tenantId, version.id) as { project_id: string };
+		expect(row.project_id).toBe(projectA.id);
 	});
 });
 

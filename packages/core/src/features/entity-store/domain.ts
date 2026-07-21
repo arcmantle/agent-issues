@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue", "handoff"] as const;
 
 export const BODY_SOURCES = ["authored", "generated"] as const;
@@ -96,9 +98,106 @@ export type EntityRecord = {
 	status: string;
 	body: string;
 	bodySource: BodySource;
+	revision: number;
+	contentHash: string;
 	createdAt: string;
 	updatedAt: string;
 };
+
+/**
+ * Computes the canonical content hash for an entity's mutable title and body
+ * (ADR55/ISS257). Used to populate `EntityRecord.contentHash` on creation and
+ * to validate `expectedContentHash` on generic title/body edits.
+ */
+export function computeEntityContentHash(title: string, body: string): string {
+	return createHash("sha256").update(`${title}\n\n${body}`).digest("hex");
+}
+
+/**
+ * The typed reverse-patch record stored in `entity_delta_entries`
+ * (ADR55/ISS257/ISS261). Each row represents one edit that advanced the entity
+ * by one revision. Applying `prior_*` values to the current head walks state
+ * back one step. The `status`, `parentId`, and `tombstone` predecessor fields
+ * are optional until ISS258 writes lifecycle deltas; parent and tombstone may
+ * also explicitly be `null` in a historical state.
+ */
+export type EntityRevisionPatch = {
+	revision: number;
+	author: string;
+	createdAt: string;
+	restoredFromRevision?: number;
+	priorTitle: string;
+	priorBody: string;
+	priorBodySource: BodySource;
+	priorStatus?: string;
+	priorParentId?: string | null;
+	priorTombstone?: boolean | null;
+};
+
+/**
+ * Returned by `StorageDriver.materializeEntityRevision` (ISS261). Contains the
+ * reconstructed entity facts at `targetRevision` plus the current
+ * `headRevision` so callers can see how stale their view is. `status`,
+ * `parentId`, and `tombstone` are best-effort from the current head until
+ * ISS258 adds lifecycle deltas.
+ */
+export type MaterializedEntityRevision = {
+	entityId: string;
+	targetRevision: number;
+	headRevision: number;
+	title: string;
+	body: string;
+	bodySource: BodySource;
+	status: string;
+	parentId: string | null;
+	tombstone: boolean | null;
+	author: string;
+	createdAt: string;
+	restoredFromRevision: number | null;
+};
+
+export type EntityRevisionErrorReason = "entity-not-found" | "revision-out-of-range" | "broken-chain";
+
+/**
+ * Thrown when `materializeEntityRevision` cannot satisfy the request
+ * (ISS261). The `reason` discriminant lets callers handle each case without
+ * parsing the message string.
+ */
+export class EntityRevisionError extends Error {
+	public readonly entityId: string;
+	public readonly reason: EntityRevisionErrorReason;
+	public readonly headRevision: number | undefined;
+
+	public constructor(entityId: string, reason: EntityRevisionErrorReason, message: string, headRevision?: number) {
+		super(message);
+		this.name = "EntityRevisionError";
+		this.entityId = entityId;
+		this.reason = reason;
+		this.headRevision = headRevision;
+	}
+}
+
+/**
+ * Thrown when a title/body edit presents a stale `expectedRevision` or
+ * `expectedContentHash` that does not match the entity's current head
+ * (ADR55/ISS257). Carries the current head's revision and hash so the caller
+ * can surface them in a "refresh and retry" error message.
+ */
+export class EntityConflictError extends Error {
+	public readonly entityId: string;
+	public readonly currentRevision: number;
+	public readonly currentContentHash: string;
+
+	public constructor(entityId: string, currentRevision: number, currentContentHash: string) {
+		super(
+			`Stale edit for ${entityId}: expected a matching revision/hash but current revision is ${currentRevision}.`
+		);
+		this.name = "EntityConflictError";
+		this.entityId = entityId;
+		this.currentRevision = currentRevision;
+		this.currentContentHash = currentContentHash;
+	}
+}
 
 export type RelationRecord = {
 	fromId: string;

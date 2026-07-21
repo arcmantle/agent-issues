@@ -18,7 +18,7 @@ let tempDir: string | null = null;
 
 async function openTestDatabase() {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-export-files-"));
-	return (await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" })).db;
+	return (await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" })).executor;
 }
 
 afterEach(() => {

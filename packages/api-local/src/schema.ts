@@ -26,6 +26,9 @@ export const entities = sqliteTable(
 		status: text("status").notNull(),
 		body: text("body").notNull().default(""),
 		bodySource: text("body_source").notNull().default("authored"),
+		revision: integer("revision").notNull().default(1),
+		contentHash: text("content_hash").notNull().default(""),
+		tombstone: integer("tombstone", { mode: "boolean" }).notNull().default(false),
 		projectId: text("project_id"),
 		createdAt: text("created_at").notNull(),
 		updatedAt: text("updated_at").notNull()
@@ -64,6 +67,8 @@ export const contexts = sqliteTable(
 		scopeEntityId: text("scope_entity_id"),
 		title: text("title").notNull(),
 		summary: text("summary").notNull(),
+		revision: integer("revision").notNull().default(1),
+		contentHash: text("content_hash").notNull().default(""),
 		createdAt: text("created_at").notNull(),
 		updatedAt: text("updated_at").notNull()
 	},
@@ -87,6 +92,9 @@ export const contextTerms = sqliteTable(
 		term: text("term").notNull(),
 		definition: text("definition").notNull(),
 		avoidTerms: text("avoid_terms").notNull(),
+		revision: integer("revision").notNull().default(1),
+		contentHash: text("content_hash").notNull().default(""),
+		tombstone: integer("tombstone", { mode: "boolean" }).notNull().default(false),
 		createdAt: text("created_at").notNull(),
 		updatedAt: text("updated_at").notNull()
 	},
@@ -128,6 +136,79 @@ export const historyEntries = sqliteTable(
 	(table) => [index("history_entries_tenant_entity_version_idx").on(table.tenantId, table.entityId, table.version)]
 );
 
+// Append-only reverse-delta chain (ADR55/ISS257). Each row stores the
+// predecessor title/body for one atomic title/body edit so ISS261's history
+// materializer can walk back from the current head one step at a time.
+// The UNIQUE constraint on (tenant_id, entity_id, revision) enforces the
+// linear chain: one delta per revision per entity, no branches allowed.
+export const entityDeltaEntries = sqliteTable(
+	"entity_delta_entries",
+	{
+		id: text("id").primaryKey(),
+		tenantId: text("tenant_id").notNull(),
+		entityId: text("entity_id").notNull(),
+		revision: integer("revision").notNull(),
+		author: text("author").notNull(),
+		priorTitle: text("prior_title").notNull(),
+		priorBody: text("prior_body").notNull(),
+		priorBodySource: text("prior_body_source").notNull(),
+		priorStatus: text("prior_status"),
+		priorParentId: text("prior_parent_id"),
+		priorParentChanged: integer("prior_parent_changed", { mode: "boolean" }).notNull().default(false),
+		priorTombstone: integer("prior_tombstone", { mode: "boolean" }),
+		restoredFromRevision: integer("restored_from_revision"),
+		createdAt: text("created_at").notNull()
+	},
+	(table) => [
+		index("entity_delta_entries_tenant_entity_revision_idx").on(table.tenantId, table.entityId, table.revision),
+		uniqueIndex("entity_delta_entries_tenant_id_entity_id_revision_key").on(table.tenantId, table.entityId, table.revision)
+	]
+);
+
+// Append-only reverse-delta chain (ADR55/ISS259). Each row stores the
+// predecessor title/summary for one atomic context title/summary edit.
+// The UNIQUE constraint on (tenant_id, context_key, revision) enforces the
+// linear chain: one delta per revision per context, no branches allowed.
+export const contextDeltaEntries = sqliteTable(
+	"context_delta_entries",
+	{
+		id: text("id").primaryKey(),
+		tenantId: text("tenant_id").notNull(),
+		contextKey: text("context_key").notNull(),
+		revision: integer("revision").notNull(),
+		author: text("author").notNull(),
+		priorTitle: text("prior_title").notNull(),
+		priorSummary: text("prior_summary").notNull(),
+		restoredFromRevision: integer("restored_from_revision"),
+		createdAt: text("created_at").notNull()
+	},
+	(table) => [
+		index("context_delta_entries_tenant_key_revision_idx").on(table.tenantId, table.contextKey, table.revision),
+		uniqueIndex("context_delta_entries_tenant_key_revision_key").on(table.tenantId, table.contextKey, table.revision)
+	]
+);
+
+export const contextTermDeltaEntries = sqliteTable(
+	"context_term_delta_entries",
+	{
+		id: text("id").primaryKey(),
+		tenantId: text("tenant_id").notNull(),
+		contextKey: text("context_key").notNull(),
+		term: text("term").notNull(),
+		revision: integer("revision").notNull(),
+		author: text("author").notNull(),
+		priorDefinition: text("prior_definition").notNull(),
+		priorAvoidTerms: text("prior_avoid_terms").notNull(),
+		priorTombstone: integer("prior_tombstone", { mode: "boolean" }).notNull(),
+		restoredFromRevision: integer("restored_from_revision"),
+		createdAt: text("created_at").notNull()
+	},
+	(table) => [
+		index("context_term_delta_entries_tenant_term_revision_idx").on(table.tenantId, table.contextKey, table.term, table.revision),
+		uniqueIndex("context_term_delta_entries_tenant_term_revision_key").on(table.tenantId, table.contextKey, table.term, table.revision)
+	]
+);
+
 // Records that a legacy per-folder tenant (the old one-tenant-per-workspace
 // scheme, ADR7) has already been folded into a `project` entity under a
 // shared tenant (ISS63, correcting ISS34's incomplete migration). Keyed by
@@ -152,7 +233,10 @@ export const schema = {
 	relations,
 	contexts,
 	contextTerms,
+	contextDeltaEntries,
+	contextTermDeltaEntries,
 	historyEntries,
+	entityDeltaEntries,
 	projectMigrations
 };
 
@@ -160,7 +244,10 @@ export type EntityRow = typeof entities.$inferSelect;
 export type RelationRow = typeof relations.$inferSelect;
 export type ContextRow = typeof contexts.$inferSelect;
 export type ContextTermRow = typeof contextTerms.$inferSelect;
+export type ContextDeltaEntryRow = typeof contextDeltaEntries.$inferSelect;
+export type ContextTermDeltaEntryRow = typeof contextTermDeltaEntries.$inferSelect;
 export type CounterRow = typeof counters.$inferSelect;
 export type MetadataRow = typeof metadata.$inferSelect;
 export type HistoryEntryRow = typeof historyEntries.$inferSelect;
+export type EntityDeltaEntryRow = typeof entityDeltaEntries.$inferSelect;
 export type ProjectMigrationRow = typeof projectMigrations.$inferSelect;

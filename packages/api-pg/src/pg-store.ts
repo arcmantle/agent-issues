@@ -1,10 +1,9 @@
 import type {
 	BodySource,
+	CanonicalChainBundle,
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
-	ContextSyncRecord,
-	ContextTermSyncRecord,
 	DatabaseSnapshot,
 	DefineContextTermResult,
 	DeleteResult,
@@ -27,27 +26,27 @@ import type {
 	TenantSummary,
 	UnlinkResult
 } from "@agent-issues/core";
+import { measureHistory } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction } from "./db/connection.js";
+import { exportCanonicalChains, importCanonicalChains } from "./features/synchronize/pg-canonical-chain-store.js";
 import { deleteTenant, listTenants, renameTenant } from "./db/tenant-admin.js";
 import {
-	applyContextTerms,
-	applyContexts,
 	defineContextTerm,
 	forgetContextTerm,
 	getContextDetails,
 	getContextDirectory,
-	listAllContextTerms,
-	listAllContexts,
 	listContexts,
+	materializeContextRevision,
+	materializeContextTermRevision,
 	queryContextDirectory,
+	restoreContextRevision,
+	restoreContextTermRevision,
 	upsertContext
 } from "./features/context/pg-context-store.js";
 import {
-	applyHistoryEntries,
 	applyRelations,
-	applyResolvedFacts,
 	archiveEntity,
 	createEntity,
 	deleteEntity,
@@ -57,18 +56,20 @@ import {
 	getInitiativeBundle,
 	getSnapshotSignature,
 	linkEntities,
-	listAllHistoryEntries,
 	listAllRelations,
 	listEntities,
 	listEntityHistory,
 	listOrphans,
 	listProjectAdrs,
+	materializeEntityRevision,
 	moveEntity,
+	restoreEntityRevision,
 	setEntityBody,
 	unlinkEntities,
 	updateEntity,
 	updateEntityStatus
 } from "./features/entity-store/pg-entity-store.js";
+import { getHistoryMaterializationDepths, recordHistoryMaterialization } from "./features/history-diagnostics.js";
 
 /**
  * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
@@ -105,6 +106,18 @@ export class PgStore implements StorageDriver {
 		private readonly projectIdentity?: string
 	) {}
 
+	public async exportCanonicalChains() {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => exportCanonicalChains(client, this.tenantId));
+	}
+
+	public async importCanonicalChains(bundle: CanonicalChainBundle) {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => importCanonicalChains(client, this.tenantId, bundle));
+	}
+
+	public async getHistoryDiagnostics() {
+		return measureHistory(await this.exportCanonicalChains(), getHistoryMaterializationDepths(this.pool, this.tenantId));
+	}
+
 	public async createEntity(input: {
 		kind: string;
 		title: string;
@@ -129,18 +142,6 @@ export class PgStore implements StorageDriver {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => listEntityHistory(client, this.tenantId, entityId));
 	}
 
-	public async listAllHistoryEntries(): Promise<HistoryEntryRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listAllHistoryEntries(client, this.tenantId));
-	}
-
-	public async applyHistoryEntries(entries: HistoryEntryRecord[]): Promise<{ inserted: number }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyHistoryEntries(client, this.tenantId, entries));
-	}
-
-	public async applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]): Promise<{ created: string[]; updated: string[] }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyResolvedFacts(client, this.tenantId, resolvedEntries, this.projectIdentity));
-	}
-
 	public async listAllRelations(): Promise<RelationRecord[]> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => listAllRelations(client, this.tenantId));
 	}
@@ -161,12 +162,24 @@ export class PgStore implements StorageDriver {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => updateEntityStatus(client, this.tenantId, input));
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => updateEntity(client, this.tenantId, input));
 	}
 
-	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }): Promise<EntityRecord> {
+	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => setEntityBody(client, this.tenantId, input));
+	}
+
+	public async materializeEntityRevision(input: { entityId: string; revision: number }) {
+		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => materializeEntityRevision(client, this.tenantId, input));
+		recordHistoryMaterialization(this.pool, this.tenantId, "entity", result.headRevision, result.targetRevision);
+		return result;
+	}
+
+	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => restoreEntityRevision(client, this.tenantId, input));
+		recordHistoryMaterialization(this.pool, this.tenantId, "entity", input.expectedRevision, input.revision);
+		return result;
 	}
 
 	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
@@ -231,7 +244,7 @@ export class PgStore implements StorageDriver {
 		);
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails> {
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => upsertContext(client, this.tenantId, this.projectIdentity, input));
 	}
 
@@ -240,28 +253,39 @@ export class PgStore implements StorageDriver {
 		term: string;
 		definition: string;
 		avoid?: string[];
+		author?: string;
+		expectedRevision?: number;
+		expectedContentHash?: string;
 	}): Promise<DefineContextTermResult> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => defineContextTerm(client, this.tenantId, this.projectIdentity, input));
 	}
 
-	public async forgetContextTerm(input: { scopeRef?: string; term: string }): Promise<ForgetContextTermResult> {
+	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => forgetContextTerm(client, this.tenantId, this.projectIdentity, input));
 	}
 
-	public async listAllContexts(): Promise<ContextSyncRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listAllContexts(client, this.tenantId));
+	public async materializeContextRevision(input: { scopeRef?: string; revision: number }) {
+		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => materializeContextRevision(client, this.tenantId, this.projectIdentity, input));
+		recordHistoryMaterialization(this.pool, this.tenantId, "context", result.headRevision, result.targetRevision);
+		return result;
 	}
 
-	public async applyContexts(contexts: ContextSyncRecord[]): Promise<{ applied: number }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyContexts(client, this.tenantId, contexts));
+	public async materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }) {
+		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => materializeContextTermRevision(client, this.tenantId, this.projectIdentity, input));
+		recordHistoryMaterialization(this.pool, this.tenantId, "context-term", result.headRevision, result.targetRevision);
+		return result;
 	}
 
-	public async listAllContextTerms(): Promise<ContextTermSyncRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listAllContextTerms(client, this.tenantId));
+	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => restoreContextRevision(client, this.tenantId, this.projectIdentity, input));
+		recordHistoryMaterialization(this.pool, this.tenantId, "context", input.expectedRevision, input.revision);
+		return result;
 	}
 
-	public async applyContextTerms(terms: ContextTermSyncRecord[]): Promise<{ applied: number }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyContextTerms(client, this.tenantId, terms));
+	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => restoreContextTermRevision(client, this.tenantId, this.projectIdentity, input));
+		recordHistoryMaterialization(this.pool, this.tenantId, "context-term", input.expectedRevision, input.revision);
+		return result;
 	}
 
 	public async listTenants(): Promise<TenantSummary[]> {

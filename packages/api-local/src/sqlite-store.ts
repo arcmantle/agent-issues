@@ -1,34 +1,33 @@
 import { existsSync, statSync } from "node:fs";
 
-import type { BodySource, DatabaseSnapshot, HistoryEntryRecord, ProjectSnapshot, RelationRecord, StorageDriver } from "@agent-issues/core";
+import { measureHistory, type BodySource, type DatabaseSnapshot, type ProjectSnapshot, type RelationRecord, type StorageDriver } from "@agent-issues/core";
+import type { CanonicalChainBundle } from "@agent-issues/core";
+import { exportCanonicalChains, importCanonicalChains } from "./features/synchronize/canonical-chain-store.js";
 import type {
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
-	ContextSyncRecord,
-	ContextTermSyncRecord,
 	QueryContextDirectoryInput
 } from "./features/context/context-store.js";
 import {
-	applyContextTerms,
-	applyContexts,
 	defineContextTerm,
 	forgetContextTerm,
 	getContextDetails,
 	getContextDirectory,
-	listAllContextTerms,
-	listAllContexts,
 	listContexts,
+	materializeContextRevision,
+	materializeContextTermRevision,
 	queryContextDirectory,
+	restoreContextRevision,
+	restoreContextTermRevision,
 	upsertContext
 } from "./features/context/context-store.js";
 import type { DatabaseHandle, DatabaseLocationOptions } from "./db/database.js";
+import { getHistoryMaterializationDepths } from "./features/history-diagnostics.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./db/database.js";
 import type { SqliteExecutor } from "./db/sqlite-executor.js";
 import {
-	applyHistoryEntries,
 	applyRelations,
-	applyResolvedFacts,
 	archiveEntity,
 	createEntity,
 	deleteEntity,
@@ -37,13 +36,14 @@ import {
 	getEntityDetails,
 	getInitiativeBundle,
 	linkEntities,
-	listAllHistoryEntries,
 	listAllRelations,
 	listEntities,
 	listEntityHistory,
 	listOrphans,
 	listProjectAdrs,
+	materializeEntityRevision,
 	moveEntity,
+	restoreEntityRevision,
 	setEntityBody,
 	unlinkEntities,
 	updateEntity,
@@ -100,6 +100,18 @@ export class SqliteStore implements StorageDriver {
 		return this.db.tenantId;
 	}
 
+	public async exportCanonicalChains() {
+		return exportCanonicalChains(this.executor);
+	}
+
+	public async importCanonicalChains(bundle: CanonicalChainBundle) {
+		return importCanonicalChains(this.executor, bundle);
+	}
+
+	public async getHistoryDiagnostics() {
+		return measureHistory(exportCanonicalChains(this.executor), getHistoryMaterializationDepths(this.executor));
+	}
+
 	public async createEntity(input: {
 		kind: string;
 		title: string;
@@ -124,40 +136,12 @@ export class SqliteStore implements StorageDriver {
 		return listEntityHistory(this.executor, entityId);
 	}
 
-	public async listAllHistoryEntries() {
-		return listAllHistoryEntries(this.executor);
-	}
-
-	public async applyHistoryEntries(entries: HistoryEntryRecord[]) {
-		return applyHistoryEntries(this.executor, entries);
-	}
-
-	public async applyResolvedFacts(resolvedEntries: HistoryEntryRecord[]) {
-		return applyResolvedFacts(this.executor, resolvedEntries);
-	}
-
 	public async listAllRelations() {
 		return listAllRelations(this.executor);
 	}
 
 	public async applyRelations(relations: RelationRecord[]) {
 		return applyRelations(this.executor, relations);
-	}
-
-	public async listAllContexts() {
-		return listAllContexts(this.executor);
-	}
-
-	public async applyContexts(contexts: ContextSyncRecord[]) {
-		return applyContexts(this.executor, contexts);
-	}
-
-	public async listAllContextTerms() {
-		return listAllContextTerms(this.executor);
-	}
-
-	public async applyContextTerms(terms: ContextTermSyncRecord[]) {
-		return applyContextTerms(this.executor, terms);
 	}
 
 	public async listOrphans(kind?: string) {
@@ -172,12 +156,20 @@ export class SqliteStore implements StorageDriver {
 		return updateEntityStatus(this.executor, input);
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string }) {
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }) {
 		return updateEntity(this.executor, input);
 	}
 
-	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string }) {
+	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }) {
 		return setEntityBody(this.executor, input);
+	}
+
+	public async materializeEntityRevision(input: { entityId: string; revision: number }) {
+		return materializeEntityRevision(this.executor, input);
+	}
+
+	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		return restoreEntityRevision(this.executor, input);
 	}
 
 	public async archiveEntity(input: { entityId: string }) {
@@ -234,16 +226,32 @@ export class SqliteStore implements StorageDriver {
 		return queryContextDirectory(this.executor, input);
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string }): Promise<ContextDetails> {
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
 		return upsertContext(this.executor, input);
 	}
 
-	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[] }) {
+	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
 		return defineContextTerm(this.executor, input);
 	}
 
-	public async forgetContextTerm(input: { scopeRef?: string; term: string }) {
+	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
 		return forgetContextTerm(this.executor, input);
+	}
+
+	public async materializeContextRevision(input: { scopeRef?: string; revision: number }) {
+		return materializeContextRevision(this.executor, input);
+	}
+
+	public async materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }) {
+		return materializeContextTermRevision(this.executor, input);
+	}
+
+	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		return restoreContextRevision(this.executor, input);
+	}
+
+	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		return restoreContextTermRevision(this.executor, input);
 	}
 
 	public async listTenants() {

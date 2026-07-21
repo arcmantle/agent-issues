@@ -1,6 +1,7 @@
 ---
 name: ai-plan
 description: Fast-paced grilling session that challenges a plan against the existing domain model, sharpens terminology, updates documentation inline, and keeps the work tracked in agent-issues. Use when the user explicitly wants fast-paced planning, batched questions, or roughly five questions at a time.
+disable-model-invocation: true
 ---
 
 Follow the shared [language standard](../agent-issues-language.md).

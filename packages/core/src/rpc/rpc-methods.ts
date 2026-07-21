@@ -13,6 +13,9 @@ import type { StorageDriver } from "../features/storage-driver/storage-driver.js
 export type RpcMethodHandler = (store: StorageDriver, params: unknown) => Promise<unknown>;
 
 export const rpcMethods: Record<string, RpcMethodHandler> = {
+	exportCanonicalChains: async (store) => store.exportCanonicalChains(),
+	importCanonicalChains: async (store, params) => store.importCanonicalChains((params as { bundle: Parameters<StorageDriver["importCanonicalChains"]>[0] }).bundle),
+	getHistoryDiagnostics: async (store) => store.getHistoryDiagnostics(),
 	createEntity: async (store, params) => store.createEntity(params as Parameters<StorageDriver["createEntity"]>[0]),
 
 	// Entity lifecycle (ISS50). Methods whose `StorageDriver` signature takes
@@ -22,13 +25,6 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	getEntityDetails: async (store, params) => store.getEntityDetails((params as { entityId: string }).entityId),
 	listEntities: async (store, params) => store.listEntities((params as { kind: string }).kind),
 	listEntityHistory: async (store, params) => store.listEntityHistory((params as { entityId: string }).entityId),
-	listAllHistoryEntries: async (store) => store.listAllHistoryEntries(),
-	// Deliberately absent from `writeMethods` below: it only appends rows to
-	// `history_entries`, which `getDatabaseSnapshot` never reads (ISS57) - so
-	// it can never change what a `snapshot-changed` broadcast would report.
-	applyHistoryEntries: async (store, params) => store.applyHistoryEntries((params as { entries: Parameters<StorageDriver["applyHistoryEntries"]>[0] }).entries),
-	applyResolvedFacts: async (store, params) =>
-		store.applyResolvedFacts((params as { resolvedEntries: Parameters<StorageDriver["applyResolvedFacts"]>[0] }).resolvedEntries),
 	listAllRelations: async (store) => store.listAllRelations(),
 	applyRelations: async (store, params) => store.applyRelations((params as { relations: Parameters<StorageDriver["applyRelations"]>[0] }).relations),
 	listOrphans: async (store, params) => store.listOrphans((params as { kind?: string } | undefined)?.kind),
@@ -36,6 +32,8 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	updateEntityStatus: async (store, params) => store.updateEntityStatus(params as Parameters<StorageDriver["updateEntityStatus"]>[0]),
 	updateEntity: async (store, params) => store.updateEntity(params as Parameters<StorageDriver["updateEntity"]>[0]),
 	setEntityBody: async (store, params) => store.setEntityBody(params as Parameters<StorageDriver["setEntityBody"]>[0]),
+	materializeEntityRevision: async (store, params) => store.materializeEntityRevision(params as Parameters<StorageDriver["materializeEntityRevision"]>[0]),
+	restoreEntityRevision: async (store, params) => store.restoreEntityRevision(params as Parameters<StorageDriver["restoreEntityRevision"]>[0]),
 	archiveEntity: async (store, params) => store.archiveEntity(params as Parameters<StorageDriver["archiveEntity"]>[0]),
 	deleteEntity: async (store, params) => store.deleteEntity(params as Parameters<StorageDriver["deleteEntity"]>[0]),
 	moveEntity: async (store, params) => store.moveEntity(params as Parameters<StorageDriver["moveEntity"]>[0]),
@@ -53,10 +51,10 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	upsertContext: async (store, params) => store.upsertContext(params as Parameters<StorageDriver["upsertContext"]>[0]),
 	defineContextTerm: async (store, params) => store.defineContextTerm(params as Parameters<StorageDriver["defineContextTerm"]>[0]),
 	forgetContextTerm: async (store, params) => store.forgetContextTerm(params as Parameters<StorageDriver["forgetContextTerm"]>[0]),
-	listAllContexts: async (store) => store.listAllContexts(),
-	applyContexts: async (store, params) => store.applyContexts((params as { contexts: Parameters<StorageDriver["applyContexts"]>[0] }).contexts),
-	listAllContextTerms: async (store) => store.listAllContextTerms(),
-	applyContextTerms: async (store, params) => store.applyContextTerms((params as { terms: Parameters<StorageDriver["applyContextTerms"]>[0] }).terms),
+	materializeContextRevision: async (store, params) => store.materializeContextRevision(params as Parameters<StorageDriver["materializeContextRevision"]>[0]),
+	materializeContextTermRevision: async (store, params) => store.materializeContextTermRevision(params as Parameters<StorageDriver["materializeContextTermRevision"]>[0]),
+	restoreContextRevision: async (store, params) => store.restoreContextRevision(params as Parameters<StorageDriver["restoreContextRevision"]>[0]),
+	restoreContextTermRevision: async (store, params) => store.restoreContextTermRevision(params as Parameters<StorageDriver["restoreContextTermRevision"]>[0]),
 
 	// Tenant administration (ISS52). `PgStore`'s guard against acting on any
 	// tenant other than the auth-seam-resolved one (ISS46's requireOwnTenant)
@@ -76,10 +74,12 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
  * the gate's SSE change-event channel; read-only methods never do.
  */
 export const writeMethods = new Set<string>([
+	"importCanonicalChains",
 	"createEntity",
 	"updateEntityStatus",
 	"updateEntity",
 	"setEntityBody",
+	"restoreEntityRevision",
 	"archiveEntity",
 	"deleteEntity",
 	"moveEntity",
@@ -88,17 +88,9 @@ export const writeMethods = new Set<string>([
 	"upsertContext",
 	"defineContextTerm",
 	"forgetContextTerm",
+	"restoreContextRevision",
+	"restoreContextTermRevision",
 	"deleteTenant",
 	"renameTenant",
-	// Unlike `applyHistoryEntries` (history-only), `applyResolvedFacts` can
-	// create/update `entities` rows directly, which is exactly what
-	// `getDatabaseSnapshot` reads - so synchronizing does need to broadcast
-	// a `snapshot-changed` event when it changes anything (ISS59).
-	"applyResolvedFacts",
-	// Same reasoning as `applyResolvedFacts` above: `getDatabaseSnapshot`
-	// reads the `relations` table directly, so bulk-applying relations
-	// (ISS60) must broadcast too.
-	"applyRelations",
-	"applyContexts",
-	"applyContextTerms"
+	"applyRelations"
 ]);

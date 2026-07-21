@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * The context-store result/record contract (ADR13's dialect-agnostic
  * boundary): every `StorageDriver` implementation - SQLite
@@ -17,15 +19,131 @@ export type ContextRecord = {
 	scopeLabel: string;
 	title: string;
 	summary: string;
+	revision: number;
+	contentHash: string;
 	createdAt: string | null;
 	updatedAt: string | null;
 	exists: boolean;
 };
 
+/**
+ * Computes the canonical content hash for a context's mutable title and
+ * summary (ADR55/ISS259). Used to populate `ContextRecord.contentHash` on
+ * creation and to validate `expectedContentHash` on upsert edits.
+ */
+export function computeContextContentHash(title: string, summary: string): string {
+	return createHash("sha256").update(`${title}\n\n${summary}`).digest("hex");
+}
+
+/**
+ * Thrown when a title/summary edit presents a stale `expectedRevision` or
+ * `expectedContentHash` that does not match the context's current head
+ * (ADR55/ISS259). Carries the current head's revision and hash so the caller
+ * can surface them in a "refresh and retry" error message.
+ */
+export class ContextConflictError extends Error {
+	public readonly contextKey: string;
+	public readonly currentRevision: number;
+	public readonly currentContentHash: string;
+
+	public constructor(contextKey: string, currentRevision: number, currentContentHash: string) {
+		super(
+			`Stale edit for context ${contextKey}: expected a matching revision/hash but current revision is ${currentRevision}.`
+		);
+		this.name = "ContextConflictError";
+		this.contextKey = contextKey;
+		this.currentRevision = currentRevision;
+		this.currentContentHash = currentContentHash;
+	}
+}
+
+export function computeContextTermContentHash(definition: string, avoid: string[], tombstone: boolean): string {
+	return createHash("sha256").update(JSON.stringify({ definition, avoid, tombstone })).digest("hex");
+}
+
+export class ContextTermConflictError extends Error {
+	public readonly contextKey: string;
+	public readonly term: string;
+	public readonly currentRevision: number;
+	public readonly currentContentHash: string;
+
+	public constructor(contextKey: string, term: string, currentRevision: number, currentContentHash: string) {
+		super(`Stale edit for context term ${term} in ${contextKey}: current revision is ${currentRevision}.`);
+		this.name = "ContextTermConflictError";
+		this.contextKey = contextKey;
+		this.term = term;
+		this.currentRevision = currentRevision;
+		this.currentContentHash = currentContentHash;
+	}
+}
+
+export type ContextRevisionPatch = {
+	revision: number;
+	author: string;
+	createdAt: string;
+	priorTitle: string;
+	priorSummary: string;
+	restoredFromRevision?: number;
+};
+
+export type ContextTermRevisionPatch = {
+	revision: number;
+	author: string;
+	createdAt: string;
+	priorDefinition: string;
+	priorAvoid: string[];
+	priorTombstone: boolean;
+	restoredFromRevision?: number;
+};
+
+export type MaterializedContextRevision = {
+	contextKey: string;
+	targetRevision: number;
+	headRevision: number;
+	title: string;
+	summary: string;
+	author: string;
+	createdAt: string;
+	restoredFromRevision: number | null;
+};
+
+export type MaterializedContextTermRevision = {
+	contextKey: string;
+	term: string;
+	targetRevision: number;
+	headRevision: number;
+	definition: string;
+	avoid: string[];
+	tombstone: boolean;
+	author: string;
+	createdAt: string;
+	restoredFromRevision: number | null;
+};
+
+export type ContextRevisionErrorReason = "context-not-found" | "term-not-found" | "revision-out-of-range" | "broken-chain";
+
+export class ContextRevisionError extends Error {
+	public readonly contextKey: string;
+	public readonly term: string | undefined;
+	public readonly reason: ContextRevisionErrorReason;
+	public readonly headRevision: number | undefined;
+
+	public constructor(contextKey: string, reason: ContextRevisionErrorReason, message: string, headRevision?: number, term?: string) {
+		super(message);
+		this.name = "ContextRevisionError";
+		this.contextKey = contextKey;
+		this.term = term;
+		this.reason = reason;
+		this.headRevision = headRevision;
+	}
+}
+
 export type ContextTermRecord = {
 	term: string;
 	definition: string;
 	avoid: string[];
+	revision: number;
+	contentHash: string;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -98,24 +216,6 @@ export type ForgetContextTermResult = {
 	context: ContextRecord;
 	term: string;
 	removed: boolean;
-};
-
-/** Sync-only shape for a context row (ISS62/ADR16), independent of any particular scope resolution. */
-export type ContextSyncRecord = {
-	key: string;
-	scopeEntityId: string | null;
-	title: string;
-	summary: string;
-	createdAt: string;
-	updatedAt: string;
-};
-
-/** Sync-only shape for a context term row (ISS62/ADR16), carrying its owning context's key explicitly. */
-export type ContextTermSyncRecord = {
-	contextKey: string;
-	term: string;
-	definition: string;
-	avoid: string[];
-	createdAt: string;
-	updatedAt: string;
+	currentRevision?: number;
+	currentContentHash?: string;
 };

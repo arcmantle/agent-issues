@@ -119,7 +119,7 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 		// omitted raw `options.dbPath`), so this always keys the SAME
 		// discovery slot a client's own resolved `dbPath` does (ISS192).
 		clearDaemonState({ ...options, dbPath });
-		if (mintedToken !== undefined) await clearDaemonToken(options.credentialStoreOptions);
+		if (mintedToken !== undefined) await clearDaemonToken({ ...options.credentialStoreOptions, dbPath });
 	}
 
 	async function selfExit(): Promise<void> {
@@ -168,7 +168,7 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 
 	void (async () => {
 		if (mintedToken !== undefined) {
-			await saveDaemonToken(mintedToken, options.credentialStoreOptions);
+			await saveDaemonToken(mintedToken, { ...options.credentialStoreOptions, dbPath });
 		}
 		server.listen(port, host, () => {
 			const address = server.address();

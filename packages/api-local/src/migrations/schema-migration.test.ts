@@ -72,10 +72,47 @@ describe("golden-fixture migration wall", () => {
 
 		const after = snapshotTables(staged);
 
-		// Tables untouched by the full-chain-invariant bootstrap (ISS34) stay byte-for-byte identical.
-		for (const table of ["contexts", "context_terms", "metadata"] as const) {
-			expect(after[table]).toEqual(before[table]);
+		expect(after.metadata).toEqual(before.metadata);
+		expect(after.context_terms).toEqual(
+			expect.arrayContaining((before.context_terms as Record<string, unknown>[]).map((row) => expect.objectContaining(row)))
+		);
+		expect(after.context_terms).toHaveLength(before.context_terms.length);
+		expect(after.context_terms).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ revision: 1, tombstone: 0, content_hash: expect.stringMatching(/^[0-9a-f]{64}$/) })
+			])
+		);
+		const migrated = new Database(staged, { readonly: true, fileMustExist: true });
+		try {
+			const contextBaselines = migrated.prepare(`SELECT delta.revision, delta.author, delta.prior_title, delta.prior_summary, delta.created_at
+				FROM context_delta_entries AS delta
+				JOIN contexts AS head ON head.tenant_id = delta.tenant_id AND head.key = delta.context_key
+				WHERE delta.created_at = head.updated_at
+				ORDER BY delta.context_key`).all();
+			expect(contextBaselines).toHaveLength(before.contexts.length);
+			expect(contextBaselines).toEqual(expect.arrayContaining([expect.objectContaining({ revision: 1, author: "system" })]));
+
+			const termBaselines = migrated.prepare(`SELECT delta.revision, delta.author, delta.prior_definition, delta.prior_avoid_terms, delta.prior_tombstone, delta.created_at
+				FROM context_term_delta_entries AS delta
+				JOIN context_terms AS head ON head.tenant_id = delta.tenant_id AND head.context_key = delta.context_key AND head.term = delta.term
+				WHERE delta.created_at = head.updated_at
+				ORDER BY delta.term`).all();
+			expect(termBaselines).toHaveLength(before.context_terms.length);
+			expect(termBaselines).toEqual(expect.arrayContaining([expect.objectContaining({ revision: 1, author: "system", prior_tombstone: 0 })]));
+		} finally {
+			migrated.close();
 		}
+
+		// contexts gains revision/content_hash columns from migration 0015; every
+		// original row survives unchanged, just with new default-valued columns
+		// appended, so objectContaining is needed here (same pattern as entities).
+		expect(after.contexts).toEqual(
+			expect.arrayContaining((before.contexts as Record<string, unknown>[]).map((row) => expect.objectContaining(row)))
+		);
+		expect(after.contexts).toHaveLength((before.contexts as unknown[]).length);
+		expect(after.contexts).toEqual(
+			expect.arrayContaining([expect.objectContaining({ revision: 1, content_hash: expect.stringMatching(/^[0-9a-f]{64}$/) })])
+		);
 
 		// entities/relations gain the synthesized default project+epic (and the
 		// "fixture" tenant's one pre-existing initiative gaining a valid parent),
@@ -157,7 +194,16 @@ describe("golden-fixture migration wall", () => {
 				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" },
 				{ id: "0009-add-entity-project-id" },
-				{ id: "0010-migrate-handoffs-to-entities" }
+				{ id: "0010-migrate-handoffs-to-entities" },
+				{ id: "0011-entity-revision-delta" },
+				{ id: "0012-entity-lifecycle-delta" },
+				{ id: "0013-entity-parent-delta-marker" },
+                                { id: "0014-history-entries-to-deltas" },
+				{ id: "0015-context-revision-delta" },
+				{ id: "0016-context-term-revision-delta" },
+				{ id: "0017-entity-restoration-source" },
+				{ id: "0018-context-restoration-source" },
+				{ id: "0019-context-revision-baselines" }
 			]);
 		} finally {
 			db2.close();
@@ -255,7 +301,16 @@ describe("fresh install schema parity", () => {
 				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" },
 				{ id: "0009-add-entity-project-id" },
-				{ id: "0010-migrate-handoffs-to-entities" }
+				{ id: "0010-migrate-handoffs-to-entities" },
+				{ id: "0011-entity-revision-delta" },
+				{ id: "0012-entity-lifecycle-delta" },
+				{ id: "0013-entity-parent-delta-marker" },
+                                { id: "0014-history-entries-to-deltas" },
+				{ id: "0015-context-revision-delta" },
+				{ id: "0016-context-term-revision-delta" },
+				{ id: "0017-entity-restoration-source" },
+				{ id: "0018-context-restoration-source" },
+				{ id: "0019-context-revision-baselines" }
 			]);
 		} finally {
 			db2.close();
@@ -361,7 +416,16 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 				{ id: "0004-backfill-tenant-bootstrap" },
 				{ id: "0008-consolidate-legacy-tenants-backfill" },
 				{ id: "0009-add-entity-project-id" },
-				{ id: "0010-migrate-handoffs-to-entities" }
+				{ id: "0010-migrate-handoffs-to-entities" },
+				{ id: "0011-entity-revision-delta" },
+				{ id: "0012-entity-lifecycle-delta" },
+				{ id: "0013-entity-parent-delta-marker" },
+                                { id: "0014-history-entries-to-deltas" },
+				{ id: "0015-context-revision-delta" },
+				{ id: "0016-context-term-revision-delta" },
+				{ id: "0017-entity-restoration-source" },
+				{ id: "0018-context-restoration-source" },
+				{ id: "0019-context-revision-baselines" }
 			]);
 
 			const legacyTables = db2

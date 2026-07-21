@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
+import { and } from "drizzle-orm";
 import type { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
 import { PgStore } from "../../pg-store.js";
-import { entities } from "../../schema.js";
+import { entities, entityDeltaEntries } from "../../schema.js";
 
 const ADMIN_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";
@@ -24,6 +25,19 @@ describe("PgStore entity lifecycle", () => {
 		adminPool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
 		await migratePgDatabase(adminPool);
 		appPool = createPgPool({ connectionString: APP_CONNECTION_STRING });
+	});
+
+	it("restoring a prior parent also restores the entity's project assignment", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const projectA = await store.createEntity({ kind: "project", title: "Project A" });
+		const projectB = await store.createEntity({ kind: "project", title: "Project B" });
+		const version = await store.createEntity({ kind: "version", title: "2.0", parentId: projectA.id });
+		const moved = await store.moveEntity({ entityId: version.id, newParentId: projectB.id });
+
+		await store.restoreEntityRevision({ entityId: version.id, revision: 1, expectedRevision: moved.entity.revision, expectedContentHash: moved.entity.contentHash });
+
+		const [row] = await withTenantTransaction(appPool, store.tenantId, (client) => client.select({ projectId: entities.projectId }).from(entities).where(and(eq(entities.tenantId, store.tenantId), eq(entities.id, version.id))));
+		expect(row?.projectId).toBe(projectA.id);
 	});
 
 	afterAll(async () => {
@@ -114,7 +128,12 @@ describe("PgStore entity lifecycle", () => {
 
 		const created = await store.createEntity({ kind: "initiative", title: "Executor CRUD" });
 		const read = await store.getEntityDetails(created.id);
-		const updated = await store.updateEntity({ entityId: created.id, title: "Executor CRUD updated" });
+		const updated = await store.updateEntity({
+			entityId: created.id,
+			title: "Executor CRUD updated",
+			expectedRevision: created.revision,
+			expectedContentHash: created.contentHash
+		});
 		const deleted = await store.deleteEntity({ entityId: created.id });
 
 		expect(read.entity).toMatchObject({ id: created.id, title: "Executor CRUD" });
@@ -175,14 +194,33 @@ describe("PgStore entity lifecycle", () => {
 		expect(statusUpdate.previousStatus).toBe("todo");
 		expect(statusUpdate.entity.status).toBe("in-progress");
 
-		const bodyUpdated = await store.setEntityBody({ entityId: issue.id, body: "Detailed plan." });
+		const bodyUpdated = await store.setEntityBody({
+			entityId: issue.id,
+			body: "Detailed plan.",
+			expectedRevision: statusUpdate.entity.revision,
+			expectedContentHash: statusUpdate.entity.contentHash
+		});
 		expect(bodyUpdated.body).toBe("Detailed plan.");
+		const deltas = await withTenantTransaction(appPool, store.tenantId, (executor) =>
+			executor.select().from(entityDeltaEntries).where(and(eq(entityDeltaEntries.tenantId, store.tenantId), eq(entityDeltaEntries.entityId, issue.id)))
+		);
+		expect(deltas).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ revision: 2, priorStatus: "todo" }),
+				expect.objectContaining({
+					revision: 3,
+					priorTitle: "Ship the seam",
+					priorBody: "",
+					priorBodySource: "authored"
+				})
+			])
+		);
 
 		const archived = await store.archiveEntity({ entityId: issue.id });
 		expect(archived.entity.status).toBe("done");
 
-		const history = await store.listEntityHistory(issue.id);
-		expect(history.map((entry) => entry.status)).toEqual(["todo", "in-progress", "in-progress", "done"]);
+		await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 1 })).resolves.toMatchObject({ status: "todo", body: "" });
+		await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 3 })).resolves.toMatchObject({ status: "in-progress", body: "Detailed plan." });
 	});
 
 	it("rejects setting a userStory's status directly once it has a fixing issue", async () => {

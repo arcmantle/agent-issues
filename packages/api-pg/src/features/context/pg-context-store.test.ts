@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
 import type { Pool } from "pg";
 
-import { createPgPool, migratePgDatabase } from "../../db/connection.js";
+import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
 import { PgStore } from "../../pg-store.js";
+import { contextDeltaEntries, contextTermDeltaEntries } from "../../schema.js";
 
 const ADMIN_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";
@@ -46,6 +48,28 @@ describe("context and glossary", () => {
 		expect(updated.context.scopeEntityId).toBe(initiative.id);
 	});
 
+	it("stores ordered context reverse deltas with predecessor facts and attribution", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const created = await store.upsertContext({ title: "Initial", summary: "First", author: "alice" });
+		await store.upsertContext({
+			title: "Updated",
+			summary: "Second",
+			author: "bob",
+			expectedRevision: created.context.revision,
+			expectedContentHash: created.context.contentHash
+		});
+
+		const deltas = await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client.select().from(contextDeltaEntries)
+				.where(and(eq(contextDeltaEntries.tenantId, store.tenantId), eq(contextDeltaEntries.contextKey, created.context.key)))
+				.orderBy(contextDeltaEntries.revision)
+		);
+		expect(deltas).toEqual([
+			expect.objectContaining({ revision: 1, author: "alice", priorTitle: "Initial", priorSummary: "First", createdAt: expect.any(String) }),
+			expect.objectContaining({ revision: 2, author: "bob", priorTitle: "Initial", priorSummary: "First", createdAt: expect.any(String) })
+		]);
+	});
+
 	it("defines a context term, auto-creating the context, and reports created vs. updated", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
@@ -63,11 +87,24 @@ describe("context and glossary", () => {
 			scopeRef: initiative.id,
 			term: "storage-driver seam",
 			definition: "Updated definition.",
-			avoid: ["seam", "storage-driver seam", " duplicate ", "duplicate"]
+			avoid: ["seam", "storage-driver seam", " duplicate ", "duplicate"],
+			author: "bob",
+			expectedRevision: created.term.revision,
+			expectedContentHash: created.term.contentHash
 		});
 		expect(updated.created).toBe(false);
 		expect(updated.term.definition).toBe("Updated definition.");
 		expect(updated.term.avoid).toEqual(["seam", "duplicate"]);
+
+		const deltas = await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client.select().from(contextTermDeltaEntries)
+				.where(and(eq(contextTermDeltaEntries.tenantId, store.tenantId), eq(contextTermDeltaEntries.term, "storage-driver seam")))
+				.orderBy(contextTermDeltaEntries.revision)
+		);
+		expect(deltas).toEqual([
+			expect.objectContaining({ revision: 1, author: "system", priorDefinition: created.term.definition, priorTombstone: false }),
+			expect.objectContaining({ revision: 2, author: "bob", priorDefinition: created.term.definition, priorTombstone: false })
+		]);
 	});
 
 	it("rejects an empty term or definition", async () => {
@@ -81,16 +118,37 @@ describe("context and glossary", () => {
 	it("forgets a context term", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });
-		await store.defineContextTerm({ scopeRef: initiative.id, term: "Settlement", definition: "Captured funds." });
+		const created = await store.defineContextTerm({ scopeRef: initiative.id, term: "Settlement", definition: "Captured funds." });
 
-		const forgotten = await store.forgetContextTerm({ scopeRef: initiative.id, term: "Settlement" });
+		const forgotten = await store.forgetContextTerm({
+			scopeRef: initiative.id,
+			term: "Settlement",
+			author: "alice",
+			expectedRevision: created.term.revision,
+			expectedContentHash: created.term.contentHash
+		});
 		expect(forgotten.removed).toBe(true);
 
 		const details = await store.getContextDetails({ scopeRef: initiative.id });
 		expect(details.terms).toHaveLength(0);
 
-		const forgottenAgain = await store.forgetContextTerm({ scopeRef: initiative.id, term: "Settlement" });
+		const forgottenAgain = await store.forgetContextTerm({
+			scopeRef: initiative.id,
+			term: "Settlement",
+			expectedRevision: forgotten.currentRevision,
+			expectedContentHash: forgotten.currentContentHash
+		});
 		expect(forgottenAgain.removed).toBe(false);
+
+		const deltas = await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client.select().from(contextTermDeltaEntries)
+				.where(and(eq(contextTermDeltaEntries.tenantId, store.tenantId), eq(contextTermDeltaEntries.term, "Settlement")))
+				.orderBy(contextTermDeltaEntries.revision)
+		);
+		expect(deltas).toEqual([
+			expect.objectContaining({ revision: 1, priorTombstone: false }),
+			expect.objectContaining({ revision: 2, author: "alice", priorDefinition: "Captured funds.", priorTombstone: false })
+		]);
 	});
 
 	it("resolves a non-initiative scopeRef to its owning initiative's context", async () => {

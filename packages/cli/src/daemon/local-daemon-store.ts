@@ -93,7 +93,7 @@ export class LocalDaemonStore extends HttpStore {
 			{ ...this.lifecycleOptions, spawn: this.lifecycleOptions.spawn ?? (() => spawnLocalDaemon({ dbPath })) },
 			async (port) => {
 				if (attempt > 0) {
-					const freshToken = await readDaemonToken(this.lifecycleOptions.credentialStoreOptions);
+					const freshToken = await readDaemonToken({ ...this.lifecycleOptions.credentialStoreOptions, dbPath });
 					if (freshToken) this.options.bearerToken = freshToken;
 				}
 				attempt++;
@@ -119,7 +119,7 @@ export async function openLocalDaemonStore(options?: LocalDaemonStoreOptions): P
 	};
 	await ensureDaemonRunning(lifecycleOptions);
 
-	const token = await readDaemonToken(options?.credentialStoreOptions);
+	const token = await readDaemonToken({ ...options?.credentialStoreOptions, dbPath: options?.dbPath });
 	if (!token) {
 		throw new Error("Local daemon is running but no daemon token was found in the OS credential store.");
 	}

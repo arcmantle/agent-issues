@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { isEntrypointInvocation, runCli, shouldRunLocalDaemon } from "./cli.js";
 import { main } from "./cli/index.js";
-import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listEntityHistory, listTenants } from "@agent-issues/api-local";
+import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listTenants, materializeEntityRevision, openSqliteStore } from "@agent-issues/api-local";
 import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
 import { startLiveSite } from "./site/index.js";
 
@@ -262,9 +262,9 @@ describe("cli", () => {
 		expect(stderr.read()).toBe("");
 		expect(stdout.read()).toContain("initiative");
 
-		const { db } = await ensureDatabase(dbPath);
+		const { db, executor } = await ensureDatabase(dbPath);
 		try {
-			const initiatives = listEntities(db, "initiative");
+			const initiatives = listEntities(executor, "initiative");
 			expect(initiatives).toHaveLength(1);
 			expect(initiatives[0]?.title).toBe("Ship clipanion");
 		} finally {
@@ -286,12 +286,12 @@ describe("cli", () => {
 		expect(projectErr.read()).toBe("");
 		expect(projectOut.read()).toContain("project");
 
-		const { db: afterProject } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterProjectDb, executor: afterProject } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		const discovery = getProjectDiscovery(afterProject);
 		const project = discovery.kind === "available"
 			? discovery.projects.find((entry) => entry.project.title === "Platform")?.project
 			: undefined;
-		afterProject.close();
+		afterProjectDb.close();
 		expect(project).toBeDefined();
 
 		const epicOut = createCapture();
@@ -304,12 +304,12 @@ describe("cli", () => {
 		expect(epicErr.read()).toBe("");
 		expect(epicOut.read()).toContain("epic");
 
-		const { db: afterEpic } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterEpicDb, executor: afterEpic } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		const projectAfterEpic = getDatabaseSnapshot(afterEpic, { projectId: project!.id });
 		const epic = projectAfterEpic.kind === "available"
 			? projectAfterEpic.snapshot.entities.find((entity) => entity.kind === "epic" && entity.title === "Checkout revamp")
 			: undefined;
-		afterEpic.close();
+		afterEpicDb.close();
 		expect(epic).toBeDefined();
 
 		const initiativeOut = createCapture();
@@ -322,7 +322,7 @@ describe("cli", () => {
 		expect(initiativeErr.read()).toBe("");
 		expect(initiativeOut.read()).toContain("Checkout redesign");
 
-		const { db: afterInitiative } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterInitiativeDb, executor: afterInitiative } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		try {
 			const projectAfterInitiative = getDatabaseSnapshot(afterInitiative, { projectId: project!.id });
 			const initiative = projectAfterInitiative.kind === "available"
@@ -338,7 +338,7 @@ describe("cli", () => {
 			const epicParent = initiativeDetails.incoming.find((entry) => entry.relationType === "contains");
 			expect(epicParent?.entity.id).toBe(epic!.id);
 		} finally {
-			afterInitiative.close();
+			afterInitiativeDb.close();
 		}
 	});
 
@@ -346,9 +346,9 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 
-		const { db: seedDb } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
-		const project = createEntity(seedDb, { kind: "project", title: "Platform" });
-		const initiative = createEntity(seedDb, { kind: "initiative", title: "Checkout redesign" });
+		const { db: seedDb, executor: seedExecutor } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const project = createEntity(seedExecutor, { kind: "project", title: "Platform" });
+		const initiative = createEntity(seedExecutor, { kind: "initiative", title: "Checkout redesign" });
 		seedDb.close();
 
 		const versionOut = createCapture();
@@ -361,12 +361,12 @@ describe("cli", () => {
 		expect(versionErr.read()).toBe("");
 		expect(versionOut.read()).toContain("version");
 
-		const { db: afterVersion } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterVersionDb, executor: afterVersion } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		const projectSnapshot = getDatabaseSnapshot(afterVersion, { projectId: project.id });
 		const version = projectSnapshot.kind === "available"
 			? projectSnapshot.snapshot.entities.find((entity) => entity.kind === "version" && entity.title === "2.0")
 			: undefined;
-		afterVersion.close();
+		afterVersionDb.close();
 		expect(version).toBeDefined();
 
 		const linkOut = createCapture();
@@ -379,7 +379,7 @@ describe("cli", () => {
 		expect(linkErr.read()).toBe("");
 		expect(linkOut.read()).toContain("taggedWith");
 
-		const { db: afterLink } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterLinkDb, executor: afterLink } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
 		try {
 			const versionDetails = getEntityDetails(afterLink, version!.id);
 			const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
@@ -388,17 +388,17 @@ describe("cli", () => {
 			const tagger = versionDetails.incoming.find((entry) => entry.relationType === "taggedWith");
 			expect(tagger?.entity.id).toBe(initiative.id);
 		} finally {
-			afterLink.close();
+			afterLinkDb.close();
 		}
 	});
 
 	it("creates initial links and edits an entity title and body through generic commands", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath);
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const blocker = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Blocking issue" });
-		const secondBlocker = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Second blocking issue" });
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Console Viewer" });
+		const blocker = createEntity(executor, { kind: "issue", parentId: initiative.id, title: "Blocking issue" });
+		const secondBlocker = createEntity(executor, { kind: "issue", parentId: initiative.id, title: "Second blocking issue" });
 		db.close();
 
 		const createExitCode = await runCli(
@@ -412,13 +412,13 @@ describe("cli", () => {
 		);
 		expect(createExitCode).toBe(0);
 
-		const { db: afterCreate } = await ensureDatabase(dbPath);
+		const { db: afterCreateDb, executor: afterCreate } = await ensureDatabase(dbPath);
 		const created = listEntities(afterCreate, "issue").find((entity) => entity.title === "Initial title");
 		expect(getEntityDetails(afterCreate, created!.id).outgoing).toEqual(expect.arrayContaining([
 			expect.objectContaining({ entity: expect.objectContaining({ id: blocker.id }), relationType: "blocks" }),
 			expect.objectContaining({ entity: expect.objectContaining({ id: secondBlocker.id }), relationType: "blocks" })
 		]));
-		afterCreate.close();
+		afterCreateDb.close();
 
 		const editExitCode = await runCli(
 			["edit", created!.id, "--title", "Final title", "--body", "Final body", "--db", dbPath],
@@ -426,12 +426,15 @@ describe("cli", () => {
 		);
 		expect(editExitCode).toBe(0);
 
-		const { db: afterEdit } = await ensureDatabase(dbPath);
+		const { db: afterEditDb, executor: afterEdit } = await ensureDatabase(dbPath);
 		try {
 			expect(getEntityDetails(afterEdit, created!.id).entity).toEqual(expect.objectContaining({ body: "Final body", title: "Final title" }));
-			expect(listEntityHistory(afterEdit, created!.id)).toHaveLength(2);
+			expect(materializeEntityRevision(afterEdit, { entityId: created!.id, revision: 1 })).toMatchObject({
+				body: "",
+				title: "Initial title"
+			});
 		} finally {
-			afterEdit.close();
+			afterEditDb.close();
 		}
 
 		const error = createCapture();
@@ -440,14 +443,143 @@ describe("cli", () => {
 		);
 	});
 
+	it("materializes an earlier entity revision through the generic history command", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const created = await store.createEntity({ kind: "issue", title: "Initial title", body: "Initial body" });
+		await store.updateEntity({
+			entityId: created.id,
+			title: "Updated title",
+			body: "Updated body",
+			expectedRevision: created.revision,
+			expectedContentHash: created.contentHash
+		});
+		await store.close();
+
+		const stdout = createCapture();
+		const exitCode = await runCli(
+			["history", created.id, "--revision", "1", "--db", dbPath],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(stdout.read()).toContain(`${created.id} revision 1/2`);
+		expect(stdout.read()).toContain("Initial title");
+		expect(stdout.read()).toContain("Initial body");
+	});
+
+	it("materializes context and forgotten term revisions through the generic history command", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const context1 = await store.upsertContext({ title: "Initial context", summary: "Initial summary." });
+		await store.upsertContext({ title: "Current context", summary: "Current summary.", expectedRevision: context1.context.revision, expectedContentHash: context1.context.contentHash });
+		const term1 = await store.defineContextTerm({ term: "Order", definition: "Initial definition." });
+		const term2 = await store.defineContextTerm({ term: "Order", definition: "Current definition.", avoid: ["purchase"], expectedRevision: term1.term.revision, expectedContentHash: term1.term.contentHash });
+		await store.forgetContextTerm({ term: "Order", expectedRevision: term2.term.revision, expectedContentHash: term2.term.contentHash });
+		await store.close();
+
+		const contextStdout = createCapture();
+		expect(await runCli(["history", "--context", "default", "--revision", "1", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: contextStdout.stream })).toBe(0);
+		expect(contextStdout.read()).toContain("default context revision 1/2 Initial context");
+
+		const termStdout = createCapture();
+		expect(await runCli(["history", "--context", "default", "--term", "Order", "--revision", "1", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: termStdout.stream })).toBe(0);
+		expect(termStdout.read()).toContain("default term Order revision 1/3");
+		expect(termStdout.read()).toContain("Initial definition.");
+	});
+
+	it("restores active and deleted entities as new heads through the generic restore command", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const parent = await store.createEntity({ kind: "initiative", title: "Parent" });
+		const created = await store.createEntity({ kind: "issue", title: "Initial", body: "Initial body", parentId: parent.id });
+		await store.updateEntity({ entityId: created.id, title: "Edited", body: "Edited body", expectedRevision: created.revision, expectedContentHash: created.contentHash });
+		await store.close();
+
+		const firstStdout = createCapture();
+		expect(await runCli(["restore", created.id, "--revision", "1", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: firstStdout.stream })).toBe(0);
+		expect(firstStdout.read()).toContain(`Restored ${created.id} revision 1 as revision 3`);
+
+		const reopened = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const restoredHead = (await reopened.store.getEntityDetails(created.id)).entity;
+		expect(restoredHead).toEqual(expect.objectContaining({ title: "Initial", body: "Initial body", revision: 3 }));
+		await reopened.store.deleteEntity({ entityId: created.id });
+		await reopened.store.close();
+
+		const secondStdout = createCapture();
+		expect(await runCli(["restore", created.id, "--revision", "3", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: secondStdout.stream })).toBe(0);
+		expect(secondStdout.read()).toContain(`Restored ${created.id} revision 3 as revision 5`);
+
+		const finalStore = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		try {
+			expect((await finalStore.store.getEntityDetails(created.id)).entity).toEqual(expect.objectContaining({ title: "Initial", revision: 5 }));
+			expect(await finalStore.store.materializeEntityRevision({ entityId: created.id, revision: 3 })).toEqual(expect.objectContaining({ restoredFromRevision: 1 }));
+		} finally {
+			await finalStore.store.close();
+		}
+	});
+
+	it("restores context and forgotten term revisions through the generic restore command", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const context1 = await store.upsertContext({ title: "Initial context", summary: "Initial summary." });
+		await store.upsertContext({ title: "Current context", summary: "Current summary.", expectedRevision: context1.context.revision, expectedContentHash: context1.context.contentHash });
+		const term1 = await store.defineContextTerm({ term: "Order", definition: "Initial definition." });
+		const term2 = await store.defineContextTerm({ term: "Order", definition: "Current definition.", expectedRevision: term1.term.revision, expectedContentHash: term1.term.contentHash });
+		await store.forgetContextTerm({ term: "Order", expectedRevision: term2.term.revision, expectedContentHash: term2.term.contentHash });
+		await store.close();
+
+		const contextStdout = createCapture();
+		expect(await runCli(["restore", "--context", "default", "--revision", "1", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: contextStdout.stream })).toBe(0);
+		expect(contextStdout.read()).toContain("Restored default context revision 1 as revision 3");
+
+		const termStdout = createCapture();
+		expect(await runCli(["restore", "--context", "default", "--term", "Order", "--revision", "1", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: termStdout.stream })).toBe(0);
+		expect(termStdout.read()).toContain("Restored default term Order revision 1 as revision 4");
+
+		const reopened = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		try {
+			expect((await reopened.store.getContextDetails()).context).toEqual(expect.objectContaining({ title: "Initial context", revision: 3 }));
+			expect((await reopened.store.getContextDetails()).terms).toEqual([expect.objectContaining({ term: "Order", definition: "Initial definition.", revision: 4 })]);
+			expect(await reopened.store.materializeContextRevision({ revision: 3 })).toEqual(expect.objectContaining({ restoredFromRevision: 1 }));
+			expect(await reopened.store.materializeContextTermRevision({ term: "Order", revision: 4 })).toEqual(expect.objectContaining({ restoredFromRevision: 1, tombstone: false }));
+		} finally {
+			await reopened.store.close();
+		}
+	});
+
+	it("resurrects a forgotten context term through the context command", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const io = { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream };
+
+		expect(await runCli(["context", "define", "Order", "--definition", "Initial.", "--db", dbPath], io)).toBe(0);
+		expect(await runCli(["context", "forget", "Order", "--db", dbPath], io)).toBe(0);
+		expect(await runCli(["context", "forget", "Order", "--db", dbPath], io)).toBe(0);
+		expect(await runCli(["context", "define", "Order", "--definition", "Restored.", "--db", dbPath], io)).toBe(0);
+
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		try {
+			expect((await store.getContextDetails()).terms).toEqual([
+				expect.objectContaining({ term: "Order", definition: "Restored.", revision: 3 })
+			]);
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("creates sub-issues through the existing create command and shows them in the bundle", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const stdout = createCapture();
 		const stderr = createCapture();
-		const { db } = await ensureDatabase(dbPath);
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Parent issue" });
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Console Viewer" });
+		const parentIssue = createEntity(executor, { kind: "issue", parentId: initiative.id, title: "Parent issue" });
 		db.close();
 
 		const createExitCode = await runCli(
@@ -476,9 +608,9 @@ describe("cli", () => {
 	it("exports one initiative to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath);
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
-		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view", body: "Issue body" });
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
+		const issue = createEntity(executor, { kind: "issue", parentId: initiative.id, title: "Render detail view", body: "Issue body" });
 		db.close();
 
 		const stdout = createCapture();
@@ -499,9 +631,9 @@ describe("cli", () => {
 	it("exports the whole project to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath);
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		createEntity(db, { kind: "adr", title: "Use SVG graphs" });
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Console Viewer" });
+		createEntity(executor, { kind: "adr", title: "Use SVG graphs" });
 		db.close();
 
 		const stdout = createCapture();
@@ -522,8 +654,8 @@ describe("cli", () => {
 	it("emits single-file markdown when requested", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
-		const { db } = await ensureDatabase(dbPath);
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });
 		db.close();
 
 		const stdout = createCapture();
@@ -544,8 +676,8 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const outputPath = path.join(root, "exports", "initiative.md");
-		const { db } = await ensureDatabase(dbPath);
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Console Viewer" });
 		db.close();
 
 		const stdout = createCapture();
@@ -607,10 +739,10 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const port = await getAvailablePort();
-		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
-		const project = createEntity(db, { kind: "project", title: "Console Viewer" });
-		const epic = createEntity(db, { kind: "epic", title: "Console Epic", parentId: project.id });
-		const initiative = createEntity(db, { kind: "initiative", parentId: epic.id, title: "Console Viewer" });
+		const { db, executor } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+		const project = createEntity(executor, { kind: "project", title: "Console Viewer" });
+		const epic = createEntity(executor, { kind: "epic", title: "Console Epic", parentId: project.id });
+		const initiative = createEntity(executor, { kind: "initiative", parentId: epic.id, title: "Console Viewer" });
 		db.close();
 
 		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
@@ -669,9 +801,9 @@ describe("cli", () => {
 			const response = await fetch(`http://127.0.0.1:${port}/api/projects?tenant=missing-tenant`);
 			expect(await response.json()).toEqual({ kind: "unavailable" });
 
-			const { db: verificationDb } = await ensureDatabase(dbPath, { tenant: "known-tenant" });
+			const { db: verificationDb, executor: verificationExecutor } = await ensureDatabase(dbPath, { tenant: "known-tenant" });
 			try {
-				expect(listEntities(verificationDb, "project").map((entity) => entity.id)).toEqual(["PROJ0"]);
+				expect(listEntities(verificationExecutor, "project").map((entity) => entity.id)).toEqual(["PROJ0"]);
 				expect(listTenants(verificationDb).map((tenant) => tenant.id)).toEqual(["known-tenant"]);
 			} finally {
 				verificationDb.close();
@@ -707,8 +839,8 @@ describe("cli", () => {
 		const listener = waitForSnapshotChangedEvent(`http://127.0.0.1:${port}/events`);
 
 		try {
-			const { db: writeDb } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
-			createEntity(writeDb, { kind: "initiative", title: "Live-refresh through the seam" });
+			const { db: writeDb, executor: writeExecutor } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
+			createEntity(writeExecutor, { kind: "initiative", title: "Live-refresh through the seam" });
 			writeDb.close();
 
 			const event = await Promise.race([

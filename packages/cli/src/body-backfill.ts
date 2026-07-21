@@ -95,7 +95,7 @@ export async function backfillBodies(
 			}
 
 			if (!input.dryRun) {
-				await store.setEntityBody({ entityId: entity.id, body, bodySource: "generated" });
+				await store.setEntityBody({ entityId: entity.id, body, bodySource: "generated", expectedRevision: entity.revision, expectedContentHash: entity.contentHash });
 			}
 			updated += 1;
 		}

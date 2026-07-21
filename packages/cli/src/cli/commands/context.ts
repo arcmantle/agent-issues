@@ -1,4 +1,5 @@
 import { Option } from "clipanion";
+import { ContextTermConflictError } from "@agent-issues/core";
 
 import {
 	renderContextDetails,
@@ -96,10 +97,15 @@ export class ContextCommand extends TenantCommand {
 			}
 
 			if (subcommand === "set") {
+				const current = await store.getContextDetails({ scopeRef: this.scope });
 				const result = await store.upsertContext({
 					scopeRef: this.scope,
 					title: requireOption(this.title, "--title is required for context set."),
-					summary: requireOption(this.summary, "--summary is required for context set.")
+					summary: requireOption(this.summary, "--summary is required for context set."),
+					...(current.context.exists && {
+						expectedRevision: current.context.revision,
+						expectedContentHash: current.context.contentHash
+					})
 				});
 
 				this.print(result, renderContextDetails(result));
@@ -108,12 +114,31 @@ export class ContextCommand extends TenantCommand {
 
 			if (subcommand === "define") {
 				const term = requirePositional(this.positionals, 1, "context define <term> --definition <definition> [--avoid <comma-separated terms>]");
-				const result = await store.defineContextTerm({
+				const current = (await store.getContextDetails({ scopeRef: this.scope })).terms.find((candidate) => candidate.term === term);
+				const input = {
 					scopeRef: this.scope,
 					term,
 					definition: requireOption(this.definition, "--definition is required for context define."),
-					avoid: parseCsvOption(this.avoid)
-				});
+					avoid: parseCsvOption(this.avoid),
+					...(current && { expectedRevision: current.revision, expectedContentHash: current.contentHash })
+				};
+				let result;
+				try {
+					result = await store.defineContextTerm(input);
+				} catch (error) {
+					if (!(error instanceof ContextTermConflictError) || current) {
+						throw error;
+					}
+					const activeAfterConflict = (await store.getContextDetails({ scopeRef: this.scope })).terms.some((candidate) => candidate.term === term);
+					if (activeAfterConflict) {
+						throw error;
+					}
+					result = await store.defineContextTerm({
+						...input,
+						expectedRevision: error.currentRevision,
+						expectedContentHash: error.currentContentHash
+					});
+				}
 
 				this.print(result, renderContextTermResult(result));
 				return 0;
@@ -121,7 +146,25 @@ export class ContextCommand extends TenantCommand {
 
 			if (subcommand === "forget") {
 				const term = requirePositional(this.positionals, 1, "context forget <term>");
-				const result = await store.forgetContextTerm({ scopeRef: this.scope, term });
+				const current = (await store.getContextDetails({ scopeRef: this.scope })).terms.find((candidate) => candidate.term === term);
+				const input = {
+					scopeRef: this.scope,
+					term,
+					...(current && { expectedRevision: current.revision, expectedContentHash: current.contentHash })
+				};
+				let result;
+				try {
+					result = await store.forgetContextTerm(input);
+				} catch (error) {
+					if (!(error instanceof ContextTermConflictError) || current) {
+						throw error;
+					}
+					result = await store.forgetContextTerm({
+						...input,
+						expectedRevision: error.currentRevision,
+						expectedContentHash: error.currentContentHash
+					});
+				}
 
 				this.print(result, renderContextForgetResult(result));
 				return 0;
