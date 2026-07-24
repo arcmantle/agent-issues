@@ -280,6 +280,8 @@ function collectBundleEntityIds(bundle: InitiativeBundle): Set<string> {
 function emptyInitiativeContext(initiative: EntityRecord): ContextDetails {
 	return {
 		context: {
+			id: null,
+			reference: null,
 			key: initiative.id,
 			scopeKind: "initiative",
 			scopeEntityId: initiative.id,

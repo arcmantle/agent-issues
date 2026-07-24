@@ -42,27 +42,28 @@ Issues are not always flat leaves. An issue may structurally `decompose` into su
 - Use `agent-issues move ISSx ISSy` to reparent a sub-issue under a different parent issue.
 - Treat leaf issues as the normal place for `fixes` links to user stories; parent issues represent grouped work and can own sub-issues.
 
-Use `agent-issues show <id> --json` for one record, `agent-issues relations <id> --json` for its edges, and `agent-issues bundle <initiativeId> --json` for the whole initiative view.
+Use `agent-issues list <kind> --json` for discovery and add `--status`, `--parent`, or `--limit` to bound the result. Use `agent-issues relations <id> --json` for edge inspection and add `--direction` or `--type` to select relevant edges. Use `agent-issues show <id> --view full --json` when you need authored content or the complete record. Reserve `bundle` for intentional initiative-wide reads.
 
-## Initiative fast path
+## Initiative reads
 
-For real work, prefer an initiative-first read instead of piecing the graph together one record at a time.
+For real work, start with compact discovery and edge inspection. Escalate to authored or initiative-wide content only when the task needs it:
 
-Treat `bundle` as the main quality-of-life command for getting most of what you need in one read:
-
-- To resume an existing workstream, run `agent-issues list handoff --json`, inspect each candidate with `agent-issues show HOx --json` and `agent-issues relations HOx --json`, and choose the handoff whose `handsOff` relation targets the active scope.
-- Then use `agent-issues bundle <initiativeId> --json` to load the initiative, PRDs, user stories, ADRs, and issues together.
+- To resume an existing workstream, run `agent-issues list handoff --json`, then inspect candidates with `agent-issues relations <handoffId> --direction outgoing --type handsOff --json`.
+- Read the selected handoff with `agent-issues show <handoffId> --view full --json` because its authored body carries the session context.
+- Use filtered compact lists and relations to navigate from the target to the active issue and blockers.
+- Use `agent-issues bundle <initiativeId> --view full --json` only when the work intentionally requires the whole initiative graph and authored records.
 - Read `agent-issues context show <initiativeId> --json` immediately after that so your language and planning match the initiative glossary.
 - If the right term is still unclear after the initiative read, use `agent-issues context search <query> --view <all|global|initiatives> --json` for project-wide discovery and `agent-issues context conflicts --json` when you suspect the same label is defined in more than one scope.
 - Only fall back to `show <id>` or `relations <id>` when you need a narrower read on one entity or one edge set.
 
 Default heuristic:
 
-1. If you know the initiative, read `bundle` first.
-2. If you only know an issue or ADR, use `show` to resolve the parent initiative, then read `bundle`.
-3. If the work is being resumed, find its `handoff` entity with `list handoff`, `show`, and `relations` first, then read `bundle` and `context show`.
+1. Discover with compact filtered `list`.
+2. Navigate with compact filtered `relations`.
+3. Read one record's authored content with `show --view full`.
+4. Read `bundle` only when the entire initiative is intentional input.
 
-Do not explore an initiative by manually listing every child kind unless you specifically need a cross-initiative search. `bundle` is the normal entry point.
+Do not fetch full records and trim them with routine `jq` projections. That indicates a missing CLI capability; use compact views and server-side filters, or track the recurring gap.
 
 ## Command selection
 
@@ -74,7 +75,7 @@ Use the right command family for the job:
 - Inspect the live graph visually: `serve-site`, `open-site`, `stop-site`
 - Discover agent integration surfaces: `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `capabilities`
 
-Prefer `--json` whenever you are reading output programmatically or using the results to drive the next action.
+Prefer `--json` whenever you are reading output programmatically or using the results to drive the next action. Entity reads and mutation acknowledgements are compact by default; add `--view full` only for complete records or authored content.
 
 ## Workflow map
 
@@ -90,9 +91,9 @@ When you need to choose the next packaged skill, route yourself explicitly:
 8. `ai-tdd` to implement one issue through a red-green-refactor loop.
 9. `ai-migrate-docs` when importing existing documentation into the tracker.
 
-If you are unsure where the work sits in the workflow, inspect the initiative first with `agent-issues bundle <initiativeId> --json` and infer the next missing artifact from the graph.
+If you are unsure where the work sits in the workflow, inspect compact entity and relation results first. Use `bundle` only if choosing the workflow genuinely requires the whole initiative.
 
-To persist a handoff, create it as an ordinary graph entity: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>`. Use `agent-issues edit HOx --title "<title>" --body-file -` to correct its title or body.
+To persist a handoff, create it as an ordinary graph entity: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>`. Use `agent-issues edit <handoffId> --title "<title>" --body-file -` to correct its title or body.
 
 ## Initiative default
 

@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { deriveMigratedEntityIdentity } from "@agent-issues/core";
+
 import type { DatabaseHandle } from "../db/database.js";
 import { runMigrations } from "../db/migration-runner.js";
 import { createSqliteExecutor } from "../db/sqlite-executor.js";
@@ -13,7 +15,17 @@ import { entityRevisionDeltaMigration } from "./0011-entity-revision-delta.js";
 import { entityLifecycleDeltaMigration } from "./0012-entity-lifecycle-delta.js";
 import { entityParentDeltaMarkerMigration } from "./0013-entity-parent-delta-marker.js";
 import { historyEntriesToDeltasMigration } from "./0014-history-entries-to-deltas.js";
+import { contextRevisionDeltaMigration } from "./0015-context-revision-delta.js";
+import { contextTermRevisionDeltaMigration } from "./0016-context-term-revision-delta.js";
 import { entityRestorationSourceMigration } from "./0017-entity-restoration-source.js";
+import { contextRestorationSourceMigration } from "./0018-context-restoration-source.js";
+import { contextRevisionBaselinesMigration } from "./0019-context-revision-baselines.js";
+import { compactReverseFieldPatchesMigration } from "./0020-compact-reverse-field-patches.js";
+import { revisionPatchLedgerMigration } from "./0021-revision-patch-ledger.js";
+import { binaryRevisionPatchHashesMigration } from "./0022-binary-revision-patch-hashes.js";
+import { contextTermStableIdsMigration } from "./0023-context-term-stable-ids.js";
+import { entityStableIdentitiesMigration } from "./0024-entity-stable-identities.js";
+import { renameRevisionEntriesMigration } from "./0028-rename-revision-entries.js";
 
 const PRIOR_MIGRATIONS = [
 	baselineV7Migration,
@@ -87,6 +99,23 @@ function entityRevision(db: DatabaseHandle, entityId: string): number {
 	return row.revision;
 }
 
+async function advanceToCurrentPatchFormat(db: DatabaseHandle): Promise<void> {
+	db.prepare(`UPDATE entities SET project_id = 'PROJ0' WHERE project_id IS NULL`).run();
+	await runMigrations(db, [
+		contextRevisionDeltaMigration,
+		contextTermRevisionDeltaMigration,
+		entityRestorationSourceMigration,
+		contextRestorationSourceMigration,
+		contextRevisionBaselinesMigration,
+		compactReverseFieldPatchesMigration,
+		revisionPatchLedgerMigration,
+		binaryRevisionPatchHashesMigration,
+		contextTermStableIdsMigration,
+		entityStableIdentitiesMigration,
+		renameRevisionEntriesMigration
+	]);
+}
+
 // ─── RED: single golden materialization fixture ───────────────────────────────
 
 describe("historyEntriesToDeltasMigration (ISS265) – materialization fixture", () => {
@@ -112,10 +141,12 @@ describe("historyEntriesToDeltasMigration (ISS265) – materialization fixture",
 		const deltas = deltaRows(db, "ISS1");
 		expect(deltas.map((d) => d.revision)).toEqual([1, 2, 3]);
 
+		await advanceToCurrentPatchFormat(db);
 		const executor = createSqliteExecutor(db);
+		const migratedIssueId = deriveMigratedEntityIdentity("issue", "ISS1").stableId;
 
 		// Revision 3 – current head
-		expect(materializeEntityRevision(executor, { entityId: "ISS1", revision: 3 })).toMatchObject({
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 3 })).toMatchObject({
 			targetRevision: 3,
 			headRevision: 3,
 			title: "Version Three Title",
@@ -126,7 +157,7 @@ describe("historyEntriesToDeltasMigration (ISS265) – materialization fixture",
 		});
 
 		// Revision 2 – one step back
-		expect(materializeEntityRevision(executor, { entityId: "ISS1", revision: 2 })).toMatchObject({
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 2 })).toMatchObject({
 			targetRevision: 2,
 			headRevision: 3,
 			title: "Version Two Title",
@@ -137,7 +168,7 @@ describe("historyEntriesToDeltasMigration (ISS265) – materialization fixture",
 		});
 
 		// Revision 1 – origin metadata comes from its baseline patch.
-		expect(materializeEntityRevision(executor, { entityId: "ISS1", revision: 1 })).toMatchObject({
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 1 })).toMatchObject({
 			targetRevision: 1,
 			headRevision: 3,
 			title: "Version One Title",
@@ -289,19 +320,21 @@ describe("historyEntriesToDeltasMigration – replay-safety", () => {
 		]);
 		expect(entityRevision(db, "ISS9")).toBe(3);
 
+		await advanceToCurrentPatchFormat(db);
 		const executor = createSqliteExecutor(db);
-		expect(materializeEntityRevision(executor, { entityId: "ISS9", revision: 1 })).toMatchObject({
+		const migratedIssueId = deriveMigratedEntityIdentity("issue", "ISS9").stableId;
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 1 })).toMatchObject({
 			title: "Snapshot v1",
 			body: "body-v1",
 			author: "creator",
 			createdAt: "2024-09-01T00:00:00.000Z"
 		});
-		expect(materializeEntityRevision(executor, { entityId: "ISS9", revision: 2 })).toMatchObject({
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 2 })).toMatchObject({
 			title: "Snapshot v2",
 			body: "body-v2",
 			author: "editor"
 		});
-		expect(materializeEntityRevision(executor, { entityId: "ISS9", revision: 3 })).toMatchObject({
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 3 })).toMatchObject({
 			title: "Post-migration edit",
 			body: "body-new",
 			author: "judy"
@@ -375,12 +408,14 @@ describe("historyEntriesToDeltasMigration – concurrent snapshots", () => {
 			["concurrent-a", 2],
 			["concurrent-b", 3]
 		]);
+		await advanceToCurrentPatchFormat(db);
 		const executor = createSqliteExecutor(db);
-		expect(materializeEntityRevision(executor, { entityId: "ISS10", revision: 2 })).toMatchObject({
+		const migratedIssueId = deriveMigratedEntityIdentity("issue", "ISS10").stableId;
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 2 })).toMatchObject({
 			title: "Losing title",
 			author: "alice"
 		});
-		expect(materializeEntityRevision(executor, { entityId: "ISS10", revision: 3 })).toMatchObject({
+		expect(materializeEntityRevision(executor, { entityId: migratedIssueId, revision: 3 })).toMatchObject({
 			title: "Winning title",
 			author: "bob"
 		});

@@ -20,8 +20,8 @@ export const PROJECT_IDENTITY_FILENAME = ".agent-issues-project.json";
 
 /**
  * Resolves a project's identity deterministically (ADR10), by precedence:
- * dedicated project file > .code-workspace filename > package.json "name" >
- * git repository name > sanitized folder name. Anchored to the same
+ * dedicated project file > .code-workspace filename > git repository name >
+ * package.json "name" > sanitized folder name. Anchored to the same
  * workspace root as tenant resolution so the same repo (or any of its
  * subdirectories) resolves to the same identity regardless of local
  * checkout path.
@@ -32,8 +32,8 @@ export function resolveProjectIdentity(currentWorkingDirectory: string = process
 	return (
 		resolveFromProjectFile(root) ??
 		resolveFromCodeWorkspace(root) ??
-		resolveFromPackageJson(root) ??
 		resolveFromGitRepository(root) ??
+		resolveFromPackageJson(root) ??
 		resolveFromFolderName(root)
 	);
 }

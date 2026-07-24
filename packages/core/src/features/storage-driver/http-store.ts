@@ -18,7 +18,14 @@ import { EntityConflictError, EntityRevisionError, type EntityRevisionErrorReaso
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import type { StorageDriver } from "./storage-driver.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
-import { SynchronizeConflictError, type CanonicalChainBundle, type CanonicalChainImportResult, type SynchronizeRecordKind } from "../synchronize/canonical-chain.js";
+import {
+	decodeCanonicalChainBundle,
+	encodeCanonicalChainBundle,
+	SynchronizeConflictError,
+	type CanonicalChainBundle,
+	type CanonicalChainImportResult,
+	type SynchronizeRecordKind
+} from "../synchronize/canonical-chain.js";
 import type {
 	DatabaseSnapshot,
 	DeleteResult,
@@ -55,21 +62,16 @@ export type HttpStoreOptions = {
 	dbPath?: string;
 	/**
 	 * This request's resolved project identity (ISS183), sent as a header so
-	 * the cloud gate can scope a bare `context` command to this project's own
-	 * shared glossary instead of the tenant-wide sentinel. Only meaningful
-	 * against the cloud gate - the local daemon ignores it, since local mode
-	 * already resolves project scope from the on-disk `project_migrations`
-	 * mapping instead.
+	 * both cloud and local gates can scope requests to this project's own
+	 * entities and shared glossary.
 	 */
 	projectIdentity?: string;
 	/**
 	 * This request's workspace root (ISS166 follow-up), sent as a header so
 	 * the local daemon - which fronts one shared database for every
 	 * workspace on the machine and cannot trust its own long-lived process
-	 * cwd - resolves each request against the CLIENT's project rather than
-	 * whichever workspace happened to spawn it. Only meaningful against the
-	 * local daemon; the cloud gate ignores it (it scopes by `projectIdentity`
-	 * and the token's tenant instead).
+	 * cwd. Retained for database-location compatibility; project selection is
+	 * driven by `projectIdentity`.
 	 */
 	workspaceRoot?: string;
 	/** Injectable for tests; defaults to the global `fetch`. */
@@ -225,12 +227,12 @@ export class HttpStore implements StorageDriver {
 		return this.options.tenantId;
 	}
 
-	public exportCanonicalChains(): Promise<CanonicalChainBundle> {
-		return this.call("exportCanonicalChains");
+	public async exportCanonicalChains(): Promise<CanonicalChainBundle> {
+		return decodeCanonicalChainBundle(await this.call("exportCanonicalChains"));
 	}
 
 	public importCanonicalChains(bundle: CanonicalChainBundle): Promise<CanonicalChainImportResult> {
-		return this.call("importCanonicalChains", { bundle });
+		return this.call("importCanonicalChains", { bundle: encodeCanonicalChainBundle(bundle) });
 	}
 
 	public getHistoryDiagnostics(): Promise<HistoryDiagnostics> {
@@ -321,8 +323,16 @@ export class HttpStore implements StorageDriver {
 		return this.call("getEntityDetails", { entityId });
 	}
 
+	public queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]): ReturnType<StorageDriver["queryEntityRelations"]> {
+		return this.call("queryEntityRelations", input);
+	}
+
 	public listEntities(kind: string): Promise<EntityRecord[]> {
 		return this.call("listEntities", { kind });
+	}
+
+	public queryEntities(input: Parameters<StorageDriver["queryEntities"]>[0]): ReturnType<StorageDriver["queryEntities"]> {
+		return this.call("queryEntities", input);
 	}
 
 	public listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {

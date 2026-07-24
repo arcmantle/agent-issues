@@ -44,7 +44,7 @@ describe("context cli rendering", () => {
 
 		const result = queryContextDirectory(db, { query: "review" });
 
-		expect(renderContextOutput(result)).toMatchInlineSnapshot(`
+		expect(renderContextOutput(result).replace(payments.id, "INIT_CANONICAL")).toMatchInlineSnapshot(`
 "Shared Context (default)
 Scope: project directory
 View: all
@@ -58,7 +58,7 @@ Discovered terms: 2
 Duplicate labels across scopes: 0
 
 Initiative contexts:
-- Payments (INIT1) stored terms=1
+- Payments (INIT_CANONICAL) stored terms=1
 
 Discovered terms:
 - Review Queue

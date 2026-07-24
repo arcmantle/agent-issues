@@ -7,9 +7,9 @@ import {
 } from "@agent-issues/core";
 import { eq, sql } from "drizzle-orm";
 import type { TenantExecutor as PoolClient } from "./connection.js";
-import { contextDeltaEntries, contextTermDeltaEntries, contextTerms, contexts, counters, entities, entityDeltaEntries, historyEntries, relations } from "../schema.js";
+import { contextTerms, contexts, counters, entities, relations, revisionEntries } from "../schema.js";
 
-import type { EntityRow, HistoryEntryRow, RelationRow } from "../features/entity-store/pg-entity-store.js";
+import type { EntityRow, RelationRow } from "../features/entity-store/pg-entity-store.js";
 import type { ContextRow, ContextTermRow } from "../features/context/pg-context-store.js";
 
 type CounterRow = {
@@ -17,9 +17,7 @@ type CounterRow = {
 	next_value: number;
 };
 
-type EntityDeltaRow = { id: string; entity_id: string; revision: number; author: string; prior_title: string; prior_body: string; prior_body_source: string; prior_status: string | null; prior_parent_id: string | null; prior_parent_changed: boolean; prior_tombstone: boolean | null; restored_from_revision: number | null; created_at: string };
-type ContextDeltaRow = { id: string; context_key: string; revision: number; author: string; prior_title: string; prior_summary: string; restored_from_revision: number | null; created_at: string };
-type ContextTermDeltaRow = { id: string; context_key: string; term: string; revision: number; author: string; prior_definition: string; prior_avoid_terms: string; prior_tombstone: boolean; restored_from_revision: number | null; created_at: string };
+type RevisionPatchRow = { id: string; project_id: string; record_kind: string; record_key: string; revision: number; author: string; patch_format: number; reverse_patch: Buffer; source_hash: Buffer; target_hash: Buffer; restored_from_revision: number | null; created_at: string };
 
 async function getTenantRecordCounts(client: PoolClient, tenantId: string): Promise<TenantRecordCounts> {
 	const result = await client.execute(sql`
@@ -60,7 +58,7 @@ async function tenantHasAnyRows(client: PoolClient, tenantId: string): Promise<b
 			UNION ALL SELECT 1 FROM relations WHERE tenant_id = ${tenantId}
 			UNION ALL SELECT 1 FROM contexts WHERE tenant_id = ${tenantId}
 			UNION ALL SELECT 1 FROM context_terms WHERE tenant_id = ${tenantId}
-			UNION ALL SELECT 1 FROM history_entries WHERE tenant_id = ${tenantId}
+			UNION ALL SELECT 1 FROM revision_entries WHERE tenant_id = ${tenantId}
 		) AS has_rows
 	`);
 	const row = result.rows[0] as { has_rows: boolean } | undefined;
@@ -103,10 +101,7 @@ export async function deleteTenant(client: PoolClient, ownTenantId: string, tena
 
 	const counts = await getTenantRecordCounts(client, tenantId);
 
-	await client.delete(historyEntries).where(eq(historyEntries.tenantId, tenantId));
-	await client.delete(contextTermDeltaEntries).where(eq(contextTermDeltaEntries.tenantId, tenantId));
-	await client.delete(contextDeltaEntries).where(eq(contextDeltaEntries.tenantId, tenantId));
-	await client.delete(entityDeltaEntries).where(eq(entityDeltaEntries.tenantId, tenantId));
+	await client.delete(revisionEntries).where(eq(revisionEntries.tenantId, tenantId));
 	await client.delete(contextTerms).where(eq(contextTerms.tenantId, tenantId));
 	await client.delete(relations).where(eq(relations.tenantId, tenantId));
 	await client.delete(contexts).where(eq(contexts.tenantId, tenantId));
@@ -168,20 +163,10 @@ export async function renameTenant(
 		`SELECT * FROM context_terms WHERE tenant_id = $1`,
 		[previousTenantId]
 	);
-	const historyRows = await client.query<HistoryEntryRow>(`SELECT * FROM history_entries WHERE tenant_id = $1`, [previousTenantId]);
-	const entityDeltaRows = await client.query<EntityDeltaRow>(`SELECT * FROM entity_delta_entries WHERE tenant_id = $1`, [previousTenantId]);
-	const contextDeltaRows = await client.query<ContextDeltaRow>(`SELECT * FROM context_delta_entries WHERE tenant_id = $1`, [previousTenantId]);
-	const contextTermDeltaRows = await client.query<ContextTermDeltaRow>(`SELECT * FROM context_term_delta_entries WHERE tenant_id = $1`, [previousTenantId]);
+	const revisionEntryRows = await client.query<RevisionPatchRow>(`SELECT * FROM revision_entries WHERE tenant_id = $1`, [previousTenantId]);
 	const counterRows = await client.query<CounterRow>(`SELECT * FROM counters WHERE tenant_id = $1`, [previousTenantId]);
 
-	// `history_entries.id` is a bare (non-tenant-scoped) primary key, so the
-	// old rows must be gone before re-inserting the same ids under the new
-	// tenant id - unlike every other table, whose primary key includes
-	// tenant_id and so tolerates the copy-before-delete order.
-	await client.query(`DELETE FROM history_entries WHERE tenant_id = $1`, [previousTenantId]);
-	await client.query(`DELETE FROM entity_delta_entries WHERE tenant_id = $1`, [previousTenantId]);
-	await client.query(`DELETE FROM context_delta_entries WHERE tenant_id = $1`, [previousTenantId]);
-	await client.query(`DELETE FROM context_term_delta_entries WHERE tenant_id = $1`, [previousTenantId]);
+	await client.query(`DELETE FROM revision_entries WHERE tenant_id = $1`, [previousTenantId]);
 
 	// Copy every row under the new tenant id (parent tables - entities,
 	// contexts - before the tables that foreign-key to them), then delete the
@@ -192,17 +177,16 @@ export async function renameTenant(
 
 	for (const row of entityRows.rows) {
 		await client.query(
-			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, revision, content_hash, tombstone, project_id, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-			[newTenantId, row.id, row.kind, row.title, row.status, row.body, row.body_source, row.revision, row.content_hash, row.tombstone, row.project_id, row.created_at, row.updated_at]
+			`INSERT INTO entities (tenant_id, id, reference, kind, title, status, body, body_source, revision, content_hash, tombstone, project_id, created_at, updated_at)
+			 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+			[newTenantId, row.id, row.reference, row.kind, row.title, row.status, row.body, row.body_source, row.revision, row.content_hash, row.tombstone, row.project_id, row.created_at, row.updated_at]
 		);
 	}
-
 	for (const row of contextRows.rows) {
 		await client.query(
-			`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			[newTenantId, row.key, row.scope_entity_id, row.title, row.summary, row.revision, row.content_hash, row.created_at, row.updated_at]
+			`INSERT INTO contexts (tenant_id, id, reference, key, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
+			 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			[newTenantId, row.id, row.reference, row.key, row.scope_entity_id, row.title, row.summary, row.revision, row.content_hash, row.created_at, row.updated_at]
 		);
 	}
 
@@ -218,53 +202,17 @@ export async function renameTenant(
 
 	for (const row of contextTermRows.rows) {
 		await client.query(
-			`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			[newTenantId, row.context_key, row.term, row.definition, row.avoid_terms, row.revision, row.content_hash, row.tombstone, row.created_at, row.updated_at]
-		);
-	}
-
-	for (const row of entityDeltaRows.rows) {
-		await client.query(
-			`INSERT INTO entity_delta_entries (id, tenant_id, entity_id, revision, author, prior_title, prior_body, prior_body_source, prior_status, prior_parent_id, prior_parent_changed, prior_tombstone, restored_from_revision, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-			[row.id, newTenantId, row.entity_id, row.revision, row.author, row.prior_title, row.prior_body, row.prior_body_source, row.prior_status, row.prior_parent_id, row.prior_parent_changed, row.prior_tombstone, row.restored_from_revision, row.created_at]
-		);
-	}
-
-	for (const row of contextDeltaRows.rows) {
-		await client.query(
-			`INSERT INTO context_delta_entries (id, tenant_id, context_key, revision, author, prior_title, prior_summary, restored_from_revision, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			[row.id, newTenantId, row.context_key, row.revision, row.author, row.prior_title, row.prior_summary, row.restored_from_revision, row.created_at]
-		);
-	}
-
-	for (const row of contextTermDeltaRows.rows) {
-		await client.query(
-			`INSERT INTO context_term_delta_entries (id, tenant_id, context_key, term, revision, author, prior_definition, prior_avoid_terms, prior_tombstone, restored_from_revision, created_at)
+			`INSERT INTO context_terms (tenant_id, id, context_key, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-			[row.id, newTenantId, row.context_key, row.term, row.revision, row.author, row.prior_definition, row.prior_avoid_terms, row.prior_tombstone, row.restored_from_revision, row.created_at]
+			[newTenantId, row.id, row.context_key, row.term, row.definition, row.avoid_terms, row.revision, row.content_hash, row.tombstone, row.created_at, row.updated_at]
 		);
 	}
 
-	for (const row of historyRows.rows) {
+	for (const row of revisionEntryRows.rows) {
 		await client.query(
-			`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-			[
-				row.id,
-				newTenantId,
-				row.entity_id,
-				row.version,
-				row.author,
-				row.title,
-				row.body,
-				row.body_source,
-				row.status,
-				row.parent_id,
-				row.created_at
-			]
+			`INSERT INTO revision_entries (id, tenant_id, project_id, record_kind, record_key, revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			[row.id, newTenantId, row.project_id, row.record_kind, row.record_key, row.revision, row.author, row.patch_format, row.reverse_patch, row.source_hash, row.target_hash, row.restored_from_revision, row.created_at]
 		);
 	}
 

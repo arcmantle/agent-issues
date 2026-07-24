@@ -20,6 +20,9 @@ import type {
 	MoveResult,
 	ProjectDiscovery,
 	ProjectSnapshot,
+	QueryEntitiesInput,
+	QueryEntitiesResult,
+	QueryEntityRelationsInput,
 	StatusUpdateResult,
 	UnlinkResult
 } from "../entity-store/store-types.js";
@@ -49,7 +52,9 @@ export interface StorageDriver {
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord>;
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
+	queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails>;
 	listEntities(kind: string): Promise<EntityRecord[]>;
+	queryEntities(input: QueryEntitiesInput): Promise<QueryEntitiesResult>;
 	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
 	/** Non-structural relations transferred after canonical entity import. */
 	listAllRelations(): Promise<RelationRecord[]>;

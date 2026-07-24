@@ -12,10 +12,22 @@ import { contextTermRevisionDeltaMigration } from "./0016-context-term-revision-
 import { entityRestorationSourceMigration } from "./0017-entity-restoration-source.js";
 import { contextRestorationSourceMigration } from "./0018-context-restoration-source.js";
 import { contextRevisionBaselinesMigration } from "./0019-context-revision-baselines.js";
+import { compactReverseFieldPatchesMigration } from "./0020-compact-reverse-field-patches.js";
+import { revisionPatchLedgerMigration } from "./0021-revision-patch-ledger.js";
+import { binaryRevisionPatchHashesMigration } from "./0022-binary-revision-patch-hashes.js";
+import { contextTermStableIdsMigration } from "./0023-context-term-stable-ids.js";
+import { entityStableIdentitiesMigration } from "./0024-entity-stable-identities.js";
+import { correctStableIdentityStorageMigration } from "./0025-correct-stable-identity-storage.js";
+import { removeEntityAliasesMigration } from "./0026-remove-entity-aliases.js";
+import { removeDrizzleLedgerMigration } from "./0027-remove-drizzle-ledger.js";
+import { renameRevisionEntriesMigration } from "./0028-rename-revision-entries.js";
+import { removeHistoryEntriesMigration } from "./0029-remove-history-entries.js";
+import { removeProjectMigrationLedgersMigration } from "./0030-remove-project-migration-ledgers.js";
+import { removeMetadataMigration } from "./0031-remove-metadata.js";
 
 /**
  * The full ordered migration chain for `packages/api-local`, replacing
  * drizzle-kit's auto-diffed `.sql` files and `__drizzle_migrations` ledger
  * (ADR43). Pass this list to `runMigrations` in the order declared here.
  */
-export const migrations: Migration[] = [baselineV7Migration, backfillTenantBootstrapMigration, addEntityProjectIdMigration, migrateHandoffsToEntitiesMigration, entityRevisionDeltaMigration, entityLifecycleDeltaMigration, entityParentDeltaMarkerMigration, historyEntriesToDeltasMigration, contextRevisionDeltaMigration, contextTermRevisionDeltaMigration, entityRestorationSourceMigration, contextRestorationSourceMigration, contextRevisionBaselinesMigration];
+export const migrations: Migration[] = [baselineV7Migration, backfillTenantBootstrapMigration, addEntityProjectIdMigration, migrateHandoffsToEntitiesMigration, entityRevisionDeltaMigration, entityLifecycleDeltaMigration, entityParentDeltaMarkerMigration, historyEntriesToDeltasMigration, contextRevisionDeltaMigration, contextTermRevisionDeltaMigration, entityRestorationSourceMigration, contextRestorationSourceMigration, contextRevisionBaselinesMigration, compactReverseFieldPatchesMigration, revisionPatchLedgerMigration, binaryRevisionPatchHashesMigration, contextTermStableIdsMigration, entityStableIdentitiesMigration, correctStableIdentityStorageMigration, removeEntityAliasesMigration, removeDrizzleLedgerMigration, renameRevisionEntriesMigration, removeHistoryEntriesMigration, removeProjectMigrationLedgersMigration, removeMetadataMigration];

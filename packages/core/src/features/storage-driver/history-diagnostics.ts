@@ -36,14 +36,13 @@ export function measureHistory(bundle: CanonicalChainBundle, depths: HistoryMate
 	};
 }
 
-function measureKind(records: Array<{ recordId: string; deltas: unknown[] }>, maxMaterializationDepth: number): HistoryKindDiagnostics {
-	const encoder = new TextEncoder();
+function measureKind(records: Array<{ recordId: string; deltas: Array<{ reversePatch: Uint8Array }> }>, maxMaterializationDepth: number): HistoryKindDiagnostics {
 	const populatedRecords = records
 		.filter((record) => record.deltas.length > 0)
 		.map((record) => ({
 			recordId: record.recordId,
 			deltaCount: record.deltas.length,
-			historyBytes: record.deltas.reduce<number>((total, delta) => total + encoder.encode(JSON.stringify(delta)).byteLength, 0)
+			historyBytes: record.deltas.reduce<number>((total, delta) => total + delta.reversePatch.byteLength, 0)
 		}))
 		.sort((left, right) => left.recordId.localeCompare(right.recordId));
 

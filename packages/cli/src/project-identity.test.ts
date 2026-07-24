@@ -60,14 +60,14 @@ describe("project identity resolution", () => {
 		});
 	});
 
-	it("prefers the package.json name field over the git repository name", () => {
+	it("prefers the git repository name over a package.json workspace label", () => {
 		const workspaceRoot = createWorkspace("checkout-dir-name-does-not-matter");
 		writeGitRemote(workspaceRoot, "https://github.com/arcmantle/agent-issues.git");
-		writeFileSync(path.join(workspaceRoot, "package.json"), JSON.stringify({ name: "My Package Name" }));
+		writeFileSync(path.join(workspaceRoot, "package.json"), JSON.stringify({ name: "agent-issues-workspace" }));
 
 		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
-			identity: "my-package-name",
-			source: "package-json"
+			identity: "agent-issues",
+			source: "git-repository"
 		});
 	});
 

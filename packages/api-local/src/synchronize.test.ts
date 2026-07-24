@@ -59,10 +59,13 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		const created = await local.createEntity({ kind: "issue", title: "First", body: "First body" });
 		const revision2 = await local.updateEntity({ entityId: created.id, title: "Second", body: "Second body", expectedRevision: created.revision, expectedContentHash: created.contentHash });
 		await local.updateEntity({ entityId: created.id, title: "Third", body: "Third body", expectedRevision: revision2.revision, expectedContentHash: revision2.contentHash });
+		const localChain = (await local.exportCanonicalChains()).entities.find((chain) => chain.head.id === created.id);
+		expect(localChain?.deltas.every((delta) => /^[0-9a-f]{64}$/.test(delta.sourceHash) && /^[0-9a-f]{64}$/.test(delta.targetHash))).toBe(true);
 
 		const result = await cloud.importCanonicalChains(await local.exportCanonicalChains());
 
 		expect(result.entitiesCreated).toContain(created.id);
+		expect((await cloud.exportCanonicalChains()).entities.find((chain) => chain.head.id === created.id)?.deltas).toEqual(localChain?.deltas);
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
 		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] });
@@ -106,6 +109,30 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 			return entity && { title: entity.title, body: entity.body, status: entity.status };
 		};
 		expect(factsOf(cloudSnapshot.entities, issue.id)).toEqual(factsOf(localSnapshot.entities, issue.id));
+	});
+
+	it("preserves different same-kind entities created independently after convergence", async () => {
+		await synchronizeStores(local, cloud);
+
+		const localIssue = await local.createEntity({ kind: "issue", title: "Created locally" });
+		const cloudIssue = await cloud.createEntity({ kind: "issue", title: "Created in cloud" });
+
+		expect(localIssue.id).not.toBe(cloudIssue.id);
+		await synchronizeStores(local, cloud);
+
+		expect((await local.listEntities("issue")).map((entity) => entity.title)).toEqual(
+			expect.arrayContaining(["Created locally", "Created in cloud"])
+		);
+		expect((await cloud.listEntities("issue")).map((entity) => entity.title)).toEqual(
+			expect.arrayContaining(["Created locally", "Created in cloud"])
+		);
+	});
+
+	it("rejects a previous sequential identifier", async () => {
+		await local.createEntity({ kind: "issue", title: "Canonical issue" });
+
+		await expect(local.getEntityDetails("ISS312")).rejects.toThrow("Entity not found: ISS312");
+		await expect(local.updateEntityStatus({ entityId: "ISS312", status: "in-progress" })).rejects.toThrow("Entity not found: ISS312");
 	});
 
 	it("propagates a non-structural relation (e.g. 'blocks') created on one side to the other, without duplicating it on repeated runs", async () => {
@@ -252,7 +279,7 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		await local.defineContextTerm({ term: "tenant", definition: "Local edit.", expectedRevision: initial.term.revision, expectedContentHash: initial.term.contentHash });
 		await cloud.defineContextTerm({ term: "tenant", definition: "Cloud edit.", expectedRevision: cloudInitial.revision, expectedContentHash: cloudInitial.contentHash });
 
-		await expect(synchronizeStores(local, cloud)).rejects.toMatchObject({ name: "SynchronizeConflictError", recordKind: "context-term", recordId: "default:tenant", currentRevision: 2 });
+		await expect(synchronizeStores(local, cloud)).rejects.toMatchObject({ name: "SynchronizeConflictError", recordKind: "context-term", recordId: initial.term.id, currentRevision: 2 });
 		expect((await local.getContextDetails()).terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Local edit." }));
 		expect((await cloud.getContextDetails()).terms).toContainEqual(expect.objectContaining({ term: "tenant", definition: "Cloud edit." }));
 	});

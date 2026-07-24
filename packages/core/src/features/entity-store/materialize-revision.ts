@@ -1,6 +1,7 @@
 import type { BodySource } from "./domain.js";
 import { EntityRevisionError, type EntityRevisionPatch, type MaterializedEntityRevision } from "./domain.js";
 import { materializeRevisionChain } from "./materialize-revision-chain.js";
+import { applyReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
 
 type EntityHead = {
 	id: string;
@@ -23,14 +24,7 @@ export function applyReversePatch(
 	state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null },
 	patch: EntityRevisionPatch
 ): { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } {
-	return {
-		title: patch.priorTitle,
-		body: patch.priorBody,
-		bodySource: patch.priorBodySource,
-		status: patch.priorStatus ?? state.status,
-		parentId: patch.priorParentId !== undefined ? patch.priorParentId : state.parentId,
-		tombstone: patch.priorTombstone != null ? patch.priorTombstone : state.tombstone
-	};
+	return applyReverseFieldPatch(state, patch, ENTITY_REVERSE_PATCH_REGISTRY);
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
+import { decodeCanonicalChainBundle, encodeCanonicalChainBundle, type CanonicalChainWireBundle } from "../features/synchronize/canonical-chain.js";
 
 /**
  * One entry per `StorageDriver` method exposed over JSON-RPC (ADR13, ADR14).
@@ -13,8 +14,8 @@ import type { StorageDriver } from "../features/storage-driver/storage-driver.js
 export type RpcMethodHandler = (store: StorageDriver, params: unknown) => Promise<unknown>;
 
 export const rpcMethods: Record<string, RpcMethodHandler> = {
-	exportCanonicalChains: async (store) => store.exportCanonicalChains(),
-	importCanonicalChains: async (store, params) => store.importCanonicalChains((params as { bundle: Parameters<StorageDriver["importCanonicalChains"]>[0] }).bundle),
+	exportCanonicalChains: async (store) => encodeCanonicalChainBundle(await store.exportCanonicalChains()),
+	importCanonicalChains: async (store, params) => store.importCanonicalChains(decodeCanonicalChainBundle((params as { bundle: CanonicalChainWireBundle }).bundle)),
 	getHistoryDiagnostics: async (store) => store.getHistoryDiagnostics(),
 	createEntity: async (store, params) => store.createEntity(params as Parameters<StorageDriver["createEntity"]>[0]),
 
@@ -23,7 +24,9 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	// a consistent JSON-RPC surface; methods that already take a single input
 	// object are forwarded to `store` unchanged.
 	getEntityDetails: async (store, params) => store.getEntityDetails((params as { entityId: string }).entityId),
+	queryEntityRelations: async (store, params) => store.queryEntityRelations(params as Parameters<StorageDriver["queryEntityRelations"]>[0]),
 	listEntities: async (store, params) => store.listEntities((params as { kind: string }).kind),
+	queryEntities: async (store, params) => store.queryEntities(params as Parameters<StorageDriver["queryEntities"]>[0]),
 	listEntityHistory: async (store, params) => store.listEntityHistory((params as { entityId: string }).entityId),
 	listAllRelations: async (store) => store.listAllRelations(),
 	applyRelations: async (store, params) => store.applyRelations((params as { relations: Parameters<StorageDriver["applyRelations"]>[0] }).relations),

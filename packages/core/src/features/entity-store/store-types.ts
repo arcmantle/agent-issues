@@ -20,6 +20,26 @@ export type EntityDetails = {
 	outgoing: Array<{ relationType: RelationType; entity: EntityRecord }>;
 };
 
+export type QueryEntitiesInput = {
+	kind: string;
+	statuses?: string[];
+	parentId?: string;
+	limit?: number;
+};
+
+export type QueryEntitiesResult = {
+	entities: EntityRecord[];
+	total: number;
+};
+
+export type RelationDirection = "incoming" | "outgoing" | "both";
+
+export type QueryEntityRelationsInput = {
+	entityId: string;
+	direction?: RelationDirection;
+	types?: RelationType[];
+};
+
 export type InitiativeBundle = {
 	initiative: EntityRecord;
 	entities: EntityRecord[];

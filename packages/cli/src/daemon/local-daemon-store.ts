@@ -64,6 +64,8 @@ export type LocalDaemonStoreOptions = Omit<CallDaemonWithVersionHandshakeRetryOp
 	credentialStoreOptions?: DaemonTokenStoreOptions;
 	/** The caller's workspace root, forwarded to the daemon on every RPC request so it resolves this workspace's project instead of the daemon process's cwd. */
 	workspaceRoot?: string;
+	/** The caller's resolved project identity, forwarded on every RPC request for local project selection. */
+	projectIdentity?: string;
 };
 
 /**
@@ -129,6 +131,7 @@ export async function openLocalDaemonStore(options?: LocalDaemonStoreOptions): P
 		tenantId: resolveWellKnownLocalTenantId(),
 		buildHash: options?.buildHash,
 		dbPath: options?.dbPath,
+		projectIdentity: options?.projectIdentity,
 		workspaceRoot: options?.workspaceRoot
 	});
 }

@@ -1,7 +1,23 @@
 import { sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 
-import { RESERVED_SYSTEM_AUTHOR } from "../entity-store/domain.js";
+import {
+	computeEntityContentHash,
+	ENTITY_KINDS,
+	ID_PREFIX,
+	isAllowedRelation,
+	isBodySource,
+	isStructuralRelationType,
+	isValidStatus,
+	RESERVED_SYSTEM_AUTHOR,
+	type BodySource,
+	type EntityKind,
+	type EntityRevisionPatch
+} from "../entity-store/domain.js";
+import { deriveMigratedEntityIdentity } from "../entity-store/canonical-reference.js";
+import { materializeFromPatches } from "../entity-store/materialize-revision.js";
+import { createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
+import { encodeEntityRecordKey } from "../revision-patch-ledger/record-key.js";
 import type { MigrationConn } from "./migration-engine.js";
 
 /**
@@ -525,4 +541,462 @@ export async function migrateHistoryEntriesToDeltas(conn: MigrationConn): Promis
 			  AND delta.entity_id = entities.id
 		  )
 	`);
+}
+
+type HistoryEntryMigRow = {
+	tenant_id: string;
+	entity_id: string;
+	version: number;
+	author: string;
+	title: string;
+	body: string;
+	body_source: string | null;
+	status: string;
+	parent_id: string | null;
+	created_at: string;
+};
+
+type EntityMigRow = {
+	id: string;
+	title: string;
+	body: string;
+	body_source: string | null;
+	status: string;
+	revision: number;
+	created_at: string;
+	tombstone: number | boolean | null;
+};
+
+type RevisionEntryMigRow = {
+	id: string;
+	revision: number;
+	author: string;
+	patch_format: number;
+	reverse_patch: Uint8Array;
+	source_hash: Uint8Array;
+	target_hash: Uint8Array;
+	restored_from_revision: number | null;
+	created_at: string;
+};
+
+type RelationMigRow = {
+	from_id: string;
+	type: string;
+};
+
+type MissingEntityBaselineRow = HistoryEntryMigRow & {
+	id: string;
+	project_id: string;
+};
+
+type LegacyCounterRow = {
+	tenant_id: string;
+	kind: string;
+	next_value: number;
+};
+
+type RecoverableOrphanRow = HistoryEntryMigRow & {
+	id: string;
+};
+
+type RecoveryParentRow = {
+	id: string;
+	kind: string;
+	project_id: string | null;
+};
+
+function decodeRevisionHash(hash: Uint8Array): string {
+	return Buffer.from(hash).toString("hex");
+}
+
+export async function recoverDeletedLegacyEntityHistory(conn: MigrationConn): Promise<void> {
+	const counters = await conn.all<LegacyCounterRow>(sql`SELECT tenant_id, kind, next_value FROM counters`);
+	const candidates = new Map<string, Array<{ kind: EntityKind; legacyAlias: string; reference: string }>>();
+	for (const counter of counters) {
+		const kind = ENTITY_KINDS.find((candidate) => candidate === counter.kind);
+		if (!kind) {
+			continue;
+		}
+		for (let value = 0; value < counter.next_value; value += 1) {
+			const legacyAlias = `${ID_PREFIX[kind]}${value}`;
+			const identity = deriveMigratedEntityIdentity(kind, legacyAlias);
+			const key = `${counter.tenant_id}\0${identity.stableId}`;
+			const matches = candidates.get(key) ?? [];
+			matches.push({ kind, legacyAlias, reference: identity.reference });
+			candidates.set(key, matches);
+		}
+	}
+
+	let madeProgress = true;
+	while (madeProgress) {
+		madeProgress = false;
+		const orphans = await conn.all<RecoverableOrphanRow>(sql`
+			SELECT history.id, history.tenant_id, history.entity_id, history.version,
+			       history.author, history.title, history.body, history.body_source,
+			       history.status, history.parent_id, history.created_at
+			FROM history_entries AS history
+			LEFT JOIN entities AS entity
+				ON entity.tenant_id = history.tenant_id AND entity.id = history.entity_id
+			WHERE entity.id IS NULL
+			ORDER BY history.tenant_id, history.entity_id, history.version
+		`);
+		const grouped = Map.groupBy(orphans, (row) => `${row.tenant_id}\0${row.entity_id}`);
+		for (const rows of grouped.values()) {
+			if (rows.length !== 1 || rows[0]!.version !== 1) {
+				continue;
+			}
+			const row = rows[0]!;
+			const matches = candidates.get(`${row.tenant_id}\0${row.entity_id}`) ?? [];
+			if (matches.length !== 1) {
+				continue;
+			}
+			const match = matches[0]!;
+			if (!isValidStatus(match.kind, row.status)) {
+				continue;
+			}
+
+			let projectId: string;
+			if (match.kind === "project") {
+				if (row.parent_id !== null) {
+					continue;
+				}
+				projectId = row.entity_id;
+			} else {
+				const parents = await conn.all<RecoveryParentRow>(sql`
+					SELECT id, kind, project_id FROM entities
+					WHERE tenant_id = ${row.tenant_id} AND id = ${row.parent_id}
+				`);
+				const parent = parents[0];
+				if (!parent || !parent.project_id || !isAllowedRelation(parent.kind as EntityKind, match.kind, resolveStructuralRelation(parent.kind as EntityKind, match.kind))) {
+					continue;
+				}
+				projectId = parent.project_id;
+			}
+
+			await restoreDeletedLegacyEntity(conn, row, match.kind, match.reference, projectId);
+			madeProgress = true;
+		}
+	}
+}
+
+function resolveStructuralRelation(fromKind: EntityKind, toKind: EntityKind): string {
+	const relation = ["contains", "owns", "records", "tracks", "creates", "decomposes"]
+		.find((type) => isAllowedRelation(fromKind, toKind, type));
+	return relation ?? "";
+}
+
+async function restoreDeletedLegacyEntity(
+	conn: MigrationConn,
+	row: RecoverableOrphanRow,
+	kind: EntityKind,
+	reference: string,
+	projectId: string
+): Promise<void> {
+	const bodySource = isBodySource(row.body_source ?? "") ? row.body_source! : "authored";
+	const predecessor = { title: row.title, body: row.body, bodySource, status: row.status, parentId: row.parent_id, tombstone: false };
+	const successor = { ...predecessor, parentId: null, tombstone: true };
+	const baseline = createReverseFieldPatch(predecessor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
+	const deletion = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
+	const tombstone = conn.dialect === "sqlite" ? 1 : true;
+	await conn.run(sql`INSERT INTO entities
+		(tenant_id, id, reference, kind, title, status, body, body_source, revision,
+		 content_hash, tombstone, project_id, created_at, updated_at)
+		VALUES (${row.tenant_id}, ${row.entity_id}, ${reference}, ${kind}, ${row.title},
+			${row.status}, ${row.body}, ${bodySource}, 2, ${computeEntityContentHash(row.title, row.body)},
+			${tombstone}, ${projectId}, ${row.created_at}, ${row.created_at})`);
+	await conn.run(sql`INSERT INTO revision_entries
+		(id, tenant_id, project_id, record_kind, record_key, revision, author,
+		 patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
+		VALUES (${row.id}, ${row.tenant_id}, ${projectId}, 'entity', ${encodeEntityRecordKey(row.entity_id)}, 1,
+			${row.author}, ${baseline.patchFormat}, ${Buffer.from(baseline.reversePatch)},
+			${Buffer.from(baseline.sourceHash, "hex")}, ${Buffer.from(baseline.targetHash, "hex")}, NULL, ${row.created_at})`);
+	await conn.run(sql`INSERT INTO revision_entries
+		(id, tenant_id, project_id, record_kind, record_key, revision, author,
+		 patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
+		VALUES (${randomUUID()}, ${row.tenant_id}, ${projectId}, 'entity', ${encodeEntityRecordKey(row.entity_id)}, 2,
+			${RESERVED_SYSTEM_AUTHOR}, ${deletion.patchFormat}, ${Buffer.from(deletion.reversePatch)},
+			${Buffer.from(deletion.sourceHash, "hex")}, ${Buffer.from(deletion.targetHash, "hex")}, NULL, ${row.created_at})`);
+}
+
+/**
+ * Restores revision-1 ledger entries omitted by older snapshot conversion.
+ * Every inserted baseline is derived from one live entity's exact version-1
+ * snapshot and retains that snapshot's stable id and attribution metadata.
+ */
+export async function seedMissingEntityRevisionBaselines(conn: MigrationConn): Promise<void> {
+	const rows = await conn.all<MissingEntityBaselineRow>(sql`
+		SELECT history.id, history.tenant_id, history.entity_id, history.version,
+		       history.author, history.title, history.body, history.body_source,
+		       history.status, history.parent_id, history.created_at, entity.project_id
+		FROM history_entries AS history
+		INNER JOIN entities AS entity
+			ON entity.tenant_id = history.tenant_id AND entity.id = history.entity_id
+		WHERE history.version = 1
+	`);
+
+	for (const row of rows) {
+		const recordKey = encodeEntityRecordKey(row.entity_id);
+		const existing = await conn.all<{ id: string }>(sql`
+			SELECT id FROM revision_entries
+			WHERE tenant_id = ${row.tenant_id}
+			  AND record_kind = 'entity'
+			  AND record_key = ${recordKey}
+			  AND revision = 1
+		`);
+		if (existing.length > 0) {
+			continue;
+		}
+
+		const state = {
+			title: row.title,
+			body: row.body,
+			bodySource: isBodySource(row.body_source ?? "") ? row.body_source! : "authored",
+			status: row.status,
+			parentId: row.parent_id,
+			tombstone: false
+		};
+		const baseline = createReverseFieldPatch(state, state, ENTITY_REVERSE_PATCH_REGISTRY);
+		await conn.run(sql`INSERT INTO revision_entries
+			(id, tenant_id, project_id, record_kind, record_key, revision, author,
+			 patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
+			VALUES (${row.id}, ${row.tenant_id}, ${row.project_id}, 'entity', ${recordKey}, 1,
+				${row.author}, ${baseline.patchFormat}, ${Buffer.from(baseline.reversePatch)},
+				${Buffer.from(baseline.sourceHash, "hex")}, ${Buffer.from(baseline.targetHash, "hex")},
+				NULL, ${row.created_at})`);
+	}
+}
+
+/**
+ * Validates that every `history_entries` row is consistent with the
+ * `revision_entries` reverse-delta chain before the history table is
+ * dropped.  Aborts (throws) on:
+ *   - orphan snapshots (entity_id absent from entities),
+ *   - duplicate versions (same version for the same entity),
+ *   - out-of-range versions (version > entity.revision),
+ *   - gaps in the revision_entries chain for revisions 2..head,
+ *   - divergent facts (title/body/bodySource/status/parentId mismatch
+ *     between snapshot and materialized revision), and
+ *   - author or timestamp disagreement between history_entries and
+ *     revision_entries.
+ *
+ * Called inside the migration runner's transaction so any throw leaves
+ * `history_entries` intact.
+ */
+export async function validateHistoryEntriesChain(conn: MigrationConn): Promise<void> {
+	const [row] = await conn.all<{ c: number }>(sql`SELECT COUNT(*) AS c FROM history_entries`);
+	if ((row?.c ?? 0) === 0) {
+		return;
+	}
+
+	// 1. Orphan check
+	const orphans = await conn.all<{ entity_id: string }>(sql`
+		SELECT DISTINCT entity_id FROM history_entries
+		WHERE entity_id NOT IN (
+			SELECT id FROM entities WHERE tenant_id = history_entries.tenant_id
+		)
+	`);
+	if (orphans.length > 0) {
+		throw new Error(
+			`Migration aborted: orphan history snapshots for ${orphans.length} entity id(s) missing from entities table`
+		);
+	}
+
+	// 2. Duplicate version check
+	const dups = await conn.all<{ entity_id: string }>(sql`
+		SELECT entity_id FROM history_entries
+		GROUP BY tenant_id, entity_id, version
+		HAVING COUNT(*) > 1
+	`);
+	if (dups.length > 0) {
+		throw new Error(`Migration aborted: duplicate history entry versions found for entity ${dups[0]!.entity_id}`);
+	}
+
+	// 3. Out-of-range version check
+	const outOfRange = await conn.all<{ entity_id: string }>(sql`
+		SELECT DISTINCT h.entity_id
+		FROM history_entries h
+		JOIN entities e ON e.tenant_id = h.tenant_id AND e.id = h.entity_id
+		WHERE h.version < 1 OR h.version > e.revision
+	`);
+	if (outOfRange.length > 0) {
+		throw new Error(
+			`Migration aborted: history entries with version out of range [1..entity.revision] for entity ${outOfRange[0]!.entity_id}`
+		);
+	}
+
+	// 4. Per-entity chain and fact validation
+	const entityKeys = await conn.all<{ tenant_id: string; entity_id: string }>(sql`
+		SELECT DISTINCT tenant_id, entity_id FROM history_entries ORDER BY tenant_id, entity_id
+	`);
+
+	for (const { tenant_id: tenantId, entity_id: entityId } of entityKeys) {
+		const [entityRow] = await conn.all<EntityMigRow>(sql`
+			SELECT id, title, body, body_source, status, revision, created_at, tombstone
+			FROM entities
+			WHERE tenant_id = ${tenantId} AND id = ${entityId}
+		`);
+		if (!entityRow) {
+			continue; // already caught by orphan check
+		}
+
+		const headRevision = entityRow.revision ?? 1;
+
+		// Candidate structural parents. A manually linked structural-type
+		// annotation may coexist with the real revision parent, and relation
+		// replay can change timestamps, so the newest patch hash decides.
+		const parentRows = await conn.all<RelationMigRow>(sql`
+			SELECT from_id, type FROM relations
+			WHERE tenant_id = ${tenantId} AND to_id = ${entityId}
+			ORDER BY from_id, type
+		`);
+
+		// Reverse-delta chain for this entity
+		const recordKey = encodeEntityRecordKey(entityId);
+		const deltaRows = await conn.all<RevisionEntryMigRow>(sql`
+			SELECT id, revision, author, patch_format, reverse_patch, source_hash, target_hash,
+			       restored_from_revision, created_at
+			FROM revision_entries
+			WHERE tenant_id = ${tenantId}
+			  AND record_kind = 'entity'
+			  AND record_key = ${recordKey}
+			ORDER BY revision DESC
+		`);
+
+		// Chain completeness: every revision 1..headRevision needs an entry.
+		const patchRevisions = new Set(deltaRows.map((d) => d.revision));
+		for (let rev = 1; rev <= headRevision; rev++) {
+			if (!patchRevisions.has(rev)) {
+				throw new Error(
+					`Migration aborted: gap in revision chain at revision ${rev} for entity ${entityId}`
+				);
+			}
+		}
+
+		const patches: EntityRevisionPatch[] = deltaRows.map((d) => ({
+			revision: d.revision,
+			author: d.author,
+			createdAt: d.created_at,
+			patchFormat: d.patch_format,
+			reversePatch: d.reverse_patch,
+			sourceHash: decodeRevisionHash(d.source_hash),
+			targetHash: decodeRevisionHash(d.target_hash),
+			...(d.restored_from_revision !== null && { restoredFromRevision: d.restored_from_revision })
+		}));
+
+		const tombstone =
+			typeof entityRow.tombstone === "boolean"
+				? entityRow.tombstone
+				: entityRow.tombstone !== 0 && entityRow.tombstone !== null;
+		const structuralParentIds = parentRows
+			.filter((row) => isStructuralRelationType(row.type))
+			.map((row) => row.from_id);
+		const newestPatch = deltaRows.find((row) => row.revision === headRevision);
+		const parentId = resolveRevisionHeadParentId(entityRow, tombstone, structuralParentIds, newestPatch);
+
+		const head = {
+			id: entityRow.id,
+			title: entityRow.title,
+			body: entityRow.body,
+			bodySource: (isBodySource(entityRow.body_source ?? "") ? entityRow.body_source! : "authored") as BodySource,
+			status: entityRow.status,
+			parentId,
+			revision: headRevision,
+			createdAt: entityRow.created_at,
+			tombstone
+		};
+
+		const historyRows = await conn.all<HistoryEntryMigRow>(sql`
+			SELECT tenant_id, entity_id, version, author, title, body, body_source,
+			       status, parent_id, created_at
+			FROM history_entries
+			WHERE tenant_id = ${tenantId} AND entity_id = ${entityId}
+		`);
+
+		for (const entry of historyRows) {
+			let materialized: ReturnType<typeof materializeFromPatches>;
+			try {
+				materialized = materializeFromPatches(entityId, head, patches, entry.version);
+			} catch (error) {
+				throw new Error(
+					`Migration aborted: cannot materialize version ${entry.version} for entity ${entityId} in tenant ${tenantId}`,
+					{ cause: error }
+				);
+			}
+
+			if (entry.title !== materialized.title) {
+				throw new Error(
+					`Migration aborted: divergent title at version ${entry.version} for entity ${entityId}`
+				);
+			}
+			if (entry.body !== materialized.body) {
+				throw new Error(
+					`Migration aborted: divergent body at version ${entry.version} for entity ${entityId}`
+				);
+			}
+			const entryBodySource = isBodySource(entry.body_source ?? "")
+				? (entry.body_source as BodySource)
+				: "authored";
+			if (entryBodySource !== materialized.bodySource) {
+				throw new Error(
+					`Migration aborted: divergent bodySource at version ${entry.version} for entity ${entityId}`
+				);
+			}
+			if (entry.status !== materialized.status) {
+				throw new Error(
+					`Migration aborted: divergent status at version ${entry.version} for entity ${entityId}`
+				);
+			}
+			if (entry.parent_id !== materialized.parentId) {
+				throw new Error(
+					`Migration aborted: divergent parentId at version ${entry.version} for entity ${entityId}`
+				);
+			}
+
+			const patch = deltaRows.find((d) => d.revision === entry.version);
+			if (!patch) {
+				// Gap already caught above, but guard for safety
+				throw new Error(
+					`Migration aborted: missing revision entry for version ${entry.version} for entity ${entityId}`
+				);
+			}
+			if (entry.author !== patch.author) {
+				throw new Error(
+					`Migration aborted: author mismatch at version ${entry.version} for entity ${entityId}`
+				);
+			}
+			if (entry.created_at !== patch.created_at) {
+				throw new Error(
+					`Migration aborted: timestamp mismatch at version ${entry.version} for entity ${entityId}`
+				);
+			}
+		}
+	}
+}
+
+function resolveRevisionHeadParentId(
+	entity: EntityMigRow,
+	tombstone: boolean,
+	parentIds: string[],
+	newestPatch: RevisionEntryMigRow | undefined
+): string | null {
+	if (!newestPatch) {
+		return parentIds[0] ?? null;
+	}
+	const expectedHash = decodeRevisionHash(newestPatch.source_hash);
+	const candidates = [...new Set<string | null>([null, ...parentIds])];
+	const matches = candidates.filter((parentId) => {
+		const state = {
+			title: entity.title,
+			body: entity.body,
+			bodySource: isBodySource(entity.body_source ?? "") ? entity.body_source! : "authored",
+			status: entity.status,
+			parentId,
+			tombstone
+		};
+		return createReverseFieldPatch(state, state, ENTITY_REVERSE_PATCH_REGISTRY).sourceHash === expectedHash;
+	});
+	if (matches.length !== 1) {
+		throw new Error(`Migration aborted: cannot uniquely resolve revision head parent for entity ${entity.id}`);
+	}
+	return matches[0]!;
 }

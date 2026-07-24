@@ -3,6 +3,7 @@ import { computeContextContentHash, computeContextTermContentHash } from "../con
 import type { BodySource, EntityKind, EntityRevisionPatch } from "../entity-store/domain.js";
 import { computeEntityContentHash } from "../entity-store/domain.js";
 import { materializeContextFromPatches, materializeContextTermFromPatches } from "../context/materialize-context-revision.js";
+import { decodeCanonicalReference } from "../entity-store/canonical-reference.js";
 import { materializeFromPatches } from "../entity-store/materialize-revision.js";
 
 export type CanonicalEntityDelta = EntityRevisionPatch & { id: string };
@@ -12,6 +13,7 @@ export type CanonicalContextTermDelta = ContextTermRevisionPatch & { id: string 
 export type CanonicalEntityChain = {
 	head: {
 		id: string;
+		reference: string;
 		kind: EntityKind;
 		title: string;
 		body: string;
@@ -29,6 +31,8 @@ export type CanonicalEntityChain = {
 
 export type CanonicalContextChain = {
 	head: {
+		id: string;
+		reference: string;
 		key: string;
 		scopeEntityId: string | null;
 		title: string;
@@ -43,6 +47,8 @@ export type CanonicalContextChain = {
 
 export type CanonicalContextTermChain = {
 	head: {
+		id: string;
+		reference: string;
 		contextKey: string;
 		term: string;
 		definition: string;
@@ -61,6 +67,37 @@ export type CanonicalChainBundle = {
 	contexts: CanonicalContextChain[];
 	contextTerms: CanonicalContextTermChain[];
 };
+
+export type CanonicalChainWireBundle = Omit<CanonicalChainBundle, "entities" | "contexts" | "contextTerms"> & {
+	entities: Array<Omit<CanonicalEntityChain, "deltas"> & { deltas: Array<Omit<CanonicalEntityDelta, "reversePatch"> & { reversePatch: string }> }>;
+	contexts: Array<Omit<CanonicalContextChain, "deltas"> & { deltas: Array<Omit<CanonicalContextDelta, "reversePatch"> & { reversePatch: string }> }>;
+	contextTerms: Array<Omit<CanonicalContextTermChain, "deltas"> & { deltas: Array<Omit<CanonicalContextTermDelta, "reversePatch"> & { reversePatch: string }> }>;
+};
+
+export function encodeCanonicalChainBundle(bundle: CanonicalChainBundle): CanonicalChainWireBundle {
+	return mapCanonicalChainBundle(bundle, (reversePatch) => Buffer.from(reversePatch).toString("base64"));
+}
+
+export function decodeCanonicalChainBundle(bundle: CanonicalChainWireBundle): CanonicalChainBundle {
+	const decoded = mapCanonicalChainBundle(bundle, (reversePatch) => Uint8Array.from(Buffer.from(reversePatch, "base64"))) as CanonicalChainBundle;
+	assertCanonicalBundle(decoded);
+	return decoded;
+}
+
+function mapCanonicalChainBundle<Input extends CanonicalChainBundle | CanonicalChainWireBundle, Output>(
+	bundle: Input,
+	mapPatch: (reversePatch: Input["entities"][number]["deltas"][number]["reversePatch"]) => Output
+) {
+	const mapChain = <Chain extends { deltas: Array<{ reversePatch: Input["entities"][number]["deltas"][number]["reversePatch"] }> }>(chain: Chain) => ({
+		...chain,
+		deltas: chain.deltas.map((delta) => ({ ...delta, reversePatch: mapPatch(delta.reversePatch) }))
+	});
+	return {
+		entities: bundle.entities.map((chain) => mapChain(chain as never)),
+		contexts: bundle.contexts.map((chain) => mapChain(chain as never)),
+		contextTerms: bundle.contextTerms.map((chain) => mapChain(chain as never))
+	};
+}
 
 export type CanonicalChainImportResult = {
 	entitiesCreated: string[];
@@ -90,11 +127,60 @@ export class SynchronizeConflictError extends Error {
 }
 
 export function mergeCanonicalChainBundles(left: CanonicalChainBundle, right: CanonicalChainBundle): CanonicalChainBundle {
+	assertBundleReferenceCollisions(left, right);
+	assertCanonicalBundle(left);
+	assertCanonicalBundle(right);
 	return {
 		entities: mergeChains(left.entities, right.entities, (chain) => chain.head.id, entityHeadsMatch, assertEntityExtension),
-		contexts: mergeChains(left.contexts, right.contexts, (chain) => chain.head.key, contextHeadsMatch, assertContextExtension),
-		contextTerms: mergeChains(left.contextTerms, right.contextTerms, (chain) => `${chain.head.contextKey}\u0000${chain.head.term}`, contextTermHeadsMatch, assertContextTermExtension)
+		contexts: mergeChains(left.contexts, right.contexts, (chain) => chain.head.id, contextHeadsMatch, assertContextExtension),
+		contextTerms: mergeChains(left.contextTerms, right.contextTerms, (chain) => chain.head.id, contextTermHeadsMatch, assertContextTermExtension)
 	};
+}
+
+function assertCanonicalBundle(bundle: CanonicalChainBundle): void {
+	const entityIds = new Set(bundle.entities.map((chain) => chain.head.id));
+	for (const chain of bundle.entities) {
+		assertCanonicalHead(chain.head.reference, chain.head.id, chain.head.kind);
+		if (chain.head.parentId !== null && !entityIds.has(chain.head.parentId)) {
+			throw new Error(`Missing canonical parent ${chain.head.parentId} for ${chain.head.id}.`);
+		}
+	}
+	for (const chain of bundle.contexts) {
+		assertCanonicalHead(chain.head.reference, chain.head.id, "context");
+		if (chain.head.scopeEntityId !== null && !entityIds.has(chain.head.scopeEntityId)) {
+			throw new Error(`Missing canonical context scope ${chain.head.scopeEntityId} for ${chain.head.id}.`);
+		}
+	}
+	for (const chain of bundle.contextTerms) {
+		assertCanonicalHead(chain.head.reference, chain.head.id, "contextTerm");
+	}
+}
+
+function assertCanonicalHead(reference: string, id: string, expectedKind: EntityKind | "context" | "contextTerm"): void {
+	const decoded = decodeCanonicalReference(reference);
+	if (decoded.kind !== expectedKind || decoded.stableId !== id) {
+		throw new Error(`Canonical reference ${reference} does not match ${expectedKind} Stable identity ${id}.`);
+	}
+}
+
+function assertBundleReferenceCollisions(left: CanonicalChainBundle, right: CanonicalChainBundle): void {
+	assertUniqueAcrossBundles(left.entities, right.entities, (chain) => chain.head.reference, (chain) => chain.head.id, "canonical-reference");
+	assertUniqueAcrossBundles(left.contexts, right.contexts, (chain) => chain.head.reference, (chain) => chain.head.id, "canonical-reference");
+	assertUniqueAcrossBundles(left.contexts, right.contexts, (chain) => chain.head.key, (chain) => chain.head.id, "context-key");
+	assertUniqueAcrossBundles(left.contextTerms, right.contextTerms, (chain) => `${chain.head.contextKey}\0${chain.head.term.toLocaleLowerCase()}`, (chain) => chain.head.id, "term-name");
+}
+
+function assertUniqueAcrossBundles<Chain>(left: Chain[], right: Chain[], keyOf: (chain: Chain) => string, identityOf: (chain: Chain) => string, collisionClass: string): void {
+	const identities = new Map<string, string>();
+	for (const chain of [...left, ...right]) {
+		const key = keyOf(chain);
+		const identity = identityOf(chain);
+		const existing = identities.get(key);
+		if (existing !== undefined && existing !== identity) {
+			throw new Error(`Synchronization preflight ${collisionClass} collision: ${key}.`);
+		}
+		identities.set(key, identity);
+	}
 }
 
 function mergeChains<Chain extends { head: { revision: number; contentHash: string } }>(
@@ -130,15 +216,15 @@ function mergeChains<Chain extends { head: { revision: number; contentHash: stri
 }
 
 function entityHeadsMatch(left: CanonicalEntityChain, right: CanonicalEntityChain): boolean {
-	return left.head.contentHash === right.head.contentHash && left.head.kind === right.head.kind && left.head.title === right.head.title && left.head.body === right.head.body && left.head.bodySource === right.head.bodySource && left.head.status === right.head.status && left.head.parentId === right.head.parentId && left.head.tombstone === right.head.tombstone;
+	return left.head.reference === right.head.reference && left.head.contentHash === right.head.contentHash && left.head.kind === right.head.kind && left.head.title === right.head.title && left.head.body === right.head.body && left.head.bodySource === right.head.bodySource && left.head.status === right.head.status && left.head.parentId === right.head.parentId && left.head.tombstone === right.head.tombstone;
 }
 
 function contextHeadsMatch(left: CanonicalContextChain, right: CanonicalContextChain): boolean {
-	return left.head.contentHash === right.head.contentHash && left.head.scopeEntityId === right.head.scopeEntityId && left.head.title === right.head.title && left.head.summary === right.head.summary;
+	return left.head.reference === right.head.reference && left.head.key === right.head.key && left.head.contentHash === right.head.contentHash && left.head.scopeEntityId === right.head.scopeEntityId && left.head.title === right.head.title && left.head.summary === right.head.summary;
 }
 
 function contextTermHeadsMatch(left: CanonicalContextTermChain, right: CanonicalContextTermChain): boolean {
-	return left.head.contentHash === right.head.contentHash && left.head.definition === right.head.definition && JSON.stringify(left.head.avoid) === JSON.stringify(right.head.avoid) && left.head.tombstone === right.head.tombstone;
+	return left.head.reference === right.head.reference && left.head.contentHash === right.head.contentHash && left.head.contextKey === right.head.contextKey && left.head.term === right.head.term && left.head.definition === right.head.definition && JSON.stringify(left.head.avoid) === JSON.stringify(right.head.avoid) && left.head.tombstone === right.head.tombstone;
 }
 
 function assertEntityExtension(candidate: CanonicalEntityChain, current: CanonicalEntityChain): void {
@@ -158,13 +244,13 @@ function assertContextExtension(candidate: CanonicalContextChain, current: Canon
 
 function assertContextTermExtension(candidate: CanonicalContextTermChain, current: CanonicalContextTermChain): void {
 	const materialized = materializeContextTermFromPatches(candidate.head, candidate.deltas, current.head.revision);
-	if (materialized.definition !== current.head.definition || JSON.stringify(materialized.avoid) !== JSON.stringify(current.head.avoid) || materialized.tombstone !== current.head.tombstone || computeContextTermContentHash(materialized.definition, materialized.avoid, materialized.tombstone) !== current.head.contentHash) {
+	if (candidate.head.contextKey !== current.head.contextKey || materialized.id !== current.head.id || materialized.term !== current.head.term || materialized.definition !== current.head.definition || JSON.stringify(materialized.avoid) !== JSON.stringify(current.head.avoid) || materialized.tombstone !== current.head.tombstone || computeContextTermContentHash(materialized.term, materialized.definition, materialized.avoid, materialized.tombstone) !== current.head.contentHash) {
 		throwConflict(current);
 	}
 }
 
-function throwConflict(chain: { head: { revision: number; contentHash: string; id?: string; key?: string; contextKey?: string; term?: string } }): never {
-	const recordKind: SynchronizeRecordKind = "id" in chain.head ? "entity" : "term" in chain.head ? "context-term" : "context";
-	const recordId = chain.head.id ?? (chain.head.term === undefined ? chain.head.key! : `${chain.head.contextKey}:${chain.head.term}`);
+function throwConflict(chain: { head: { revision: number; contentHash: string; id?: string; key?: string; kind?: EntityKind; term?: string } }): never {
+	const recordKind: SynchronizeRecordKind = "kind" in chain.head ? "entity" : "term" in chain.head ? "context-term" : "context";
+	const recordId = recordKind === "context" ? chain.head.key! : chain.head.id!;
 	throw new SynchronizeConflictError(recordKind, recordId, chain.head.revision, chain.head.contentHash);
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,7 +17,9 @@ const liveSiteClosers = new Set<() => void>();
 
 function createTempDir(): string {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-cli-"));
-	return tempDir;
+	const workspace = path.join(tempDir, "default-project");
+	mkdirSync(workspace);
+	return workspace;
 }
 
 function createCapture() {
@@ -168,8 +170,80 @@ describe("cli", () => {
 
 		expect(editExitCode).toBe(0);
 		expect(JSON.parse(editStdout.read()).command.usage).toContain(
-			"agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->]"
+			"agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->] [--view <compact|full>]"
 		);
+	});
+
+	it.each(["list", "relations", "show", "bundle"])("documents compact and full JSON views for %s", async (command) => {
+		const stdout = createCapture();
+
+		const exitCode = await runCli(["help", command, "--json"], {
+			stderr: createCapture().stream,
+			stdout: stdout.stream
+		});
+		const help = JSON.parse(stdout.read()).command;
+
+		expect(exitCode).toBe(0);
+		expect(help.options).toContainEqual({
+			allowedValues: ["compact", "full"],
+			description: "Select compact or full JSON output. Compact is the default; use full for authored content and complete records. Human-readable output is unchanged.",
+			name: "--view <compact|full>"
+		});
+	});
+
+	it("documents bounded list and relation filters", async () => {
+		const listStdout = createCapture();
+		const relationsStdout = createCapture();
+
+		await runCli(["help", "list", "--json"], { stderr: createCapture().stream, stdout: listStdout.stream });
+		await runCli(["help", "relations", "--json"], { stderr: createCapture().stream, stdout: relationsStdout.stream });
+		const listHelp = JSON.parse(listStdout.read()).command;
+		const relationsHelp = JSON.parse(relationsStdout.read()).command;
+
+		expect(listHelp.options.map((option: { name: string }) => option.name)).toEqual([
+			"--status <comma-separated statuses>",
+			"--parent <id>",
+			"--limit <count>",
+			"--view <compact|full>"
+		]);
+		expect(relationsHelp.options.map((option: { name: string }) => option.name)).toEqual([
+			"--direction <incoming|outgoing|both>",
+			"--type <comma-separated types>",
+			"--view <compact|full>"
+		]);
+		expect(listHelp.examples).toContain("agent-issues list issue --status todo,in-progress --parent <initiativeId> --limit 20 --json");
+		expect(relationsHelp.examples).toContain("agent-issues relations <id> --direction incoming --type blocks,decomposes --json");
+		expect(listHelp.notes).toContain("Accepted status values depend on the entity kind; use agent-issues schema --json to inspect each kind's workflow.");
+	});
+
+	it("rejects read-only context acknowledgement views before opening the store", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "invalid-context-view.db");
+
+		await expect(runCli(
+			["context", "show", "--view", "compact", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		)).rejects.toThrow("--view compact is only valid for context set, define, and forget.");
+		expect(existsSync(dbPath)).toBe(false);
+	});
+
+	it("documents compact and full mutation acknowledgements", async () => {
+		for (const command of ["create", "edit", "archive", "delete", "move", "status", "link", "unlink"]) {
+			const stdout = createCapture();
+			await runCli(["help", command, "--json"], { stderr: createCapture().stream, stdout: stdout.stream });
+			const help = JSON.parse(stdout.read()).command;
+			expect(help.options).toContainEqual({
+				allowedValues: ["compact", "full"],
+				description: "Select compact or full JSON output. Compact is the default; use full for authored content and complete records. Human-readable output is unchanged.",
+				name: "--view <compact|full>"
+			});
+		}
+
+		const contextStdout = createCapture();
+		await runCli(["help", "context", "--json"], { stderr: createCapture().stream, stdout: contextStdout.stream });
+		expect(JSON.parse(contextStdout.read()).command.options).toContainEqual(expect.objectContaining({
+			name: "--view <all|global|initiatives|compact|full>"
+		}));
 	});
 
 	it("prints compact json by default and pretty json when requested", async () => {
@@ -272,6 +346,583 @@ describe("cli", () => {
 		}
 	});
 
+	it("returns compact create and edit acknowledgements without authored bodies", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createBody = "Create body that must not be echoed. ".repeat(200);
+		const editBody = "Edit body that must not be echoed. ".repeat(200);
+		const createStdout = createCapture();
+
+		await runCli([
+			"create", "issue",
+			"--title", "Compact mutation",
+			"--body", createBody,
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: createStdout.stream });
+		const created = JSON.parse(createStdout.read()) as { reference: string; revision: number };
+
+		expect(created).toEqual({
+			operation: "create",
+			reference: expect.stringMatching(/^ISS_/),
+			status: "todo",
+			revision: 1
+		});
+		expect(createStdout.read()).not.toContain(createBody);
+
+		const editStdout = createCapture();
+		await runCli([
+			"edit", created.reference,
+			"--body", editBody,
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: editStdout.stream });
+
+		expect(JSON.parse(editStdout.read())).toEqual({
+			operation: "edit",
+			reference: created.reference,
+			revision: 2
+		});
+		expect(editStdout.read()).not.toContain(editBody);
+
+		const fullStdout = createCapture();
+		await runCli([
+			"edit", created.reference,
+			"--title", "Full mutation",
+			"--view", "full",
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: fullStdout.stream });
+		expect(JSON.parse(fullStdout.read())).toEqual(expect.objectContaining({
+			body: editBody,
+			contentHash: expect.any(String),
+			reference: created.reference,
+			revision: 3
+		}));
+	});
+
+	it("returns compact lifecycle acknowledgements while preserving human output", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createJson = async (kind: string, title: string, parent?: string) => {
+			const stdout = createCapture();
+			await runCli([
+				"create", kind, "--title", title,
+				...(parent ? ["--parent", parent] : []),
+				"--view", "full", "--db", dbPath, "--json"
+			], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read()) as { id: string; reference: string };
+		};
+		const firstParent = await createJson("initiative", "First parent");
+		const secondParent = await createJson("initiative", "Second parent");
+		const issue = await createJson("issue", "Lifecycle issue", firstParent.id);
+		const statusStdout = createCapture();
+		await runCli(["status", issue.reference, "in-progress", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: statusStdout.stream });
+		expect(JSON.parse(statusStdout.read())).toEqual({
+			operation: "status",
+			reference: issue.reference,
+			previousStatus: "todo",
+			status: "in-progress",
+			revision: 2
+		});
+
+		const moveStdout = createCapture();
+		await runCli(["move", issue.reference, secondParent.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: moveStdout.stream });
+		expect(JSON.parse(moveStdout.read())).toEqual(expect.objectContaining({
+			operation: "move",
+			reference: issue.reference,
+			newParentId: secondParent.id,
+			type: "tracks",
+			revision: 3
+		}));
+
+		const archiveStdout = createCapture();
+		await runCli(["archive", issue.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: archiveStdout.stream });
+		expect(JSON.parse(archiveStdout.read())).toEqual({
+			operation: "archive",
+			reference: issue.reference,
+			previousStatus: "in-progress",
+			status: "done",
+			revision: 4
+		});
+
+		const statusNoopStdout = createCapture();
+		await runCli(["status", issue.reference, "done", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: statusNoopStdout.stream });
+		expect(JSON.parse(statusNoopStdout.read())).toEqual(expect.objectContaining({
+			operation: "status",
+			reference: issue.reference,
+			previousStatus: "done",
+			status: "done"
+		}));
+
+		const humanStdout = createCapture();
+		await runCli(["status", issue.reference, "done", "--view", "compact", "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: humanStdout.stream });
+		expect(humanStdout.read()).toContain(`Updated ${issue.id} from done to done`);
+
+		const deleteStdout = createCapture();
+		await runCli(["delete", issue.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: deleteStdout.stream });
+		expect(JSON.parse(deleteStdout.read())).toEqual({ operation: "delete", reference: issue.reference, removed: true });
+	});
+
+	it("returns compact relation acknowledgements for successful and no-op writes", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createJson = async (title: string) => {
+			const stdout = createCapture();
+			await runCli(["create", "issue", "--title", title, "--view", "full", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read()) as { id: string; reference: string };
+		};
+		const source = await createJson("Source");
+		const target = await createJson("Target");
+		const runRelation = async (command: "link" | "unlink") => {
+			const stdout = createCapture();
+			await runCli([command, source.reference, "blocks", target.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read());
+		};
+
+		expect(await runRelation("link")).toEqual({ operation: "link", fromId: source.id, toId: target.id, type: "blocks", created: true });
+		expect(await runRelation("link")).toEqual({ operation: "link", fromId: source.id, toId: target.id, type: "blocks", created: false });
+		expect(await runRelation("unlink")).toEqual({ operation: "unlink", fromId: source.id, toId: target.id, type: "blocks", removed: true });
+	});
+
+	it("returns compact context write and restore acknowledgements without authored content", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const summary = "Context summary that must not be echoed. ".repeat(100);
+		const definition = "Term definition that must not be echoed. ".repeat(100);
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return { output: stdout.read(), value: JSON.parse(stdout.read()) };
+		};
+
+		const set = await runJson(["context", "set", "--title", "Compact context", "--summary", summary]);
+		expect(set.value).toEqual({ operation: "context-set", reference: expect.stringMatching(/^CTX_/), revision: 1 });
+		expect(set.output).not.toContain(summary);
+
+		const define = await runJson(["context", "define", "Order", "--definition", definition]);
+		expect(define.value).toEqual(expect.objectContaining({ operation: "context-define", contextReference: set.value.reference, term: "Order", created: true, revision: 1 }));
+		expect(define.output).not.toContain(definition);
+
+		const redefine = await runJson(["context", "define", "Order", "--definition", "Updated definition"]);
+		expect(redefine.value).toEqual(expect.objectContaining({ operation: "context-define", term: "Order", created: false, revision: 2 }));
+
+		const forget = await runJson(["context", "forget", "Order"]);
+		expect(forget.value).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.value.reference, term: "Order", removed: true }));
+		const forgetNoop = await runJson(["context", "forget", "Order"]);
+		expect(forgetNoop.value).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.value.reference, term: "Order", removed: false }));
+
+		const contextRestore = await runJson(["restore", "--context", "default", "--revision", "1"]);
+		expect(contextRestore.value).toEqual({ operation: "context-restore", contextKey: "default", revision: 2, restoredFromRevision: 1 });
+		const termRestore = await runJson(["restore", "--context", "default", "--term", "Order", "--revision", "1"]);
+		expect(termRestore.value).toEqual(expect.objectContaining({ operation: "context-term-restore", contextKey: "default", term: "Order", restoredFromRevision: 1 }));
+
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const entity = await store.createEntity({ kind: "issue", title: "Original", body: "Original body" });
+		await store.updateEntity({
+			entityId: entity.id,
+			title: "Edited",
+			expectedRevision: entity.revision,
+			expectedContentHash: entity.contentHash
+		});
+		await store.close();
+		const entityRestore = await runJson(["restore", entity.reference, "--revision", "1"]);
+		expect(entityRestore.value).toEqual({
+			operation: "restore",
+			id: entity.id,
+			revision: 3,
+			restoredFromRevision: 1
+		});
+	});
+
+	it.each([
+		["create", "issue", "--title", "Invalid view"],
+		["edit", "missing", "--title", "Invalid view"],
+		["archive", "missing"],
+		["delete", "missing"],
+		["move", "missing", "parent"],
+		["status", "missing", "done"],
+		["link", "from", "blocks", "to"],
+		["unlink", "from", "blocks", "to"],
+		["restore", "missing", "--revision", "1"],
+		["context", "set", "--title", "Invalid", "--summary", "Invalid"],
+		["context", "define", "Term", "--definition", "Invalid"],
+		["context", "forget", "Term"]
+	])("rejects an invalid mutation view before opening the store", async (...command) => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "invalid-mutation-view.db");
+
+		await expect(runCli(
+			[...command, "--view", "summary", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		)).rejects.toThrow("Unknown entity view: summary");
+		expect(existsSync(dbPath)).toBe(false);
+	});
+
+	it("lists populated compact JSON as items and total", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createStdout = createCapture();
+
+		const createExitCode = await runCli(
+			["create", "issue", "--title", "Compact list issue", "--view", "full", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createStdout.stream }
+		);
+		const created = JSON.parse(createStdout.read()) as { id: string };
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli(
+			["list", "issue", "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: stderr.stream, stdout: stdout.stream }
+		);
+
+		expect(createExitCode).toBe(0);
+		expect(exitCode).toBe(0);
+		expect(stderr.read()).toBe("");
+		expect(JSON.parse(stdout.read())).toEqual({
+			items: [{
+				id: created.id,
+				kind: "issue",
+				status: "todo",
+				title: "Compact list issue"
+			}],
+			total: 1
+		});
+	});
+
+	it("lists empty compact JSON as empty items and zero total", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli(
+			["list", "issue", "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: stderr.stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(stderr.read()).toBe("");
+		expect(JSON.parse(stdout.read())).toEqual({ items: [], total: 0 });
+	});
+
+	it("combines list filters and preserves the filtered total when results are limited", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createJson = async (args: string[]): Promise<{ id: string; reference: string }> => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "full", "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: stdout.stream
+			});
+			return JSON.parse(stdout.read()) as { id: string; reference: string };
+		};
+		const selectedParent = await createJson(["create", "initiative", "--title", "Selected parent"]);
+		const otherParent = await createJson(["create", "initiative", "--title", "Other parent"]);
+		await createJson(["create", "issue", "--title", "Selected todo", "--parent", selectedParent.id]);
+		await createJson(["create", "issue", "--title", "Selected active", "--parent", selectedParent.id, "--status", "in-progress"]);
+		await createJson(["create", "issue", "--title", "Other todo", "--parent", otherParent.id]);
+		const stdout = createCapture();
+
+		const exitCode = await runCli([
+			"list", "issue",
+			"--status", "todo,in-progress",
+			"--parent", selectedParent.reference,
+			"--limit", "1",
+			"--view", "compact",
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		const result = JSON.parse(stdout.read()) as { items: Array<{ title: string }>; total: number };
+		expect(result.items).toHaveLength(1);
+		expect(["Selected todo", "Selected active"]).toContain(result.items[0]?.title);
+		expect(result.total).toBe(2);
+
+		const emptyStdout = createCapture();
+		await runCli([
+			"list", "issue",
+			"--parent", otherParent.reference,
+			"--status", "in-progress",
+			"--view", "compact",
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: emptyStdout.stream });
+		expect(JSON.parse(emptyStdout.read())).toEqual({ items: [], total: 0 });
+	});
+
+	it("returns compact list JSON by default and preserves explicit full view", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		await runCli(
+			["create", "issue", "--title", "Full list issue", "--body", "Full body", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		);
+		const defaultStdout = createCapture();
+		const fullStdout = createCapture();
+
+		const defaultExitCode = await runCli(
+			["list", "issue", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: defaultStdout.stream }
+		);
+		const fullExitCode = await runCli(
+			["list", "issue", "--db", dbPath, "--json", "--view", "full"],
+			{ cwd: root, stderr: createCapture().stream, stdout: fullStdout.stream }
+		);
+
+		expect(defaultExitCode).toBe(0);
+		expect(fullExitCode).toBe(0);
+		expect(JSON.parse(defaultStdout.read())).toEqual({
+			items: [expect.objectContaining({ kind: "issue", status: "todo", title: "Full list issue" })],
+			total: 1
+		});
+		expect(JSON.parse(fullStdout.read())).toEqual([
+			expect.objectContaining({ body: "Full body", contentHash: expect.any(String), revision: 1 })
+		]);
+	});
+
+	it("rejects an invalid list view before opening the store", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "invalid-view.db");
+
+		await expect(runCli(
+			["list", "issue", "--db", dbPath, "--json", "--view", "summary"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		)).rejects.toThrow("Unknown entity view: summary");
+		expect(existsSync(dbPath)).toBe(false);
+	});
+
+	it.each(["relations", "show", "bundle"])("rejects an invalid %s view before opening the store", async (command) => {
+		const root = createTempDir();
+		const dbPath = path.join(root, `${command}-invalid-view.db`);
+
+		await expect(runCli(
+			[command, "missing-entity", "--db", dbPath, "--json", "--view", "summary"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		)).rejects.toThrow("Unknown entity view: summary");
+		expect(existsSync(dbPath)).toBe(false);
+	});
+
+	it("renders compact relations with mixed incoming and outgoing edges", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createJson = async (kind: string, title: string): Promise<{ id: string }> => {
+			const stdout = createCapture();
+			await runCli(
+				["create", kind, "--title", title, "--view", "full", "--db", dbPath, "--json"],
+				{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+			);
+			return JSON.parse(stdout.read()) as { id: string };
+		};
+		const blocker = await createJson("issue", "Blocking issue");
+		const issue = await createJson("issue", "Focused issue");
+		const story = await createJson("userStory", "Fixed story");
+		await runCli(["link", blocker.id, "blocks", issue.id, "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream });
+		await runCli(["link", issue.id, "fixes", story.id, "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream });
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["relations", issue.id, "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual({
+			entity: { id: issue.id, kind: "issue", status: "todo", title: "Focused issue" },
+			incoming: [{ type: "blocks", entity: { id: blocker.id, kind: "issue", status: "todo", title: "Blocking issue" } }],
+			outgoing: [{ type: "fixes", entity: { id: story.id, kind: "userStory", status: "ready", title: "Fixed story" } }]
+		});
+	});
+
+	it("filters relations by direction and comma-separated types", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createJson = async (kind: string, title: string): Promise<{ id: string }> => {
+			const stdout = createCapture();
+			await runCli(["create", kind, "--title", title, "--view", "full", "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: stdout.stream
+			});
+			return JSON.parse(stdout.read()) as { id: string };
+		};
+		const blocker = await createJson("issue", "Blocking issue");
+		const issue = await createJson("issue", "Focused issue");
+		const story = await createJson("userStory", "Fixed story");
+		await runCli(["link", blocker.id, "blocks", issue.id, "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream });
+		await runCli(["link", issue.id, "fixes", story.id, "--db", dbPath], { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream });
+		const outgoingStdout = createCapture();
+		const emptyStdout = createCapture();
+
+		await runCli([
+			"relations", issue.id,
+			"--direction", "outgoing",
+			"--type", "fixes,blocks",
+			"--view", "compact",
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: outgoingStdout.stream });
+		await runCli([
+			"relations", issue.id,
+			"--direction", "incoming",
+			"--type", "fixes",
+			"--view", "compact",
+			"--db", dbPath,
+			"--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: emptyStdout.stream });
+
+		expect(JSON.parse(outgoingStdout.read())).toEqual({
+			entity: { id: issue.id, kind: "issue", status: "todo", title: "Focused issue" },
+			incoming: [],
+			outgoing: [{ type: "fixes", entity: { id: story.id, kind: "userStory", status: "ready", title: "Fixed story" } }]
+		});
+		expect(JSON.parse(emptyStdout.read())).toEqual({
+			entity: { id: issue.id, kind: "issue", status: "todo", title: "Focused issue" },
+			incoming: [],
+			outgoing: []
+		});
+	});
+
+	it.each([
+		{ command: ["list", "issue", "--status", "unknown"], message: "Invalid issue status: unknown" },
+		{ command: ["list", "issue", "--limit", "0"], message: "--limit must be a positive integer: 0" },
+		{ command: ["relations", "missing", "--direction", "sideways"], message: "Unknown relation direction: sideways" },
+		{ command: ["relations", "missing", "--type", "unknown"], message: "Unknown relation type: unknown" }
+	])("rejects invalid entity filter values before opening the store", async ({ command, message }) => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "invalid-filter.db");
+
+		await expect(runCli(
+			[...command, "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
+		)).rejects.toThrow(message);
+		expect(existsSync(dbPath)).toBe(false);
+	});
+
+	it("renders a compact non-initiative show as compact details", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createStdout = createCapture();
+		await runCli(
+			["create", "issue", "--title", "Ordinary compact show", "--body", "Hidden body", "--view", "full", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createStdout.stream }
+		);
+		const issue = JSON.parse(createStdout.read()) as { id: string };
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["show", issue.id, "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual({
+			entity: { id: issue.id, kind: "issue", status: "todo", title: "Ordinary compact show" },
+			incoming: [],
+			outgoing: []
+		});
+	});
+
+	it("renders a compact initiative show as a compact bundle", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createStdout = createCapture();
+		await runCli(
+			["create", "initiative", "--title", "Initiative compact show", "--body", "Hidden initiative body", "--view", "full", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createStdout.stream }
+		);
+		const initiative = JSON.parse(createStdout.read()) as { id: string };
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["show", initiative.id, "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+		const payload = JSON.parse(stdout.read());
+
+		expect(exitCode).toBe(0);
+		expect(Object.keys(payload)).toEqual([
+			"initiative", "entities", "prds", "userStories", "adrs", "issues",
+			"fixLinks", "subIssueLinks", "blockerLinks", "constrainsLinks"
+		]);
+		expect(payload.initiative).toEqual({
+			id: initiative.id,
+			kind: "initiative",
+			status: "draft",
+			title: "Initiative compact show"
+		});
+		expect(payload.initiative).not.toHaveProperty("body");
+		expect(payload.entities.every((record: object) => !Object.hasOwn(record, "body"))).toBe(true);
+	});
+
+	it("renders direct compact bundle JSON through the compact bundle contract", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createStdout = createCapture();
+		await runCli(
+			["create", "initiative", "--title", "Direct compact bundle", "--body", "Hidden bundle body", "--view", "full", "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: createStdout.stream }
+		);
+		const initiative = JSON.parse(createStdout.read()) as { id: string };
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["bundle", initiative.id, "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+		const payload = JSON.parse(stdout.read());
+
+		expect(exitCode).toBe(0);
+		expect(payload.initiative).toEqual({
+			id: initiative.id,
+			kind: "initiative",
+			status: "draft",
+			title: "Direct compact bundle"
+		});
+		expect(payload.entities.every((record: object) => !Object.hasOwn(record, "body"))).toBe(true);
+	});
+
+	it("defaults entity reads to compact JSON while preserving explicit full and human output", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createJson = async (kind: string, title: string): Promise<{ id: string }> => {
+			const stdout = createCapture();
+			await runCli(
+				["create", kind, "--title", title, "--body", "Verbose body", "--view", "full", "--db", dbPath, "--json"],
+				{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+			);
+			return JSON.parse(stdout.read()) as { id: string };
+		};
+		const initiative = await createJson("initiative", "Compatibility initiative");
+		const issue = await createJson("issue", "Compatibility issue");
+		const commands = [
+			["list", "issue"],
+			["relations", issue.id],
+			["show", issue.id],
+			["show", initiative.id],
+			["bundle", initiative.id]
+		];
+		const run = async (args: string[]): Promise<string> => {
+			const stdout = createCapture();
+			const exitCode = await runCli(
+				[...args, "--db", dbPath],
+				{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+			);
+			expect(exitCode).toBe(0);
+			return stdout.read();
+		};
+
+		for (const command of commands) {
+			expect(await run([...command, "--json", "--view", "compact"])).toBe(await run([...command, "--json"]));
+			expect(await run([...command, "--json", "--view", "full"])).not.toBe(await run([...command, "--json"]));
+			expect(await run([...command, "--view", "compact"])).toBe(await run(command));
+			expect(await run([...command, "--view", "full"])).toBe(await run(command));
+		}
+	});
+
 	it("creates a project -> epic -> initiative chain through the create command", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
@@ -286,7 +937,10 @@ describe("cli", () => {
 		expect(projectErr.read()).toBe("");
 		expect(projectOut.read()).toContain("project");
 
-		const { db: afterProjectDb, executor: afterProject } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterProjectDb, executor: afterProject } = await ensureDatabase(dbPath, {
+			currentWorkingDirectory: root,
+			projectIdentity: "default-project"
+		});
 		const discovery = getProjectDiscovery(afterProject);
 		const project = discovery.kind === "available"
 			? discovery.projects.find((entry) => entry.project.title === "Platform")?.project
@@ -304,7 +958,10 @@ describe("cli", () => {
 		expect(epicErr.read()).toBe("");
 		expect(epicOut.read()).toContain("epic");
 
-		const { db: afterEpicDb, executor: afterEpic } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterEpicDb, executor: afterEpic } = await ensureDatabase(dbPath, {
+			currentWorkingDirectory: root,
+			projectIdentity: project!.id
+		});
 		const projectAfterEpic = getDatabaseSnapshot(afterEpic, { projectId: project!.id });
 		const epic = projectAfterEpic.kind === "available"
 			? projectAfterEpic.snapshot.entities.find((entity) => entity.kind === "epic" && entity.title === "Checkout revamp")
@@ -322,7 +979,10 @@ describe("cli", () => {
 		expect(initiativeErr.read()).toBe("");
 		expect(initiativeOut.read()).toContain("Checkout redesign");
 
-		const { db: afterInitiativeDb, executor: afterInitiative } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterInitiativeDb, executor: afterInitiative } = await ensureDatabase(dbPath, {
+			currentWorkingDirectory: root,
+			projectIdentity: project!.id
+		});
 		try {
 			const projectAfterInitiative = getDatabaseSnapshot(afterInitiative, { projectId: project!.id });
 			const initiative = projectAfterInitiative.kind === "available"
@@ -361,7 +1021,10 @@ describe("cli", () => {
 		expect(versionErr.read()).toBe("");
 		expect(versionOut.read()).toContain("version");
 
-		const { db: afterVersionDb, executor: afterVersion } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterVersionDb, executor: afterVersion } = await ensureDatabase(dbPath, {
+			currentWorkingDirectory: root,
+			projectIdentity: project.id
+		});
 		const projectSnapshot = getDatabaseSnapshot(afterVersion, { projectId: project.id });
 		const version = projectSnapshot.kind === "available"
 			? projectSnapshot.snapshot.entities.find((entity) => entity.kind === "version" && entity.title === "2.0")
@@ -379,7 +1042,10 @@ describe("cli", () => {
 		expect(linkErr.read()).toBe("");
 		expect(linkOut.read()).toContain("taggedWith");
 
-		const { db: afterLinkDb, executor: afterLink } = await ensureDatabase(dbPath, { currentWorkingDirectory: root });
+		const { db: afterLinkDb, executor: afterLink } = await ensureDatabase(dbPath, {
+			currentWorkingDirectory: root,
+			projectIdentity: project.id
+		});
 		try {
 			const versionDetails = getEntityDetails(afterLink, version!.id);
 			const projectParent = versionDetails.incoming.find((entry) => entry.relationType === "owns");
@@ -583,13 +1249,14 @@ describe("cli", () => {
 		db.close();
 
 		const createExitCode = await runCli(
-			["create", "issue", "--title", "Sub-issue", "--parent", parentIssue.id, "--db", dbPath],
+			["create", "issue", "--title", "Sub-issue", "--parent", parentIssue.id, "--view", "full", "--db", dbPath, "--json"],
 			{ cwd: root, stderr: stderr.stream, stdout: stdout.stream }
 		);
 
 		expect(createExitCode).toBe(0);
 		expect(stderr.read()).toBe("");
-		expect(stdout.read()).toContain("Sub-issue");
+		const subIssue = JSON.parse(stdout.read()) as { id: string; reference: string; title: string };
+		expect(subIssue).toMatchObject({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), reference: expect.stringMatching(/^ISS_[0-7][0-9A-HJKMNP-TV-Z]{25}$/), title: "Sub-issue" });
 
 		const bundleStdout = createCapture();
 		const bundleStderr = createCapture();
@@ -602,7 +1269,7 @@ describe("cli", () => {
 		expect(bundleExitCode).toBe(0);
 		expect(bundleStderr.read()).toBe("");
 		expect(bundleStdout.read()).toContain("Sub-issues:");
-		expect(bundleStdout.read()).toContain(`${parentIssue.id} -> ISS2`);
+		expect(bundleStdout.read()).toContain(`${parentIssue.id} -> ${subIssue.id}`);
 	});
 
 	it("exports one initiative to a grouped directory by default", async () => {
@@ -706,7 +1373,7 @@ describe("cli", () => {
 		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		db.close();
 
-		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
+		const handle = await startLiveSite({ currentWorkingDirectory: root, dbPath, port, tenant: "test-tenant" });
 		liveSiteClosers.add(() => {
 			if (handle.server.listening) {
 				handle.close();
@@ -745,7 +1412,7 @@ describe("cli", () => {
 		const initiative = createEntity(executor, { kind: "initiative", parentId: epic.id, title: "Console Viewer" });
 		db.close();
 
-		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant" });
+		const handle = await startLiveSite({ currentWorkingDirectory: root, dbPath, port, tenant: "test-tenant" });
 		liveSiteClosers.add(() => {
 			if (handle.server.listening) {
 				handle.close();
@@ -787,7 +1454,7 @@ describe("cli", () => {
 		const { db } = await ensureDatabase(dbPath, { tenant: "known-tenant" });
 		db.close();
 
-		const handle = await startLiveSite({ dbPath, port, tenant: "known-tenant" });
+		const handle = await startLiveSite({ currentWorkingDirectory: root, dbPath, port, tenant: "known-tenant" });
 		liveSiteClosers.add(() => {
 			if (handle.server.listening) {
 				handle.close();
@@ -803,7 +1470,9 @@ describe("cli", () => {
 
 			const { db: verificationDb, executor: verificationExecutor } = await ensureDatabase(dbPath, { tenant: "known-tenant" });
 			try {
-				expect(listEntities(verificationExecutor, "project").map((entity) => entity.id)).toEqual(["PROJ0"]);
+				expect(listEntities(verificationExecutor, "project").map((entity) => entity.reference)).toEqual([
+					expect.stringMatching(/^PROJ_[0-7][0-9A-HJKMNP-TV-Z]{25}$/)
+				]);
 				expect(listTenants(verificationDb).map((tenant) => tenant.id)).toEqual(["known-tenant"]);
 			} finally {
 				verificationDb.close();
@@ -825,7 +1494,7 @@ describe("cli", () => {
 		const { db } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
 		db.close();
 
-		const handle = await startLiveSite({ dbPath, port, tenant: "test-tenant", pollIntervalMs: 20 });
+		const handle = await startLiveSite({ currentWorkingDirectory: root, dbPath, port, tenant: "test-tenant", pollIntervalMs: 20 });
 		liveSiteClosers.add(() => {
 			if (handle.server.listening) {
 				handle.close();

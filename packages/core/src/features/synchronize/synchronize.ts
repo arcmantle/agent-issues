@@ -26,6 +26,14 @@ function unionRelations(left: RelationRecord[], right: RelationRecord[]): Relati
 	return [...byKey.values()];
 }
 
+function assertRelationEndpoints(relations: RelationRecord[], canonical: CanonicalChainBundle): void {
+	const entityReferences = new Set(canonical.entities.map((chain) => chain.head.id));
+	for (const relation of relations) {
+		if (!entityReferences.has(relation.fromId)) throw new Error(`Synchronization preflight missing relation endpoint: ${relation.fromId}.`);
+		if (!entityReferences.has(relation.toId)) throw new Error(`Synchronization preflight missing relation endpoint: ${relation.toId}.`);
+	}
+}
+
 function countImportedDeltas(bundle: CanonicalChainBundle, recordIds: string[]): number {
 	const imported = new Set(recordIds);
 	return bundle.entities
@@ -49,11 +57,12 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 		cloud.listAllRelations()
 	]);
 	const canonical = mergeCanonicalChainBundles(localBundle, cloudBundle);
+	const relationUnion = unionRelations(localRelations, cloudRelations);
+	assertRelationEndpoints(relationUnion, canonical);
 	const [localImport, cloudImport] = await Promise.all([
 		local.importCanonicalChains(canonical),
 		cloud.importCanonicalChains(canonical)
 	]);
-	const relationUnion = unionRelations(localRelations, cloudRelations);
 	const [localRelationImport, cloudRelationImport] = await Promise.all([
 		local.applyRelations(relationUnion),
 		cloud.applyRelations(relationUnion)

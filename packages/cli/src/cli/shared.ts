@@ -25,6 +25,8 @@ export type BodyInputOptions = {
 	bodyFile?: string;
 };
 
+export type EntityView = "compact" | "full";
+
 export const CONTEXT_SUBCOMMANDS = new Set(["list", "show", "search", "conflicts", "set", "define", "forget"]);
 
 export abstract class BaseCommand extends Command<AgentIssuesContext> {
@@ -124,12 +126,37 @@ export function parseContextView(value: string | undefined): ContextDirectoryVie
 	throw new Error(`Unknown context view: ${value}`);
 }
 
+export function parseEntityView(value: string | undefined): EntityView {
+	if (value === undefined || value === "compact") {
+		return "compact";
+	}
+
+	if (value === "full") {
+		return value;
+	}
+
+	throw new Error(`Unknown entity view: ${value}`);
+}
+
 export function parseCsvOption(value: string | undefined): string[] {
 	if (!value) {
 		return [];
 	}
 
 	return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+export function parsePositiveIntegerOption(value: string | undefined, optionName: string): number | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed) || parsed < 1) {
+		throw new Error(`${optionName} must be a positive integer: ${value}`);
+	}
+
+	return parsed;
 }
 
 export function parsePortOption(value: string | undefined): number | undefined {

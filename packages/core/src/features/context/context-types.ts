@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ReverseFieldPatchTransition } from "../reverse-field-patch/reverse-field-patch.js";
 
 /**
  * The context-store result/record contract (ADR13's dialect-agnostic
@@ -13,6 +14,8 @@ export const DEFAULT_CONTEXT_TITLE = "Shared Context";
 export const DEFAULT_CONTEXT_SUMMARY = "Shared glossary of project-specific domain terms and preferred language.";
 
 export type ContextRecord = {
+	id: string | null;
+	reference: string | null;
 	key: string;
 	scopeKind: "default" | "initiative";
 	scopeEntityId: string | null;
@@ -57,8 +60,8 @@ export class ContextConflictError extends Error {
 	}
 }
 
-export function computeContextTermContentHash(definition: string, avoid: string[], tombstone: boolean): string {
-	return createHash("sha256").update(JSON.stringify({ definition, avoid, tombstone })).digest("hex");
+export function computeContextTermContentHash(term: string, definition: string, avoid: string[], tombstone: boolean): string {
+	return createHash("sha256").update(JSON.stringify({ term, definition, avoid, tombstone })).digest("hex");
 }
 
 export class ContextTermConflictError extends Error {
@@ -77,22 +80,17 @@ export class ContextTermConflictError extends Error {
 	}
 }
 
-export type ContextRevisionPatch = {
+export type ContextRevisionPatch = ReverseFieldPatchTransition & {
 	revision: number;
 	author: string;
 	createdAt: string;
-	priorTitle: string;
-	priorSummary: string;
 	restoredFromRevision?: number;
 };
 
-export type ContextTermRevisionPatch = {
+export type ContextTermRevisionPatch = ReverseFieldPatchTransition & {
 	revision: number;
 	author: string;
 	createdAt: string;
-	priorDefinition: string;
-	priorAvoid: string[];
-	priorTombstone: boolean;
 	restoredFromRevision?: number;
 };
 
@@ -108,6 +106,7 @@ export type MaterializedContextRevision = {
 };
 
 export type MaterializedContextTermRevision = {
+	id: string;
 	contextKey: string;
 	term: string;
 	targetRevision: number;
@@ -139,6 +138,8 @@ export class ContextRevisionError extends Error {
 }
 
 export type ContextTermRecord = {
+	id: string;
+	reference: string;
 	term: string;
 	definition: string;
 	avoid: string[];

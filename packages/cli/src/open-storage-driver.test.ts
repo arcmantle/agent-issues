@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { saveDaemonState, saveDaemonToken, SqliteStore } from "@agent-issues/api
 import { saveAuthSession } from "./auth-session.js";
 import { bindCloudProject } from "./cloud-binding.js";
 import { LocalDaemonStore } from "./daemon/local-daemon-store.js";
-import { openStorageDriver } from "./open-storage-driver.js";
+import { assertNoDaemonAllowed, openStorageDriver } from "./open-storage-driver.js";
 import { resolveProjectIdentity } from "./project-identity.js";
 
 /** Fake in-memory OS credential store, mirroring `daemon-token.test.ts`'s helper, so this suite never shells out to a real native tool. */
@@ -39,6 +39,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
 	let projectDirectory: string;
+	let projectRoot: string;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-storage-driver-home-"));
@@ -50,13 +51,21 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 		// entities into the developer's actual ~/.agent-issues/agent-issues.db.
 		originalHome = process.env.HOME;
 		process.env.HOME = homeDirectory;
-		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-storage-driver-project-"));
+		projectRoot = mkdtempSync(path.join(tmpdir(), "agent-issues-open-storage-driver-project-"));
+		projectDirectory = path.join(projectRoot, "default-project");
+		mkdirSync(projectDirectory);
 	});
 
 	afterEach(() => {
 		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { recursive: true, force: true });
-		rmSync(projectDirectory, { recursive: true, force: true });
+		rmSync(projectRoot, { recursive: true, force: true });
+	});
+
+	it("rejects AGENT_ISSUES_NO_DAEMON in a production build", () => {
+		expect(() => assertNoDaemonAllowed({ AGENT_ISSUES_NO_DAEMON: "1" }, "production")).toThrow(
+			"AGENT_ISSUES_NO_DAEMON is only available in development builds"
+		);
 	});
 
 	it("opens a direct SqliteStore when AGENT_ISSUES_NO_DAEMON=1 forces the escape hatch (ISS190)", async () => {
@@ -133,8 +142,10 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 		it("passes its own resolved db path through to the daemon store (ISS190)", async () => {
 			await saveDaemonToken("real-token", credentialStoreOptions);
 			let seenDbPath: string | string[] | undefined;
+			let seenProjectIdentity: string | string[] | undefined;
 			const server = createServer((request, response) => {
 				seenDbPath = request.headers["x-agent-issues-db-path"];
+				seenProjectIdentity = request.headers["x-agent-issues-project-identity"];
 				response.writeHead(200, { "content-type": "application/json" });
 				response.end(JSON.stringify({ jsonrpc: "2.0", id: "1", result: [] }));
 			});
@@ -158,6 +169,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			try {
 				await result.store.listEntities("initiative");
 				expect(seenDbPath).toBe(result.dbPath);
+				expect(seenProjectIdentity).toBe(resolveProjectIdentity(projectDirectory).identity);
 			} finally {
 				await result.store.close();
 			}

@@ -43,6 +43,8 @@ import {
 	listProjectAdrs,
 	materializeEntityRevision,
 	moveEntity,
+	queryEntities,
+	queryEntityRelations,
 	restoreEntityRevision,
 	setEntityBody,
 	unlinkEntities,
@@ -128,8 +130,16 @@ export class SqliteStore implements StorageDriver {
 		return getEntityDetails(this.executor, entityId);
 	}
 
+	public async queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]) {
+		return queryEntityRelations(this.executor, input);
+	}
+
 	public async listEntities(kind: string) {
 		return listEntities(this.executor, kind);
+	}
+
+	public async queryEntities(input: Parameters<StorageDriver["queryEntities"]>[0]) {
+		return queryEntities(this.executor, input);
 	}
 
 	public async listEntityHistory(entityId: string) {

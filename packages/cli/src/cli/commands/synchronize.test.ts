@@ -1,11 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { RunCredentialCommand } from "@agent-issues/core";
+import {
+	decodeCanonicalChainBundle,
+	encodeCanonicalChainBundle,
+	type CanonicalChainWireBundle,
+	type RunCredentialCommand
+} from "@agent-issues/core";
 import { openSqliteStore, type SqliteStore } from "@agent-issues/api-local";
 import { bindCloudProject } from "../../cloud-binding.js";
 import { saveAuthSession, type AuthSessionStoreOptions } from "../../auth-session.js";
@@ -83,9 +88,9 @@ async function dispatch(store: SqliteStore, method: string, params: unknown): Pr
 		case "createEntity":
 			return store.createEntity(args as Parameters<SqliteStore["createEntity"]>[0]);
 		case "exportCanonicalChains":
-			return store.exportCanonicalChains();
+			return encodeCanonicalChainBundle(await store.exportCanonicalChains());
 		case "importCanonicalChains":
-			return store.importCanonicalChains(args.bundle as Parameters<SqliteStore["importCanonicalChains"]>[0]);
+			return store.importCanonicalChains(decodeCanonicalChainBundle(args.bundle as CanonicalChainWireBundle));
 		case "listAllRelations":
 			return store.listAllRelations();
 		case "applyRelations":
@@ -103,6 +108,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
 	let projectDirectory: string;
+	let projectRoot: string;
 	let cloudDirectory: string;
 	let cloudStore: SqliteStore;
 	let credentialStoreOptions: AuthSessionStoreOptions;
@@ -111,7 +117,9 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-home-"));
 		originalHome = process.env.HOME;
 		process.env.HOME = homeDirectory;
-		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-project-"));
+		projectRoot = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-project-"));
+		projectDirectory = path.join(projectRoot, "default-project");
+		mkdirSync(projectDirectory);
 		cloudDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-cloud-"));
 		cloudStore = (await openSqliteStore(path.join(cloudDirectory, "cloud.db"), { tenant: "tenant-a" })).store;
 		credentialStoreOptions = fakeCredentialStore();
@@ -121,7 +129,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		await cloudStore.close();
 		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { force: true, recursive: true });
-		rmSync(projectDirectory, { force: true, recursive: true });
+		rmSync(projectRoot, { force: true, recursive: true });
 		rmSync(cloudDirectory, { force: true, recursive: true });
 	});
 

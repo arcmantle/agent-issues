@@ -91,10 +91,11 @@ describe("baselineV7Migration", () => {
 		// assertion can't race with other test files concurrently inserting or
 		// deleting their own tenants' rows in the same shared live table.
 		const tenantId = `baseline-skip-${randomUUID()}`;
+		const entityId = randomUUID();
 		await adminPool.query(
-			`INSERT INTO entities (tenant_id, id, kind, title, status, created_at, updated_at)
-			 VALUES ($1, 'entity-1', 'issue', 'Existing row', 'open', now()::text, now()::text)`,
-			[tenantId]
+			`INSERT INTO entities (tenant_id, id, reference, kind, title, status, created_at, updated_at)
+			 VALUES ($1, $2::uuid, 'ISS00000000000000000000000000', 'issue', 'Existing row', 'todo', now()::text, now()::text)`,
+			[tenantId, entityId]
 		);
 
 		try {

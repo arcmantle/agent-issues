@@ -46,14 +46,29 @@ export function getSqliteDrizzle(db: DatabaseHandle): BetterSQLite3Database<type
 }
 
 export function getSqliteEntityOrThrow(executor: SqliteExecutor, entityId: string) {
-	const row = executor.drizzle
-		.select()
-		.from(entities)
-		.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.id, entityId), eq(entities.tombstone, false)))
-		.get();
+	const row = resolveSqliteEntity(executor, entityId);
 
 	if (!row) {
 		throw new Error(`Entity not found: ${entityId}`);
+	}
+
+	return row;
+}
+
+export function resolveSqliteEntity(executor: SqliteExecutor, entityId: string, includeTombstone: boolean = false) {
+	const livePredicate = includeTombstone ? undefined : eq(entities.tombstone, false);
+	let row = executor.drizzle
+		.select()
+		.from(entities)
+		.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.id, entityId), livePredicate))
+		.get();
+
+	if (!row) {
+		row = executor.drizzle
+			.select()
+			.from(entities)
+			.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.reference, entityId), livePredicate))
+			.get();
 	}
 
 	return row;

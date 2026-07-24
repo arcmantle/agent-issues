@@ -5,11 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { deriveMigratedEntityIdentity } from "@agent-issues/core";
 import { ensureDatabase, resolveWellKnownLocalTenantId } from "../db/database.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN_FIXTURE = path.join(here, "__fixtures__", "schema-v7.db");
-const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "metadata"] as const;
+const DOMAIN_TABLES = ["counters", "entities", "relations", "contexts", "context_terms"] as const;
 
 // A real (not synthetic) pre-ADR43 backup of a personal `agent-issues.db`,
 // scrubbed of the counters-only ghost tenants left behind by an unrelated,
@@ -69,10 +70,24 @@ describe("golden-fixture migration wall", () => {
 
 		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
 		db.close();
+		const migratedSchema = new Database(staged, { readonly: true, fileMustExist: true });
+		try {
+			const columns = migratedSchema.prepare(`PRAGMA table_info(revision_entries)`).all() as Array<{ name: string }>;
+			expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
+				"project_id", "record_kind", "record_key", "patch_format",
+				"reverse_patch", "source_hash", "target_hash"
+			]));
+			expect(columns.some((column) => column.name.startsWith("prior_"))).toBe(false);
+			const legacyTables = migratedSchema.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'
+				AND name IN ('entity_delta_entries', 'context_delta_entries', 'context_term_delta_entries')`).all();
+			expect(legacyTables).toEqual([]);
+			expect(migratedSchema.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metadata'").get()).toBeUndefined();
+		} finally {
+			migratedSchema.close();
+		}
 
 		const after = snapshotTables(staged);
 
-		expect(after.metadata).toEqual(before.metadata);
 		expect(after.context_terms).toEqual(
 			expect.arrayContaining((before.context_terms as Record<string, unknown>[]).map((row) => expect.objectContaining(row)))
 		);
@@ -84,61 +99,71 @@ describe("golden-fixture migration wall", () => {
 		);
 		const migrated = new Database(staged, { readonly: true, fileMustExist: true });
 		try {
-			const contextBaselines = migrated.prepare(`SELECT delta.revision, delta.author, delta.prior_title, delta.prior_summary, delta.created_at
-				FROM context_delta_entries AS delta
-				JOIN contexts AS head ON head.tenant_id = delta.tenant_id AND head.key = delta.context_key
+			const contextBaselines = migrated.prepare(`SELECT delta.revision, delta.author, delta.patch_format, length(delta.reverse_patch) AS patch_bytes, lower(hex(delta.source_hash)) AS source_hash, lower(hex(delta.target_hash)) AS target_hash, delta.created_at
+				FROM revision_entries AS delta
+				JOIN contexts AS head ON head.tenant_id = delta.tenant_id AND delta.record_kind = 'context'
+					AND delta.record_key = CAST(length(CAST(head.id AS BLOB)) AS TEXT) || ':' || head.id
 				WHERE delta.created_at = head.updated_at
-				ORDER BY delta.context_key`).all();
+				ORDER BY delta.record_key`).all();
 			expect(contextBaselines).toHaveLength(before.contexts.length);
-			expect(contextBaselines).toEqual(expect.arrayContaining([expect.objectContaining({ revision: 1, author: "system" })]));
+			expect(contextBaselines).toEqual(expect.arrayContaining([expect.objectContaining({ revision: 1, author: "system", patch_format: 1, source_hash: expect.stringMatching(/^[0-9a-f]{64}$/), target_hash: expect.stringMatching(/^[0-9a-f]{64}$/) })]));
 
-			const termBaselines = migrated.prepare(`SELECT delta.revision, delta.author, delta.prior_definition, delta.prior_avoid_terms, delta.prior_tombstone, delta.created_at
-				FROM context_term_delta_entries AS delta
-				JOIN context_terms AS head ON head.tenant_id = delta.tenant_id AND head.context_key = delta.context_key AND head.term = delta.term
+			const termBaselines = migrated.prepare(`SELECT delta.revision, delta.author, delta.patch_format, length(delta.reverse_patch) AS patch_bytes, lower(hex(delta.source_hash)) AS source_hash, lower(hex(delta.target_hash)) AS target_hash, delta.created_at
+				FROM revision_entries AS delta
+				JOIN context_terms AS head ON head.tenant_id = delta.tenant_id AND delta.record_kind = 'context-term'
+					AND delta.record_key = CAST(length(CAST(head.id AS BLOB)) AS TEXT) || ':' || head.id
 				WHERE delta.created_at = head.updated_at
-				ORDER BY delta.term`).all();
+				ORDER BY delta.record_key`).all();
 			expect(termBaselines).toHaveLength(before.context_terms.length);
-			expect(termBaselines).toEqual(expect.arrayContaining([expect.objectContaining({ revision: 1, author: "system", prior_tombstone: 0 })]));
+			expect(termBaselines).toEqual(expect.arrayContaining([expect.objectContaining({ revision: 1, author: "system", patch_format: 1, source_hash: expect.stringMatching(/^[0-9a-f]{64}$/), target_hash: expect.stringMatching(/^[0-9a-f]{64}$/) })]));
 		} finally {
 			migrated.close();
 		}
 
-		// contexts gains revision/content_hash columns from migration 0015; every
-		// original row survives unchanged, just with new default-valued columns
-		// appended, so objectContaining is needed here (same pattern as entities).
-		expect(after.contexts).toEqual(
-			expect.arrayContaining((before.contexts as Record<string, unknown>[]).map((row) => expect.objectContaining(row)))
-		);
+		for (const row of before.contexts as Array<{ tenant_id: string; key: string; title: string; summary: string; scope_entity_id: string | null }>) {
+			expect(after.contexts).toEqual(expect.arrayContaining([expect.objectContaining({
+				tenant_id: row.tenant_id,
+				key: row.key,
+				title: row.title,
+				summary: row.summary,
+				scope_entity_id: row.scope_entity_id ? deriveMigratedEntityIdentity("initiative", row.scope_entity_id).stableId : null
+			})]));
+		}
 		expect(after.contexts).toHaveLength((before.contexts as unknown[]).length);
 		expect(after.contexts).toEqual(
 			expect.arrayContaining([expect.objectContaining({ revision: 1, content_hash: expect.stringMatching(/^[0-9a-f]{64}$/) })])
 		);
 
-		// entities/relations gain the synthesized default project+epic (and the
-		// "fixture" tenant's one pre-existing initiative gaining a valid parent),
-		// but every original row survives unchanged.
-		for (const table of ["entities", "relations"] as const) {
-			expect(after[table]).toEqual(
-				expect.arrayContaining((before[table] as Record<string, unknown>[]).map((row) => expect.objectContaining(row)))
-			);
-			expect(after[table]).toHaveLength(before[table].length + 2 + handoffs.length);
+		const migratedRecords = new Database(staged, { readonly: true, fileMustExist: true });
+		try {
+			for (const row of before.entities as Array<{ tenant_id: string; id: string; kind: Parameters<typeof deriveMigratedEntityIdentity>[0]; title: string; status: string }>) {
+				const identity = deriveMigratedEntityIdentity(row.kind, row.id);
+				expect(migratedRecords.prepare(`SELECT id, reference, title, status FROM entities WHERE tenant_id = ? AND id = ?`).get(row.tenant_id, identity.stableId)).toEqual({ id: identity.stableId, reference: identity.reference, title: row.title, status: row.status });
+			}
+		} finally {
+			migratedRecords.close();
 		}
+		expect(after.entities).toHaveLength(before.entities.length + 2 + handoffs.length);
+		expect(after.relations).toHaveLength(before.relations.length + 2 + handoffs.length);
 
 		// counters gains one row per newly-recognized entity kind (project, epic,
 		// version - ISS38) that this pre-existing tenant didn't have before.
 		expect(after.counters).toEqual(expect.arrayContaining(before.counters));
 		expect(after.counters).toHaveLength(before.counters.length + 3);
 
+		const projectId = deriveMigratedEntityIdentity("project", "PROJ0").stableId;
+		const epicId = deriveMigratedEntityIdentity("epic", "EPIC0").stableId;
+		const initiativeId = deriveMigratedEntityIdentity("initiative", "INIT1").stableId;
 		expect(after.entities).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ tenant_id: "fixture", id: "PROJ0", kind: "project" }),
-				expect.objectContaining({ tenant_id: "fixture", id: "EPIC0", kind: "epic" })
+				expect.objectContaining({ tenant_id: "fixture", id: projectId, kind: "project" }),
+				expect.objectContaining({ tenant_id: "fixture", id: epicId, kind: "epic" })
 			])
 		);
 		expect(after.relations).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ tenant_id: "fixture", from_id: "PROJ0", to_id: "EPIC0", type: "contains" }),
-				expect.objectContaining({ tenant_id: "fixture", from_id: "EPIC0", to_id: "INIT1", type: "contains" })
+				expect.objectContaining({ tenant_id: "fixture", from_id: projectId, to_id: epicId, type: "contains" }),
+				expect.objectContaining({ tenant_id: "fixture", from_id: epicId, to_id: initiativeId, type: "contains" })
 			])
 		);
 		expect(after.counters).toEqual(
@@ -149,11 +174,12 @@ describe("golden-fixture migration wall", () => {
 			])
 		);
 		expect(handoffs).toHaveLength(1);
-		expect(after.entities).toContainEqual(expect.objectContaining({ id: handoffs[0]!.id, kind: "handoff", title: handoffs[0]!.summary, body: handoffs[0]!.body }));
-		expect(after.relations).toContainEqual(expect.objectContaining({ from_id: handoffs[0]!.id, to_id: handoffs[0]!.entity_id, type: "handsOff" }));
+		const handoffId = deriveMigratedEntityIdentity("handoff", handoffs[0]!.id).stableId;
+		expect(after.entities).toContainEqual(expect.objectContaining({ id: handoffId, kind: "handoff", title: handoffs[0]!.summary, body: handoffs[0]!.body }));
+		expect(after.relations).toContainEqual(expect.objectContaining({ from_id: handoffId, to_id: initiativeId, type: "handsOff" }));
 	});
 
-	it("backfills a synthetic version-1 history entry for every pre-existing record and the new sentinels", async () => {
+	it("backfills a revision-1 ledger entry for every pre-existing record and the new sentinels", async () => {
 		const staged = stageFixture();
 		const before = snapshotTables(staged);
 
@@ -163,18 +189,14 @@ describe("golden-fixture migration wall", () => {
 		const db2 = new Database(staged, { readonly: true, fileMustExist: true });
 		try {
 			const historyRows = db2
-				.prepare(`SELECT entity_id, version, author, status, parent_id FROM history_entries WHERE tenant_id = 'fixture' ORDER BY entity_id`)
-				.all() as Array<{ entity_id: string; version: number; author: string; status: string; parent_id: string | null }>;
+				.prepare(`SELECT record_key, revision, author FROM revision_entries WHERE tenant_id = 'fixture' AND record_kind = 'entity' ORDER BY record_key`)
+				.all() as Array<{ record_key: string; revision: number; author: string }>;
 
-			const preExistingIds = (before.entities as Array<{ id: string }>).map((entity) => entity.id);
-			const seededIds = historyRows.map((row) => row.entity_id);
-			expect(seededIds.sort()).toEqual([...preExistingIds, "HO1", "EPIC0", "PROJ0"].sort());
-			expect(historyRows.every((row) => row.version === 1)).toBe(true);
+			const currentIds = db2.prepare(`SELECT id FROM entities WHERE tenant_id = 'fixture' ORDER BY id`).all() as Array<{ id: string }>;
+			const seededIds = historyRows.map((row) => row.record_key.slice(row.record_key.indexOf(":") + 1));
+			expect(seededIds.sort()).toEqual(currentIds.map((row) => row.id).sort());
+			expect(historyRows.every((row) => row.revision === 1)).toBe(true);
 			expect(historyRows.every((row) => row.author === "system")).toBe(true);
-
-			expect(historyRows.find((row) => row.entity_id === "INIT1")).toMatchObject({ parent_id: "EPIC0" });
-			expect(historyRows.find((row) => row.entity_id === "PROJ0")).toMatchObject({ parent_id: null, status: "active" });
-			expect(historyRows.find((row) => row.entity_id === "EPIC0")).toMatchObject({ parent_id: "PROJ0", status: "active" });
 		} finally {
 			db2.close();
 		}
@@ -203,7 +225,19 @@ describe("golden-fixture migration wall", () => {
 				{ id: "0016-context-term-revision-delta" },
 				{ id: "0017-entity-restoration-source" },
 				{ id: "0018-context-restoration-source" },
-				{ id: "0019-context-revision-baselines" }
+				{ id: "0019-context-revision-baselines" },
+				{ id: "0020-compact-reverse-field-patches" },
+				{ id: "0021-revision-patch-ledger" },
+				{ id: "0022-binary-revision-patch-hashes" },
+				{ id: "0023-context-term-stable-ids" },
+				{ id: "0024-entity-stable-identities" },
+				{ id: "0025-correct-stable-identity-storage" },
+				{ id: "0026-remove-entity-aliases" },
+				{ id: "0027-remove-drizzle-ledger" },
+				{ id: "0028-rename-revision-entries" },
+				{ id: "0029-remove-history-entries" },
+				{ id: "0030-remove-project-migration-ledgers" },
+				{ id: "0031-remove-metadata" }
 			]);
 		} finally {
 			db2.close();
@@ -242,15 +276,21 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 			}, 0);
 		before.close();
 
-		const { db } = await ensureDatabase(undefined, {});
+		const { db } = await ensureDatabase(undefined, { projectIdentity: "agent-issues" });
 		try {
 			const wellKnownTenantId = resolveWellKnownLocalTenantId();
 			expect(db.tenantId).toBe(wellKnownTenantId);
 
-			const projectMigrations = db
-				.prepare(`SELECT legacy_tenant_id FROM project_migrations ORDER BY legacy_tenant_id`)
-				.all() as Array<{ legacy_tenant_id: string }>;
-			expect(projectMigrations.map((row) => row.legacy_tenant_id)).toEqual([...REAL_WORLD_LEGACY_TENANT_IDS].sort());
+			expect(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('project_migrations', '__drizzle_migrations')`).all()).toEqual([]);
+			const migratedProjectTitles = db
+				.prepare(`SELECT title FROM entities WHERE tenant_id = ? AND kind = 'project' AND title != 'Default Project' ORDER BY title`)
+				.all(wellKnownTenantId) as Array<{ title: string }>;
+			expect(migratedProjectTitles.map((row) => row.title)).toEqual([
+				"Agent Issues",
+				"Content Hub",
+				"Eye Share Devops Net",
+				"Weave"
+			]);
 
 			// Exactly one freshly-minted project per real legacy tenant, plus the
 			// well-known tenant's own PROJ0 sentinel - no ghost project should be
@@ -310,7 +350,19 @@ describe("fresh install schema parity", () => {
 				{ id: "0016-context-term-revision-delta" },
 				{ id: "0017-entity-restoration-source" },
 				{ id: "0018-context-restoration-source" },
-				{ id: "0019-context-revision-baselines" }
+				{ id: "0019-context-revision-baselines" },
+				{ id: "0020-compact-reverse-field-patches" },
+				{ id: "0021-revision-patch-ledger" },
+				{ id: "0022-binary-revision-patch-hashes" },
+				{ id: "0023-context-term-stable-ids" },
+				{ id: "0024-entity-stable-identities" },
+				{ id: "0025-correct-stable-identity-storage" },
+				{ id: "0026-remove-entity-aliases" },
+				{ id: "0027-remove-drizzle-ledger" },
+				{ id: "0028-rename-revision-entries" },
+				{ id: "0029-remove-history-entries" },
+				{ id: "0030-remove-project-migration-ledgers" },
+				{ id: "0031-remove-metadata" }
 			]);
 		} finally {
 			db2.close();
@@ -392,19 +444,19 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
-			const entities = db2.prepare(`SELECT tenant_id, id, kind, body, body_source FROM entities ORDER BY id`).all();
+			const entities = db2.prepare(`SELECT tenant_id, id, reference, kind, body, body_source FROM entities ORDER BY id`).all();
 			expect(entities).toEqual([
-				{ tenant_id: "legacy", id: "EPIC0", kind: "epic", body: "", body_source: "generated" },
-				{ tenant_id: "legacy", id: "INIT1", kind: "initiative", body: "", body_source: "authored" },
-				{ tenant_id: "legacy", id: "ISS1", kind: "issue", body: "", body_source: "authored" },
-				{ tenant_id: "legacy", id: "PROJ0", kind: "project", body: "", body_source: "generated" }
+				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("epic", "EPIC0").stableId, reference: deriveMigratedEntityIdentity("epic", "EPIC0").reference, kind: "epic", body: "", body_source: "generated" },
+				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("initiative", "INIT1").stableId, reference: deriveMigratedEntityIdentity("initiative", "INIT1").reference, kind: "initiative", body: "", body_source: "authored" },
+				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("project", "PROJ0").stableId, reference: deriveMigratedEntityIdentity("project", "PROJ0").reference, kind: "project", body: "", body_source: "generated" },
+				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("issue", "ISS1").stableId, reference: deriveMigratedEntityIdentity("issue", "ISS1").reference, kind: "issue", body: "", body_source: "authored" }
 			]);
 
 			const relations = db2.prepare(`SELECT tenant_id, from_id, to_id, type FROM relations ORDER BY from_id, to_id`).all();
 			expect(relations).toEqual([
-				{ tenant_id: "legacy", from_id: "EPIC0", to_id: "INIT1", type: "contains" },
-				{ tenant_id: "legacy", from_id: "INIT1", to_id: "ISS1", type: "tracks" },
-				{ tenant_id: "legacy", from_id: "PROJ0", to_id: "EPIC0", type: "contains" }
+				{ tenant_id: "legacy", from_id: deriveMigratedEntityIdentity("epic", "EPIC0").stableId, to_id: deriveMigratedEntityIdentity("initiative", "INIT1").stableId, type: "contains" },
+				{ tenant_id: "legacy", from_id: deriveMigratedEntityIdentity("initiative", "INIT1").stableId, to_id: deriveMigratedEntityIdentity("issue", "ISS1").stableId, type: "tracks" },
+				{ tenant_id: "legacy", from_id: deriveMigratedEntityIdentity("project", "PROJ0").stableId, to_id: deriveMigratedEntityIdentity("epic", "EPIC0").stableId, type: "contains" }
 			]);
 
 			const terms = db2.prepare(`SELECT tenant_id, context_key, term FROM context_terms`).all();
@@ -425,7 +477,19 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 				{ id: "0016-context-term-revision-delta" },
 				{ id: "0017-entity-restoration-source" },
 				{ id: "0018-context-restoration-source" },
-				{ id: "0019-context-revision-baselines" }
+				{ id: "0019-context-revision-baselines" },
+				{ id: "0020-compact-reverse-field-patches" },
+				{ id: "0021-revision-patch-ledger" },
+				{ id: "0022-binary-revision-patch-hashes" },
+				{ id: "0023-context-term-stable-ids" },
+				{ id: "0024-entity-stable-identities" },
+				{ id: "0025-correct-stable-identity-storage" },
+				{ id: "0026-remove-entity-aliases" },
+				{ id: "0027-remove-drizzle-ledger" },
+				{ id: "0028-rename-revision-entries" },
+				{ id: "0029-remove-history-entries" },
+				{ id: "0030-remove-project-migration-ledgers" },
+				{ id: "0031-remove-metadata" }
 			]);
 
 			const legacyTables = db2

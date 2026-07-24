@@ -102,7 +102,7 @@ agent-issues relations ISS1
 agent-issues orphans
 agent-issues link ISS1 fixes US1
 agent-issues unlink ISS1 fixes US1
-agent-issues show INIT1 --json
+agent-issues show INIT1 --view full --json
 agent-issues list issue
 agent-issues auth login --tenant-id <entra-tenant-guid> --client-id <entra-app-client-guid>
 agent-issues auth status
@@ -125,8 +125,10 @@ agent-issues auth logout
 ## Output
 
 - Default output is human-readable text.
-- Use `--json` for compact machine-readable skill-friendly output.
+- Use `--json` for compact machine-readable output. Entity lists return `{ items, total }`, and mutation acknowledgements are compact.
+- Add `--view full` when an entity command must return complete records or authored body content.
 - Add `--pretty` with `--json` when you want indented JSON.
+- Human-readable output is unchanged by the JSON response-shape change. See [release notes](docs/release-notes.md) for migration details.
 
 ## Tenant management
 

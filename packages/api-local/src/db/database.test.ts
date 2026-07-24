@@ -42,6 +42,20 @@ afterEach(() => {
 });
 
 describe("tenant resolution", () => {
+	it("opens a database without legacy history or project migration ledgers", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-history-removal-"));
+		tempDirs.push(tempDir);
+
+		const { db } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+		try {
+			expect(
+				db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('history_entries', 'project_migrations', '__drizzle_migrations')").all()
+			).toEqual([]);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("defaults to the well-known local tenant regardless of the workspace root path (ISS63)", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-tenant-"));
 		tempDirs.push(tempDir);
@@ -58,6 +72,73 @@ describe("tenant resolution", () => {
 
 	it("uses an explicit tenant when provided", async () => {
 		expect(resolveTenantSlug({ tenant: " Payments Sandbox " })).toBe("payments-sandbox");
+	});
+
+	it("resolves a canonical project reference passed as projectIdentity", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-project-identity-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+		const seeded = await ensureDatabase(dbPath, { tenant: "test" });
+		const project = createEntity(seeded.executor, { kind: "project", title: "Project A" });
+		seeded.db.close();
+
+		const selected = await ensureDatabase(dbPath, { tenant: "test", projectIdentity: project.reference });
+		try {
+			expect(selected.db.currentProjectId).toBe(project.id);
+		} finally {
+			selected.db.close();
+		}
+	});
+
+	it("resolves a normalized exact project title and rejects ambiguous matches", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-project-title-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+		const seeded = await ensureDatabase(dbPath, { tenant: "test" });
+		const project = createEntity(seeded.executor, { kind: "project", title: "Project A" });
+		seeded.db.close();
+
+		const selected = await ensureDatabase(dbPath, { tenant: "test", projectIdentity: "project-a" });
+		expect(selected.db.currentProjectId).toBe(project.id);
+		createEntity(selected.executor, { kind: "project", title: "project_a" });
+		selected.db.close();
+
+		await expect(ensureDatabase(dbPath, { tenant: "test", projectIdentity: "project-a" })).rejects.toThrow(/ambiguous project identity/i);
+	});
+
+	it("ignores tombstoned projects when resolving an explicit identity", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-project-tombstone-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+		const seeded = await ensureDatabase(dbPath, { tenant: "test" });
+		const project = createEntity(seeded.executor, { kind: "project", title: "Project A" });
+		const duplicate = createEntity(seeded.executor, { kind: "project", title: "project_a" });
+		seeded.db.prepare("UPDATE entities SET tombstone = 1 WHERE id = ?").run(duplicate.id);
+		seeded.db.close();
+
+		const selected = await ensureDatabase(dbPath, { tenant: "test", projectIdentity: "project-a" });
+		try {
+			expect(selected.db.currentProjectId).toBe(project.id);
+		} finally {
+			selected.db.close();
+		}
+	});
+
+	it("requires a resolvable identity when multiple live projects exist", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-project-required-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+		const soleProject = await ensureDatabase(dbPath, { tenant: "test" });
+		const soleProjectId = soleProject.db.currentProjectId;
+		soleProject.db.close();
+
+		const reopened = await ensureDatabase(dbPath, { tenant: "test" });
+		expect(reopened.db.currentProjectId).toBe(soleProjectId);
+		createEntity(reopened.executor, { kind: "project", title: "Project B" });
+		reopened.db.close();
+
+		await expect(ensureDatabase(dbPath, { tenant: "test" })).rejects.toThrow(/project identity is required/i);
+		await expect(ensureDatabase(dbPath, { tenant: "test", projectIdentity: "missing" })).rejects.toThrow(/cannot resolve project identity/i);
 	});
 
 	it("derives the legacy per-workspace tenant from the workspace root path (pre-ISS63 formula, kept for migration lookups)", async () => {
@@ -201,21 +282,21 @@ describe("tenant resolution", () => {
 					(SELECT COUNT(*) FROM relations WHERE tenant_id = 'source-team') AS relations,
 					(SELECT COUNT(*) FROM contexts WHERE tenant_id = 'source-team') AS contexts,
 					(SELECT COUNT(*) FROM context_terms WHERE tenant_id = 'source-team') AS context_terms,
-					(SELECT COUNT(*) FROM history_entries WHERE tenant_id = 'source-team') AS history_entries`
+					(SELECT COUNT(*) FROM revision_entries WHERE tenant_id = 'source-team') AS revision_entries`
 			).get() as {
 				counters: number;
 				entities: number;
 				relations: number;
 				contexts: number;
 				context_terms: number;
-				history_entries: number;
+				revision_entries: number;
 			};
 			expect(sourceCounts).toEqual({
 				context_terms: 0,
 				contexts: 0,
 				counters: 0,
 				entities: 0,
-				history_entries: 0,
+				revision_entries: 0,
 				relations: 0
 			});
 

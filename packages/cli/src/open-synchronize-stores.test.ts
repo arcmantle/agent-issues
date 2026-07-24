@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -37,6 +37,7 @@ describe("openSynchronizeStores (ISS59/ADR13, ADR18)", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
 	let projectDirectory: string;
+	let projectRoot: string;
 	let credentialStoreOptions: ReturnType<typeof fakeCredentialStore>;
 
 	beforeEach(() => {
@@ -48,14 +49,16 @@ describe("openSynchronizeStores (ISS59/ADR13, ADR18)", () => {
 		// developer's real ~/.agent-issues/agent-issues.db.
 		originalHome = process.env.HOME;
 		process.env.HOME = homeDirectory;
-		projectDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-sync-stores-project-"));
+		projectRoot = mkdtempSync(path.join(tmpdir(), "agent-issues-open-sync-stores-project-"));
+		projectDirectory = path.join(projectRoot, "default-project");
+		mkdirSync(projectDirectory);
 		credentialStoreOptions = fakeCredentialStore();
 	});
 
 	afterEach(() => {
 		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { recursive: true, force: true });
-		rmSync(projectDirectory, { recursive: true, force: true });
+		rmSync(projectRoot, { recursive: true, force: true });
 	});
 
 	it("opens a local SqliteStore and a cloud HttpStore simultaneously when bound and a valid session is cached", async () => {

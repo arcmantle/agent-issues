@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Pool } from "pg";
+import { encodeContextRecordKey, encodeContextTermRecordKey } from "@agent-issues/core";
 
 import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
 import { PgStore } from "../../pg-store.js";
-import { contextDeltaEntries, contextTermDeltaEntries } from "../../schema.js";
+import { contexts, contextTerms, revisionEntries } from "../../schema.js";
 
 const ADMIN_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";
@@ -48,7 +49,37 @@ describe("context and glossary", () => {
 		expect(updated.context.scopeEntityId).toBe(initiative.id);
 	});
 
-	it("stores ordered context reverse deltas with predecessor facts and attribution", async () => {
+	it("updates initiative contexts that retain a legacy key", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const initiative = await store.createEntity({ kind: "initiative", title: "Net Migration" });
+		const created = await store.upsertContext({
+			scopeRef: initiative.reference,
+			title: "Net Migration Context",
+			summary: "Original summary."
+		});
+		await withTenantTransaction(appPool, store.tenantId, async (client) => {
+			await client.update(contexts)
+				.set({ key: "INIT15" })
+				.where(and(eq(contexts.tenantId, store.tenantId), eq(contexts.scopeEntityId, initiative.id)));
+		});
+
+		const updated = await store.upsertContext({
+			scopeRef: initiative.reference,
+			title: "Migrate eye-share-devops to .NET 10 (Photino) Context",
+			summary: "Glossary for backend parity ports and migration-specific behavior.",
+			expectedRevision: created.context.revision,
+			expectedContentHash: created.context.contentHash
+		});
+
+		expect(updated.context).toMatchObject({
+			key: "INIT15",
+			scopeEntityId: initiative.id,
+			title: "Migrate eye-share-devops to .NET 10 (Photino) Context",
+			revision: 2
+		});
+	});
+
+	it("stores ordered context reverse patches that materialize predecessor facts and attribution", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const created = await store.upsertContext({ title: "Initial", summary: "First", author: "alice" });
 		await store.upsertContext({
@@ -59,15 +90,18 @@ describe("context and glossary", () => {
 			expectedContentHash: created.context.contentHash
 		});
 
-		const deltas = await withTenantTransaction(appPool, store.tenantId, (client) =>
-			client.select().from(contextDeltaEntries)
-				.where(and(eq(contextDeltaEntries.tenantId, store.tenantId), eq(contextDeltaEntries.contextKey, created.context.key)))
-				.orderBy(contextDeltaEntries.revision)
-		);
+		const deltas = await withTenantTransaction(appPool, store.tenantId, async (client) => {
+			const [context] = await client.select({ id: contexts.id }).from(contexts).where(and(eq(contexts.tenantId, store.tenantId), eq(contexts.key, created.context.key)));
+			return client.select().from(revisionEntries)
+				.where(and(eq(revisionEntries.tenantId, store.tenantId), eq(revisionEntries.recordKind, "context"), eq(revisionEntries.recordKey, encodeContextRecordKey(context!.id))))
+				.orderBy(revisionEntries.revision)
+		});
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "alice", priorTitle: "Initial", priorSummary: "First", createdAt: expect.any(String) }),
-			expect.objectContaining({ revision: 2, author: "bob", priorTitle: "Initial", priorSummary: "First", createdAt: expect.any(String) })
+			expect.objectContaining({ revision: 1, author: "alice", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer), createdAt: expect.any(String) }),
+			expect.objectContaining({ revision: 2, author: "bob", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer), createdAt: expect.any(String) })
 		]);
+		expect(deltas[0]?.reversePatch.byteLength).toBe(0);
+		await expect(store.materializeContextRevision({ revision: 1 })).resolves.toMatchObject({ title: "Initial", summary: "First", author: "alice" });
 	});
 
 	it("defines a context term, auto-creating the context, and reports created vs. updated", async () => {
@@ -92,19 +126,24 @@ describe("context and glossary", () => {
 			expectedRevision: created.term.revision,
 			expectedContentHash: created.term.contentHash
 		});
+		expect(created.term.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(created.term.reference).toMatch(/^TERM_[0-9A-HJKMNP-TV-Z]{26}$/);
+		expect(updated.term.id).toBe(created.term.id);
 		expect(updated.created).toBe(false);
 		expect(updated.term.definition).toBe("Updated definition.");
 		expect(updated.term.avoid).toEqual(["seam", "duplicate"]);
 
-		const deltas = await withTenantTransaction(appPool, store.tenantId, (client) =>
-			client.select().from(contextTermDeltaEntries)
-				.where(and(eq(contextTermDeltaEntries.tenantId, store.tenantId), eq(contextTermDeltaEntries.term, "storage-driver seam")))
-				.orderBy(contextTermDeltaEntries.revision)
-		);
+		const deltas = await withTenantTransaction(appPool, store.tenantId, async (client) => {
+			const [term] = await client.select({ stableId: contextTerms.id }).from(contextTerms).where(and(eq(contextTerms.tenantId, store.tenantId), eq(contextTerms.contextKey, created.context.key), eq(contextTerms.term, created.term.term)));
+			return client.select().from(revisionEntries)
+				.where(and(eq(revisionEntries.tenantId, store.tenantId), eq(revisionEntries.recordKind, "context-term"), eq(revisionEntries.recordKey, encodeContextTermRecordKey(term!.stableId))))
+				.orderBy(revisionEntries.revision)
+		});
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "system", priorDefinition: created.term.definition, priorTombstone: false }),
-			expect.objectContaining({ revision: 2, author: "bob", priorDefinition: created.term.definition, priorTombstone: false })
+			expect.objectContaining({ revision: 1, author: "system", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 2, author: "bob", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
 		]);
+		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "storage-driver seam", revision: 1 })).resolves.toMatchObject({ definition: created.term.definition, tombstone: false, author: "system" });
 	});
 
 	it("rejects an empty term or definition", async () => {
@@ -140,15 +179,17 @@ describe("context and glossary", () => {
 		});
 		expect(forgottenAgain.removed).toBe(false);
 
-		const deltas = await withTenantTransaction(appPool, store.tenantId, (client) =>
-			client.select().from(contextTermDeltaEntries)
-				.where(and(eq(contextTermDeltaEntries.tenantId, store.tenantId), eq(contextTermDeltaEntries.term, "Settlement")))
-				.orderBy(contextTermDeltaEntries.revision)
-		);
+		const deltas = await withTenantTransaction(appPool, store.tenantId, async (client) => {
+			const [term] = await client.select({ stableId: contextTerms.id }).from(contextTerms).where(and(eq(contextTerms.tenantId, store.tenantId), eq(contextTerms.contextKey, created.context.key), eq(contextTerms.term, created.term.term)));
+			return client.select().from(revisionEntries)
+				.where(and(eq(revisionEntries.tenantId, store.tenantId), eq(revisionEntries.recordKind, "context-term"), eq(revisionEntries.recordKey, encodeContextTermRecordKey(term!.stableId))))
+				.orderBy(revisionEntries.revision)
+		});
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, priorTombstone: false }),
-			expect.objectContaining({ revision: 2, author: "alice", priorDefinition: "Captured funds.", priorTombstone: false })
+			expect.objectContaining({ revision: 1, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 2, author: "alice", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
 		]);
+		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "Settlement", revision: 1 })).resolves.toMatchObject({ definition: "Captured funds.", tombstone: false });
 	});
 
 	it("resolves a non-initiative scopeRef to its owning initiative's context", async () => {

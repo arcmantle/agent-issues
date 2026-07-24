@@ -1,4 +1,5 @@
 import { materializeRevisionChain } from "../entity-store/materialize-revision-chain.js";
+import { applyReverseFieldPatch, CONTEXT_REVERSE_PATCH_REGISTRY, CONTEXT_TERM_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
 import {
 	ContextRevisionError,
 	type ContextRevisionPatch,
@@ -19,7 +20,7 @@ export function materializeContextFromPatches(
 		headCreatedAt: head.createdAt,
 		patches,
 		targetRevision,
-		applyReversePatch: (_state, patch) => ({ title: patch.priorTitle, summary: patch.priorSummary }),
+		applyReversePatch: (state, patch) => applyReverseFieldPatch(state, patch, CONTEXT_REVERSE_PATCH_REGISTRY),
 		createError: (message, headRevision) => new ContextRevisionError(
 			head.key,
 			message.startsWith("Broken") ? "broken-chain" : "revision-out-of-range",
@@ -40,22 +41,18 @@ export function materializeContextFromPatches(
 }
 
 export function materializeContextTermFromPatches(
-	head: { contextKey: string; term: string; definition: string; avoid: string[]; tombstone: boolean; revision: number; createdAt: string },
+	head: { id: string; contextKey: string; term: string; definition: string; avoid: string[]; tombstone: boolean; revision: number; createdAt: string },
 	patches: ContextTermRevisionPatch[],
 	targetRevision: number
 ): MaterializedContextTermRevision {
 	const materialized = materializeRevisionChain({
 		recordLabel: `context term ${head.term} in ${head.contextKey}`,
-		headState: { definition: head.definition, avoid: head.avoid, tombstone: head.tombstone },
+		headState: { term: head.term, definition: head.definition, avoid: head.avoid, tombstone: head.tombstone },
 		headRevision: head.revision,
 		headCreatedAt: head.createdAt,
 		patches,
 		targetRevision,
-		applyReversePatch: (_state, patch) => ({
-			definition: patch.priorDefinition,
-			avoid: patch.priorAvoid,
-			tombstone: patch.priorTombstone
-		}),
+		applyReversePatch: (state, patch) => applyReverseFieldPatch(state, patch, CONTEXT_TERM_REVERSE_PATCH_REGISTRY),
 		createError: (message, headRevision) => new ContextRevisionError(
 			head.contextKey,
 			message.startsWith("Broken") ? "broken-chain" : "revision-out-of-range",
@@ -66,8 +63,8 @@ export function materializeContextTermFromPatches(
 	});
 
 	return {
+		id: head.id,
 		contextKey: head.contextKey,
-		term: head.term,
 		targetRevision,
 		headRevision: head.revision,
 		...materialized.state,

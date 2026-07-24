@@ -12,6 +12,7 @@ const SKILL_NAMES = [
 	"ai-grill-with-docs",
 	"ai-handoff",
 	"ai-migrate-docs",
+	"ai-next-work",
 	"ai-plan",
 	"ai-start-work",
 	"ai-tdd",

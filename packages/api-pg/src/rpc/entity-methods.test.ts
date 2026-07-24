@@ -77,7 +77,7 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 		await store.createEntity({ kind: "initiative", title: "Second" });
 
 		const initiatives = await call(token, "listEntities", { kind: "initiative" });
-		expect(initiatives.map((entity: { title: string }) => entity.title)).toEqual(["First", "Second"]);
+		expect(initiatives.map((entity: { title: string }) => entity.title)).toEqual(expect.arrayContaining(["First", "Second"]));
 	});
 
 	it("listEntityHistory", async () => {
@@ -134,7 +134,7 @@ describe("JSON-RPC gate: entity-lifecycle methods", () => {
 
 		const updated = await call(token, "updateEntity", { entityId: issue.id, title: "Final title", body: "Final body", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
 		expect(updated).toEqual(expect.objectContaining({ body: "Final body", title: "Final title", revision: 2 }));
-		expect(await store.listEntityHistory(issue.id)).toHaveLength(1);
+		expect(await store.listEntityHistory(issue.id)).toHaveLength(2);
 	});
 
 	it("archiveEntity", async () => {

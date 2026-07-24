@@ -31,7 +31,7 @@ Follow the shared [language standard](./agent-issues-language.md).
 3. Keep the plan and edits scoped to the issue's stated outcome, dependencies, and terminology.
 4. Before the first edit, identify one local hypothesis and one cheap discriminating check.
 5. After the first substantive edit, run the narrowest available validation for the touched slice before widening scope.
-6. After the implementation and its focused validation are complete, launch two independent read-only review subagents in parallel: one for behavior and contract coverage, and one for code and regression risks. Fix valid material findings and rerun focused validation before marking the issue done.
+6. After the implementation and its focused validation are complete, launch one independent read-only review subagent covering behavior and contract coverage plus code and regression risks. Fix valid material findings and rerun focused validation before marking the issue done.
 
 ## Constraints
 

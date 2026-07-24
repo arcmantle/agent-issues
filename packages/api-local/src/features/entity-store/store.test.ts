@@ -3,9 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { deriveMigratedEntityIdentity } from "@agent-issues/core";
 import { ensureDatabase } from "../../db/database.js";
 import type { SqliteExecutor } from "../../db/sqlite-executor.js";
 import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
+
+const CANONICAL_ID_SUFFIX = "_[0-7][0-9A-HJKMNP-TV-Z]{25}";
+const DEFAULT_PROJECT_STABLE_ID = deriveMigratedEntityIdentity("project", "PROJ0").stableId;
+const DEFAULT_EPIC_STABLE_ID = deriveMigratedEntityIdentity("epic", "EPIC0").stableId;
 
 function statusOf(db: SqliteExecutor, entityId: string): string {
 	return getEntityDetails(db, entityId).entity.status;
@@ -158,7 +163,7 @@ describe("handoff graph entities", () => {
 			links: [{ relationType: "handsOff", targetId: focus.id }]
 		});
 
-		expect(handoff.id).toMatch(/^HO\d+$/);
+		expect(handoff.reference).toMatch(new RegExp(`^HO${CANONICAL_ID_SUFFIX}$`));
 		expect(listEntities(db, "handoff")).toEqual([expect.objectContaining({ id: handoff.id })]);
 		expect(getEntityDetails(db, handoff.id).outgoing).toEqual([
 			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: focus.id }) })
@@ -542,7 +547,7 @@ describe("derived issue status from sub-issues", () => {
 
 		expect(bundle.issues.map((issue) => issue.id)).toEqual([parentIssue.id, ...subIssues.map((issue) => issue.id)].sort());
 		expect(bundle.subIssueLinks).toEqual(
-			subIssues.map((issue) => ({
+			subIssues.toSorted((left, right) => left.id.localeCompare(right.id)).map((issue) => ({
 				parent: expect.objectContaining({ id: parentIssue.id }),
 				issue: expect.objectContaining({ id: issue.id })
 			}))
@@ -557,13 +562,15 @@ describe("project and epic tiers", () => {
 
 		const initiativeDetails = getEntityDetails(db, initiative.id);
 		const epicParent = initiativeDetails.incoming.find((entry) => entry.relationType === "contains");
-		expect(epicParent?.entity.id).toBe("EPIC0");
+		expect(epicParent?.entity.reference).toMatch(new RegExp(`^EPIC${CANONICAL_ID_SUFFIX}$`));
 		expect(epicParent?.entity.kind).toBe("epic");
 
-		const epicDetails = getEntityDetails(db, "EPIC0");
+		const epicDetails = getEntityDetails(db, DEFAULT_EPIC_STABLE_ID);
+		expect(epicDetails.entity.id).toBe(epicParent?.entity.id);
 		const projectParent = epicDetails.incoming.find((entry) => entry.relationType === "contains");
-		expect(projectParent?.entity.id).toBe("PROJ0");
+		expect(projectParent?.entity.reference).toMatch(new RegExp(`^PROJ${CANONICAL_ID_SUFFIX}$`));
 		expect(projectParent?.entity.kind).toBe("project");
+		expect(getEntityDetails(db, DEFAULT_PROJECT_STABLE_ID).entity.id).toBe(projectParent?.entity.id);
 	});
 
 	it("creates an explicit project -> epic -> initiative chain through the generic create path", async () => {
@@ -585,8 +592,8 @@ describe("project and epic tiers", () => {
 
 	it("moves an initiative from one epic to another", async () => {
 		const db = await openTestDatabase();
-		const sourceEpic = createEntity(db, { kind: "epic", title: "Source epic", parentId: "PROJ0" });
-		const targetEpic = createEntity(db, { kind: "epic", title: "Target epic", parentId: "PROJ0" });
+		const sourceEpic = createEntity(db, { kind: "epic", title: "Source epic", parentId: DEFAULT_PROJECT_STABLE_ID });
+		const targetEpic = createEntity(db, { kind: "epic", title: "Target epic", parentId: DEFAULT_PROJECT_STABLE_ID });
 		const initiative = createEntity(db, { kind: "initiative", title: "Nomadic initiative", parentId: sourceEpic.id });
 
 		const result = moveEntity(db, { entityId: initiative.id, newParentId: targetEpic.id });
@@ -602,24 +609,26 @@ describe("project and epic tiers", () => {
 	it("blocks unlinking an initiative's sole remaining epic parent", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Anchored initiative" });
+		const canonicalEpicId = getEntityDetails(db, DEFAULT_EPIC_STABLE_ID).entity.id;
 
-		expect(() => unlinkEntities(db, { fromId: "EPIC0", toId: initiative.id, relationType: "contains" })).toThrow(
+		expect(() => unlinkEntities(db, { fromId: DEFAULT_EPIC_STABLE_ID, toId: initiative.id, relationType: "contains" })).toThrow(
 			/only remaining structural parent/
 		);
 
 		const details = getEntityDetails(db, initiative.id);
-		expect(details.incoming.some((entry) => entry.relationType === "contains" && entry.entity.id === "EPIC0")).toBe(true);
+		expect(details.incoming.some((entry) => entry.relationType === "contains" && entry.entity.id === canonicalEpicId)).toBe(true);
 	});
 
 	it("blocks unlinking an epic's sole remaining project parent", async () => {
 		const db = await openTestDatabase();
+		const canonicalProjectId = getEntityDetails(db, DEFAULT_PROJECT_STABLE_ID).entity.id;
 
-		expect(() => unlinkEntities(db, { fromId: "PROJ0", toId: "EPIC0", relationType: "contains" })).toThrow(
+		expect(() => unlinkEntities(db, { fromId: DEFAULT_PROJECT_STABLE_ID, toId: DEFAULT_EPIC_STABLE_ID, relationType: "contains" })).toThrow(
 			/only remaining structural parent/
 		);
 
-		const details = getEntityDetails(db, "EPIC0");
-		expect(details.incoming.some((entry) => entry.relationType === "contains" && entry.entity.id === "PROJ0")).toBe(true);
+		const details = getEntityDetails(db, DEFAULT_EPIC_STABLE_ID);
+		expect(details.incoming.some((entry) => entry.relationType === "contains" && entry.entity.id === canonicalProjectId)).toBe(true);
 	});
 
 	it("never lists the default project or epic as orphans", async () => {
@@ -636,7 +645,7 @@ describe("version as first-class entity", () => {
 		const db = await openTestDatabase();
 		const version = createEntity(db, { kind: "version", title: "2.0" });
 
-		expect(version.id).toMatch(/^VER\d+$/);
+		expect(version.reference).toMatch(new RegExp(`^VER${CANONICAL_ID_SUFFIX}$`));
 		expect(version.kind).toBe("version");
 		expect(version.status).toBe("draft");
 	});
@@ -719,13 +728,14 @@ describe("canonical revision history", () => {
 	it("materializes revision 1 from a newly created canonical head", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Payments" });
+		const canonicalEpicId = getEntityDetails(db, DEFAULT_EPIC_STABLE_ID).entity.id;
 
 		expect(materializeEntityRevision(db, { entityId: initiative.id, revision: 1 })).toMatchObject({
 			targetRevision: 1,
 			author: "system",
 			title: "Payments",
 			status: "draft",
-			parentId: "EPIC0"
+			parentId: canonicalEpicId
 		});
 	});
 
@@ -751,24 +761,26 @@ describe("canonical revision history", () => {
 		});
 	});
 
-	it("appends a new history version when an entity's body changes", async () => {
+	it("appends a compact reverse patch when an entity's body changes", async () => {
 		const db = await openTestDatabase();
 		const issue = createEntity(db, { kind: "issue", title: "Fix bug" });
 
 		setEntityBody(db, { entityId: issue.id, body: "Repro steps here.", author: "kris", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
-
 		const delta = db.db.prepare(`
-			SELECT revision, author, prior_title, prior_body, prior_body_source
-			FROM entity_delta_entries
-			WHERE tenant_id = ? AND entity_id = ?
-		`).get(db.tenantId, issue.id);
-		expect(delta).toEqual({
+			SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash
+			FROM revision_entries
+			WHERE tenant_id = ? AND project_id = ? AND record_kind = 'entity' AND record_key = ? AND revision = 2
+		`).get(db.tenantId, db.currentProjectId, `${Buffer.byteLength(issue.id, "utf8")}:${issue.id}`) as { revision: number; author: string; patch_format: number; patch_bytes: number; source_hash: Buffer; target_hash: Buffer };
+		expect(delta).toEqual(expect.objectContaining({
 			revision: 2,
 			author: "kris",
-			prior_title: "Fix bug",
-			prior_body: "",
-			prior_body_source: "authored"
-		});
+			patch_format: 1,
+			patch_bytes: expect.any(Number),
+			source_hash: expect.any(Buffer),
+			target_hash: expect.any(Buffer)
+		}));
+		expect(delta.patch_bytes).toBeGreaterThan(0);
+		expect(materializeEntityRevision(db, { entityId: issue.id, revision: 1 })).toMatchObject({ title: "Fix bug", body: "", bodySource: "authored" });
 	});
 
 	it("appends a move revision that materializes its predecessor, but not on a no-op move", async () => {

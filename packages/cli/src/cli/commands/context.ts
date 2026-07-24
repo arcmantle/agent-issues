@@ -10,12 +10,18 @@ import {
 	renderContextTermResult,
 	toContextSearchTermsOnly
 } from "../../context-cli.js";
+import {
+	toCompactContextDefineAcknowledgement,
+	toCompactContextForgetAcknowledgement,
+	toCompactContextSetAcknowledgement
+} from "../../entity-projection.js";
 
 import {
 	CONTEXT_SUBCOMMANDS,
 	TenantCommand,
 	parseContextView,
 	parseCsvOption,
+	parseEntityView,
 	requireOption,
 	requirePositional,
 	withStore
@@ -35,13 +41,20 @@ export class ContextCommand extends TenantCommand {
 	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
+		const firstPositional = this.positionals[0];
+		const subcommand = !firstPositional || CONTEXT_SUBCOMMANDS.has(firstPositional) ? firstPositional ?? "show" : "show";
+		const isMutation = subcommand === "set" || subcommand === "define" || subcommand === "forget";
+		if (!isMutation && (this.view === "compact" || this.view === "full")) {
+			throw new Error(`--view ${this.view} is only valid for context set, define, and forget.`);
+		}
+		const mutationView = isMutation
+			? parseEntityView(this.view)
+			: undefined;
+		const contextView = mutationView === undefined ? parseContextView(this.view) : "all";
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
-			const firstPositional = this.positionals[0];
-			const subcommand = !firstPositional || CONTEXT_SUBCOMMANDS.has(firstPositional) ? firstPositional ?? "show" : "show";
 			const showScopeRef = subcommand === "show"
 				? this.scope ?? (firstPositional && !CONTEXT_SUBCOMMANDS.has(firstPositional) ? firstPositional : this.positionals[1])
 				: this.scope;
-			const contextView = parseContextView(this.view);
 
 			if (subcommand === "list") {
 				const result = await store.listContexts();
@@ -108,7 +121,7 @@ export class ContextCommand extends TenantCommand {
 					})
 				});
 
-				this.print(result, renderContextDetails(result));
+				this.print(this.asJson && mutationView === "compact" ? toCompactContextSetAcknowledgement(result) : result, renderContextDetails(result));
 				return 0;
 			}
 
@@ -140,7 +153,7 @@ export class ContextCommand extends TenantCommand {
 					});
 				}
 
-				this.print(result, renderContextTermResult(result));
+				this.print(this.asJson && mutationView === "compact" ? toCompactContextDefineAcknowledgement(result) : result, renderContextTermResult(result));
 				return 0;
 			}
 
@@ -166,7 +179,7 @@ export class ContextCommand extends TenantCommand {
 					});
 				}
 
-				this.print(result, renderContextForgetResult(result));
+				this.print(this.asJson && mutationView === "compact" ? toCompactContextForgetAcknowledgement(result) : result, renderContextForgetResult(result));
 				return 0;
 			}
 

@@ -48,7 +48,7 @@ export type CreateJsonRpcAppOptions = {
 	 * `(identity, projectIdentity) => new PgStore(pool, identity.tenantId, projectIdentity)`;
 	 * the local daemon supplies a `SqliteStore`-opening equivalent instead
 	 * (using `workspaceRoot`, since local mode resolves project scope from the
-	 * client workspace's on-disk `project_migrations` mapping) - the gate itself never branches on which backend it's
+	 * client workspace's resolved project identity) - the gate itself never branches on which backend it's
 	 * fronting.
 	 */
 	createStore: (identity: AuthIdentity, projectIdentity?: string, workspaceRoot?: string) => StorageDriver | Promise<StorageDriver>;

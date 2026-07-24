@@ -5,23 +5,25 @@ import {
 	materializeContextTermFromPatches
 } from "./materialize-context-revision.js";
 import type { ContextRevisionPatch, ContextTermRevisionPatch } from "./context-types.js";
+import { CONTEXT_REVERSE_PATCH_REGISTRY, CONTEXT_TERM_REVERSE_PATCH_REGISTRY, createReverseFieldPatch } from "../reverse-field-patch/reverse-field-patch.js";
 
 describe("context revision materialization", () => {
 	it("materializes context revisions newest-first", () => {
+		const first = { title: "First", summary: "First summary." };
+		const second = { title: "Second", summary: "Second summary." };
+		const third = { title: "Third", summary: "Third summary." };
 		const patches: ContextRevisionPatch[] = [
 			{
 				revision: 3,
 				author: "carol",
 				createdAt: "2026-01-03T00:00:00.000Z",
-				priorTitle: "Second",
-				priorSummary: "Second summary."
+				...createReverseFieldPatch(third, second, CONTEXT_REVERSE_PATCH_REGISTRY)
 			},
 			{
 				revision: 2,
 				author: "bob",
 				createdAt: "2026-01-02T00:00:00.000Z",
-				priorTitle: "First",
-				priorSummary: "First summary."
+				...createReverseFieldPatch(second, first, CONTEXT_REVERSE_PATCH_REGISTRY)
 			}
 		];
 
@@ -48,29 +50,29 @@ describe("context revision materialization", () => {
 	});
 
 	it("materializes a term before its tombstone", () => {
+		const first = { term: "Order", definition: "First definition.", avoid: [], tombstone: false };
+		const second = { term: "Purchase", definition: "Second definition.", avoid: ["second"], tombstone: false };
+		const third = { term: "Purchase", definition: "Second definition.", avoid: ["second"], tombstone: true };
 		const patches: ContextTermRevisionPatch[] = [
 			{
 				revision: 3,
 				author: "carol",
 				createdAt: "2026-01-03T00:00:00.000Z",
-				priorDefinition: "Second definition.",
-				priorAvoid: ["second"],
-				priorTombstone: false
+				...createReverseFieldPatch(third, second, CONTEXT_TERM_REVERSE_PATCH_REGISTRY)
 			},
 			{
 				revision: 2,
 				author: "bob",
 				createdAt: "2026-01-02T00:00:00.000Z",
-				priorDefinition: "First definition.",
-				priorAvoid: [],
-				priorTombstone: false
+				...createReverseFieldPatch(second, first, CONTEXT_TERM_REVERSE_PATCH_REGISTRY)
 			}
 		];
 
 		expect(materializeContextTermFromPatches(
 			{
+				id: "018f0000-0000-4000-8000-000000000001",
 				contextKey: "default",
-				term: "Order",
+				term: "Purchase",
 				definition: "Second definition.",
 				avoid: ["second"],
 				tombstone: true,
@@ -80,6 +82,7 @@ describe("context revision materialization", () => {
 			patches,
 			1
 		)).toEqual({
+			id: "018f0000-0000-4000-8000-000000000001",
 			contextKey: "default",
 			term: "Order",
 			targetRevision: 1,

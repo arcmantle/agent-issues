@@ -16,6 +16,7 @@ import { readBuildContentHash } from "./build-info.js";
 import { readDaemonState } from "./daemon-state.js";
 import { readDaemonToken } from "../auth/daemon-token.js";
 import { createLocalDaemonServer, type LocalDaemonServerHandle } from "./local-daemon-server.js";
+import { openSqliteStore } from "../sqlite-store.js";
 
 const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";
 
@@ -56,6 +57,29 @@ describe("local daemon JSON-RPC tracer bullet (ISS186)", () => {
 
 		const listed = await client.listEntities("initiative");
 		expect(listed.map((entity) => entity.title)).toContain("Ship the daemon");
+	});
+
+	it("routes project identities to distinct projects in one shared database", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "daemon-tenant";
+		const seeded = await openSqliteStore(dbPath, { tenant: tenantId });
+		const projectA = await seeded.store.createEntity({ kind: "project", title: "Project A" });
+		const projectB = await seeded.store.createEntity({ kind: "project", title: "Project B" });
+		await seeded.store.createEntity({ kind: "epic", title: "Project A epic", parentId: projectA.id });
+		await seeded.store.createEntity({ kind: "epic", title: "Project B epic", parentId: projectB.id });
+		await seeded.store.close();
+
+		const address = handle.server.address() as AddressInfo;
+		const baseUrl = `http://127.0.0.1:${address.port}`;
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const clientA = new HttpStore({ baseUrl, bearerToken, tenantId, projectIdentity: projectA.id, buildHash: readBuildContentHash(), dbPath });
+		const clientB = new HttpStore({ baseUrl, bearerToken, tenantId, projectIdentity: projectB.id, buildHash: readBuildContentHash(), dbPath });
+
+		await clientA.createEntity({ kind: "initiative", title: "Initiative A" });
+		await clientB.createEntity({ kind: "initiative", title: "Initiative B" });
+
+		expect((await clientA.listEntities("initiative")).map((entity) => entity.title)).toEqual(["Initiative A"]);
+		expect((await clientB.listEntities("initiative")).map((entity) => entity.title)).toEqual(["Initiative B"]);
 	});
 });
 

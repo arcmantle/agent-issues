@@ -2,6 +2,7 @@ import { HttpStore, type StorageDriver } from "@agent-issues/core";
 import { openSqliteStore, resolveDatabasePath, type DatabaseLocationOptions } from "@agent-issues/api-local";
 import { listAuthSessions, type AuthSessionStoreOptions } from "./auth-session.js";
 import { resolveBackendSelection } from "./backend-selection.js";
+import { BUILD_MODE } from "./build-mode.js";
 import type { CloudBindingStoreOptions } from "./cloud-binding.js";
 import { openLocalDaemonStore, type LocalDaemonStoreOptions } from "./daemon/local-daemon-store.js";
 import { resolveProjectIdentity } from "./project-identity.js";
@@ -48,6 +49,15 @@ export type OpenStorageDriverResult = {
 
 const NO_DAEMON_ENV_VAR = "AGENT_ISSUES_NO_DAEMON";
 
+export function assertNoDaemonAllowed(
+	env: Record<string, string | undefined>,
+	buildMode: "development" | "production" = BUILD_MODE
+): void {
+	if (env[NO_DAEMON_ENV_VAR] === "1" && buildMode === "production") {
+		throw new Error(`${NO_DAEMON_ENV_VAR} is only available in development builds.`);
+	}
+}
+
 /** Exported for `openSynchronizeStores` (ISS59), which enforces the same cloud-session precondition on both stores it opens. */
 export function isSessionExpired(expiresAt: string): boolean {
 	return Date.parse(expiresAt) <= Date.now();
@@ -64,6 +74,9 @@ export function isSessionExpired(expiresAt: string): boolean {
  * applies.
  */
 export async function openStorageDriver(options: OpenStorageDriverOptions = {}): Promise<OpenStorageDriverResult> {
+	const env = options.env ?? process.env;
+	assertNoDaemonAllowed(env);
+
 	const currentWorkingDirectory = options.databaseOptions?.currentWorkingDirectory ?? process.cwd();
 	const { identity: projectIdentity } = resolveProjectIdentity(currentWorkingDirectory);
 
@@ -75,10 +88,9 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 
 	if (selection.backend === "local") {
 		const dbPath = resolveDatabasePath(options.dbPath, options.databaseOptions);
-		const env = options.env ?? process.env;
 
 		if (env[NO_DAEMON_ENV_VAR] === "1") {
-			const { store } = await openSqliteStore(options.dbPath, options.databaseOptions);
+			const { store } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
 			return { store, backend: "local", dbPath };
 		}
 
@@ -86,11 +98,12 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 			const store = await openLocalDaemonStore({
 				...options.localDaemon,
 				dbPath: options.localDaemon?.dbPath ?? dbPath,
+				projectIdentity,
 				workspaceRoot: currentWorkingDirectory
 			});
 			return { store, backend: "local", dbPath };
 		} catch (error) {
-			const { store } = await openSqliteStore(options.dbPath, options.databaseOptions);
+			const { store } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
 			const message = error instanceof Error ? error.message : String(error);
 			return {
 				store,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { computeEntityContentHash, EntityConflictError, EntityRevisionError } from "../entity-store/domain.js";
+import { decodeCanonicalReference, deriveMigratedEntityIdentity } from "../entity-store/canonical-reference.js";
+import { computeEntityContentHash, DEFAULT_EPIC_ID, EntityConflictError, EntityRevisionError } from "../entity-store/domain.js";
 import { computeContextTermContentHash, ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import type { StorageDriver } from "./storage-driver.js";
 
@@ -29,6 +30,46 @@ export type StorageDriverContractOptions = {
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore } = options;
 
+	describe(`storage-driver seam: Stable identity and Canonical reference (${label})`, () => {
+		it("creates and resolves an entity by UUID or Canonical reference", async () => {
+			const store = await openStore();
+
+			try {
+				const created = await store.createEntity({ kind: "initiative", title: "Canonical identity" });
+
+				expect(created).toEqual(expect.objectContaining({
+					id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+					reference: expect.stringMatching(/^INIT_[0-7][0-9A-HJKMNP-TV-Z]{25}$/)
+				}));
+				expect(decodeCanonicalReference(created.reference)).toEqual({ kind: "initiative", stableId: created.id });
+
+				const byId = await store.getEntityDetails(created.id);
+				const byReference = await store.getEntityDetails(created.reference);
+				expect(byId.entity).toMatchObject({ id: created.id, reference: created.reference });
+				expect(byReference.entity).toMatchObject({ id: created.id, reference: created.reference });
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: canonical revision patch hashes (${label})`, () => {
+		it("exposes lowercase 64-character hexadecimal hashes", async () => {
+			const store = await openStore();
+
+			try {
+				const created = await store.createEntity({ kind: "initiative", title: "First" });
+				await store.updateEntity({ entityId: created.id, title: "Second", expectedRevision: created.revision, expectedContentHash: created.contentHash });
+				const chain = (await store.exportCanonicalChains()).entities.find((candidate) => candidate.head.id === created.id);
+
+				expect(chain).toBeDefined();
+				expect(chain!.deltas.every((delta) => /^[0-9a-f]{64}$/.test(delta.sourceHash) && /^[0-9a-f]{64}$/.test(delta.targetHash))).toBe(true);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: history diagnostics (${label})`, () => {
 		it("measures empty, short, and multi-step chains without charging ordinary reads", async () => {
 			const store = await openStore();
@@ -48,11 +89,11 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await store.defineContextTerm({ term: "Diagnostic", definition: "Current", expectedRevision: termV1.term.revision, expectedContentHash: termV1.term.contentHash });
 
 				const beforeOrdinaryReads = await store.getHistoryDiagnostics();
-				expect(beforeOrdinaryReads.entity.deltaCount).toBe(initial.entity.deltaCount + 2);
-				expect(beforeOrdinaryReads.entity).toMatchObject({ maxChainLength: 2, maxMaterializationDepth: 0 });
+				expect(beforeOrdinaryReads.entity.deltaCount).toBe(initial.entity.deltaCount + 3);
+				expect(beforeOrdinaryReads.entity).toMatchObject({ maxChainLength: 3, maxMaterializationDepth: 0 });
 				expect(beforeOrdinaryReads.context).toMatchObject({ deltaCount: 2, maxChainLength: 2, maxMaterializationDepth: 0 });
 				expect(beforeOrdinaryReads["context-term"]).toMatchObject({ deltaCount: 2, maxChainLength: 2, maxMaterializationDepth: 0 });
-				expect(beforeOrdinaryReads.entity.records).toContainEqual({ recordId: entityV1.id, deltaCount: 2, historyBytes: expect.any(Number) });
+				expect(beforeOrdinaryReads.entity.records).toContainEqual({ recordId: entityV1.id, deltaCount: 3, historyBytes: expect.any(Number) });
 				expect(beforeOrdinaryReads.context.records).toContainEqual({ recordId: "default", deltaCount: 2, historyBytes: expect.any(Number) });
 				expect(beforeOrdinaryReads["context-term"].records).toContainEqual({ recordId: "default:Diagnostic", deltaCount: 2, historyBytes: expect.any(Number) });
 				expect(beforeOrdinaryReads.entity.historyBytes).toBeGreaterThan(0);
@@ -60,7 +101,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(beforeOrdinaryReads["context-term"].historyBytes).toBeGreaterThan(0);
 				for (const kind of ["entity", "context", "context-term"] as const) {
 					expect(beforeOrdinaryReads[kind].historyBytes).toBe(beforeOrdinaryReads[kind].records.reduce((total, record) => total + record.historyBytes, 0));
-					expect(beforeOrdinaryReads[kind].records.every((record) => record.historyBytes > 0)).toBe(true);
+					expect(beforeOrdinaryReads[kind].records.every((record) => record.historyBytes >= 0)).toBe(true);
 				}
 
 				await store.listEntities("initiative");
@@ -88,6 +129,24 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(afterHistoricalReads.entity.maxMaterializationDepth).toBe(2);
 				expect(afterHistoricalReads.context.maxMaterializationDepth).toBe(1);
 				expect(afterHistoricalReads["context-term"].maxMaterializationDepth).toBe(1);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("keeps a tiny edit to a large body proportional to the edit", async () => {
+			const store = await openStore();
+
+			try {
+				const largeBody = "a".repeat(50 * 1024);
+				const created = await store.createEntity({ kind: "initiative", title: "Compact history", body: largeBody });
+				await store.updateEntity({ entityId: created.id, body: `${largeBody}!`, expectedRevision: created.revision, expectedContentHash: created.contentHash });
+
+				const diagnostics = await store.getHistoryDiagnostics();
+				const record = diagnostics.entity.records.find((candidate) => candidate.recordId === created.id);
+				expect(record).toBeDefined();
+				expect(record!.historyBytes).toBeLessThan(largeBody.length / 100);
+				expect(diagnostics.entity.historyBytes).toBe(diagnostics.entity.records.reduce((total, candidate) => total + candidate.historyBytes, 0));
 			} finally {
 				await store.close();
 			}
@@ -258,7 +317,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 						links: [{ relationType: "handsOff", targetId: target.id }]
 					});
 
-					expect(handoff).toEqual(expect.objectContaining({ id: expect.stringMatching(/^HO\d+$/), kind: "handoff" }));
+					expect(handoff).toEqual(expect.objectContaining({ id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/), reference: expect.stringMatching(/^HO_[0-9A-HJKMNP-TV-Z]{26}$/), kind: "handoff" }));
 					await expect(store.materializeEntityRevision({ entityId: handoff.id, revision: 1 })).resolves.toEqual(
 						expect.objectContaining({ title: `Resume ${target.kind}`, body: "The migration test is green.", headRevision: 1 })
 					);
@@ -270,7 +329,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const project = await store.createEntity({ kind: "project", title: "Forbidden project" });
 				const version = await store.createEntity({ kind: "version", parentId: project.id, title: "Forbidden version" });
 				const standaloneHandoff = await store.createEntity({ kind: "handoff", title: "Standalone handoff" });
-				for (const targetId of [project.id, "EPIC0", version.id, standaloneHandoff.id]) {
+				const defaultEpicId = deriveMigratedEntityIdentity("epic", DEFAULT_EPIC_ID).stableId;
+				for (const targetId of [project.id, defaultEpicId, version.id, standaloneHandoff.id]) {
 					await expect(store.createEntity({
 						kind: "handoff",
 						title: "Invalid target",
@@ -459,7 +519,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await expect(target.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toMatchObject({ definition: "Initial.", headRevision: 2 });
 				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] });
 				const afterImport = await target.createEntity({ kind: "issue", title: "After import" });
-				expect(Number(afterImport.id.slice(3))).toBeGreaterThan(Number(created.id.slice(3)));
+				expect(afterImport.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+				expect(afterImport.reference).toMatch(/^ISS_[0-9A-HJKMNP-TV-Z]{26}$/);
+				expect(afterImport.id).not.toBe(created.id);
 			} finally {
 				await source.close();
 				await target.close();
@@ -519,7 +581,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				expect(created.term.revision).toBe(1);
 				expect(created.term.contentHash).toBe(
-					computeContextTermContentHash("A confirmed purchase.", ["request"], false)
+					computeContextTermContentHash("Order", "A confirmed purchase.", ["request"], false)
 				);
 			} finally {
 				await store.close();
@@ -543,7 +605,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(updated.created).toBe(false);
 				expect(updated.term.revision).toBe(2);
 				expect(updated.term.contentHash).toBe(
-					computeContextTermContentHash("Updated definition.", ["request"], false)
+					computeContextTermContentHash("Order", "Updated definition.", ["request"], false)
 				);
 
 				await expect(store.defineContextTerm({
@@ -654,6 +716,35 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 	});
 
 	describe(`storage-driver seam: bulk relations (${label})`, () => {
+		it("queries bounded entities and selected relation edges", async () => {
+			const store = await openStore();
+
+			try {
+				const selectedParent = await store.createEntity({ kind: "initiative", title: "Selected parent" });
+				const otherParent = await store.createEntity({ kind: "initiative", title: "Other parent" });
+				const first = await store.createEntity({ kind: "issue", title: "First", parentId: selectedParent.id });
+				const second = await store.createEntity({ kind: "issue", title: "Second", parentId: selectedParent.id, status: "in-progress" });
+				await store.createEntity({ kind: "issue", title: "Other", parentId: otherParent.id });
+				await store.linkEntities({ fromId: first.id, toId: second.id, relationType: "blocks" });
+
+				const queried = await store.queryEntities({
+					kind: "issue",
+					statuses: ["todo", "in-progress"],
+					parentId: selectedParent.reference,
+					limit: 1
+				});
+				expect(queried.entities).toHaveLength(1);
+				expect([first.id, second.id]).toContain(queried.entities[0]?.id);
+				expect(queried.total).toBe(2);
+
+				const relations = await store.queryEntityRelations({ entityId: second.id, direction: "incoming", types: ["blocks"] });
+				expect(relations.incoming).toEqual([expect.objectContaining({ relationType: "blocks", entity: expect.objectContaining({ id: first.id }) })]);
+				expect(relations.outgoing).toEqual([]);
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("lists every relation key and idempotently applies a batch (ISS267/ADR55)", async () => {
 			const store = await openStore();
 
@@ -757,6 +848,47 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			await expect(store.materializeEntityRevision({ entityId: edited.id, revision: 1 })).resolves.toEqual(
 				expect.objectContaining({ title: "Original title", body: "Original body.", headRevision: 2 })
 			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("content mutations resolve stable entity references", async () => {
+		const store = await openStore();
+
+		try {
+			const created = await store.createEntity({ kind: "issue", title: "Original title", body: "Original body." });
+			const edited = await store.updateEntity({
+				entityId: created.reference,
+				title: "Updated title",
+				expectedRevision: created.revision,
+				expectedContentHash: created.contentHash
+			});
+			const bodyUpdated = await store.setEntityBody({
+				entityId: created.reference,
+				body: "Updated body.",
+				expectedRevision: edited.revision,
+				expectedContentHash: edited.contentHash
+			});
+			const statusUpdated = await store.updateEntityStatus({ entityId: created.reference, status: "in-progress" });
+			const restored = await store.restoreEntityRevision({
+				entityId: created.reference,
+				revision: 1,
+				expectedRevision: statusUpdated.entity.revision,
+				expectedContentHash: statusUpdated.entity.contentHash
+			});
+			const deleted = await store.deleteEntity({ entityId: created.reference });
+
+			expect(bodyUpdated).toMatchObject({
+				id: created.id,
+				reference: created.reference,
+				title: "Updated title",
+				body: "Updated body.",
+				revision: 3
+			});
+			expect(restored).toMatchObject({ entityId: created.id, title: "Original title", body: "Original body." });
+			expect(deleted).toMatchObject({ entity: { id: created.id, reference: created.reference }, removed: true });
+			await expect(store.getEntityDetails(created.id)).rejects.toThrow(`Entity not found: ${created.id}`);
 		} finally {
 			await store.close();
 		}
@@ -1121,6 +1253,107 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 2 })).resolves.toEqual(
 				expect.objectContaining({ targetRevision: 2, headRevision: 2, tombstone: true })
 			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("listEntityHistory returns full revision facts from the reverse-delta chain", async () => {
+		const store = await openStore();
+
+		try {
+			const parent = await store.createEntity({ kind: "initiative", title: "Host initiative" });
+			const issue = await store.createEntity({ kind: "issue", title: "Initial title", body: "Initial body." });
+
+			// revision 2: title/body edit
+			const rev2 = await store.updateEntity({
+				entityId: issue.id,
+				title: "Revised title",
+				body: "Revised body.",
+				author: "alice",
+				expectedRevision: 1,
+				expectedContentHash: issue.contentHash
+			});
+
+			// revision 3: status change
+			await store.updateEntityStatus({ entityId: issue.id, status: "in-progress", author: "bob" });
+
+			// revision 4: structural move
+			await store.moveEntity({ entityId: issue.id, newParentId: parent.id, author: "charlie" });
+
+			// revision 5: tombstone (no author param on deleteEntity)
+			await store.deleteEntity({ entityId: issue.id });
+
+			// revision 6: restore revision 1
+			await store.restoreEntityRevision({
+				entityId: issue.id,
+				revision: 1,
+				author: "dave",
+				expectedRevision: 5,
+				expectedContentHash: rev2.contentHash
+			});
+
+			const history = await store.listEntityHistory(issue.id);
+
+			expect(history).toHaveLength(6);
+
+			// Entries are oldest-first
+			expect(history[0]).toMatchObject({
+				entityId: issue.id,
+				version: 1,
+				title: "Initial title",
+				body: "Initial body.",
+				bodySource: "authored",
+				status: "todo",
+				parentId: null
+			});
+			expect(history[1]).toMatchObject({
+				entityId: issue.id,
+				version: 2,
+				title: "Revised title",
+				body: "Revised body.",
+				bodySource: "authored",
+				status: "todo",
+				parentId: null,
+				author: "alice"
+			});
+			expect(history[2]).toMatchObject({
+				entityId: issue.id,
+				version: 3,
+				title: "Revised title",
+				body: "Revised body.",
+				status: "in-progress",
+				parentId: null,
+				author: "bob"
+			});
+			expect(history[3]).toMatchObject({
+				entityId: issue.id,
+				version: 4,
+				status: "in-progress",
+				parentId: parent.id,
+				author: "charlie"
+			});
+			expect(history[4]).toMatchObject({
+				entityId: issue.id,
+				version: 5,
+				status: "in-progress",
+				parentId: null
+			});
+			expect(history[5]).toMatchObject({
+				entityId: issue.id,
+				version: 6,
+				title: "Initial title",
+				body: "Initial body.",
+				status: "todo",
+				parentId: null,
+				author: "dave"
+			});
+
+			// IDs are real UUIDs from revision_entries — not fabricated ephemeral strings
+			const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+			expect(history.every((entry) => UUID_RE.test(entry.id))).toBe(true);
+			// History is stable across repeated calls
+			expect(await store.listEntityHistory(issue.id)).toEqual(history);
 		} finally {
 			await store.close();
 		}

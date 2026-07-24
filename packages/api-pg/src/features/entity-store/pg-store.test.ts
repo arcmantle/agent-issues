@@ -2,11 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { and } from "drizzle-orm";
 import type { Pool } from "pg";
+import { decodeCanonicalReference, encodeEntityRecordKey } from "@agent-issues/core";
 
 import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
 import { PgStore } from "../../pg-store.js";
-import { entities, entityDeltaEntries } from "../../schema.js";
+import { entities, relations, revisionEntries } from "../../schema.js";
 
 const ADMIN_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_URL ?? "postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues";
@@ -51,13 +52,15 @@ describe("PgStore entity lifecycle", () => {
 
 		const entity = await store.createEntity({ kind: "initiative", title: "Ship the Postgres gate" });
 
-		expect(entity.id).toBe("INIT1");
+		expect(decodeCanonicalReference(entity.reference)).toEqual({ kind: "initiative", stableId: entity.id });
 		expect(entity.kind).toBe("initiative");
 		expect(entity.title).toBe("Ship the Postgres gate");
 		expect(entity.status).toBe("draft");
 
 		const details = await store.getEntityDetails(entity.id);
-		expect(details.incoming).toEqual([{ relationType: "contains", entity: expect.objectContaining({ id: "EPIC0" }) }]);
+		const canonicalEpicReference = details.incoming[0]?.entity.reference;
+		expect(canonicalEpicReference).toMatch(/^EPIC_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+		expect(details.incoming).toEqual([{ relationType: "contains", entity: expect.objectContaining({ reference: canonicalEpicReference }) }]);
 
 		const history = await store.listEntityHistory(entity.id);
 		expect(history).toHaveLength(1);
@@ -66,7 +69,7 @@ describe("PgStore entity lifecycle", () => {
 			author: "system",
 			title: "Ship the Postgres gate",
 			status: "draft",
-			parentId: "EPIC0"
+			parentId: details.incoming[0]?.entity.id
 		});
 	});
 
@@ -77,10 +80,31 @@ describe("PgStore entity lifecycle", () => {
 		await store.createEntity({ kind: "initiative", title: "Second" });
 
 		const initiatives = await store.listEntities("initiative");
-		expect(initiatives.map((entity) => entity.title)).toEqual(["First", "Second"]);
+		expect(initiatives.map((entity) => entity.title)).toEqual(expect.arrayContaining(["First", "Second"]));
 
-		const history = await store.listEntityHistory(initiatives[0]!.id);
+		const history = await store.listEntityHistory(initiatives.find((entity) => entity.title === "First")!.id);
 		expect(history[0]?.author).toBe("alice");
+	});
+
+	it("resolves the revision parent by source hash when relation replay changes timestamp order", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const canonicalParent = await store.createEntity({ kind: "project", title: "Canonical parent" });
+		const annotationParent = await store.createEntity({ kind: "project", title: "Structural annotation" });
+		const version = await store.createEntity({ kind: "version", title: "2.0", parentId: canonicalParent.id });
+
+		await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client.insert(relations).values({
+				tenantId: store.tenantId,
+				fromId: annotationParent.id,
+				toId: version.id,
+				type: "contains",
+				createdAt: "1900-01-01T00:00:00.000Z"
+			})
+		);
+
+		await expect(store.listEntityHistory(version.id)).resolves.toEqual([
+			expect.objectContaining({ version: 1, parentId: canonicalParent.id })
+		]);
 	});
 
 	it("keeps tenants isolated even for a query the app layer forgets to filter by tenant_id", async () => {
@@ -202,16 +226,17 @@ describe("PgStore entity lifecycle", () => {
 		});
 		expect(bodyUpdated.body).toBe("Detailed plan.");
 		const deltas = await withTenantTransaction(appPool, store.tenantId, (executor) =>
-			executor.select().from(entityDeltaEntries).where(and(eq(entityDeltaEntries.tenantId, store.tenantId), eq(entityDeltaEntries.entityId, issue.id)))
+			executor.select().from(revisionEntries).where(and(eq(revisionEntries.tenantId, store.tenantId), eq(revisionEntries.recordKind, "entity"), eq(revisionEntries.recordKey, encodeEntityRecordKey(issue.id))))
 		);
 		expect(deltas).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ revision: 2, priorStatus: "todo" }),
+				expect.objectContaining({ revision: 2, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
 				expect.objectContaining({
 					revision: 3,
-					priorTitle: "Ship the seam",
-					priorBody: "",
-					priorBodySource: "authored"
+					patchFormat: 1,
+					reversePatch: expect.any(Buffer),
+					sourceHash: expect.any(Buffer),
+					targetHash: expect.any(Buffer)
 				})
 			])
 		);

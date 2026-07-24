@@ -1,11 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { formatTenantDisplayName } from "@agent-issues/core";
-import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, queryContextDirectory, upsertContext } from "./context-store.js";
-import { ensureDatabase, resolveCurrentProjectId, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
+import { encodeContextRecordKey, encodeContextTermRecordKey, formatTenantDisplayName, sanitizePathSegment } from "@agent-issues/core";
+import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, materializeContextRevision, materializeContextTermRevision, queryContextDirectory, upsertContext } from "./context-store.js";
+import { ensureDatabase, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
 import type { SqliteExecutor } from "../../db/sqlite-executor.js";
 import { createEntity } from "../entity-store/store.js";
 
@@ -19,10 +20,9 @@ async function openTestDatabase(): Promise<SqliteExecutor> {
 
 async function seedProjectContext(
 	dbPath: string,
-	workspaceMappingId: string,
 	projectTitle: string,
 	term?: { definition: string; term: string }
-): Promise<void> {
+): Promise<string> {
 	const { db } = await ensureDatabase(dbPath, {});
 	try {
 		const projectId = "PROJ1";
@@ -31,20 +31,17 @@ async function seedProjectContext(
 			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
 			 VALUES (?, ?, 'project', ?, 'active', '', 'authored', ?, ?, ?)`
 		).run(db.tenantId, projectId, projectTitle, projectId, now, now);
-		db.prepare(
-			`INSERT INTO project_migrations (tenant_id, legacy_tenant_id, project_id, created_at)
-			 VALUES (?, ?, ?, ?)`
-		).run(db.tenantId, workspaceMappingId, projectId, now);
 		if (term) {
 			db.prepare(
 				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
 				 VALUES (?, ?, NULL, ?, '', ?, ?)`
 			).run(db.tenantId, `default:${projectId}`, `${projectTitle} Context`, now, now);
 			db.prepare(
-				`INSERT INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, '', ?, ?)`
-			).run(db.tenantId, `default:${projectId}`, term.term, term.definition, now, now);
+				`INSERT INTO context_terms (tenant_id, id, context_key, term, definition, avoid_terms, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, '', ?, ?)`
+			).run(db.tenantId, randomUUID(), `default:${projectId}`, term.term, term.definition, now, now);
 		}
+		return projectId;
 	} finally {
 		db.close();
 	}
@@ -58,7 +55,7 @@ afterEach(() => {
 });
 
 describe("context directory", () => {
-	it("stores ordered context reverse deltas with predecessor facts and attribution", async () => {
+	it("stores ordered context reverse patches that materialize predecessor facts and attribution", async () => {
 		const db = await openTestDatabase();
 		const created = upsertContext(db, { title: "Initial", summary: "First", author: "alice" });
 		upsertContext(db, {
@@ -68,13 +65,20 @@ describe("context directory", () => {
 			expectedRevision: created.context.revision,
 			expectedContentHash: created.context.contentHash
 		});
+		const storedContext = db.db.prepare("SELECT id, reference FROM contexts WHERE tenant_id = ? AND key = ?").get(db.tenantId, created.context.key) as { id: string; reference: string };
+		expect(created.context.id).toBe(storedContext.id);
+		expect(created.context.reference).toBe(storedContext.reference);
+		expect(created.context.reference).toMatch(/^CTX_[0-9A-HJKMNP-TV-Z]{26}$/);
 
-		const deltas = db.db.prepare(`SELECT revision, author, prior_title, prior_summary, created_at
-			FROM context_delta_entries WHERE tenant_id = ? AND context_key = ? ORDER BY revision`).all(db.tenantId, created.context.key);
+		const deltas = db.db.prepare(`SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash, created_at
+			FROM revision_entries
+			WHERE tenant_id = ? AND project_id = ? AND record_kind = 'context' AND record_key = ?
+			ORDER BY revision`).all(db.tenantId, db.currentProjectId, encodeContextRecordKey(storedContext.id));
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "alice", prior_title: "Initial", prior_summary: "First", created_at: expect.any(String) }),
-			expect.objectContaining({ revision: 2, author: "bob", prior_title: "Initial", prior_summary: "First", created_at: expect.any(String) })
+			expect.objectContaining({ revision: 1, author: "alice", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) }),
+			expect.objectContaining({ revision: 2, author: "bob", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) })
 		]);
+		expect(materializeContextRevision(db, { revision: 1 })).toMatchObject({ title: "Initial", summary: "First", author: "alice" });
 	});
 
 	it("stores one linear context-term reverse-delta chain through removal", async () => {
@@ -94,15 +98,22 @@ describe("context directory", () => {
 			expectedRevision: updated.term.revision,
 			expectedContentHash: updated.term.contentHash
 		});
+		const storedTerm = db.db.prepare("SELECT id FROM context_terms WHERE tenant_id = ? AND context_key = ? AND term = ?").get(db.tenantId, created.context.key, "Order") as { id: string };
+		expect(created.term.id).toBe(storedTerm.id);
+		expect(created.term.reference).toMatch(/^TERM_[0-9A-HJKMNP-TV-Z]{26}$/);
 
-		const deltas = db.db.prepare(`SELECT revision, author, prior_definition, prior_avoid_terms, prior_tombstone
-			FROM context_term_delta_entries WHERE tenant_id = ? AND context_key = ? AND term = ? ORDER BY revision`)
-			.all(db.tenantId, created.context.key, "Order");
+		const deltas = db.db.prepare(`SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash
+			FROM revision_entries
+			WHERE tenant_id = ? AND project_id = ? AND record_kind = 'context-term' AND record_key = ?
+			ORDER BY revision`)
+			.all(db.tenantId, db.currentProjectId, encodeContextTermRecordKey(storedTerm.id));
 		expect(deltas).toEqual([
-			{ revision: 1, author: "alice", prior_definition: "Initial.", prior_avoid_terms: '["request"]', prior_tombstone: 0 },
-			{ revision: 2, author: "bob", prior_definition: "Initial.", prior_avoid_terms: '["request"]', prior_tombstone: 0 },
-			{ revision: 3, author: "carol", prior_definition: "Updated.", prior_avoid_terms: '["draft"]', prior_tombstone: 0 }
+			expect.objectContaining({ revision: 1, author: "alice", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 2, author: "bob", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 3, author: "carol", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) })
 		]);
+		expect(materializeContextTermRevision(db, { term: "Order", revision: 1 })).toMatchObject({ definition: "Initial.", avoid: ["request"], tombstone: false, author: "alice" });
+		expect(materializeContextTermRevision(db, { term: "Order", revision: 2 })).toMatchObject({ definition: "Updated.", avoid: ["draft"], tombstone: false, author: "bob" });
 		expect(getContextDetails(db).terms).toEqual([]);
 	});
 
@@ -159,6 +170,35 @@ describe("context directory", () => {
 		expect(details.context.scopeKind).toBe("initiative");
 		expect(details.context.scopeEntityId).toBe(initiative.id);
 		expect(details.terms.map((term) => term.term)).toEqual(["Review Snapshot"]);
+	});
+
+	it("updates initiative contexts that retain a legacy key", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Net Migration" });
+		const created = upsertContext(db, {
+			scopeRef: initiative.reference,
+			title: "Net Migration Context",
+			summary: "Original summary."
+		});
+		db.db.prepare("UPDATE contexts SET key = ? WHERE tenant_id = ? AND scope_entity_id = ?")
+			.run("INIT15", db.tenantId, initiative.id);
+
+		const updated = upsertContext(db, {
+			scopeRef: initiative.reference,
+			title: "Migrate eye-share-devops to .NET 10 (Photino) Context",
+			summary: "Glossary for backend parity ports and migration-specific behavior.",
+			expectedRevision: created.context.revision,
+			expectedContentHash: created.context.contentHash
+		});
+
+		expect(updated.context).toMatchObject({
+			key: "INIT15",
+			scopeEntityId: initiative.id,
+			title: "Migrate eye-share-devops to .NET 10 (Photino) Context",
+			revision: 2
+		});
+		expect(db.db.prepare("SELECT count(*) AS count FROM contexts WHERE tenant_id = ? AND scope_entity_id = ?")
+			.get(db.tenantId, initiative.id)).toEqual({ count: 1 });
 	});
 
 	it("supports global-only search against shared context", async () => {
@@ -272,21 +312,15 @@ describe("project-aware default context (ISS166)", () => {
 		const workspaceA = mkdtempSync(path.join(tmpdir(), "agent-issues-workspace-a-"));
 
 		try {
-			// Seed the current project and its workspace mapping directly.
 			const workspaceMappingId = resolveLegacyWorkspaceTenantId(workspaceA);
 			const projectTitle = formatTenantDisplayName(workspaceMappingId);
-			await seedProjectContext(dbPath, workspaceMappingId, projectTitle, {
+			const projectId = await seedProjectContext(dbPath, projectTitle, {
 				definition: "Workspace A's own widget.",
 				term: "Widget"
 			});
 
-			const { db: sharedDb } = await ensureDatabase(dbPath, {});
-			const projectId = resolveCurrentProjectId(sharedDb, workspaceA);
-			sharedDb.close();
-
-			// Re-opening as if standing in workspaceA resolves the bare
-			// (no --scope) context to that project's `default:<projectId>` row.
-			const { executor: dbFromWorkspaceA } = await ensureDatabase(dbPath, { currentWorkingDirectory: workspaceA });
+			const projectIdentity = sanitizePathSegment(projectTitle);
+			const { executor: dbFromWorkspaceA } = await ensureDatabase(dbPath, { currentWorkingDirectory: workspaceA, projectIdentity });
 			const details = getContextDetails(dbFromWorkspaceA, {});
 
 			expect(details.context.key).toBe(`default:${projectId}`);
@@ -294,12 +328,7 @@ describe("project-aware default context (ISS166)", () => {
 			expect(details.terms.map((term) => term.term)).toEqual(["Widget"]);
 			dbFromWorkspaceA.db.close();
 
-			// A workspace without a mapping resolves the tenant's sentinel default.
-			const { executor: dbElsewhere } = await ensureDatabase(dbPath, {});
-			const elsewhereDetails = getContextDetails(dbElsewhere, {});
-			expect(elsewhereDetails.context.key).toBe("default");
-			expect(elsewhereDetails.context.scopeLabel).toBe("Shared");
-			dbElsewhere.db.close();
+			await expect(ensureDatabase(dbPath, {})).rejects.toThrow(/project identity is required/i);
 		} finally {
 			rmSync(workspaceA, { force: true, recursive: true });
 		}
@@ -313,10 +342,9 @@ describe("project-aware default context (ISS166)", () => {
 		try {
 			const workspaceMappingId = resolveLegacyWorkspaceTenantId(workspaceB);
 			const projectTitle = formatTenantDisplayName(workspaceMappingId);
-			await seedProjectContext(dbPath, workspaceMappingId, projectTitle);
+			const projectId = await seedProjectContext(dbPath, projectTitle);
 
-			const { executor: sharedDb } = await ensureDatabase(dbPath, {});
-			const projectId = resolveCurrentProjectId(sharedDb.db, workspaceB);
+			const { executor: sharedDb } = await ensureDatabase(dbPath, { projectIdentity: sanitizePathSegment(projectTitle) });
 
 			const details = getContextDetails(sharedDb, { scopeRef: projectId });
 

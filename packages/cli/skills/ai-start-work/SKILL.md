@@ -13,10 +13,6 @@ Pick up an initiative that has already been planned (grilled, captured as a PRD,
 
 This skill is the bridge between planning and coding.
 
-## Issue lifecycle
-
-- Move each issue you start through its lifecycle: `agent-issues status ISSx in-progress` when you begin, `agent-issues status ISSx done` when it is implemented and validated.
-
 ## Process
 
 ### 1. Select the active initiative
@@ -27,22 +23,14 @@ Resolve the scope you were asked to work on.
 
 ### 2. Select the next workable issue
 
-From the initiative's issues, choose the single next issue to implement.
-
-- List candidates with `agent-issues list issue --json` and inspect dependencies with `agent-issues relations <id> --json`.
-- An issue is **workable** when it is not `done` and nothing that `blocks` it is still open.
-- Rank every workable leaf issue ahead of every parent issue.
-- Among workable issues, prefer the one that unblocks the most downstream work, then the thinnest tracer-bullet slice.
-- If every remaining issue is blocked, stop and report the blocker chain instead of guessing. Surface the blocking issue and what it needs.
-
-Present your pick to the user with its title, whether it is a parent issue or a leaf sub-issue, the user stories it `fixes`, and its blockers. Confirm it is the right next slice before writing any code. Ask one question; do not present a long menu unless the user asks.
+Invoke the `ai-next-work` skill for the active scope. Present its result and confirm the selected issue with the user before writing code. If it reports complete or blocked, stop with that result.
 
 ### 3. Decide how to approach it
 
 Once the issue is confirmed, work out the approach before touching the tdd loop.
 
 - Explore the codebase to understand the current state of the area the issue touches.
-- Re-read any ADR that `constrains` the issue (visible in `agent-issues relations <id> --json`) and respect those decisions.
+- Find constraining ADRs with `agent-issues relations <id> --direction incoming --type constrains --json`, then read each ADR's authored decision with `agent-issues show <adrId> --view full --json`.
 - Identify the public interface the slice should expose and the observable behavior the user stories demand.
 - Surface any assumption the planning did not resolve. If a real, hard-to-reverse design question appears, route it to `/ai-grill-with-docs` rather than deciding silently.
 
@@ -53,7 +41,7 @@ Summarize the approach in a few lines: the interface, the behaviors that matter,
 Begin implementation under test-driven development.
 
 - Set the issue in progress: `agent-issues status ISSx in-progress`.
-- Invoke the `ai-tdd` skill to delegate the confirmed slice to its implementation subagent. The implementation subagent owns implementation, focused validation, and repairs for accepted findings. The visible `ai-tdd` orchestrator owns the two parallel read-only reviews, final validation, marking the issue `done`, and reporting the next workable issue.
+- Invoke the `ai-tdd` skill with the confirmed issue and approach. Wait for its completion result and next-workable-issue result before continuing.
 - Do not write production code outside the tdd loop. This skill chooses the work; the tdd skill builds it.
 
 ### 5. Continue or stop

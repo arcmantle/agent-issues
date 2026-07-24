@@ -93,12 +93,12 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 		options.authProvider ?? new DaemonTokenAuthProvider({ token: mintedToken!, tenantId: resolveWellKnownLocalTenantId() });
 
 	const storesByWorkspace = new Map<string, Promise<StorageDriver>>();
-	function getOrOpenStore(tenantId: string, workspaceRoot?: string): Promise<StorageDriver> {
+	function getOrOpenStore(tenantId: string, projectIdentity?: string, workspaceRoot?: string): Promise<StorageDriver> {
 		const currentWorkingDirectory = workspaceRoot ? resolveTenantRootPath(workspaceRoot) : process.cwd();
-		const storeKey = `${tenantId}:${currentWorkingDirectory}`;
+		const storeKey = `${tenantId}:${projectIdentity ?? currentWorkingDirectory}`;
 		let store = storesByWorkspace.get(storeKey);
 		if (!store) {
-			store = openSqliteStore(dbPath, { currentWorkingDirectory, tenant: tenantId }).then((opened) => opened.store);
+			store = openSqliteStore(dbPath, { currentWorkingDirectory, projectIdentity, tenant: tenantId }).then((opened) => opened.store);
 			storesByWorkspace.set(storeKey, store);
 		}
 		return store;
@@ -150,7 +150,7 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 
 	const app = createJsonRpcApp({
 		authProvider,
-		createStore: (identity, _projectIdentity, workspaceRoot) => getOrOpenStore(identity.tenantId, workspaceRoot),
+		createStore: (identity, projectIdentity, workspaceRoot) => getOrOpenStore(identity.tenantId, projectIdentity, workspaceRoot),
 		versionHandshake: {
 			buildHash,
 			dbPath,

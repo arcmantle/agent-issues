@@ -10,13 +10,12 @@ import {
 	DEFAULT_EPIC_TITLE,
 	DEFAULT_PROJECT_ID,
 	DEFAULT_PROJECT_TITLE,
+	deriveMigratedEntityIdentity,
 	ENTITY_KINDS,
 	formatTenantDisplayName,
-	RESERVED_SYSTEM_AUTHOR,
 	resolveAgentIssuesHomeDirectory,
 	resolveWellKnownLocalTenantId,
 	sanitizePathSegment,
-	STRUCTURAL_RELATION_TYPES,
 	type DeleteTenantResult,
 	type RenameTenantResult,
 	type TenantRecordCounts,
@@ -37,6 +36,18 @@ import { contextTermRevisionDeltaMigration } from "../migrations/0016-context-te
 import { entityRestorationSourceMigration } from "../migrations/0017-entity-restoration-source.js";
 import { contextRestorationSourceMigration } from "../migrations/0018-context-restoration-source.js";
 import { contextRevisionBaselinesMigration } from "../migrations/0019-context-revision-baselines.js";
+import { compactReverseFieldPatchesMigration } from "../migrations/0020-compact-reverse-field-patches.js";
+import { revisionPatchLedgerMigration } from "../migrations/0021-revision-patch-ledger.js";
+import { binaryRevisionPatchHashesMigration } from "../migrations/0022-binary-revision-patch-hashes.js";
+import { contextTermStableIdsMigration } from "../migrations/0023-context-term-stable-ids.js";
+import { entityStableIdentitiesMigration } from "../migrations/0024-entity-stable-identities.js";
+import { correctStableIdentityStorageMigration } from "../migrations/0025-correct-stable-identity-storage.js";
+import { removeEntityAliasesMigration } from "../migrations/0026-remove-entity-aliases.js";
+import { removeDrizzleLedgerMigration } from "../migrations/0027-remove-drizzle-ledger.js";
+import { renameRevisionEntriesMigration } from "../migrations/0028-rename-revision-entries.js";
+import { removeHistoryEntriesMigration } from "../migrations/0029-remove-history-entries.js";
+import { removeProjectMigrationLedgersMigration } from "../migrations/0030-remove-project-migration-ledgers.js";
+import { removeMetadataMigration } from "../migrations/0031-remove-metadata.js";
 import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/0008-consolidate-legacy-tenants-backfill.js";
 
 export {
@@ -51,8 +62,8 @@ export {
 
 /**
  * The schema-shape migration (ADR43) applied on every open, before any
- * tenant is resolved - full baseline table creation, including
- * `history_entries` and `project_migrations`. Every statement is `IF NOT
+ * tenant is resolved - historical baseline table creation, including the
+ * now-obsolete `project_migrations` input consumed by later migrations. Every statement is `IF NOT
  * EXISTS`-guarded, so re-running this against an already-shaped database
  * (including ones that pre-date this runner and only have plain tables, no
  * ledger at all) is a safe no-op that just gets recorded, rather than
@@ -84,6 +95,7 @@ export type OpenDatabaseResult = {
 export type DatabaseLocationOptions = {
 	tenant?: string;
 	currentWorkingDirectory?: string;
+	projectIdentity?: string;
 };
 
 const LEGACY_TENANTS_DIRECTORY = "tenants";
@@ -91,10 +103,10 @@ const LEGACY_TENANTS_DIRECTORY = "tenants";
 /**
  * The one-time, all-tenants sweep migration (ADR43) that retroactively fixes
  * every tenant already present in the database file for the historical gap
- * left by `ensureFullChainInvariant`/`ensureTenantCounters`/`ensureHistorySeed`
+ * left by `ensureFullChainInvariant`/`ensureTenantCounters`
  * only ever running for whichever tenant happened to be open. Ledgered via
  * `schema_migrations`, so this only ever runs once per database file. The
- * ongoing per-current-tenant calls to those three functions below are a
+ * ongoing per-current-tenant calls to those two functions below are a
  * distinct, unaffected concern (bootstrapping brand-new tenants going
  * forward) and are not part of this list.
  *
@@ -144,15 +156,13 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	// checks below only ever running for whichever tenant happened to be
 	// open - never re-runs once applied.
 	await runBootstrapBackfillMigrations(db, dbPath, hadPreExistingData);
-	// `ensureFullChainInvariant`/`ensureTenantCounters`/`ensureHistorySeed`
-	// are onboarding logic for a tenant that has never been opened before -
-	// not a migration, since a brand-new tenant created tomorrow still
-	// needs this the moment it first appears. Gated behind one indexed
-	// lookup (ISS179) so an already-bootstrapped tenant - every open after
-	// its first - pays for none of these checks' underlying queries
-	// (including `ensureHistorySeed`'s full entities/history_entries scan),
-	// rather than re-deriving "has this already happened?" from live data
-	// on every single CLI invocation forever.
+	// `ensureFullChainInvariant`/`ensureTenantCounters` are onboarding logic
+	// for a tenant that has never been opened before - not a migration, since
+	// a brand-new tenant created tomorrow still needs this the moment it first
+	// appears. Gated behind one indexed lookup (ISS179) so an
+	// already-bootstrapped tenant - every open after its first - pays for none
+	// of these checks' underlying queries, rather than re-deriving "has this
+	// already happened?" from live data on every single CLI invocation forever.
 	if (!isTenantBootstrapped(db)) {
 		// Runs before ensureTenantCounters so its "does this tenant already
 		// have data" backup check (tenantHasAnyRows) sees the tenant's true
@@ -160,11 +170,6 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 		// about to seed.
 		ensureFullChainInvariant(db, dbPath);
 		ensureTenantCounters(db);
-		// Runs after ensureFullChainInvariant so the PROJ0/EPIC0 sentinels
-		// and any orphan-initiative attachment already exist and get
-		// swept up as ordinary "entities lacking history" - no
-		// special-casing needed.
-		ensureHistorySeed(db);
 	}
 	// Runs AFTER the per-current-tenant trio above, not folded into
 	// `runBootstrapBackfillMigrations` - this migration's own
@@ -200,8 +205,20 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	await runMigrations(db, [entityRestorationSourceMigration], hadPreExistingData ? { dbPath } : undefined);
 	await runMigrations(db, [contextRestorationSourceMigration], hadPreExistingData ? { dbPath } : undefined);
 	await runMigrations(db, [contextRevisionBaselinesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [compactReverseFieldPatchesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [revisionPatchLedgerMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [binaryRevisionPatchHashesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [contextTermStableIdsMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [entityStableIdentitiesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [correctStableIdentityStorageMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [removeEntityAliasesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [removeDrizzleLedgerMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [renameRevisionEntriesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [removeHistoryEntriesMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [removeProjectMigrationLedgersMigration], hadPreExistingData ? { dbPath } : undefined);
+	await runMigrations(db, [removeMetadataMigration], hadPreExistingData ? { dbPath } : undefined);
 
-	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory);
+	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory, options?.projectIdentity);
 
 	return { db, executor: createSqliteExecutor(db), dbPath };
 }
@@ -262,7 +279,7 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				UNION
 				SELECT tenant_id FROM context_terms
 				UNION
-				SELECT tenant_id FROM entity_delta_entries
+				SELECT tenant_id FROM revision_entries
 			)
 			SELECT tenant_ids.tenant_id,
 				COALESCE(entity_counts.entity_count, 0) AS entity_count,
@@ -322,10 +339,7 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 
 export function deleteTenant(db: Database.Database, tenantId: string): DeleteTenantResult {
 	const counts = getTenantRecordCounts(db, tenantId);
-	const deleteHistoryEntries = db.prepare(`DELETE FROM history_entries WHERE tenant_id = ?`);
-	const deleteEntityDeltaEntries = db.prepare(`DELETE FROM entity_delta_entries WHERE tenant_id = ?`);
-	const deleteContextDeltaEntries = db.prepare(`DELETE FROM context_delta_entries WHERE tenant_id = ?`);
-	const deleteContextTermDeltaEntries = db.prepare(`DELETE FROM context_term_delta_entries WHERE tenant_id = ?`);
+	const deleteRevisionEntries = db.prepare(`DELETE FROM revision_entries WHERE tenant_id = ?`);
 	const deleteContextTerms = db.prepare(`DELETE FROM context_terms WHERE tenant_id = ?`);
 	const deleteRelations = db.prepare(`DELETE FROM relations WHERE tenant_id = ?`);
 	const deleteContexts = db.prepare(`DELETE FROM contexts WHERE tenant_id = ?`);
@@ -333,10 +347,7 @@ export function deleteTenant(db: Database.Database, tenantId: string): DeleteTen
 	const deleteCounters = db.prepare(`DELETE FROM counters WHERE tenant_id = ?`);
 
 	const counters = db.transaction(() => {
-		deleteHistoryEntries.run(tenantId);
-		deleteEntityDeltaEntries.run(tenantId);
-		deleteContextDeltaEntries.run(tenantId);
-		deleteContextTermDeltaEntries.run(tenantId);
+		deleteRevisionEntries.run(tenantId);
 		deleteContextTerms.run(tenantId);
 		deleteRelations.run(tenantId);
 		deleteContexts.run(tenantId);
@@ -383,10 +394,7 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 	const renameRelations = db.prepare(`UPDATE relations SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameContexts = db.prepare(`UPDATE contexts SET tenant_id = ? WHERE tenant_id = ?`);
 	const renameContextTerms = db.prepare(`UPDATE context_terms SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameHistoryEntries = db.prepare(`UPDATE history_entries SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameEntityDeltaEntries = db.prepare(`UPDATE entity_delta_entries SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameContextDeltaEntries = db.prepare(`UPDATE context_delta_entries SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameContextTermDeltaEntries = db.prepare(`UPDATE context_term_delta_entries SET tenant_id = ? WHERE tenant_id = ?`);
+	const renameRevisionEntries = db.prepare(`UPDATE revision_entries SET tenant_id = ? WHERE tenant_id = ?`);
 
 	db.pragma("defer_foreign_keys = ON");
 	try {
@@ -396,10 +404,7 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 			renameRelations.run(newTenantId, previousTenantId);
 			renameContexts.run(newTenantId, previousTenantId);
 			renameContextTerms.run(newTenantId, previousTenantId);
-			renameHistoryEntries.run(newTenantId, previousTenantId);
-			renameEntityDeltaEntries.run(newTenantId, previousTenantId);
-			renameContextDeltaEntries.run(newTenantId, previousTenantId);
-			renameContextTermDeltaEntries.run(newTenantId, previousTenantId);
+			renameRevisionEntries.run(newTenantId, previousTenantId);
 		})();
 	} finally {
 		db.pragma("defer_foreign_keys = OFF");
@@ -519,7 +524,6 @@ function databaseHasAnyData(db: DatabaseHandle): boolean {
 				UNION SELECT 1 FROM relations
 				UNION SELECT 1 FROM contexts
 				UNION SELECT 1 FROM context_terms
-				UNION SELECT 1 FROM history_entries
 			) AS has_rows`
 		)
 		.get() as { has_rows: number };
@@ -555,7 +559,6 @@ async function migrateDatabase(db: DatabaseHandle): Promise<void> {
 	}
 	ensureEntityBodyColumn(db);
 	ensureEntityBodySourceColumn(db);
-	upsertSchemaVersion(db, "7");
 }
 
 function applyBaselineAndForwardMigrations(db: DatabaseHandle): Promise<void> {
@@ -606,16 +609,16 @@ async function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): Promise
 
 /**
  * Whether the current tenant (`db.tenantId`) has already been through the
- * onboarding trio below at least once. `counters` is seeded the moment a
+ * onboarding pair below at least once. `counters` is seeded the moment a
  * tenant is first onboarded (or retroactively by the one-time historical
  * backfill migration) and never removed while the tenant exists, so an
  * indexed prefix lookup on its `(tenant_id, kind)` primary key answers this
- * in O(1) - unlike `ensureFullChainInvariant`/`ensureHistorySeed`, which
- * would otherwise have to re-inspect this tenant's live entities/history
- * rows on every single open just to re-derive "has this already happened?"
- * (ISS179). A tenant, once bootstrapped, stays bootstrapped forever - this
- * is safe to treat as a permanent fact about `db.tenantId`, unlike the
- * legacy-tenant sweep below (a brand-new `--tenant` can still appear later).
+ * in O(1) - unlike `ensureFullChainInvariant`, which would otherwise have to
+ * re-inspect this tenant's live entities on every single open just to
+ * re-derive "has this already happened?" (ISS179). A tenant, once
+ * bootstrapped, stays bootstrapped forever - this is safe to treat as a
+ * permanent fact about `db.tenantId`, unlike the legacy-tenant sweep below
+ * (a brand-new `--tenant` can still appear later).
  */
 function isTenantBootstrapped(db: DatabaseHandle): boolean {
 	return db.prepare(`SELECT 1 FROM counters WHERE tenant_id = ? LIMIT 1`).get(db.tenantId) !== undefined;
@@ -633,70 +636,6 @@ function ensureTenantCounters(db: DatabaseHandle): void {
 	}
 
 	insertCounter.run({ tenantId: db.tenantId, kind: "handoff" });
-}
-
-// Structural relation types are a fixed, code-controlled constant (never
-// user input), so inlining them into the SQL text below is safe and keeps
-// this query automatically in sync with domain.ts's canonical list.
-const STRUCTURAL_TYPES_SQL_LIST = STRUCTURAL_RELATION_TYPES.map((type) => `'${type}'`).join(", ");
-
-/**
- * Backfills a synthetic version-1 history entry (ADR8) for every entity that
- * predates append-only history (ISS35) or was inserted outside `createEntity`
- * (the PROJ0/EPIC0 sentinels), so `listEntityHistory` always has at least one
- * row regardless of when an entity was created. Idempotent: only entities
- * with zero history rows are seeded. Uses each entity's own current facts,
- * its structural parent (if any), and its `updated_at` as the seed's
- * `created_at` (its last known-true state), with RESERVED_SYSTEM_AUTHOR since
- * the real original author was never captured for pre-history data.
- */
-function ensureHistorySeed(db: DatabaseHandle): void {
-	const unseeded = db
-		.prepare(
-			`SELECT id, title, body, body_source, status, updated_at FROM entities
-			 WHERE tenant_id = @tenantId
-			   AND id NOT IN (SELECT entity_id FROM history_entries WHERE tenant_id = @tenantId)`
-		)
-		.all({ tenantId: db.tenantId }) as Array<{
-			id: string;
-			title: string;
-			body: string;
-			body_source: string;
-			status: string;
-			updated_at: string;
-		}>;
-
-	if (unseeded.length === 0) {
-		return;
-	}
-
-	const getParentId = db.prepare(
-		`SELECT from_id FROM relations
-		 WHERE tenant_id = @tenantId AND to_id = @entityId AND type IN (${STRUCTURAL_TYPES_SQL_LIST})
-		 LIMIT 1`
-	);
-
-	const insertHistoryEntry = db.prepare(
-		`INSERT INTO history_entries (id, tenant_id, entity_id, version, author, title, body, body_source, status, parent_id, created_at)
-		 VALUES (@id, @tenantId, @entityId, 1, @author, @title, @body, @bodySource, @status, @parentId, @createdAt)`
-	);
-
-	for (const entity of unseeded) {
-		const parent = getParentId.get({ tenantId: db.tenantId, entityId: entity.id }) as { from_id: string } | undefined;
-
-		insertHistoryEntry.run({
-			id: randomUUID(),
-			tenantId: db.tenantId,
-			entityId: entity.id,
-			author: RESERVED_SYSTEM_AUTHOR,
-			title: entity.title,
-			body: entity.body,
-			bodySource: entity.body_source,
-			status: entity.status,
-			parentId: parent?.from_id ?? null,
-			createdAt: entity.updated_at
-		});
-	}
 }
 
 /**
@@ -720,10 +659,34 @@ function ensureFullChainInvariant(db: DatabaseHandle, dbPath: string): void {
 }
 
 function entityExists(db: DatabaseHandle, entityId: string): boolean {
-	return db.prepare(`SELECT 1 FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, entityId) !== undefined;
+	const canonicalReference = resolveEntityReference(db, entityId);
+	return db.prepare(`SELECT 1 FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, canonicalReference) !== undefined;
 }
 
 function insertSentinelEntity(db: DatabaseHandle, id: string, kind: string, title: string, now: string): void {
+	if (tableHasColumn(db, "entities", "reference")) {
+		const identity = deriveMigratedEntityIdentity(kind === "project" ? "project" : "epic", id);
+		const projectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
+		db.prepare(
+			`INSERT INTO entities (tenant_id, id, reference, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			 VALUES (@tenantId, @stableId, @reference, @kind, @title, 'active', '', 'generated', @projectId, @now, @now)
+			 ON CONFLICT (tenant_id, id) DO NOTHING`
+		).run({ tenantId: db.tenantId, stableId: identity.stableId, reference: identity.reference, kind, projectId, title, now });
+		return;
+	}
+	if (tableHasColumn(db, "entities", "stable_id")) {
+		const identity = deriveMigratedEntityIdentity(kind === "project" ? "project" : "epic", id);
+		db.prepare(
+			`INSERT INTO entities (tenant_id, id, stable_id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			 VALUES (@tenantId, @canonicalReference, @stableId, @kind, @title, 'active', '', 'generated', @projectId, @now, @now)
+			 ON CONFLICT (tenant_id, id) DO NOTHING`
+		).run({ tenantId: db.tenantId, canonicalReference: identity.reference, stableId: identity.stableId, kind, projectId: identity.reference, title, now });
+		db.prepare(
+			`INSERT INTO entity_aliases (tenant_id, alias, entity_stable_id) VALUES (?, ?, ?)
+			 ON CONFLICT (tenant_id, alias) DO NOTHING`
+		).run(db.tenantId, id, identity.stableId);
+		return;
+	}
 	if (tableHasColumn(db, "entities", "project_id")) {
 		db.prepare(
 			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
@@ -741,11 +704,28 @@ function insertSentinelEntity(db: DatabaseHandle, id: string, kind: string, titl
 }
 
 function insertSentinelRelation(db: DatabaseHandle, fromId: string, toId: string, now: string): void {
+	const canonicalFromId = resolveEntityReference(db, fromId);
+	const canonicalToId = resolveEntityReference(db, toId);
 	db.prepare(
 		`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
 		 VALUES (@tenantId, @fromId, @toId, 'contains', @now)
 		 ON CONFLICT (tenant_id, from_id, to_id, type) DO NOTHING`
-	).run({ tenantId: db.tenantId, fromId, toId, now });
+	).run({ tenantId: db.tenantId, fromId: canonicalFromId, toId: canonicalToId, now });
+}
+
+function resolveEntityReference(db: DatabaseHandle, reference: string): string {
+	if (tableHasColumn(db, "entities", "reference")) {
+		if (reference === DEFAULT_PROJECT_ID) return deriveMigratedEntityIdentity("project", reference).stableId;
+		if (reference === DEFAULT_EPIC_ID) return deriveMigratedEntityIdentity("epic", reference).stableId;
+		return reference;
+	}
+	if (!tableHasColumn(db, "entities", "stable_id")) return reference;
+	const row = db.prepare(`SELECT entities.id
+		FROM entity_aliases
+		JOIN entities ON entities.tenant_id = entity_aliases.tenant_id
+			AND entities.stable_id = entity_aliases.entity_stable_id
+		WHERE entity_aliases.tenant_id = ? AND entity_aliases.alias = ?`).get(db.tenantId, reference) as { id: string } | undefined;
+	return row?.id ?? reference;
 }
 
 function attachOrphanInitiativesToDefaultEpic(db: DatabaseHandle, now: string): void {
@@ -764,28 +744,48 @@ function attachOrphanInitiativesToDefaultEpic(db: DatabaseHandle, now: string): 
 	}
 }
 
-function getProjectMigration(db: DatabaseHandle, legacyTenantId: string): { projectId: string } | undefined {
-	return db
-		.prepare(`SELECT project_id AS projectId FROM project_migrations WHERE tenant_id = ? AND legacy_tenant_id = ?`)
-		.get(db.tenantId, legacyTenantId) as { projectId: string } | undefined;
-}
-
 /**
- * Resolves which `project` entity the current invocation belongs to
- * (ISS166), so `context-store.ts`'s bare (no `--scope`) resolution can mean
- * "this workspace's own project" instead of always the tenant's one
- * literal "default". Looks up this workspace's legacy per-folder tenant id
- * (the exact same deterministic formula the one-time historical fold-in
- * migration, ISS181, used to fold it in) in `project_migrations`; falls
- * back to the tenant's sentinel `DEFAULT_PROJECT_ID` when this workspace
- * was never consolidated - a fresh single-project tenant, or a workspace
- * not yet folded in - keeping that common case resolving exactly as before
- * ISS166.
+ * Resolves the current invocation's project from the identity already
+ * derived by the CLI. UUID and Canonical reference selectors are direct;
+ * repository-style identities use a normalized exact title match.
  */
-export function resolveCurrentProjectId(db: DatabaseHandle, currentWorkingDirectory: string = process.cwd()): string {
-	const legacyTenantId = resolveLegacyWorkspaceTenantId(currentWorkingDirectory);
-	const migration = getProjectMigration(db, legacyTenantId);
-	return migration?.projectId ?? DEFAULT_PROJECT_ID;
+export function resolveCurrentProjectId(
+	db: DatabaseHandle,
+	_currentWorkingDirectory: string = process.cwd(),
+	projectIdentity?: string
+): string {
+	const selector = projectIdentity?.trim();
+	if (selector) {
+		const directProject = db
+			.prepare(`SELECT id FROM entities WHERE tenant_id = ? AND kind = 'project' AND tombstone = 0 AND (id = ? OR reference = ?)`)
+			.get(db.tenantId, selector, selector) as { id: string } | undefined;
+		if (directProject) {
+			return directProject.id;
+		}
+
+		const normalizedSelector = sanitizePathSegment(selector);
+		const matchingProjects = (
+			db.prepare(`SELECT id, title FROM entities WHERE tenant_id = ? AND kind = 'project' AND tombstone = 0`).all(db.tenantId) as Array<{
+				id: string;
+				title: string;
+			}>
+		).filter((project) => sanitizePathSegment(project.title) === normalizedSelector);
+		if (matchingProjects.length === 0) {
+			throw new Error(`Cannot resolve project identity "${selector}" in tenant ${db.tenantId}.`);
+		}
+		if (matchingProjects.length > 1) {
+			throw new Error(`Ambiguous project identity "${selector}" in tenant ${db.tenantId}.`);
+		}
+		return matchingProjects[0]!.id;
+	}
+
+	const projects = db
+		.prepare(`SELECT id FROM entities WHERE tenant_id = ? AND kind = 'project' AND tombstone = 0 ORDER BY id`)
+		.all(db.tenantId) as Array<{ id: string }>;
+	if (projects.length === 1) {
+		return projects[0]!.id;
+	}
+	throw new Error(`Project identity is required for tenant ${db.tenantId}, which contains ${projects.length} projects.`);
 }
 
 function backupDatabaseFile(db: DatabaseHandle, dbPath: string): void {
@@ -923,14 +923,6 @@ function copyLegacyTablesIntoTenant(
 			 FROM ${contextTermsTable}`
 		).run({ tenantId });
 	}
-}
-
-function upsertSchemaVersion(db: DatabaseHandle, version: string): void {
-	db.prepare(
-		`INSERT INTO metadata (key, value)
-		 VALUES ('schema_version', @version)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-	).run({ version });
 }
 
 function tableExists(db: DatabaseHandle, tableName: string): boolean {

@@ -59,8 +59,8 @@ export async function openSynchronizeStores(options: OpenSynchronizeStoresOption
 		);
 	}
 
-	const { store: local } = await openSqliteStore(options.dbPath, options.databaseOptions);
-	const cloud = new HttpStore({ baseUrl: binding.cloudApiUrl, bearerToken: session.accessToken, tenantId: binding.tenantId });
+	const { store: local } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
+	const cloud = new HttpStore({ baseUrl: binding.cloudApiUrl, bearerToken: session.accessToken, tenantId: binding.tenantId, projectIdentity });
 
 	return { local, cloud, binding };
 }

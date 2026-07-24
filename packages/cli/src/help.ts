@@ -94,7 +94,7 @@ const GLOBAL_OPTIONS: GlobalOptionSpec[] = [
 	},
 	{
 		name: "--json",
-		description: "Print machine-readable JSON in compact form."
+		description: "Print machine-readable JSON. Entity commands use compact output by default; pass --view full for complete records."
 	},
 	{
 		name: "--pretty",
@@ -109,6 +109,11 @@ const GLOBAL_OPTIONS: GlobalOptionSpec[] = [
 const ENTITY_KIND_VALUES = ENTITY_KINDS;
 const RELATION_TYPE_VALUES = Array.from(new Set(ALLOWED_RELATIONS.map((relation) => relation.type))).sort();
 const STATUS_VALUES = Array.from(new Set(Object.values(STATUS_FLOW).flat())).sort();
+const ENTITY_VIEW_OPTION: OptionSpec = {
+	name: "--view <compact|full>",
+	description: "Select compact or full JSON output. Compact is the default; use full for authored content and complete records. Human-readable output is unchanged.",
+	allowedValues: ["compact", "full"]
+};
 
 const COMMAND_SPECS: CommandSpec[] = [
 	{
@@ -123,9 +128,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues context show <entityOrInitiativeId>",
 			"agent-issues context search <query> [--view <all|global|initiatives>]",
 			"agent-issues context conflicts [<query>] [--view <all|initiatives>]",
-			"agent-issues context set [--scope <entityOrInitiativeId|default>] --title <title> --summary <summary>",
-			"agent-issues context define <term> [--scope <entityOrInitiativeId|default>] --definition <definition> [--avoid <comma-separated terms>]",
-			"agent-issues context forget <term> [--scope <entityOrInitiativeId|default>]"
+			"agent-issues context set [--scope <entityOrInitiativeId|default>] --title <title> --summary <summary> [--view <compact|full>]",
+			"agent-issues context define <term> [--scope <entityOrInitiativeId|default>] --definition <definition> [--avoid <comma-separated terms>] [--view <compact|full>]",
+			"agent-issues context forget <term> [--scope <entityOrInitiativeId|default>] [--view <compact|full>]"
 		],
 		positionals: [
 			{
@@ -164,8 +169,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 				description: "Alternative terms to avoid for `context define`."
 			},
 			{
-				name: "--view <all|global|initiatives>",
-				description: "Choose the discovery slice for project-wide context reads. `context conflicts` supports `all` and `initiatives`."
+				name: "--view <all|global|initiatives|compact|full>",
+				description: "For show, search, and conflicts: all/global/initiatives. For set, define, and forget: compact/full JSON acknowledgements."
 			},
 			{
 				name: "--terms-only",
@@ -418,7 +423,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "create",
 		summary: "Create an entity, optionally under a structural parent.",
-		usage: ["agent-issues create <kind> --title <title> [--parent <id>] [--status <status>] [--body <markdown> | --body-file <path|->]"],
+		usage: ["agent-issues create <kind> --title <title> [--parent <id>] [--status <status>] [--body <markdown> | --body-file <path|->] [--view <compact|full>]"],
 		positionals: [
 			{
 				name: "kind",
@@ -453,7 +458,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 			{
 				name: "--body-file <path|->",
 				description: "Read the authored markdown body from a file, or from stdin when the value is `-`."
-			}
+			},
+			ENTITY_VIEW_OPTION
 		],
 		examples: [
 			'agent-issues create initiative --title "Workflow tooling"',
@@ -479,8 +485,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "archive",
 		summary: "Move one entity to its archive status.",
-		usage: ["agent-issues archive <id>"],
+		usage: ["agent-issues archive <id> [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
+		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues archive ISS1"],
 		notes: ["Archive status depends on entity kind and is exposed by `agent-issues schema --json`."],
 		output: {
@@ -491,8 +498,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "delete",
 		summary: "Delete one leaf entity.",
-		usage: ["agent-issues delete <id>"],
+		usage: ["agent-issues delete <id> [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
+		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues delete ISS2"],
 		notes: ["Deletion fails when the entity still has outgoing relations."],
 		output: {
@@ -503,9 +511,15 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "bundle",
 		summary: "Show one initiative bundle directly.",
-		usage: ["agent-issues bundle <initiativeId>"],
+		usage: ["agent-issues bundle <initiativeId> [--view <compact|full>]"],
 		positionals: [{ name: "initiativeId", description: "Initiative ID.", required: true }],
+		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues bundle INIT1", "agent-issues bundle INIT1 --json"],
+		notes: [
+			"Compact JSON is the default and preserves bundle groups and link shapes while projecting every entity to id, kind, status, and title.",
+			"Use --view full when the intentional initiative-wide read requires complete records, authored content, and links.",
+			"Reserve bundle for intentional initiative-wide reads; use filtered list and relations commands for routine discovery."
+		],
 		output: {
 			human: [
 				"<initiativeId> <status> <title>",
@@ -515,17 +529,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 				"Issues: <id:status, ...>",
 				"Fixes / Sub-issues / Blockers / Constrains summaries"
 			],
-			json: [
-				"initiative",
-				"prds",
-				"userStories",
-				"adrs",
-				"issues",
-				"fixLinks",
-				"subIssueLinks",
-				"blockerLinks",
-				"constrainsLinks"
-			]
+			json: ["Full: InitiativeBundle with complete records", "Compact: same bundle groups and links with CompactEntity values"]
 		}
 	},
 	{
@@ -581,11 +585,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "move",
 		summary: "Move one entity under a new structural parent.",
-		usage: ["agent-issues move <id> <newParentId>"],
+		usage: ["agent-issues move <id> <newParentId> [--view <compact|full>]"],
 		positionals: [
 			{ name: "id", description: "Entity ID to move.", required: true },
 			{ name: "newParentId", description: "New structural parent ID.", required: true }
 		],
+		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues move US1 PRD2", "agent-issues move ISS7 ISS1"],
 		notes: [
 			"Move rejects incompatible parent kinds, cycles, and initiatives.",
@@ -599,16 +604,34 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "relations",
 		summary: "Show incoming and outgoing relations for one entity.",
-		usage: ["agent-issues relations <id>"],
+		usage: ["agent-issues relations <id> [--direction <incoming|outgoing|both>] [--type <comma-separated types>] [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
-		examples: ["agent-issues relations ISS1", "agent-issues relations ISS1 --json"],
+		options: [
+			{
+				name: "--direction <incoming|outgoing|both>",
+				description: "Select incoming, outgoing, or both relation directions. Defaults to both.",
+				allowedValues: ["incoming", "outgoing", "both"]
+			},
+			{
+				name: "--type <comma-separated types>",
+				description: "Include only the selected relation types.",
+				allowedValues: RELATION_TYPE_VALUES
+			},
+			ENTITY_VIEW_OPTION
+		],
+		examples: ["agent-issues relations <id>", "agent-issues relations <id> --direction incoming --type blocks,decomposes --json"],
+		notes: [
+			"Compact JSON is the default and returns the focused entity and selected edges with id, kind, status, and title only.",
+			"Use --view full when complete entity records or authored content are required.",
+			"Use --direction and --type to select edges before serialization."
+		],
 		output: {
 			human: [
 				"<id> <kind> <status> <title>",
 				"Incoming section",
 				"Outgoing section"
 			],
-			json: ["entity", "incoming", "outgoing"]
+			json: ["Full: EntityDetails with complete records", "Compact: { entity: CompactEntity, incoming: CompactRelation[], outgoing: CompactRelation[] }"]
 		}
 	},
 	{
@@ -631,7 +654,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "status",
 		summary: "Update an entity status.",
-		usage: ["agent-issues status <id> <status>"],
+		usage: ["agent-issues status <id> <status> [--view <compact|full>]"],
 		positionals: [
 			{ name: "id", description: "Entity ID.", required: true },
 			{
@@ -641,6 +664,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 				allowedValues: STATUS_VALUES
 			}
 		],
+		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues status ISS1 in-progress", "agent-issues status US1 done"],
 		notes: [
 			"Each entity kind only accepts its own status flow.",
@@ -655,7 +679,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "edit",
 		summary: "Update an entity title and/or authored markdown body.",
-		usage: ["agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->]"],
+		usage: ["agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->] [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
 		options: [
 			{
@@ -669,7 +693,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 			{
 				name: "--body-file <path|->",
 				description: "Read the authored markdown body from a file, or from stdin when the value is `-`."
-			}
+			},
+			ENTITY_VIEW_OPTION
 		],
 		examples: [
 			'agent-issues edit ISS1 --body "# Plan\\n\\nDetails here."',
@@ -688,7 +713,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "link",
 		summary: "Create a relation between entities.",
-		usage: ["agent-issues link <fromId> <relationType> <toId>"],
+		usage: ["agent-issues link <fromId> <relationType> <toId> [--view <compact|full>]"],
 		positionals: [
 			{ name: "fromId", description: "Source entity ID.", required: true },
 			{
@@ -699,6 +724,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			},
 			{ name: "toId", description: "Target entity ID.", required: true }
 		],
+		options: [ENTITY_VIEW_OPTION],
 		examples: [
 			"agent-issues link ISS1 fixes US1",
 			"agent-issues link ADR1 constrains ISS1",
@@ -721,7 +747,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "unlink",
 		summary: "Remove one relation between entities.",
-		usage: ["agent-issues unlink <fromId> <relationType> <toId>"],
+		usage: ["agent-issues unlink <fromId> <relationType> <toId> [--view <compact|full>]"],
 		positionals: [
 			{ name: "fromId", description: "Source entity ID.", required: true },
 			{
@@ -732,6 +758,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			},
 			{ name: "toId", description: "Target entity ID.", required: true }
 		],
+		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues unlink ISS1 fixes US1"],
 		notes: ["Unlink rejects structural removals that would orphan a subtree."],
 		output: {
@@ -745,21 +772,26 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "show",
 		summary: "Show an entity or initiative bundle.",
-		usage: ["agent-issues show <id>"],
+		usage: ["agent-issues show <id> [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
-		examples: ["agent-issues show INIT1", "agent-issues show ISS1 --json"],
+		options: [ENTITY_VIEW_OPTION],
+		examples: ["agent-issues show INIT1", "agent-issues show ISS1 --view full --json"],
+		notes: [
+			"Compact JSON is the default and projects entities to id, kind, status, and title.",
+			"Use --view full when authored body content or the complete stored record is required."
+		],
 		output: {
 			human: [
 				"For initiatives: same shape as bundle",
 				"For other kinds: same shape as relations"
 			],
-			json: ["InitiativeBundle | EntityDetails"]
+			json: ["Full: InitiativeBundle | EntityDetails", "Compact: CompactInitiativeBundle | CompactEntityDetails"]
 		}
 	},
 	{
 		name: "list",
 		summary: "List entities by kind.",
-		usage: ["agent-issues list <kind>"],
+		usage: ["agent-issues list <kind> [--status <comma-separated statuses>] [--parent <id>] [--limit <count>] [--view <compact|full>]"],
 		positionals: [
 			{
 				name: "kind",
@@ -768,10 +800,32 @@ const COMMAND_SPECS: CommandSpec[] = [
 				allowedValues: ENTITY_KIND_VALUES
 			}
 		],
-		examples: ["agent-issues list issue", "agent-issues list prd --json"],
+		options: [
+			{
+				name: "--status <comma-separated statuses>",
+				description: "Include only entities with a selected status.",
+				allowedValues: STATUS_VALUES
+			},
+			{
+				name: "--parent <id>",
+				description: "Include only entities with this structural parent."
+			},
+			{
+				name: "--limit <count>",
+				description: "Return at most this many entities. Compact total reports the full filtered count."
+			},
+			ENTITY_VIEW_OPTION
+		],
+		examples: ["agent-issues list issue", "agent-issues list issue --status todo,in-progress --parent <initiativeId> --limit 20 --json"],
+		notes: [
+			"Compact JSON is the default and returns { items, total }; total is the filtered count before --limit is applied.",
+			"Use --view full when complete entity records or authored content are required.",
+			"Use --status, --parent, and --limit to select records before serialization.",
+			"Accepted status values depend on the entity kind; use agent-issues schema --json to inspect each kind's workflow."
+		],
 		output: {
 			human: ["One line per entity: <id> <status> <title>"],
-			json: ["Array<EntityRecord>"]
+			json: ["Full: Array<EntityRecord>", "Compact: { items: CompactEntity[], total: number }"]
 		}
 	},
 	{

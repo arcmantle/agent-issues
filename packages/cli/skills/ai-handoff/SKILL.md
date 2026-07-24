@@ -57,6 +57,6 @@ PowerShell:
 
 After saving, confirm the returned handoff ID (e.g. `HO7`) in your response.
 
-To correct a persisted handoff, use the generic entity editor: `agent-issues edit HOx --title "<title>" --body-file -`.
+To correct a persisted handoff, use the generic entity editor: `agent-issues edit <handoffId> --title "<title>" --body-file -`.
 
 If extra prose is needed beyond the persisted handoff, return it in the response only.

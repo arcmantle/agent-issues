@@ -1,23 +1,32 @@
 import { describe, expect, it } from "vitest";
 
+import { computeContextTermContentHash } from "../context/context-types.js";
 import { computeEntityContentHash } from "../entity-store/domain.js";
-import { mergeCanonicalChainBundles, SynchronizeConflictError, type CanonicalChainBundle, type CanonicalEntityChain } from "./canonical-chain.js";
+import { encodeCanonicalReference } from "../entity-store/canonical-reference.js";
+import { CONTEXT_TERM_REVERSE_PATCH_REGISTRY, createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
+import { mergeCanonicalChainBundles, SynchronizeConflictError, type CanonicalChainBundle, type CanonicalContextChain, type CanonicalContextTermChain, type CanonicalEntityChain } from "./canonical-chain.js";
 
 const emptyBundle = (): CanonicalChainBundle => ({ entities: [], contexts: [], contextTerms: [] });
+const ENTITY_STABLE_ID = "00000000-0000-4000-8000-000000000001";
+const ENTITY_REFERENCE = encodeCanonicalReference("issue", ENTITY_STABLE_ID);
 
-function entityChain(title: string, revision: number, priorTitles: string[] = []): CanonicalEntityChain {
-	const deltas = priorTitles.map((priorTitle, index) => ({
-		id: `delta-${index + 2}-${priorTitle}`,
-		revision: index + 2,
-		author: "author",
-		createdAt: `2026-01-0${index + 2}T00:00:00.000Z`,
-		priorTitle,
-		priorBody: "body",
-		priorBodySource: "authored" as const
-	}));
+function entityChain(title: string, revision: number, predecessorTitles: string[] = []): CanonicalEntityChain {
+	const titles = [...predecessorTitles, title];
+	const state = (stateTitle: string) => ({ title: stateTitle, body: "body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false });
+	const deltas = predecessorTitles.map((predecessorTitle, index) => {
+		const deltaRevision = index + 2;
+		return {
+			id: `delta-${deltaRevision}-${predecessorTitle}`,
+			revision: deltaRevision,
+			author: "author",
+			createdAt: `2026-01-0${deltaRevision}T00:00:00.000Z`,
+			...createReverseFieldPatch(state(titles[index + 1]), state(predecessorTitle), ENTITY_REVERSE_PATCH_REGISTRY)
+		};
+	});
 	return {
 		head: {
-			id: "ISS1",
+			id: ENTITY_STABLE_ID,
+			reference: ENTITY_REFERENCE,
 			kind: "issue",
 			title,
 			body: "body",
@@ -34,13 +43,99 @@ function entityChain(title: string, revision: number, priorTitles: string[] = []
 	};
 }
 
+function contextTermChain(term: string, revision: number, predecessorTerm?: string): CanonicalContextTermChain {
+	const stableId = "018f0000-0000-4000-8000-000000000001";
+	const state = (stateTerm: string) => ({ term: stateTerm, definition: "A confirmed purchase.", avoid: ["request"], tombstone: false });
+	return {
+		head: {
+			id: stableId,
+			reference: encodeCanonicalReference("contextTerm", stableId),
+			contextKey: "default",
+			...state(term),
+			revision,
+			contentHash: computeContextTermContentHash(term, "A confirmed purchase.", ["request"], false),
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: `2026-01-0${revision}T00:00:00.000Z`
+		},
+		deltas: predecessorTerm === undefined ? [] : [{
+			id: "rename-delta",
+			revision,
+			author: "alice",
+			createdAt: `2026-01-0${revision}T00:00:00.000Z`,
+			...createReverseFieldPatch(state(term), state(predecessorTerm), CONTEXT_TERM_REVERSE_PATCH_REGISTRY)
+		}]
+	};
+}
+
+function contextChain(key: string, stableId = "00000000-0000-4000-8000-000000000010"): CanonicalContextChain {
+	return {
+		head: {
+			id: stableId,
+			reference: encodeCanonicalReference("context", stableId),
+			key,
+			scopeEntityId: null,
+			title: "Context",
+			summary: "Summary",
+			revision: 1,
+			contentHash: "hash",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z"
+		},
+		deltas: []
+	};
+}
+
 describe("mergeCanonicalChainBundles", () => {
+	it("merges a renamed context term as one stable-ID chain", () => {
+		const original = contextTermChain("Order", 1);
+		const renamed = contextTermChain("Purchase", 2, "Order");
+
+		expect(mergeCanonicalChainBundles(
+			{ ...emptyBundle(), contextTerms: [original] },
+			{ ...emptyBundle(), contextTerms: [renamed] }
+		).contextTerms).toEqual([renamed]);
+	});
+
 	it("keeps identical heads as a no-op", () => {
 		const chain = entityChain("Initial", 1);
 		const left = { ...emptyBundle(), entities: [chain] };
-		const right = { ...emptyBundle(), entities: [{ ...chain, deltas: [{ id: "different-baseline", revision: 1, author: "other", createdAt: chain.head.createdAt, priorTitle: "Initial", priorBody: "body", priorBodySource: "authored" }] }] };
+		const baselineState = { title: chain.head.title, body: chain.head.body, bodySource: chain.head.bodySource, status: chain.head.status, parentId: chain.head.parentId, tombstone: chain.head.tombstone };
+		const right = { ...emptyBundle(), entities: [{ ...chain, deltas: [{ id: "different-baseline", revision: 1, author: "other", createdAt: chain.head.createdAt, ...createReverseFieldPatch(baselineState, baselineState, ENTITY_REVERSE_PATCH_REGISTRY) }] }] };
 
 		expect(mergeCanonicalChainBundles(left, right)).toEqual(left);
+	});
+
+	it("classifies duplicate canonical references before mutation", () => {
+		const left = entityChain("Local", 1);
+		const right = entityChain("Cloud", 1);
+		right.head.id = "00000000-0000-4000-8000-000000000002";
+
+		expect(() => mergeCanonicalChainBundles(
+			{ ...emptyBundle(), entities: [left] },
+			{ ...emptyBundle(), entities: [right] }
+		)).toThrow(`Synchronization preflight canonical-reference collision: ${ENTITY_REFERENCE}.`);
+	});
+
+	it("classifies duplicate context keys before mutation", () => {
+		const left = contextChain("default");
+		const right = contextChain("default", "00000000-0000-4000-8000-000000000011");
+
+		expect(() => mergeCanonicalChainBundles(
+			{ ...emptyBundle(), contexts: [left] },
+			{ ...emptyBundle(), contexts: [right] }
+		)).toThrow("Synchronization preflight context-key collision: default.");
+	});
+
+	it("classifies duplicate term names before mutation", () => {
+		const left = contextTermChain("Order", 1);
+		const right = contextTermChain("order", 1);
+		right.head.id = "018f0000-0000-4000-8000-000000000002";
+		right.head.reference = encodeCanonicalReference("contextTerm", right.head.id);
+
+		expect(() => mergeCanonicalChainBundles(
+			{ ...emptyBundle(), contextTerms: [left] },
+			{ ...emptyBundle(), contextTerms: [right] }
+		)).toThrow(/Synchronization preflight term-name collision/);
 	});
 
 	it("selects a strict compatible extension regardless of source direction", () => {
@@ -59,7 +154,7 @@ describe("mergeCanonicalChainBundles", () => {
 		try {
 			mergeCanonicalChainBundles({ ...emptyBundle(), entities: [left] }, { ...emptyBundle(), entities: [right] });
 		} catch (error) {
-			expect(error).toMatchObject({ recordKind: "entity", recordId: "ISS1", currentRevision: 2, currentContentHash: left.head.contentHash });
+			expect(error).toMatchObject({ recordKind: "entity", recordId: ENTITY_STABLE_ID, currentRevision: 2, currentContentHash: left.head.contentHash });
 		}
 	});
 

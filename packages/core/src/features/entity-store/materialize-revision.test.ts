@@ -2,38 +2,38 @@ import { describe, expect, it } from "vitest";
 
 import { EntityRevisionError, type EntityRevisionPatch } from "./domain.js";
 import { applyReversePatch, materializeFromPatches } from "./materialize-revision.js";
+import { createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
 
 describe("materializeFromPatches", () => {
-	it("treats a legacy null tombstone patch as unchanged", () => {
-		const state = { title: "Current", body: "Body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false };
-		const patch: EntityRevisionPatch = { revision: 2, author: "system", createdAt: "2026-01-02T00:00:00.000Z", priorTitle: "Initial", priorBody: "Body", priorBodySource: "authored", priorTombstone: null };
+	it("materializes a generic reverse-field transition", () => {
+		const predecessor = { title: "Initial", body: "Body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false };
+		const successor = { title: "Current", body: "Body!", bodySource: "generated" as const, status: "done", parentId: "INIT2", tombstone: true };
+		const patch = {
+			revision: 2,
+			author: "alice",
+			createdAt: "2026-01-02T00:00:00.000Z",
+			...createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY)
+		};
 
-		expect(applyReversePatch(state, patch).tombstone).toBe(false);
+		expect(applyReversePatch(successor, patch)).toEqual(predecessor);
 	});
 
 	it("applies content and lifecycle patches newest-first with target revision metadata", () => {
+		const first = { title: "First", body: "First body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false };
+		const second = { title: "Second", body: "Second body", bodySource: "generated" as const, status: "in-progress", parentId: "INIT1", tombstone: false };
+		const third = { title: "Third", body: "Third body", bodySource: "authored" as const, status: "done", parentId: "INIT2", tombstone: false };
 		const patches: EntityRevisionPatch[] = [
 			{
 				revision: 3,
 				author: "third-author",
 				createdAt: "2026-01-03T00:00:00.000Z",
-				priorTitle: "Second",
-				priorBody: "Second body",
-				priorBodySource: "generated",
-				priorStatus: "in-progress",
-				priorParentId: "INIT1",
-				priorTombstone: false
+				...createReverseFieldPatch(third, second, ENTITY_REVERSE_PATCH_REGISTRY)
 			},
 			{
 				revision: 2,
 				author: "second-author",
 				createdAt: "2026-01-02T00:00:00.000Z",
-				priorTitle: "First",
-				priorBody: "First body",
-				priorBodySource: "authored",
-				priorStatus: "todo",
-				priorParentId: null,
-				priorTombstone: null
+				...createReverseFieldPatch(second, first, ENTITY_REVERSE_PATCH_REGISTRY)
 			}
 		];
 
@@ -41,11 +41,7 @@ describe("materializeFromPatches", () => {
 			"ISS1",
 			{
 				id: "ISS1",
-				title: "Third",
-				body: "Third body",
-				bodySource: "authored",
-				status: "done",
-				parentId: "INIT2",
+				...third,
 				revision: 3,
 				createdAt: "2026-01-01T00:00:00.000Z"
 			},
@@ -80,6 +76,7 @@ describe("materializeFromPatches", () => {
 					bodySource: "authored",
 					status: "done",
 					parentId: null,
+					tombstone: false,
 					revision: 3,
 					createdAt: "2026-01-01T00:00:00.000Z"
 				},
@@ -122,6 +119,7 @@ describe("materializeFromPatches", () => {
 					bodySource: "authored",
 					status: "done",
 					parentId: null,
+					tombstone: false,
 					revision: 3,
 					createdAt: "2026-01-01T00:00:00.000Z"
 				},
@@ -130,9 +128,11 @@ describe("materializeFromPatches", () => {
 						revision: 3,
 						author: "third-author",
 						createdAt: "2026-01-03T00:00:00.000Z",
-						priorTitle: "Second",
-						priorBody: "Second body",
-						priorBodySource: "authored"
+						...createReverseFieldPatch(
+							{ title: "Third", body: "Third body", bodySource: "authored", status: "done", parentId: null, tombstone: false },
+							{ title: "Second", body: "Second body", bodySource: "authored", status: "done", parentId: null, tombstone: false },
+							ENTITY_REVERSE_PATCH_REGISTRY
+						)
 					}
 				],
 				2

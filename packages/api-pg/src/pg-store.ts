@@ -19,6 +19,9 @@ import type {
 	ProjectSnapshot,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult,
+	QueryEntitiesInput,
+	QueryEntitiesResult,
+	QueryEntityRelationsInput,
 	RelationRecord,
 	RenameTenantResult,
 	StatusUpdateResult,
@@ -63,6 +66,8 @@ import {
 	listProjectAdrs,
 	materializeEntityRevision,
 	moveEntity,
+	queryEntities,
+	queryEntityRelations,
 	restoreEntityRevision,
 	setEntityBody,
 	unlinkEntities,
@@ -134,8 +139,16 @@ export class PgStore implements StorageDriver {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => getEntityDetails(client, this.tenantId, entityId));
 	}
 
+	public async queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => queryEntityRelations(client, this.tenantId, input));
+	}
+
 	public async listEntities(kind: string): Promise<EntityRecord[]> {
 		return withTenantTransaction(this.pool, this.tenantId, (client) => listEntities(client, this.tenantId, kind));
+	}
+
+	public async queryEntities(input: QueryEntitiesInput): Promise<QueryEntitiesResult> {
+		return withTenantTransaction(this.pool, this.tenantId, (client) => queryEntities(client, this.tenantId, input));
 	}
 
 	public async listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {

@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, or, sql } from "drizzle-orm";
+import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import {
+	applyReversePatch,
 	collectReachableIds,
 	computeEntityContentHash,
+	createReverseFieldPatch,
+	encodeEntityRecordKey,
 	EntityConflictError,
 	EntityRevisionError,
 	DEFAULT_EPIC_ID,
@@ -11,9 +15,12 @@ import {
 	DEFAULT_PROJECT_TITLE,
 	assignEntitiesToProjects,
 	deriveEntityStatuses,
+	ENTITY_REVERSE_PATCH_REGISTRY,
 	ENTITY_KINDS,
+	generateCanonicalIdentity,
 	getAllowedRelationType,
 	getArchiveStatus,
+	deriveMigratedEntityIdentity,
 	getInitialStatus,
 	isAllowedRelation,
 	isBodySource,
@@ -23,7 +30,6 @@ import {
 	isValidStatus,
 	materializeFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
-	ID_PREFIX,
 	STRUCTURAL_RELATION_TYPES,
 	wouldOrphanSubtree as wouldOrphanSubtreeInGraph,
 	type BodySource,
@@ -47,12 +53,13 @@ import {
 	type UnlinkResult
 } from "@agent-issues/core";
 import type { TenantExecutor as PoolClient } from "../../db/connection.js";
-import { counters, entities, entityDeltaEntries, historyEntries, relations } from "../../schema.js";
+import { counters, entities, relations, revisionEntries } from "../../schema.js";
 
 import { queryContextDetails, queryProjectContextDetails } from "../context/pg-context-store.js";
 
 export type EntityRow = {
 	id: string;
+	reference: string;
 	kind: string;
 	title: string;
 	status: string;
@@ -73,19 +80,6 @@ export type RelationRow = {
 	created_at: string;
 };
 
-export type HistoryEntryRow = {
-	id: string;
-	entity_id: string;
-	version: number;
-	author: string;
-	title: string;
-	body: string;
-	body_source: string;
-	status: string;
-	parent_id: string | null;
-	created_at: string;
-};
-
 /**
  * Seeds a fresh cloud tenant (per-kind id counters + the PROJ0/EPIC0
  * sentinels the full-chain invariant requires, ADR7) so `createEntity` has
@@ -101,11 +95,14 @@ export async function ensurePgTenant(client: PoolClient, tenantId: string): Prom
 	}
 
 	const now = new Date().toISOString();
+	const projectIdentity = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID);
+	const epicIdentity = deriveMigratedEntityIdentity("epic", DEFAULT_EPIC_ID);
 	await client
 		.insert(entities)
 		.values({
 			tenantId,
-			id: DEFAULT_PROJECT_ID,
+			id: projectIdentity.stableId,
+			reference: projectIdentity.reference,
 			kind: "project",
 			title: DEFAULT_PROJECT_TITLE,
 			status: "active",
@@ -113,7 +110,7 @@ export async function ensurePgTenant(client: PoolClient, tenantId: string): Prom
 			bodySource: "generated",
 			revision: 1,
 			contentHash: computeEntityContentHash(DEFAULT_PROJECT_TITLE, ""),
-			projectId: DEFAULT_PROJECT_ID,
+			projectId: projectIdentity.stableId,
 			createdAt: now,
 			updatedAt: now
 		})
@@ -122,7 +119,8 @@ export async function ensurePgTenant(client: PoolClient, tenantId: string): Prom
 		.insert(entities)
 		.values({
 			tenantId,
-			id: DEFAULT_EPIC_ID,
+			id: epicIdentity.stableId,
+			reference: epicIdentity.reference,
 			kind: "epic",
 			title: DEFAULT_EPIC_TITLE,
 			status: "active",
@@ -130,14 +128,14 @@ export async function ensurePgTenant(client: PoolClient, tenantId: string): Prom
 			bodySource: "generated",
 			revision: 1,
 			contentHash: computeEntityContentHash(DEFAULT_EPIC_TITLE, ""),
-			projectId: DEFAULT_PROJECT_ID,
+			projectId: projectIdentity.stableId,
 			createdAt: now,
 			updatedAt: now
 		})
 		.onConflictDoNothing();
 	await client
 		.insert(relations)
-		.values({ tenantId, fromId: DEFAULT_PROJECT_ID, toId: DEFAULT_EPIC_ID, type: "contains", createdAt: now })
+		.values({ tenantId, fromId: projectIdentity.stableId, toId: epicIdentity.stableId, type: "contains", createdAt: now })
 		.onConflictDoNothing();
 }
 
@@ -150,6 +148,7 @@ export function mapEntityRow(row: EntityRow): EntityRecord {
 
 	return {
 		id: row.id,
+		reference: row.reference,
 		kind: row.kind,
 		title: row.title,
 		status: row.status,
@@ -165,6 +164,7 @@ export function mapEntityRow(row: EntityRow): EntityRecord {
 function mapDrizzleEntityRow(row: typeof entities.$inferSelect): EntityRecord {
 	return {
 		id: row.id,
+		reference: row.reference,
 		kind: row.kind as EntityKind,
 		title: row.title,
 		status: row.status,
@@ -177,27 +177,8 @@ function mapDrizzleEntityRow(row: typeof entities.$inferSelect): EntityRecord {
 	};
 }
 
-function mapHistoryEntryRow(row: HistoryEntryRow): HistoryEntryRecord {
-	return {
-		id: row.id,
-		entityId: row.entity_id,
-		version: row.version,
-		author: row.author,
-		title: row.title,
-		body: row.body,
-		bodySource: isBodySource(row.body_source) ? row.body_source : "authored",
-		status: row.status,
-		parentId: row.parent_id,
-		createdAt: row.created_at
-	};
-}
-
 export async function getEntityOrThrow(client: PoolClient, tenantId: string, entityId: string): Promise<EntityRecord> {
-	const [row] = await client
-		.select()
-		.from(entities)
-		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, entityId), eq(entities.tombstone, false)));
-
+	const row = await resolveEntity(client, tenantId, entityId);
 	if (!row) {
 		throw new Error(`Entity not found: ${entityId}`);
 	}
@@ -205,12 +186,30 @@ export async function getEntityOrThrow(client: PoolClient, tenantId: string, ent
 	return mapDrizzleEntityRow(row);
 }
 
+async function resolveEntity(client: PoolClient, tenantId: string, entityId: string, includeTombstone: boolean = false): Promise<typeof entities.$inferSelect | undefined> {
+	const livePredicate = includeTombstone ? undefined : eq(entities.tombstone, false);
+	let row: typeof entities.$inferSelect | undefined;
+	if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entityId)) {
+		[row] = await client
+			.select()
+			.from(entities)
+			.where(and(eq(entities.tenantId, tenantId), eq(entities.id, entityId), livePredicate));
+	} else {
+		[row] = await client
+			.select()
+			.from(entities)
+			.where(and(eq(entities.tenantId, tenantId), eq(entities.reference, entityId), livePredicate));
+	}
+
+	return row;
+}
+
 async function getStructuralParentRelations(client: PoolClient, tenantId: string, entityId: string): Promise<RelationRecord[]> {
 	const rows = await client
 		.select()
 		.from(relations)
 		.where(and(eq(relations.tenantId, tenantId), eq(relations.toId, entityId)))
-		.orderBy(asc(relations.fromId), asc(relations.type));
+		.orderBy(asc(relations.createdAt), asc(relations.fromId), asc(relations.type));
 
 	return rows
 		.filter((row) => isStructuralRelationType(row.type))
@@ -260,52 +259,8 @@ async function resolveOwningInitiativeId(client: PoolClient, tenantId: string, f
 	return structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
 }
 
-export async function nextEntityId(client: PoolClient, tenantId: string, kind: EntityKind): Promise<string> {
-	const [row] = await client
-		.select({ nextValue: counters.nextValue })
-		.from(counters)
-		.where(and(eq(counters.tenantId, tenantId), eq(counters.kind, kind)));
-
-	if (!row) {
-		throw new Error(`Counter missing for entity kind: ${kind}`);
-	}
-
-	await client
-		.update(counters)
-		.set({ nextValue: sql`${counters.nextValue} + 1` })
-		.where(and(eq(counters.tenantId, tenantId), eq(counters.kind, kind)));
-	return `${ID_PREFIX[kind]}${row.nextValue}`;
-}
-
-async function getNextHistoryVersion(client: PoolClient, tenantId: string, entityId: string): Promise<number> {
-	const [row] = await client
-		.select({ maxVersion: sql<number | null>`max(${historyEntries.version})` })
-		.from(historyEntries)
-		.where(and(eq(historyEntries.tenantId, tenantId), eq(historyEntries.entityId, entityId)));
-
-	return (row?.maxVersion ?? 0) + 1;
-}
-
-// Appends a full snapshot of `entity`'s current trackable facts as the next
-// history version (ADR8), mirroring `appendHistoryEntry` in core's
-// `store.ts` so both backends share the same append-only write path.
-async function appendHistoryEntry(client: PoolClient, tenantId: string, entity: EntityRecord, author: string | undefined): Promise<void> {
-	const parentId = (await getStructuralParentRelations(client, tenantId, entity.id))[0]?.fromId ?? null;
-	const version = await getNextHistoryVersion(client, tenantId, entity.id);
-
-	await client.insert(historyEntries).values({
-		id: randomUUID(),
-		tenantId,
-		entityId: entity.id,
-		version,
-		author: author?.trim() || RESERVED_SYSTEM_AUTHOR,
-		title: entity.title,
-		body: entity.body,
-		bodySource: entity.bodySource,
-		status: entity.status,
-		parentId,
-		createdAt: entity.updatedAt
-	});
+export async function nextEntityId(_client: PoolClient, _tenantId: string, kind: EntityKind): Promise<string> {
+	return generateCanonicalIdentity(kind).reference;
 }
 
 // Appends a reverse-patch entry (ADR55/ISS257) mirroring appendDeltaEntry in
@@ -323,10 +278,23 @@ async function appendDeltaEntry(
 	createdAt: string,
 	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; restoredFromRevision?: number } = {}
 ): Promise<void> {
-	await client.execute(sql`
-		INSERT INTO entity_delta_entries (id, tenant_id, entity_id, revision, author, prior_title, prior_body, prior_body_source, prior_status, prior_parent_id, prior_parent_changed, prior_tombstone, restored_from_revision, created_at)
-		VALUES (${randomUUID()}, ${tenantId}, ${entityId}, ${newRevision}, ${author?.trim() || RESERVED_SYSTEM_AUTHOR}, ${priorTitle}, ${priorBody}, ${priorBodySource}, ${lifecycle.priorStatus ?? null}, ${lifecycle.priorParentId ?? null}, ${Object.hasOwn(lifecycle, "priorParentId")}, ${lifecycle.priorTombstone ?? null}, ${lifecycle.restoredFromRevision ?? null}, ${createdAt})
-	`);
+	const [row] = await client.select().from(entities).where(and(eq(entities.tenantId, tenantId), eq(entities.id, entityId)));
+	if (!row) {
+		throw new Error(`Cannot append reverse patch for missing entity ${entityId}.`);
+	}
+	const successor = { title: row.title, body: row.body, bodySource: row.bodySource, status: row.status, parentId: (await getStructuralParentRelations(client, tenantId, entityId))[0]?.fromId ?? null, tombstone: row.tombstone };
+	const predecessor = {
+		...successor,
+		title: priorTitle,
+		body: priorBody,
+		bodySource: priorBodySource,
+		...(lifecycle.priorStatus !== undefined && { status: lifecycle.priorStatus }),
+		...(Object.hasOwn(lifecycle, "priorParentId") && { parentId: lifecycle.priorParentId ?? null }),
+		...(lifecycle.priorTombstone != null && { tombstone: lifecycle.priorTombstone })
+	};
+	const transition = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
+	if (!row.projectId) throw new Error(`Cannot append reverse patch for entity ${entityId} without a project.`);
+	await client.insert(revisionEntries).values({ id: randomUUID(), tenantId, projectId: row.projectId, recordKind: "entity", recordKey: encodeEntityRecordKey(row.id), revision: newRevision, author: author?.trim() || RESERVED_SYSTEM_AUTHOR, patchFormat: transition.patchFormat, reversePatch: Buffer.from(transition.reversePatch), sourceHash: encodeRevisionPatchHash(transition.sourceHash), targetHash: encodeRevisionPatchHash(transition.targetHash), restoredFromRevision: lifecycle.restoredFromRevision ?? null, createdAt });
 }
 
 async function getAllEntities(client: PoolClient, tenantId: string): Promise<EntityRecord[]> {
@@ -339,8 +307,65 @@ async function getAllRelations(client: PoolClient, tenantId: string): Promise<Re
 	return rows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }));
 }
 
-async function getDerivedStatusMap(client: PoolClient, tenantId: string): Promise<Map<string, string>> {
-	const entities = deriveEntityStatuses(await getAllEntities(client, tenantId), await getAllRelations(client, tenantId));
+async function getDerivedStatusMap(client: PoolClient, tenantId: string, rootIds?: string[]): Promise<Map<string, string>> {
+	if (rootIds?.length === 0) {
+		return new Map();
+	}
+	const result = rootIds
+		? await client.execute(sql`
+			WITH RECURSIVE status_entities AS (
+				SELECT id, kind, status
+				FROM entities
+				WHERE tenant_id = ${tenantId} AND tombstone = false AND id IN ${rootIds}
+				UNION
+				SELECT dependency.id, dependency.kind, dependency.status
+				FROM status_entities AS current
+				JOIN relations AS dependency_relation ON dependency_relation.tenant_id = ${tenantId}
+				JOIN entities AS dependency ON dependency.tenant_id = dependency_relation.tenant_id
+					AND dependency.tombstone = false
+					AND (
+						(current.kind = 'issue' AND dependency_relation.type = 'decomposes' AND dependency_relation.from_id = current.id AND dependency.id = dependency_relation.to_id)
+						OR (current.kind = 'userStory' AND dependency_relation.type = 'fixes' AND dependency_relation.to_id = current.id AND dependency.id = dependency_relation.from_id)
+						OR (current.kind = 'prd' AND dependency_relation.type = 'creates' AND dependency_relation.from_id = current.id AND dependency.id = dependency_relation.to_id)
+						OR (current.kind = 'initiative' AND dependency_relation.type IN ('tracks', 'owns') AND dependency_relation.from_id = current.id AND dependency.id = dependency_relation.to_id)
+						OR (current.kind = 'adr' AND dependency_relation.type = 'constrains' AND dependency_relation.from_id = current.id AND dependency.id = dependency_relation.to_id)
+						OR (dependency_relation.type = 'supersedes' AND dependency_relation.to_id = current.id AND dependency.id = dependency_relation.from_id AND dependency.kind = current.kind)
+					)
+			)
+			SELECT id, kind, status FROM status_entities
+		`)
+		: await client.execute(sql`
+			SELECT id, kind, status FROM entities
+			WHERE tenant_id = ${tenantId} AND tombstone = false
+		`);
+	const statusEntities = (result.rows as Array<{ id: string; kind: string; status: string }>).map((row) => ({
+		id: row.id,
+		reference: "",
+		kind: row.kind as EntityKind,
+		title: "",
+		status: row.status,
+		body: "",
+		bodySource: "authored" as const,
+		revision: 1,
+		contentHash: "",
+		createdAt: "",
+		updatedAt: ""
+	}));
+	const statusEntityIds = statusEntities.map((entity) => entity.id);
+	const relationRows = rootIds
+		? await client
+			.select()
+			.from(relations)
+			.where(and(
+				eq(relations.tenantId, tenantId),
+				inArray(relations.fromId, statusEntityIds),
+				inArray(relations.toId, statusEntityIds)
+			))
+		: undefined;
+	const statusRelations = relationRows
+		? relationRows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }))
+		: await getAllRelations(client, tenantId);
+	const entities = deriveEntityStatuses(statusEntities, statusRelations);
 	return new Map(entities.map((entity) => [entity.id, entity.status]));
 }
 
@@ -626,7 +651,7 @@ export async function createEntity(
 	await ensurePgTenant(client, tenantId);
 
 	const now = new Date().toISOString();
-	const parentId = input.parentId ?? (kind === "initiative" ? DEFAULT_EPIC_ID : undefined);
+	const parentId = input.parentId ?? (kind === "initiative" ? deriveMigratedEntityIdentity("epic", DEFAULT_EPIC_ID).stableId : undefined);
 	const parent = parentId ? await getEntityOrThrow(client, tenantId, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
 
@@ -634,7 +659,8 @@ export async function createEntity(
 		throw new Error(`Cannot create ${kind} under ${parent.kind}.`);
 	}
 
-	const id = await nextEntityId(client, tenantId, kind);
+	const identity = generateCanonicalIdentity(kind);
+	const id = identity.stableId;
 	const inheritedProjectId = parent
 		? await getEntityProjectId(client, tenantId, parent.id)
 		: await resolveProjectIdForWrite(client, tenantId, projectIdentity);
@@ -643,6 +669,7 @@ export async function createEntity(
 	await client.insert(entities).values({
 		tenantId,
 		id,
+		reference: identity.reference,
 		kind,
 		title,
 		status,
@@ -663,12 +690,15 @@ export async function createEntity(
 	}
 
 	for (const link of input.links ?? []) {
-		await linkEntities(client, tenantId, { fromId: id, relationType: link.relationType, toId: link.targetId });
+		await linkEntities(client, tenantId, { fromId: identity.stableId, relationType: link.relationType, toId: link.targetId });
 	}
 
-	const entity = await getEntityOrThrow(client, tenantId, id);
-	await appendHistoryEntry(client, tenantId, entity, input.author);
-	return entity;
+	// Write the baseline revision-1 entry: a no-op patch (predecessor ==
+	// successor) so listEntityHistory always has a real revision_entries row
+	// for every revision in the chain, including the initial one.
+	await appendDeltaEntry(client, tenantId, id, 1, title, body, bodySource, input.author, now);
+
+	return getEntityOrThrow(client, tenantId, id);
 }
 
 export async function getEntityDetails(client: PoolClient, tenantId: string, entityId: string): Promise<EntityDetails> {
@@ -678,18 +708,67 @@ export async function getEntityDetails(client: PoolClient, tenantId: string, ent
 		SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${tenantId} AND relations.to_id = ${entityId}
+		WHERE relations.tenant_id = ${tenantId} AND relations.to_id = ${entity.id}
 		ORDER BY entities.id
 	`);
 	const outgoingResult = await client.execute(sql`
 		SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${tenantId} AND relations.from_id = ${entityId}
+		WHERE relations.tenant_id = ${tenantId} AND relations.from_id = ${entity.id}
 		ORDER BY entities.id
 	`);
 
 	const statusMap = await getDerivedStatusMap(client, tenantId);
+
+	return {
+		entity: applyDerivedStatus(entity, statusMap),
+		incoming: (incomingResult.rows as Array<EntityRow & { type: string }>).map((row) => ({
+			relationType: row.type as RelationType,
+			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+		})),
+		outgoing: (outgoingResult.rows as Array<EntityRow & { type: string }>).map((row) => ({
+			relationType: row.type as RelationType,
+			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+		}))
+	};
+}
+
+export async function queryEntityRelations(
+	client: PoolClient,
+	tenantId: string,
+	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] }
+): Promise<EntityDetails> {
+	const entity = await getEntityOrThrow(client, tenantId, input.entityId);
+	const typeFilter = input.types?.length ? sql`AND relations.type IN ${input.types}` : sql``;
+	const includeIncoming = input.direction === undefined || input.direction === "both" || input.direction === "incoming";
+	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
+	const incomingResult = includeIncoming
+		? await client.execute(sql`
+			SELECT relations.type, entities.*
+			FROM relations
+			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
+			WHERE relations.tenant_id = ${tenantId} AND relations.to_id = ${entity.id}
+				AND entities.tombstone = false ${typeFilter}
+			ORDER BY entities.id
+		`)
+		: { rows: [] };
+	const outgoingResult = includeOutgoing
+		? await client.execute(sql`
+			SELECT relations.type, entities.*
+			FROM relations
+			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
+			WHERE relations.tenant_id = ${tenantId} AND relations.from_id = ${entity.id}
+				AND entities.tombstone = false ${typeFilter}
+			ORDER BY entities.id
+		`)
+		: { rows: [] };
+	const relatedIds = [
+		entity.id,
+		...(incomingResult.rows as EntityRow[]).map((row) => row.id),
+		...(outgoingResult.rows as EntityRow[]).map((row) => row.id)
+	];
+	const statusMap = await getDerivedStatusMap(client, tenantId, relatedIds);
 
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
@@ -713,26 +792,157 @@ export async function listEntities(client: PoolClient, tenantId: string, kind: s
 	return entities.filter((entity) => entity.kind === kind);
 }
 
+export async function queryEntities(
+	client: PoolClient,
+	tenantId: string,
+	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
+): Promise<{ entities: EntityRecord[]; total: number }> {
+	if (!isEntityKind(input.kind)) {
+		throw new Error(`Unknown entity kind: ${input.kind}`);
+	}
+
+	let parentId: string | undefined;
+	if (input.parentId) {
+		const parent = await resolveEntity(client, tenantId, input.parentId);
+		if (!parent) {
+			return { entities: [], total: 0 };
+		}
+		parentId = parent.id;
+	}
+	const candidateResult = parentId
+		? await client.execute(sql`
+			SELECT entity.id
+			FROM entities AS entity
+			JOIN relations AS parent_relation
+				ON parent_relation.tenant_id = entity.tenant_id AND parent_relation.to_id = entity.id
+			WHERE entity.tenant_id = ${tenantId}
+				AND entity.tombstone = false
+				AND entity.kind = ${input.kind}
+				AND parent_relation.from_id = ${parentId}
+				AND parent_relation.type IN ${STRUCTURAL_RELATION_TYPES}
+			ORDER BY entity.id
+		`)
+		: await client.execute(sql`
+			SELECT id FROM entities
+			WHERE tenant_id = ${tenantId} AND tombstone = false AND kind = ${input.kind}
+			ORDER BY id
+		`);
+	let selectedIds = (candidateResult.rows as Array<{ id: string }>).map((row) => row.id);
+	let statusMap: Map<string, string>;
+	if (input.statuses?.length) {
+		statusMap = await getDerivedStatusMap(client, tenantId, selectedIds);
+		const statuses = new Set(input.statuses);
+		selectedIds = selectedIds.filter((entityId) => statuses.has(statusMap.get(entityId) ?? ""));
+	} else {
+		const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
+		statusMap = await getDerivedStatusMap(client, tenantId, limitedIds);
+	}
+	const total = selectedIds.length;
+	const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
+	if (limitedIds.length === 0) {
+		return { entities: [], total };
+	}
+	const selectedRows = await client.select().from(entities).where(and(
+		eq(entities.tenantId, tenantId),
+		inArray(entities.id, limitedIds)
+	));
+	const selectedById = new Map(selectedRows.map((row) => [row.id, applyDerivedStatus(mapDrizzleEntityRow(row), statusMap)]));
+
+	return {
+		entities: limitedIds.map((entityId) => selectedById.get(entityId)!),
+		total
+	};
+}
+
 export async function listEntityHistory(client: PoolClient, tenantId: string, entityId: string): Promise<HistoryEntryRecord[]> {
-	const rows = await client
+	const row = await resolveEntity(client, tenantId, entityId, true);
+	if (!row) {
+		return [];
+	}
+
+	const headRevision = row.revision ?? 1;
+	const currentParentIds = (await getStructuralParentRelations(client, tenantId, entityId)).map((relation) => relation.fromId);
+
+	const deltaRows = await client
 		.select()
-		.from(historyEntries)
-		.where(and(eq(historyEntries.tenantId, tenantId), eq(historyEntries.entityId, entityId)))
-		.orderBy(asc(historyEntries.version));
-	return rows.map((row) =>
-		mapHistoryEntryRow({
-			id: row.id,
-			entity_id: row.entityId,
-			version: row.version,
-			author: row.author,
-			title: row.title,
-			body: row.body,
-			body_source: row.bodySource,
-			status: row.status,
-			parent_id: row.parentId,
-			created_at: row.createdAt
-		})
+		.from(revisionEntries)
+		.where(
+			and(
+				eq(revisionEntries.tenantId, tenantId),
+				eq(revisionEntries.recordKind, "entity"),
+				eq(revisionEntries.recordKey, encodeEntityRecordKey(entityId))
+			)
+		)
+		.orderBy(desc(revisionEntries.revision));
+
+	const patchByRevision = new Map(deltaRows.map((d) => [d.revision, d]));
+	const newestPatch = patchByRevision.get(headRevision);
+	const headState = {
+		title: row.title,
+		body: row.body,
+		bodySource: isBodySource(row.bodySource) ? (row.bodySource as BodySource) : "authored",
+		status: row.status,
+		tombstone: row.tombstone
+	};
+	const currentParentId = resolveRevisionHeadParentId(entityId, headState, currentParentIds, newestPatch?.sourceHash);
+
+	let state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } = {
+		...headState,
+		parentId: currentParentId,
+	};
+
+	const entries: HistoryEntryRecord[] = [];
+
+	for (let revision = headRevision; revision >= 1; revision--) {
+		const patch = patchByRevision.get(revision);
+		if (!patch) {
+			throw new EntityRevisionError(entityId, "broken-chain", `Missing revision_entries row for entity ${entityId} at revision ${revision}`, headRevision);
+		}
+		entries.push({
+			id: patch.id,
+			entityId: row.id,
+			version: revision,
+			author: patch.author,
+			title: state.title,
+			body: state.body,
+			bodySource: state.bodySource,
+			status: state.status,
+			parentId: state.parentId,
+			createdAt: patch.createdAt
+		});
+		if (revision > 1) {
+			state = applyReversePatch(state, {
+				revision: patch.revision,
+				author: patch.author,
+				createdAt: patch.createdAt,
+				patchFormat: patch.patchFormat,
+				reversePatch: patch.reversePatch,
+				sourceHash: decodeRevisionPatchHash(patch.sourceHash),
+				targetHash: decodeRevisionPatchHash(patch.targetHash)
+			});
+		}
+	}
+
+	return entries.reverse();
+}
+
+function resolveRevisionHeadParentId(
+	entityId: string,
+	state: { title: string; body: string; bodySource: BodySource; status: string; tombstone: boolean | null },
+	parentIds: string[],
+	sourceHash: Uint8Array | undefined
+): string | null {
+	if (!sourceHash) {
+		return parentIds[0] ?? null;
+	}
+	const expectedHash = decodeRevisionPatchHash(sourceHash);
+	const matches = [...new Set<string | null>([null, ...parentIds])].filter((parentId) =>
+		createReverseFieldPatch({ ...state, parentId }, { ...state, parentId }, ENTITY_REVERSE_PATCH_REGISTRY).sourceHash === expectedHash
 	);
+	if (matches.length !== 1) {
+		throw new EntityRevisionError(entityId, "broken-chain", `Cannot uniquely resolve revision head parent for entity ${entityId}`);
+	}
+	return matches[0]!;
 }
 
 // Relations are an idempotent key union after canonical heads import. This
@@ -754,7 +964,9 @@ export async function listAllRelations(client: PoolClient, tenantId: string): Pr
 export async function applyRelations(client: PoolClient, tenantId: string, relations: RelationRecord[]): Promise<{ inserted: number }> {
 	let inserted = 0;
 	for (const relation of relations) {
-		const { inserted: wasInserted } = await insertRelation(client, tenantId, relation);
+		const from = await getEntityOrThrow(client, tenantId, relation.fromId);
+		const to = await getEntityOrThrow(client, tenantId, relation.toId);
+		const { inserted: wasInserted } = await insertRelation(client, tenantId, { ...relation, fromId: from.id, toId: to.id });
 		if (wasInserted) {
 			inserted += 1;
 		}
@@ -904,17 +1116,17 @@ export async function updateEntityStatus(
 	const updated = await client
 		.update(entities)
 		.set({ status: input.status, revision: newRevision, updatedAt })
-		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, input.entityId), eq(entities.revision, entity.revision)))
+		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.returning({ id: entities.id });
 	if (updated.length === 0) {
-		const current = await getEntityOrThrow(client, tenantId, input.entityId);
+		const current = await getEntityOrThrow(client, tenantId, entity.id);
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
 	await appendDeltaEntry(client, tenantId, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
 		priorStatus: entity.status
 	});
 
-	return { entity: await getEntityOrThrow(client, tenantId, input.entityId), previousStatus };
+	return { entity: await getEntityOrThrow(client, tenantId, entity.id), previousStatus };
 }
 
 export async function setEntityBody(
@@ -936,16 +1148,16 @@ export async function setEntityBody(
 	const [guard] = await client
 		.update(entities)
 		.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
-		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, input.entityId), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
+		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
 	if (!guard) {
-		const fresh = await getEntityOrThrow(client, tenantId, input.entityId);
+		const fresh = await getEntityOrThrow(client, tenantId, current.id);
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(client, tenantId, input.entityId, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
-	return getEntityOrThrow(client, tenantId, input.entityId);
+	await appendDeltaEntry(client, tenantId, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+	return getEntityOrThrow(client, tenantId, current.id);
 }
 
 export async function updateEntity(
@@ -975,16 +1187,16 @@ export async function updateEntity(
 	const [guard] = await client
 		.update(entities)
 		.set({ title, body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
-		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, input.entityId), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
+		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
 	if (!guard) {
-		const fresh = await getEntityOrThrow(client, tenantId, input.entityId);
+		const fresh = await getEntityOrThrow(client, tenantId, current.id);
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(client, tenantId, input.entityId, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
-	return getEntityOrThrow(client, tenantId, input.entityId);
+	await appendDeltaEntry(client, tenantId, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+	return getEntityOrThrow(client, tenantId, current.id);
 }
 
 export async function materializeEntityRevision(
@@ -992,10 +1204,7 @@ export async function materializeEntityRevision(
 	tenantId: string,
 	input: { entityId: string; revision: number }
 ): Promise<MaterializedEntityRevision> {
-	const [row] = await client
-		.select()
-		.from(entities)
-		.where(and(eq(entities.tenantId, tenantId), eq(entities.id, input.entityId)));
+	const row = await resolveEntity(client, tenantId, input.entityId, true);
 	if (!row) {
 		throw new EntityRevisionError(input.entityId, "entity-not-found", `Entity not found: ${input.entityId}`);
 	}
@@ -1004,19 +1213,17 @@ export async function materializeEntityRevision(
 	const parentId = (await getStructuralParentRelations(client, tenantId, entity.id))[0]?.fromId ?? null;
 	const deltaRows = await client
 		.select()
-		.from(entityDeltaEntries)
-		.where(and(eq(entityDeltaEntries.tenantId, tenantId), eq(entityDeltaEntries.entityId, entity.id)))
-		.orderBy(desc(entityDeltaEntries.revision));
+		.from(revisionEntries)
+		.where(and(eq(revisionEntries.tenantId, tenantId), eq(revisionEntries.recordKind, "entity"), eq(revisionEntries.recordKey, encodeEntityRecordKey(row.id))))
+		.orderBy(desc(revisionEntries.revision));
 	const patches: EntityRevisionPatch[] = deltaRows.map((delta) => ({
 		revision: delta.revision,
 		author: delta.author,
 		createdAt: delta.createdAt,
-		priorTitle: delta.priorTitle,
-		priorBody: delta.priorBody,
-		priorBodySource: isBodySource(delta.priorBodySource) ? delta.priorBodySource : "authored",
-		...(delta.priorStatus !== null && { priorStatus: delta.priorStatus }),
-		...(delta.priorParentChanged && { priorParentId: delta.priorParentId }),
-		...(delta.priorTombstone !== null && { priorTombstone: delta.priorTombstone }),
+		patchFormat: delta.patchFormat,
+		reversePatch: delta.reversePatch,
+		sourceHash: decodeRevisionPatchHash(delta.sourceHash),
+		targetHash: decodeRevisionPatchHash(delta.targetHash),
 		...(delta.restoredFromRevision !== null && { restoredFromRevision: delta.restoredFromRevision })
 	}));
 
@@ -1043,7 +1250,7 @@ export async function restoreEntityRevision(
 	tenantId: string,
 	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
 ): Promise<MaterializedEntityRevision> {
-	const [row] = await client.select().from(entities).where(and(eq(entities.tenantId, tenantId), eq(entities.id, input.entityId)));
+	const row = await resolveEntity(client, tenantId, input.entityId, true);
 	if (!row) {
 		throw new EntityRevisionError(input.entityId, "entity-not-found", `Entity not found: ${input.entityId}`);
 	}
@@ -1051,7 +1258,7 @@ export async function restoreEntityRevision(
 	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
-	const source = await materializeEntityRevision(client, tenantId, { entityId: input.entityId, revision: input.revision });
+	const source = await materializeEntityRevision(client, tenantId, { entityId: current.id, revision: input.revision });
 	const currentParentId = (await getStructuralParentRelations(client, tenantId, current.id))[0]?.fromId ?? null;
 	let restoredParent: EntityRecord | null = null;
 	let restoredRelationType: RelationType | null = null;
@@ -1190,7 +1397,7 @@ export async function deleteEntity(client: PoolClient, tenantId: string, input: 
 				eq(entities.tenantId, tenantId),
 				eq(entities.kind, "handoff"),
 				eq(entities.tombstone, false),
-				eq(relations.toId, input.entityId),
+				eq(relations.toId, entity.id),
 				eq(relations.type, "handsOff")
 			)
 		);
@@ -1213,7 +1420,7 @@ export async function deleteEntity(client: PoolClient, tenantId: string, input: 
 	const [outgoingResult] = await client
 		.select({ count: sql<number>`count(*)` })
 		.from(relations)
-		.where(and(eq(relations.tenantId, tenantId), eq(relations.fromId, input.entityId)));
+		.where(and(eq(relations.tenantId, tenantId), eq(relations.fromId, entity.id)));
 	if (Number(outgoingResult?.count ?? 0) > 0) {
 		throw new Error(`Cannot delete ${entity.id} while it still has outgoing relations. Unlink or delete dependents first.`);
 	}
@@ -1229,15 +1436,15 @@ export async function deleteEntity(client: PoolClient, tenantId: string, input: 
 		.where(
 			and(
 				eq(entities.tenantId, tenantId),
-				eq(entities.id, input.entityId),
+				eq(entities.id, entity.id),
 				eq(entities.tombstone, false),
 				eq(entities.revision, entity.revision)
 			)
 		)
 		.returning({ id: entities.id });
 	if (removed.length === 0) {
-		const current = await getEntityOrThrow(client, tenantId, input.entityId);
-		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
+		const current = await getEntityOrThrow(client, tenantId, entity.id);
+		throw new EntityConflictError(entity.id, current.revision, current.contentHash);
 	}
 	await appendDeltaEntry(client, tenantId, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
 		priorParentId: previousParentId,
@@ -1313,7 +1520,7 @@ export async function getInitiativeBundle(
 
 	const reachableResult = await client.execute(sql`
 		WITH RECURSIVE reachable(id) AS (
-			SELECT ${initiativeId}::text
+			SELECT ${initiative.id}::uuid
 			UNION
 			SELECT CASE
 				WHEN relations.from_id = reachable.id THEN relations.to_id
@@ -1333,7 +1540,7 @@ export async function getInitiativeBundle(
 
 	const entityResult = await client.execute(sql`
 		SELECT * FROM entities
-		WHERE tenant_id = ${tenantId} AND id = ANY(ARRAY[${sql.join([...selectedIds], sql`, `)}]::text[])
+		WHERE tenant_id = ${tenantId} AND id = ANY(ARRAY[${sql.join([...selectedIds], sql`, `)}]::uuid[])
 		ORDER BY id
 	`);
 	const relationResult = await client.execute(sql`SELECT * FROM relations WHERE tenant_id = ${tenantId}`);
@@ -1468,7 +1675,7 @@ async function resolveProjectIdForWrite(client: PoolClient, tenantId: string, pr
 		}
 	}
 
-	return DEFAULT_PROJECT_ID;
+	return (await getEntityOrThrow(client, tenantId, deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId)).id;
 }
 
 async function refreshProjectAssignments(client: PoolClient, tenantId: string, projectIdentity?: string): Promise<void> {
@@ -1480,7 +1687,8 @@ async function refreshProjectAssignments(client: PoolClient, tenantId: string, p
 	const relations = relationResult.rows as Array<{ from_id: string; to_id: string; type: string }>;
 	const assignment = assignEntitiesToProjects(
 		entities,
-		relations.map((relation) => ({ fromId: relation.from_id, toId: relation.to_id, type: relation.type }))
+		relations.map((relation) => ({ fromId: relation.from_id, toId: relation.to_id, type: relation.type })),
+		deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId
 	);
 	const fallbackProjectId = await resolveProjectIdForWrite(client, tenantId, projectIdentity);
 
@@ -1501,7 +1709,8 @@ export async function getProjectDiscovery(
 	const relations = await getAllRelations(client, tenantId);
 	const statusMap = new Map(deriveEntityStatuses(entities, relations).map((entity) => [entity.id, entity.status]));
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, statusMap));
-	const projects = derivedEntities.filter((entity) => entity.kind === "project" && entity.id !== DEFAULT_PROJECT_ID);
+	const defaultProjectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
+	const projects = derivedEntities.filter((entity) => entity.kind === "project" && entity.id !== defaultProjectId);
 	if (input?.projectId && !projects.some((project) => project.id === input.projectId)) {
 		return { kind: "unavailable" };
 	}

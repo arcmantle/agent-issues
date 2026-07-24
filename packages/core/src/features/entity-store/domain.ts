@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ReverseFieldPatchTransition } from "../reverse-field-patch/reverse-field-patch.js";
 
 export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue", "handoff"] as const;
 
@@ -93,6 +94,7 @@ export type StructuralRelationType = (typeof STRUCTURAL_RELATION_TYPES)[number];
 
 export type EntityRecord = {
 	id: string;
+	reference: string;
 	kind: EntityKind;
 	title: string;
 	status: string;
@@ -121,17 +123,11 @@ export function computeEntityContentHash(title: string, body: string): string {
  * are optional until ISS258 writes lifecycle deltas; parent and tombstone may
  * also explicitly be `null` in a historical state.
  */
-export type EntityRevisionPatch = {
+export type EntityRevisionPatch = ReverseFieldPatchTransition & {
 	revision: number;
 	author: string;
 	createdAt: string;
 	restoredFromRevision?: number;
-	priorTitle: string;
-	priorBody: string;
-	priorBodySource: BodySource;
-	priorStatus?: string;
-	priorParentId?: string | null;
-	priorTombstone?: boolean | null;
 };
 
 /**
@@ -212,12 +208,10 @@ export type RelationRecord = {
 // that does not supply one.
 export const RESERVED_SYSTEM_AUTHOR = "system";
 
-// A single append-only entry in an entity's history log (ADR8/ADR16). Each
-// entry is a FULL snapshot of that entity's trackable facts at the time of
-// the write, not a diff, so "resolve latest" and point-in-time
-// reconstruction are both just "read one row". `version` here is the
-// per-entity revision counter (ADR16's "record version" clock) - unrelated
-// to the `version` ENTITY KIND (ISS38's release-line tracking).
+// A materialized entry in an entity's append-only revision history. The
+// storage layer reconstructs these facts from `revision_entries` plus the
+// current head. `version` is the per-entity revision counter, unrelated to
+// the `version` entity kind.
 export type HistoryEntryRecord = {
 	id: string;
 	entityId: string;
@@ -595,7 +589,8 @@ export function wouldOrphanSubtree(entities: EntityRecord[], relations: Relation
  */
 export function assignEntitiesToProjects(
 	entities: readonly { id: string; kind: string }[],
-	relations: readonly { fromId: string; toId: string; type: string }[]
+	relations: readonly { fromId: string; toId: string; type: string }[],
+	defaultProjectId = DEFAULT_PROJECT_ID
 ): Map<string, string> {
 	const structuralRelations = relations
 		.filter((relation) => isStructuralRelationType(relation.type))
@@ -611,8 +606,8 @@ export function assignEntitiesToProjects(
 		}
 	}
 
-	const fallbackProjectId = projectIds.includes(DEFAULT_PROJECT_ID)
-		? DEFAULT_PROJECT_ID
+	const fallbackProjectId = projectIds.includes(defaultProjectId)
+		? defaultProjectId
 		: projectIds.length === 1
 			? projectIds[0]
 			: undefined;
