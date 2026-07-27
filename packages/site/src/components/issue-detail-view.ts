@@ -96,7 +96,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			data-cross-link=${crossLink ? "true" : nothing}
 			@click=${this.onSelectEntityClick}
 		>
-			<span class="r-id">${record.id}</span>
+			<span class="r-id">${store.shortRef(record)}</span>
 			<span class="r-title">${record.title}</span>
 			<span class=${`badge ${store.badgeTone(record.status)}`}>${record.status}</span>
 		</button>
@@ -209,7 +209,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			<h1 class="ai-d-title">
 				${entity.title}
 				<span class=${`badge ${store.badgeTone(entity.status)}`}>${entity.status}</span>
-				<span class="ai-id">${entity.id}</span>
+				<span class="ai-id">${store.shortRef(entity)}</span>
 			</h1>
 			<div class="ai-meta">
 				${repeat(

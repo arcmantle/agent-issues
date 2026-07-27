@@ -109,7 +109,7 @@ class CascadeView extends SignalWatcher(LitElement) {
 						const leaf = store.entityForId(leafId);
 						return html`
 						<button class="re-root-chip" data-index=${index} title=${leaf?.title ?? leafId} @click=${this.onChipClick}>
-							${leafId}
+							${leaf ? store.shortRef(leaf) : leafId}
 						</button>
 						`;
 					}
@@ -145,7 +145,7 @@ class CascadeView extends SignalWatcher(LitElement) {
 					const childId = path[index + 1]?.id ?? null;
 					const branch = childId ? store.cascadeSeamFor(entity.id, childId).branch : null;
 					const label = html`
-						<span class="crumb-id">${entity.id}</span>
+						<span class="crumb-id">${store.shortRef(entity)}</span>
 						<span class="crumb-title">${entity.title}</span>
 					`;
 					return html`

@@ -383,7 +383,7 @@ describe("id-driven detail meta", () => {
 
 		const meta = new Map(store.detailMetaFor("ISS9"));
 
-		expect(meta.get("Initiative")).toBe("INIT2 Status derivation");
+		expect(meta.get("Initiative")).toBe(`${store.shortRef(initiative)} Status derivation`);
 		expect(meta.get("Status")).toBe("todo");
 		expect(store.selectedId.get()).toBeNull();
 	});

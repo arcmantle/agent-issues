@@ -412,7 +412,7 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 			return {
 				data: {
 					id: graphEntity.id,
-					label: `${graphEntity.id}\n${store.truncate(graphEntity.title, 30)}`,
+					label: `${store.shortRef(graphEntity)}\n${store.truncate(graphEntity.title, 30)}`,
 					selected: graphEntity.id === entity.id
 				},
 				classes

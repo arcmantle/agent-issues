@@ -94,7 +94,7 @@ class IssueListView extends SignalWatcher(LitElement) {
 			<div class="initiative-card-header">
 				<div>
 					<div class="section-label">Initiative</div>
-					<h3>${bundle.initiative.id} ${bundle.initiative.title}</h3>
+					<h3>${store.shortRef(bundle.initiative)} ${bundle.initiative.title}</h3>
 				</div>
 				<span class=${`badge ${store.statusTone(bundle.initiative.status)}`}>${bundle.initiative.status}</span>
 			</div>
@@ -122,7 +122,7 @@ class IssueListView extends SignalWatcher(LitElement) {
 			@click=${this.onSelectEntityClick}
 		>
 			<div class="issue-row-top">
-				<div class="issue-row-title">${entity.id} ${entity.title}</div>
+				<div class="issue-row-title">${store.shortRef(entity)} ${entity.title}</div>
 				<div class="badge-row">
 					<span class="badge neutral">ADR</span>
 					<span class=${`badge ${store.statusTone(entity.status)}`}>${entity.status}</span>

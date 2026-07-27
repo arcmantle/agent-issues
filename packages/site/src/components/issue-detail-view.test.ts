@@ -101,7 +101,7 @@ describe("entity detail pane", () => {
 		const root = view.shadowRoot;
 		expect(root?.querySelector(".ai-kind")?.textContent?.trim()).toBe("Issue");
 		expect(root?.querySelector(".ai-d-title")?.textContent).toContain("Wire the detail pane");
-		expect(root?.querySelector(".ai-d-title .ai-id")?.textContent?.trim()).toBe("ISS9");
+		expect(root?.querySelector(".ai-d-title .ai-id")?.textContent?.trim()).toBe(store.shortRef(issue));
 		expect(root?.querySelector(".ai-d-title .badge")?.textContent?.trim()).toBe("todo");
 	});
 
@@ -141,7 +141,7 @@ describe("entity detail pane", () => {
 
 		const root = view.shadowRoot;
 		expect(root?.querySelector(".ai-d-title")?.textContent).toContain("Wire the detail pane");
-		expect(root?.querySelector(".ai-d-title .ai-id")?.textContent?.trim()).toBe("ISS9");
+		expect(root?.querySelector(".ai-d-title .ai-id")?.textContent?.trim()).toBe(store.shortRef(issue));
 		expect(store.selectedId.get()).toBeNull();
 	});
 
@@ -161,7 +161,7 @@ describe("entity detail pane", () => {
 		const sectionTitle = view.shadowRoot?.querySelector(".ai-sec h2");
 		const ref = view.shadowRoot?.querySelector(".ai-sec .ai-ref");
 		expect(sectionTitle?.textContent?.trim()).toBe("Fixed by");
-		expect(ref?.querySelector(".r-id")?.textContent?.trim()).toBe("ISS9");
+		expect(ref?.querySelector(".r-id")?.textContent?.trim()).toBe(store.shortRef(issue));
 		expect(ref?.querySelector(".r-title")?.textContent?.trim()).toBe("Wire the detail pane");
 	});
 
@@ -210,8 +210,8 @@ describe("entity detail pane", () => {
 		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
 		expect(sectionTitles).toContain("Sub-issues");
 		const nestedRefs = [...(view.shadowRoot?.querySelectorAll(".ai-issue-tree .ai-ref .r-id") ?? [])].map((node) => node.textContent?.trim());
-		expect(nestedRefs).toEqual(["ISS2", "ISS3"]);
-		expect(view.shadowRoot?.querySelector(".ai-issue-tree-children .ai-ref .r-id")?.textContent?.trim()).toBe("ISS3");
+		expect(nestedRefs).toEqual([store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
+		expect(view.shadowRoot?.querySelector(".ai-issue-tree-children .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(nestedSubIssue));
 	});
 
 	it("renders the parent issue section when a sub-issue is open", async () => {
@@ -228,7 +228,7 @@ describe("entity detail pane", () => {
 
 		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
 		expect(sectionTitles).toContain("Parent issue");
-		expect(view.shadowRoot?.querySelector(".ai-refs .ai-ref .r-id")?.textContent?.trim()).toBe("ISS1");
+		expect(view.shadowRoot?.querySelector(".ai-refs .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(parentIssue));
 	});
 
 	it("highlights the child reference matching the active child id", async () => {
@@ -314,7 +314,7 @@ describe("entity detail pane", () => {
 		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
 		expect(sectionTitles).toContain("Creates");
 		expect(view.shadowRoot?.querySelector('.ai-story-list .ai-ref[data-id="US1"]')).not.toBeNull();
-		expect([...view.shadowRoot?.querySelectorAll('.ai-story-issues .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual(["ISS1", "ISS2"]);
+		expect([...view.shadowRoot?.querySelectorAll('.ai-story-issues .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue)]);
 	});
 
 	it("collapses and expands nested sub-issues in the issue detail tree", async () => {
@@ -341,12 +341,12 @@ describe("entity detail pane", () => {
 		const toggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.branch-toggle[data-id="ISS2"]');
 		toggle?.click();
 		await view.updateComplete;
-		expect(view.shadowRoot?.querySelector('.ai-issue-tree-children .ai-ref .r-id')?.textContent?.trim()).not.toBe("ISS3");
-		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual(["ISS2"]);
+		expect(view.shadowRoot?.querySelector('.ai-issue-tree-children .ai-ref .r-id')?.textContent?.trim()).not.toBe(store.shortRef(nestedSubIssue));
+		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(subIssue)]);
 
 		toggle?.click();
 		await view.updateComplete;
-		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual(["ISS2", "ISS3"]);
+		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
 	});
 
 	it("offers a back control that closes the open record", async () => {

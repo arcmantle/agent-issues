@@ -247,7 +247,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			<div class="project-card-head">
 				<div>
 					<h2>${rollup.project.title}</h2>
-					<p>${rollup.project.id}</p>
+					<p>${this.store.shortRef(rollup.project)}</p>
 				</div>
 				<span class="badge ${this.store.badgeTone(rollup.project.status)}">${rollup.project.status}</span>
 			</div>
@@ -389,7 +389,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				<span class=${`badge ${store.badgeTone(adr.status)}`}>${adr.status}</span>
 			</div>
 			<div class="m-meta">
-				<span class="idtag">${adr.id}</span>
+				<span class="idtag">${store.shortRef(adr)}</span>
 				<span>${entry.scopeLabel}</span>
 				<span>updated ${store.formatTimestamp(adr.updatedAt)}</span>
 			</div>

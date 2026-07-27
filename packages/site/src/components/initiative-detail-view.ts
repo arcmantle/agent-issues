@@ -152,7 +152,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					data-id=${node.issue.id}
 					@click=${this.onSelectEntityClick}
 				>
-				<span class="idtag">${node.issue.id}</span>
+				<span class="idtag">${store.shortRef(node.issue)}</span>
 				<span class=${`issue-dot ${store.issueStatusTone(node.issue.status)}`}></span>
 				<span class="child-title">${node.issue.title}</span>
 				<span class=${`badge ${store.badgeTone(node.issue.status)}`}>${node.issue.status}</span>
@@ -190,7 +190,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				data-id=${story.id}
 				@click=${this.onSelectEntityClick}
 			>
-				<span class="idtag">${story.id}</span>
+				<span class="idtag">${store.shortRef(story)}</span>
 				<span class="s-title">${story.title}</span>
 				<span class=${`badge ${store.badgeTone(story.status)}`}>${story.status}</span>
 				<span class="chev">›</span>
@@ -267,7 +267,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			data-id=${entity.id}
 			@click=${this.onSelectEntityClick}
 		>
-			<span class="idtag">${entity.id}</span>
+			<span class="idtag">${store.shortRef(entity)}</span>
 			<span class="line-title">${entity.title}</span>
 			<span class=${`badge ${store.badgeTone(entity.status)}`}>${entity.status}</span>
 		</button>

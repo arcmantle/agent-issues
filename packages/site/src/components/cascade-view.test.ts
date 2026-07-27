@@ -420,7 +420,7 @@ describe("re-root trail strip", () => {
 		const view = await mountCascade(store);
 
 		const chipIds = [...(view.shadowRoot?.querySelectorAll(".re-root-chip") ?? [])].map((chip) => chip.textContent?.trim());
-		expect(chipIds).toEqual(["ISS18", "ISS30"]);
+		expect(chipIds).toEqual([store.shortRef({ id: "ISS18", kind: "issue" }), store.shortRef({ id: "ISS30", kind: "issue" })]);
 	});
 
 	it("restores the whole stack when a chip is clicked", async () => {
