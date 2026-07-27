@@ -9,8 +9,8 @@ import { eq, sql } from "drizzle-orm";
 import type { TenantExecutor as PoolClient } from "./connection.js";
 import { contextTerms, contexts, counters, entities, relations, revisionEntries } from "../schema.js";
 
-import type { EntityRow, RelationRow } from "../features/entity-store/pg-entity-store.js";
-import type { ContextRow, ContextTermRow } from "../features/context/pg-context-store.js";
+import type { EntityRow, RelationRow } from "../features/entity-store/store.js";
+import type { ContextRow, ContextTermRow } from "../features/context/context-store.js";
 
 type CounterRow = {
 	kind: string;

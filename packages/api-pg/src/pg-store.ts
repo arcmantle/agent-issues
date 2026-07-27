@@ -33,49 +33,11 @@ import { measureHistory } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
-import { exportCanonicalChains, importCanonicalChains } from "./features/synchronize/pg-canonical-chain-store.js";
+import { PgSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import { deleteTenant, listTenants, renameTenant } from "./db/tenant-admin.js";
-import {
-	defineContextTerm,
-	forgetContextTerm,
-	getContextDetails,
-	getContextDirectory,
-	listContexts,
-	materializeContextRevision,
-	materializeContextTermRevision,
-	queryContextDirectory,
-	restoreContextRevision,
-	restoreContextTermRevision,
-	upsertContext
-} from "./features/context/pg-context-store.js";
-import {
-	applyRelations,
-	archiveEntity,
-	createEntity,
-	deleteEntity,
-	getDatabaseSnapshot,
-	getProjectDiscovery,
-	getEntityDetails,
-	getInitiativeBundle,
-	getSnapshotSignature,
-	linkEntities,
-	listAllRelations,
-	primeCurrentProjectId,
-	listEntities,
-	listEntityHistory,
-	listOrphans,
-	listProjectAdrs,
-	materializeEntityRevision,
-	moveEntity,
-	queryEntities,
-	queryEntityRelations,
-	restoreEntityRevision,
-	setEntityBody,
-	unlinkEntities,
-	updateEntity,
-	updateEntityStatus
-} from "./features/entity-store/pg-entity-store.js";
-import { getHistoryMaterializationDepths, recordHistoryMaterialization } from "./features/history-diagnostics.js";
+import { PgContextStore } from "./features/context/context-store.js";
+import { PgEntityStore, resolveCurrentProjectId } from "./features/entity-store/store.js";
+import { PgHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
 
 /**
  * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
@@ -101,7 +63,7 @@ export class PgStore implements StorageDriver {
 		private readonly pool: Pool,
 		public readonly tenantId: string,
 		/**
-		 * The client-resolved project identity (ISS183, mirroring
+		 * The executor-resolved project identity (ISS183, mirroring
 		 * `resolveProjectIdentity` in core) this request is scoped to.
 		 * Threaded from the cloud gate's `x-agent-issues-project-identity`
 		 * header. Undefined keeps today's behavior: the bare (no `--scope`)
@@ -118,6 +80,10 @@ export class PgStore implements StorageDriver {
 	 */
 	protected currentProjectId?: string;
 
+	private get historyDiagnosticsStore(): PgHistoryDiagnosticsStore {
+		return new PgHistoryDiagnosticsStore(this.pool, this.tenantId);
+	}
+
 	/**
 	 * One `withTenantTransaction` per store method (ADR9), carrying this
 	 * request's `projectIdentity` onto the executor so project-scoped reads can
@@ -133,20 +99,20 @@ export class PgStore implements StorageDriver {
 	 * rolled-back transaction may have resolved to a project that no longer
 	 * exists.
 	 */
-	protected transaction<T>(fn: (client: TenantExecutor) => Promise<T>): Promise<T> {
+	protected transaction<T>(fn: (executor: TenantExecutor) => Promise<T>): Promise<T> {
 		return withTenantTransaction(
 			this.pool,
 			this.tenantId,
-			async (client) => {
+			async (executor) => {
 				// Awaited before `fn` runs, not merely started: the advisory lock
 				// inside project registration is transaction-scoped, so it cannot
 				// serialize two resolutions racing within this same transaction.
 				// Letting `fn` start first is how a store ends up minting two
 				// projects for one identity and making it ambiguous forever.
-				const projectId = this.currentProjectId ?? (await primeCurrentProjectId(client));
-				client.currentProjectId = Promise.resolve(projectId);
+				const projectId = this.currentProjectId ?? (await resolveCurrentProjectId(executor, executor.projectIdentity));
+				executor.currentProjectId = projectId;
 
-				const result = await fn(client);
+				const result = await fn(executor);
 				this.currentProjectId = projectId;
 				return result;
 			},
@@ -162,20 +128,20 @@ export class PgStore implements StorageDriver {
 	 * tenants it exists for, and would let a `deleteTenant` call register a
 	 * project in the tenant it is about to remove.
 	 */
-	protected tenantWideTransaction<T>(fn: (client: TenantExecutor) => Promise<T>): Promise<T> {
+	protected tenantWideTransaction<T>(fn: (executor: TenantExecutor) => Promise<T>): Promise<T> {
 		return withTenantTransaction(this.pool, this.tenantId, fn, this.projectIdentity);
 	}
 
 	public async exportCanonicalChains() {
-		return this.tenantWideTransaction((client) => exportCanonicalChains(client));
+		return this.tenantWideTransaction((executor) => new PgSynchronizeStore(executor).exportCanonicalChains());
 	}
 
 	public async importCanonicalChains(bundle: CanonicalChainBundle) {
-		return this.tenantWideTransaction((client) => importCanonicalChains(client, bundle));
+		return this.tenantWideTransaction((executor) => new PgSynchronizeStore(executor).importCanonicalChains(bundle));
 	}
 
 	public async getHistoryDiagnostics() {
-		return measureHistory(await this.exportCanonicalChains(), getHistoryMaterializationDepths(this.pool, this.tenantId));
+		return measureHistory(await this.exportCanonicalChains(), await this.historyDiagnosticsStore.getMaterializationDepths());
 	}
 
 	public async createEntity(input: {
@@ -187,129 +153,129 @@ export class PgStore implements StorageDriver {
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord> {
-		return this.transaction((client) => createEntity(client, input, this.projectIdentity));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).createEntity(input));
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
-		return this.transaction((client) => getEntityDetails(client, entityId));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getEntityDetails(entityId));
 	}
 
 	public async queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails> {
-		return this.transaction((client) => queryEntityRelations(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).queryEntityRelations(input));
 	}
 
 	public async listEntities(kind: string): Promise<EntityRecord[]> {
-		return this.transaction((client) => listEntities(client, kind));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listEntities(kind));
 	}
 
 	public async queryEntities(input: QueryEntitiesInput): Promise<QueryEntitiesResult> {
-		return this.transaction((client) => queryEntities(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).queryEntities(input));
 	}
 
 	public async listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {
-		return this.transaction((client) => listEntityHistory(client, entityId));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listEntityHistory(entityId));
 	}
 
 	public async listAllRelations(): Promise<RelationRecord[]> {
-		return this.transaction((client) => listAllRelations(client));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listAllRelations());
 	}
 
 	public async applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
-		return this.transaction((client) => applyRelations(client, relations));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).applyRelations(relations));
 	}
 
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
-		return this.transaction((client) => linkEntities(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).linkEntities(input));
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult> {
-		return this.transaction((client) => unlinkEntities(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).unlinkEntities(input));
 	}
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
-		return this.transaction((client) => updateEntityStatus(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).updateEntityStatus(input));
 	}
 
 	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return this.transaction((client) => updateEntity(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).updateEntity(input));
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return this.transaction((client) => setEntityBody(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).setEntityBody(input));
 	}
 
 	public async materializeEntityRevision(input: { entityId: string; revision: number }) {
-		const result = await this.transaction((client) => materializeEntityRevision(client, input));
-		recordHistoryMaterialization(this.pool, this.tenantId, "entity", result.headRevision, result.targetRevision);
+		const result = await this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).materializeEntityRevision(input));
+		await this.historyDiagnosticsStore.recordMaterialization("entity", result.headRevision, result.targetRevision);
 		return result;
 	}
 
 	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await this.transaction((client) => restoreEntityRevision(client, input));
-		recordHistoryMaterialization(this.pool, this.tenantId, "entity", input.expectedRevision, input.revision);
+		const result = await this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).restoreEntityRevision(input));
+		await this.historyDiagnosticsStore.recordMaterialization("entity", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
-		return this.transaction((client) => archiveEntity(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).archiveEntity(input));
 	}
 
 	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult> {
-		return this.transaction((client) => moveEntity(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).moveEntity(input));
 	}
 
 	public async deleteEntity(input: { entityId: string }): Promise<DeleteResult> {
-		return this.transaction((client) => deleteEntity(client, input));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).deleteEntity(input));
 	}
 
 	public async listOrphans(kind?: string): Promise<EntityRecord[]> {
-		return this.transaction((client) => listOrphans(client, kind));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listOrphans(kind));
 	}
 
 	public async listProjectAdrs(): Promise<EntityRecord[]> {
-		return this.transaction((client) => listProjectAdrs(client));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listProjectAdrs());
 	}
 
 	public async getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
-		return this.transaction((client) => getInitiativeBundle(client, initiativeId));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getInitiativeBundle(initiativeId));
 	}
 
 	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
 	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
 	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
 		if (input) {
-			return this.transaction((client) => getDatabaseSnapshot(client, this.projectIdentity, input));
+			return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getDatabaseSnapshot(input));
 		}
 
-		return this.transaction((client) => getDatabaseSnapshot(client, this.projectIdentity));
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getDatabaseSnapshot());
 	}
 
 	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
-		return this.tenantWideTransaction((client) => getProjectDiscovery(client, input));
+		return this.tenantWideTransaction((executor) => new PgEntityStore(executor, this.projectIdentity).getProjectDiscovery(input));
 	}
 
 	public async getSnapshotSignature(): Promise<string> {
-		return this.tenantWideTransaction((client) => getSnapshotSignature(client));
+		return this.tenantWideTransaction((executor) => new PgEntityStore(executor, this.projectIdentity).getSnapshotSignature());
 	}
 
 	public async listContexts(): Promise<ContextListResult> {
-		return this.transaction((client) => listContexts(client, this.projectIdentity));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).listContexts());
 	}
 
 	public async getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails> {
-		return this.transaction((client) => getContextDetails(client, this.projectIdentity, input));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).getContextDetails(input));
 	}
 
 	public async getContextDirectory(): Promise<ContextDirectory> {
-		return this.transaction((client) => getContextDirectory(client, this.projectIdentity));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).getContextDirectory());
 	}
 
 	public async queryContextDirectory(input: QueryContextDirectoryInput = {}): Promise<QueryContextDirectoryResult> {
-		return this.transaction((client) => queryContextDirectory(client, this.projectIdentity, input));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).queryContextDirectory(input));
 	}
 
 	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
-		return this.transaction((client) => upsertContext(client, this.projectIdentity, input));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).upsertContext(input));
 	}
 
 	public async defineContextTerm(input: {
@@ -321,47 +287,47 @@ export class PgStore implements StorageDriver {
 		expectedRevision?: number;
 		expectedContentHash?: string;
 	}): Promise<DefineContextTermResult> {
-		return this.transaction((client) => defineContextTerm(client, this.projectIdentity, input));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).defineContextTerm(input));
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {
-		return this.transaction((client) => forgetContextTerm(client, this.projectIdentity, input));
+		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).forgetContextTerm(input));
 	}
 
 	public async materializeContextRevision(input: { scopeRef?: string; revision: number }) {
-		const result = await this.transaction((client) => materializeContextRevision(client, this.projectIdentity, input));
-		recordHistoryMaterialization(this.pool, this.tenantId, "context", result.headRevision, result.targetRevision);
+		const result = await this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).materializeContextRevision(input));
+		await this.historyDiagnosticsStore.recordMaterialization("context", result.headRevision, result.targetRevision);
 		return result;
 	}
 
 	public async materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }) {
-		const result = await this.transaction((client) => materializeContextTermRevision(client, this.projectIdentity, input));
-		recordHistoryMaterialization(this.pool, this.tenantId, "context-term", result.headRevision, result.targetRevision);
+		const result = await this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).materializeContextTermRevision(input));
+		await this.historyDiagnosticsStore.recordMaterialization("context-term", result.headRevision, result.targetRevision);
 		return result;
 	}
 
 	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await this.transaction((client) => restoreContextRevision(client, this.projectIdentity, input));
-		recordHistoryMaterialization(this.pool, this.tenantId, "context", input.expectedRevision, input.revision);
+		const result = await this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).restoreContextRevision(input));
+		await this.historyDiagnosticsStore.recordMaterialization("context", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await this.transaction((client) => restoreContextTermRevision(client, this.projectIdentity, input));
-		recordHistoryMaterialization(this.pool, this.tenantId, "context-term", input.expectedRevision, input.revision);
+		const result = await this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).restoreContextTermRevision(input));
+		await this.historyDiagnosticsStore.recordMaterialization("context-term", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async listTenants(): Promise<TenantSummary[]> {
-		return this.tenantWideTransaction((client) => listTenants(client, this.tenantId));
+		return this.tenantWideTransaction((executor) => listTenants(executor, this.tenantId));
 	}
 
 	public async deleteTenant(tenantId: string): Promise<DeleteTenantResult> {
-		return this.tenantWideTransaction((client) => deleteTenant(client, this.tenantId, tenantId));
+		return this.tenantWideTransaction((executor) => deleteTenant(executor, this.tenantId, tenantId));
 	}
 
 	public async renameTenant(previousTenantId: string, newTenantId: string): Promise<RenameTenantResult> {
-		return this.tenantWideTransaction((client) => renameTenant(client, this.tenantId, previousTenantId, newTenantId));
+		return this.tenantWideTransaction((executor) => renameTenant(executor, this.tenantId, previousTenantId, newTenantId));
 	}
 
 	public async close(): Promise<void> {

@@ -42,6 +42,7 @@ import {
 	type EntityKind,
 	type EntityRecord,
 	type EntityRevisionPatch,
+	type EntityStore,
 	type HistoryEntryRecord,
 	type InitiativeBundle,
 	type LinkResult,
@@ -54,10 +55,10 @@ import {
 	type StatusUpdateResult,
 	type UnlinkResult
 } from "@agent-issues/core";
-import type { TenantExecutor as PoolClient } from "../../db/connection.js";
+import type { TenantExecutor } from "../../db/connection.js";
 import { counters, entities, relations, revisionEntries } from "../../schema.js";
 
-import { queryContextDetails, queryProjectContextDetails } from "../context/pg-context-store.js";
+import { queryContextDetails, queryProjectContextDetails } from "../context/context-store.js";
 
 export type EntityRow = {
 	id: string;
@@ -91,18 +92,18 @@ export type RelationRow = {
  * `database.ts`). No legacy-data import or backup step applies here: a
  * cloud tenant starts empty.
  */
-export async function ensurePgTenant(client: PoolClient): Promise<void> {
+export async function ensurePgTenant(executor: TenantExecutor): Promise<void> {
 	for (const kind of ENTITY_KINDS) {
-		await client.insert(counters).values({ tenantId: client.tenantId, kind, nextValue: 1 }).onConflictDoNothing();
+		await executor.insert(counters).values({ tenantId: executor.tenantId, kind, nextValue: 1 }).onConflictDoNothing();
 	}
 
 	const now = new Date().toISOString();
 	const projectIdentity = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID);
 	const epicIdentity = deriveMigratedEntityIdentity("epic", DEFAULT_EPIC_ID);
-	await client
+	await executor
 		.insert(entities)
 		.values({
-			tenantId: client.tenantId,
+			tenantId: executor.tenantId,
 			id: projectIdentity.stableId,
 			reference: projectIdentity.reference,
 			kind: "project",
@@ -117,10 +118,10 @@ export async function ensurePgTenant(client: PoolClient): Promise<void> {
 			updatedAt: now
 		})
 		.onConflictDoNothing();
-	await client
+	await executor
 		.insert(entities)
 		.values({
-			tenantId: client.tenantId,
+			tenantId: executor.tenantId,
 			id: epicIdentity.stableId,
 			reference: epicIdentity.reference,
 			kind: "epic",
@@ -135,9 +136,9 @@ export async function ensurePgTenant(client: PoolClient): Promise<void> {
 			updatedAt: now
 		})
 		.onConflictDoNothing();
-	await client
+	await executor
 		.insert(relations)
-		.values({ tenantId: client.tenantId, fromId: projectIdentity.stableId, toId: epicIdentity.stableId, type: "contains", createdAt: now })
+		.values({ tenantId: executor.tenantId, fromId: projectIdentity.stableId, toId: epicIdentity.stableId, type: "contains", createdAt: now })
 		.onConflictDoNothing();
 }
 
@@ -150,19 +151,19 @@ export async function ensurePgTenant(client: PoolClient): Promise<void> {
  * whatever title a human typed.
  */
 async function findProjectsByNormalizedTitle(
-	client: PoolClient,
+	executor: TenantExecutor,
 	normalizedTitle: string
 ): Promise<Array<{ id: string; title: string }>> {
-	const rows = await client
+	const rows = await executor
 		.select({ id: entities.id, title: entities.title })
 		.from(entities)
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.kind, "project"), eq(entities.tombstone, false)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "project"), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
 	return rows.filter((project) => sanitizePathSegment(project.title) === normalizedTitle);
 }
 
 /**
- * The `project` entity this tenant already minted for a client-resolved
+ * The `project` entity this tenant already minted for a executor-resolved
  * `projectIdentity`, or a freshly minted one plus its own epic the first time
  * a request for that identity arrives - `ensurePgTenant`'s
  * project+epic+contains seeding, just per-identity rather than once per
@@ -186,20 +187,20 @@ async function findProjectsByNormalizedTitle(
  * which is worse than either request simply waiting.
  */
 export async function getOrCreateProjectByIdentity(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string
 ): Promise<EntityRecord> {
 	// Taken before `ensurePgTenant`, so the whole seed-then-check-then-create
 	// sequence is inside the lock rather than only its tail.
-	await client.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${client.tenantId}), hashtext(${projectIdentity}))`);
-	await ensurePgTenant(client);
+	await executor.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${executor.tenantId}), hashtext(${projectIdentity}))`);
+	await ensurePgTenant(executor);
 
-	const [direct] = await client
+	const [direct] = await executor
 		.select({ id: entities.id })
 		.from(entities)
 		.where(
 			and(
-				eq(entities.tenantId, client.tenantId),
+				eq(entities.tenantId, executor.tenantId),
 				eq(entities.kind, "project"),
 				eq(entities.tombstone, false),
 				// `id::text` rather than `eq(entities.id, ...)`: the column is a
@@ -211,26 +212,26 @@ export async function getOrCreateProjectByIdentity(
 		)
 		.limit(1);
 	if (direct) {
-		return getEntityOrThrow(client, direct.id);
+		return getEntityOrThrow(executor, direct.id);
 	}
 
-	const matching = await findProjectsByNormalizedTitle(client, sanitizePathSegment(projectIdentity));
+	const matching = await findProjectsByNormalizedTitle(executor, sanitizePathSegment(projectIdentity));
 	if (matching.length > 1) {
-		throw new Error(`Ambiguous project identity "${projectIdentity}" in tenant ${client.tenantId}.`);
+		throw new Error(`Ambiguous project identity "${projectIdentity}" in tenant ${executor.tenantId}.`);
 	}
 	if (matching.length === 1) {
-		return getEntityOrThrow(client, matching[0]!.id);
+		return getEntityOrThrow(executor, matching[0]!.id);
 	}
 	if (isDirectEntitySelector(projectIdentity)) {
-		throw new Error(`Cannot resolve project identity "${projectIdentity}" in tenant ${client.tenantId}.`);
+		throw new Error(`Cannot resolve project identity "${projectIdentity}" in tenant ${executor.tenantId}.`);
 	}
 
 	const now = new Date().toISOString();
 	const project = generateCanonicalIdentity("project");
 	const epic = generateCanonicalIdentity("epic");
 
-	await client.insert(entities).values({
-		tenantId: client.tenantId,
+	await executor.insert(entities).values({
+		tenantId: executor.tenantId,
 		id: project.stableId,
 		reference: project.reference,
 		kind: "project",
@@ -246,8 +247,8 @@ export async function getOrCreateProjectByIdentity(
 		createdAt: now,
 		updatedAt: now
 	});
-	await client.insert(entities).values({
-		tenantId: client.tenantId,
+	await executor.insert(entities).values({
+		tenantId: executor.tenantId,
 		id: epic.stableId,
 		reference: epic.reference,
 		kind: "epic",
@@ -261,12 +262,12 @@ export async function getOrCreateProjectByIdentity(
 		createdAt: now,
 		updatedAt: now
 	});
-	await client
+	await executor
 		.insert(relations)
-		.values({ tenantId: client.tenantId, fromId: project.stableId, toId: epic.stableId, type: "contains", createdAt: now })
+		.values({ tenantId: executor.tenantId, fromId: project.stableId, toId: epic.stableId, type: "contains", createdAt: now })
 		.onConflictDoNothing();
 
-	return getEntityOrThrow(client, project.stableId);
+	return getEntityOrThrow(executor, project.stableId);
 }
 
 export function mapEntityRow(row: EntityRow): EntityRecord {
@@ -307,8 +308,8 @@ function mapDrizzleEntityRow(row: typeof entities.$inferSelect): EntityRecord {
 	};
 }
 
-export async function getEntityOrThrow(client: PoolClient, entityId: string): Promise<EntityRecord> {
-	const row = await resolveEntity(client, entityId);
+export async function getEntityOrThrow(executor: TenantExecutor, entityId: string): Promise<EntityRecord> {
+	const row = await resolveEntity(executor, entityId);
 	if (!row) {
 		throw new Error(`Entity not found: ${entityId}`);
 	}
@@ -316,29 +317,29 @@ export async function getEntityOrThrow(client: PoolClient, entityId: string): Pr
 	return mapDrizzleEntityRow(row);
 }
 
-async function resolveEntity(client: PoolClient, entityId: string, includeTombstone: boolean = false): Promise<typeof entities.$inferSelect | undefined> {
+async function resolveEntity(executor: TenantExecutor, entityId: string, includeTombstone: boolean = false): Promise<typeof entities.$inferSelect | undefined> {
 	const livePredicate = includeTombstone ? undefined : eq(entities.tombstone, false);
 	let row: typeof entities.$inferSelect | undefined;
 	if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entityId)) {
-		[row] = await client
+		[row] = await executor
 			.select()
 			.from(entities)
-			.where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, entityId), livePredicate));
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entityId), livePredicate));
 	} else {
-		[row] = await client
+		[row] = await executor
 			.select()
 			.from(entities)
-			.where(and(eq(entities.tenantId, client.tenantId), eq(entities.reference, entityId), livePredicate));
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.reference, entityId), livePredicate));
 	}
 
 	return row;
 }
 
-async function getStructuralParentRelations(client: PoolClient, entityId: string): Promise<RelationRecord[]> {
-	const rows = await client
+async function getStructuralParentRelations(executor: TenantExecutor, entityId: string): Promise<RelationRecord[]> {
+	const rows = await executor
 		.select()
 		.from(relations)
-		.where(and(eq(relations.tenantId, client.tenantId), eq(relations.toId, entityId)))
+		.where(and(eq(relations.tenantId, executor.tenantId), eq(relations.toId, entityId)))
 		.orderBy(asc(relations.createdAt), asc(relations.fromId), asc(relations.type));
 
 	return rows
@@ -350,7 +351,7 @@ async function getStructuralParentRelations(client: PoolClient, entityId: string
 // store.ts getStructuralPath, so handoffs can resolve their owning
 // initiative the same way locally and in the cloud.
 async function getStructuralPath(
-	client: PoolClient,
+	executor: TenantExecutor,
 	entityId: string
 ): Promise<Array<{ relationType: RelationType; entity: EntityRecord }>> {
 	const path: Array<{ relationType: RelationType; entity: EntityRecord }> = [];
@@ -358,7 +359,7 @@ async function getStructuralPath(
 	let currentId = entityId;
 
 	while (true) {
-		const parents = await getStructuralParentRelations(client, currentId);
+		const parents = await getStructuralParentRelations(executor, currentId);
 
 		if (parents.length === 0) {
 			return path.reverse();
@@ -374,21 +375,21 @@ async function getStructuralPath(
 		}
 
 		seen.add(parent.fromId);
-		path.push({ relationType: parent.type, entity: await getEntityOrThrow(client, parent.fromId) });
+		path.push({ relationType: parent.type, entity: await getEntityOrThrow(executor, parent.fromId) });
 		currentId = parent.fromId;
 	}
 }
 
-async function resolveOwningInitiativeId(client: PoolClient, focus: EntityRecord): Promise<string | null> {
+async function resolveOwningInitiativeId(executor: TenantExecutor, focus: EntityRecord): Promise<string | null> {
 	if (focus.kind === "initiative") {
 		return focus.id;
 	}
 
-	const structuralPath = await getStructuralPath(client, focus.id);
+	const structuralPath = await getStructuralPath(executor, focus.id);
 	return structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
 }
 
-export async function nextEntityId(_client: PoolClient, kind: EntityKind): Promise<string> {
+export async function nextEntityId(_client: TenantExecutor, kind: EntityKind): Promise<string> {
 	return generateCanonicalIdentity(kind).reference;
 }
 
@@ -396,7 +397,7 @@ export async function nextEntityId(_client: PoolClient, kind: EntityKind): Promi
 // core's store.ts. Records the predecessor title/body so ISS261's history
 // materializer can walk back from the current head one step at a time.
 async function appendDeltaEntry(
-	client: PoolClient,
+	executor: TenantExecutor,
 	entityId: string,
 	newRevision: number,
 	priorTitle: string,
@@ -406,11 +407,11 @@ async function appendDeltaEntry(
 	createdAt: string,
 	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; restoredFromRevision?: number } = {}
 ): Promise<void> {
-	const [row] = await client.select().from(entities).where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, entityId)));
+	const [row] = await executor.select().from(entities).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entityId)));
 	if (!row) {
 		throw new Error(`Cannot append reverse patch for missing entity ${entityId}.`);
 	}
-	const successor = { title: row.title, body: row.body, bodySource: row.bodySource, status: row.status, parentId: (await getStructuralParentRelations(client, entityId))[0]?.fromId ?? null, tombstone: row.tombstone };
+	const successor = { title: row.title, body: row.body, bodySource: row.bodySource, status: row.status, parentId: (await getStructuralParentRelations(executor, entityId))[0]?.fromId ?? null, tombstone: row.tombstone };
 	const predecessor = {
 		...successor,
 		title: priorTitle,
@@ -422,38 +423,26 @@ async function appendDeltaEntry(
 	};
 	const transition = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
 	if (!row.projectId) throw new Error(`Cannot append reverse patch for entity ${entityId} without a project.`);
-	await client.insert(revisionEntries).values({ id: randomUUID(), tenantId: client.tenantId, projectId: row.projectId, recordKind: "entity", recordKey: encodeEntityRecordKey(row.id), revision: newRevision, author: author?.trim() || RESERVED_SYSTEM_AUTHOR, patchFormat: transition.patchFormat, reversePatch: Buffer.from(transition.reversePatch), sourceHash: encodeRevisionPatchHash(transition.sourceHash), targetHash: encodeRevisionPatchHash(transition.targetHash), restoredFromRevision: lifecycle.restoredFromRevision ?? null, createdAt });
+	await executor.insert(revisionEntries).values({ id: randomUUID(), tenantId: executor.tenantId, projectId: row.projectId, recordKind: "entity", recordKey: encodeEntityRecordKey(row.id), revision: newRevision, author: author?.trim() || RESERVED_SYSTEM_AUTHOR, patchFormat: transition.patchFormat, reversePatch: Buffer.from(transition.reversePatch), sourceHash: encodeRevisionPatchHash(transition.sourceHash), targetHash: encodeRevisionPatchHash(transition.targetHash), restoredFromRevision: lifecycle.restoredFromRevision ?? null, createdAt });
 }
 
 /**
- * The project every project-scoped read below filters by, resolved once per
- * transaction and memoized on the executor - the cloud counterpart of local's
- * `db.currentProjectId`, which `ensureDatabase` fills in at open.
+ * The project every project-scoped read below filters by - the cloud
+ * counterpart of local's `db.currentProjectId`, which `ensureDatabase` fills
+ * in at open. `PgStore.transaction()` resolves this once per store lifetime
+ * and assigns the plain string onto the executor before any of the functions
+ * below run, so they read `executor.currentProjectId` directly rather than
+ * resolving or memoizing it themselves.
  *
- * Resolution itself mirrors local's `resolveCurrentProjectId`: a carried
- * identity registers itself on first use, and a tenant with no identity and
- * more than one project refuses to guess which one the caller meant rather
- * than silently blending them.
+ * Resolution mirrors local's `resolveCurrentProjectId`: a carried identity
+ * registers itself on first use, and a tenant with no identity and more than
+ * one project refuses to guess which one the caller meant rather than
+ * silently blending them.
  */
-function currentProjectId(client: PoolClient): Promise<string> {
-	client.currentProjectId ??= resolveCurrentProjectId(client, client.projectIdentity);
-	return client.currentProjectId;
-}
-
-/**
- * Forces the resolution `currentProjectId` would otherwise defer, so a store
- * settles on its project the way local's `ensureDatabase` does at open -
- * before the caller has had a chance to create a second project and make the
- * choice ambiguous.
- */
-export async function primeCurrentProjectId(client: PoolClient): Promise<string> {
-	return currentProjectId(client);
-}
-
-async function resolveCurrentProjectId(client: PoolClient, projectIdentity: string | undefined): Promise<string> {
+export async function resolveCurrentProjectId(executor: TenantExecutor, projectIdentity: string | undefined): Promise<string> {
 	const selector = projectIdentity?.trim();
 	if (selector) {
-		return (await getOrCreateProjectByIdentity(client, selector)).id;
+		return (await getOrCreateProjectByIdentity(executor, selector)).id;
 	}
 
 	// No identity resolves to the `PROJ0` sentinel rather than local's literal
@@ -465,7 +454,7 @@ async function resolveCurrentProjectId(client: PoolClient, projectIdentity: stri
 	// builds a fresh store per request - so copying the refusal literally would
 	// make an unidentified caller start failing the moment a second project
 	// appeared, which is not what the same caller experiences locally.
-	await ensurePgTenant(client);
+	await ensurePgTenant(executor);
 	return deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
 }
 
@@ -476,36 +465,36 @@ async function resolveCurrentProjectId(client: PoolClient, projectIdentity: stri
  * project-scoped read path instead of needing a parallel set of queries.
  *
  * Save-and-restore around a mutable field only holds for one pin at a time, so
- * this must not be nested or run concurrently with itself on the same client -
+ * this must not be nested or run concurrently with itself on the same executor -
  * two overlapping pins would restore each other's value. There is exactly one
  * call site (`getDatabaseSnapshot` with an explicit project), and nothing it
  * calls pins again.
  */
-async function withCurrentProject<T>(client: PoolClient, projectId: string, fn: () => Promise<T>): Promise<T> {
-	const previous = client.currentProjectId;
-	client.currentProjectId = Promise.resolve(projectId);
+async function withCurrentProject<T>(executor: TenantExecutor, projectId: string, fn: () => Promise<T>): Promise<T> {
+	const previous = executor.currentProjectId;
+	executor.currentProjectId = projectId;
 	try {
 		return await fn();
 	} finally {
-		client.currentProjectId = previous;
+		executor.currentProjectId = previous;
 	}
 }
 
-async function getAllEntities(client: PoolClient): Promise<EntityRecord[]> {
-	const projectId = await currentProjectId(client);
-	const rows = await client
+async function getAllEntities(executor: TenantExecutor): Promise<EntityRecord[]> {
+	const projectId = executor.currentProjectId;
+	const rows = await executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.projectId, projectId), eq(entities.tombstone, false)));
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.projectId, projectId), eq(entities.tombstone, false)));
 	return rows.map(mapDrizzleEntityRow);
 }
 
-async function getAllRelations(client: PoolClient): Promise<RelationRecord[]> {
-	const projectId = await currentProjectId(client);
-	const result = await client.execute(sql`
+async function getAllRelations(executor: TenantExecutor): Promise<RelationRecord[]> {
+	const projectId = executor.currentProjectId;
+	const result = await executor.execute(sql`
 		SELECT relations.* FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${client.tenantId} AND entities.project_id = ${projectId}
+		WHERE relations.tenant_id = ${executor.tenantId} AND entities.project_id = ${projectId}
 		ORDER BY relations.from_id, relations.to_id, relations.type
 	`);
 	return (result.rows as RelationRow[]).map((row) => ({
@@ -517,30 +506,30 @@ async function getAllRelations(client: PoolClient): Promise<RelationRecord[]> {
 }
 
 /** Tenant-wide reads, for the callers that legitimately span every project: project discovery and whole-tenant synchronize. Mirrors local's `getTenantEntities`/`getTenantRelations`. */
-async function getTenantEntities(client: PoolClient): Promise<EntityRecord[]> {
-	const rows = await client.select().from(entities).where(and(eq(entities.tenantId, client.tenantId), eq(entities.tombstone, false)));
+async function getTenantEntities(executor: TenantExecutor): Promise<EntityRecord[]> {
+	const rows = await executor.select().from(entities).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.tombstone, false)));
 	return rows.map(mapDrizzleEntityRow);
 }
 
-async function getTenantRelations(client: PoolClient): Promise<RelationRecord[]> {
-	const rows = await client.select().from(relations).where(eq(relations.tenantId, client.tenantId));
+async function getTenantRelations(executor: TenantExecutor): Promise<RelationRecord[]> {
+	const rows = await executor.select().from(relations).where(eq(relations.tenantId, executor.tenantId));
 	return rows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }));
 }
 
-async function getDerivedStatusMap(client: PoolClient, rootIds?: string[]): Promise<Map<string, string>> {
+async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[]): Promise<Map<string, string>> {
 	if (rootIds?.length === 0) {
 		return new Map();
 	}
 	const result = rootIds
-		? await client.execute(sql`
+		? await executor.execute(sql`
 			WITH RECURSIVE status_entities AS (
 				SELECT id, kind, status
 				FROM entities
-				WHERE tenant_id = ${client.tenantId} AND tombstone = false AND id IN ${rootIds}
+				WHERE tenant_id = ${executor.tenantId} AND tombstone = false AND id IN ${rootIds}
 				UNION
 				SELECT dependency.id, dependency.kind, dependency.status
 				FROM status_entities AS current
-				JOIN relations AS dependency_relation ON dependency_relation.tenant_id = ${client.tenantId}
+				JOIN relations AS dependency_relation ON dependency_relation.tenant_id = ${executor.tenantId}
 				JOIN entities AS dependency ON dependency.tenant_id = dependency_relation.tenant_id
 					AND dependency.tombstone = false
 					AND (
@@ -554,9 +543,9 @@ async function getDerivedStatusMap(client: PoolClient, rootIds?: string[]): Prom
 			)
 			SELECT id, kind, status FROM status_entities
 		`)
-		: await client.execute(sql`
+		: await executor.execute(sql`
 			SELECT id, kind, status FROM entities
-			WHERE tenant_id = ${client.tenantId} AND tombstone = false
+			WHERE tenant_id = ${executor.tenantId} AND tombstone = false
 		`);
 	const statusEntities = (result.rows as Array<{ id: string; kind: string; status: string }>).map((row) => ({
 		id: row.id,
@@ -573,18 +562,18 @@ async function getDerivedStatusMap(client: PoolClient, rootIds?: string[]): Prom
 	}));
 	const statusEntityIds = statusEntities.map((entity) => entity.id);
 	const relationRows = rootIds
-		? await client
+		? await executor
 			.select()
 			.from(relations)
 			.where(and(
-				eq(relations.tenantId, client.tenantId),
+				eq(relations.tenantId, executor.tenantId),
 				inArray(relations.fromId, statusEntityIds),
 				inArray(relations.toId, statusEntityIds)
 			))
 		: undefined;
 	const statusRelations = relationRows
 		? relationRows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }))
-		: await getAllRelations(client);
+		: await getAllRelations(executor);
 	const entities = deriveEntityStatuses(statusEntities, statusRelations);
 	return new Map(entities.map((entity) => [entity.id, entity.status]));
 }
@@ -595,15 +584,15 @@ function applyDerivedStatus(entity: EntityRecord, statusMap: ReadonlyMap<string,
 }
 
 async function getRelationOrThrow(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): Promise<RelationRecord> {
-	const [row] = await client
+	const [row] = await executor
 		.select()
 		.from(relations)
 		.where(
 			and(
-				eq(relations.tenantId, client.tenantId),
+				eq(relations.tenantId, executor.tenantId),
 				eq(relations.fromId, input.fromId),
 				eq(relations.toId, input.toId),
 				eq(relations.type, input.relationType)
@@ -617,10 +606,10 @@ async function getRelationOrThrow(
 	return { fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt };
 }
 
-async function insertRelation(client: PoolClient, relation: RelationRecord): Promise<{ inserted: boolean }> {
-	const inserted = await client
+async function insertRelation(executor: TenantExecutor, relation: RelationRecord): Promise<{ inserted: boolean }> {
+	const inserted = await executor
 		.insert(relations)
-		.values({ tenantId: client.tenantId, fromId: relation.fromId, toId: relation.toId, type: relation.type, createdAt: relation.createdAt })
+		.values({ tenantId: executor.tenantId, fromId: relation.fromId, toId: relation.toId, type: relation.type, createdAt: relation.createdAt })
 		.onConflictDoNothing()
 		.returning({ fromId: relations.fromId });
 
@@ -630,12 +619,12 @@ async function insertRelation(client: PoolClient, relation: RelationRecord): Pro
 // Reconciles `entityId`'s structural parent relation to `newParentId` (see
 // core's `reconcileStructuralParent` for the full rationale).
 async function reconcileStructuralParent(
-	client: PoolClient,
+	executor: TenantExecutor,
 	entityId: string,
 	kind: EntityKind,
 	newParentId: string | null
 ): Promise<void> {
-	const currentParents = await getStructuralParentRelations(client, entityId);
+	const currentParents = await getStructuralParentRelations(executor, entityId);
 	const currentParentId = currentParents[0]?.fromId ?? null;
 
 	if (currentParentId === newParentId) {
@@ -643,11 +632,11 @@ async function reconcileStructuralParent(
 	}
 
 	for (const relation of currentParents) {
-		await client
+		await executor
 			.delete(relations)
 			.where(
 				and(
-					eq(relations.tenantId, client.tenantId),
+					eq(relations.tenantId, executor.tenantId),
 					eq(relations.fromId, relation.fromId),
 					eq(relations.toId, entityId),
 					eq(relations.type, relation.type)
@@ -659,49 +648,49 @@ async function reconcileStructuralParent(
 		return;
 	}
 
-	const parent = await getEntityOrThrow(client, newParentId);
+	const parent = await getEntityOrThrow(executor, newParentId);
 	const relationType = getAllowedRelationType(parent.kind, kind);
 	if (!relationType) {
 		throw new Error(`Cannot resolve ${entityId} under ${parent.kind} via synchronize: no allowed relation from ${parent.kind} to ${kind}.`);
 	}
 
-	await insertRelation(client, { fromId: parent.id, toId: entityId, type: relationType, createdAt: new Date().toISOString() });
+	await insertRelation(executor, { fromId: parent.id, toId: entityId, type: relationType, createdAt: new Date().toISOString() });
 }
 
-async function hasTypedPath(client: PoolClient, startId: string, targetId: string, relationType: string): Promise<boolean> {
-	const relations = (await getAllRelations(client)).filter((relation) => relation.type === relationType);
+async function hasTypedPath(executor: TenantExecutor, startId: string, targetId: string, relationType: string): Promise<boolean> {
+	const relations = (await getAllRelations(executor)).filter((relation) => relation.type === relationType);
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-async function hasStructuralPath(client: PoolClient, startId: string, targetId: string): Promise<boolean> {
-	const relations = (await getAllRelations(client)).filter((relation) => isStructuralRelationType(relation.type));
+async function hasStructuralPath(executor: TenantExecutor, startId: string, targetId: string): Promise<boolean> {
+	const relations = (await getAllRelations(executor)).filter((relation) => isStructuralRelationType(relation.type));
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-async function wouldOrphanSubtree(client: PoolClient, relation: RelationRecord): Promise<boolean> {
-	const [relations, entities] = await Promise.all([getAllRelations(client), getAllEntities(client)]);
+async function wouldOrphanSubtree(executor: TenantExecutor, relation: RelationRecord): Promise<boolean> {
+	const [relations, entities] = await Promise.all([getAllRelations(executor), getAllEntities(executor)]);
 	return wouldOrphanSubtreeInGraph(entities, relations, relation);
 }
 
 // Mirrors `wouldBreakFullChainInvariant` in core's `store.ts`: blocks
 // unlinking a "contains" relation that is the sole remaining structural
 // parent of an epic or initiative (ADR7's full-chain invariant).
-async function wouldBreakFullChainInvariant(client: PoolClient, relation: RelationRecord): Promise<boolean> {
+async function wouldBreakFullChainInvariant(executor: TenantExecutor, relation: RelationRecord): Promise<boolean> {
 	if (relation.type !== "contains") {
 		return false;
 	}
 
-	const target = await getEntityOrThrow(client, relation.toId);
+	const target = await getEntityOrThrow(executor, relation.toId);
 	if (target.kind !== "epic" && target.kind !== "initiative") {
 		return false;
 	}
 
-	const [result] = await client
+	const [result] = await executor
 		.select({ count: sql<number>`count(*)` })
 		.from(relations)
 		.where(
 			and(
-				eq(relations.tenantId, client.tenantId),
+				eq(relations.tenantId, executor.tenantId),
 				eq(relations.toId, relation.toId),
 				eq(relations.type, "contains"),
 				sql`${relations.fromId} <> ${relation.fromId}`
@@ -711,12 +700,12 @@ async function wouldBreakFullChainInvariant(client: PoolClient, relation: Relati
 	return Number(result?.count ?? 0) === 0;
 }
 
-async function getActiveBlockingIssues(client: PoolClient, entityId: string): Promise<EntityRecord[]> {
-	const result = await client.execute(sql`
+async function getActiveBlockingIssues(executor: TenantExecutor, entityId: string): Promise<EntityRecord[]> {
+	const result = await executor.execute(sql`
 		SELECT entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'blocks'
 			AND relations.to_id = ${entityId}
 			AND entities.status != 'done'
@@ -726,13 +715,13 @@ async function getActiveBlockingIssues(client: PoolClient, entityId: string): Pr
 	return (result.rows as EntityRow[]).map(mapEntityRow);
 }
 
-async function getOpenSubIssues(client: PoolClient, issueId: string): Promise<EntityRecord[]> {
-	const statusMap = await getDerivedStatusMap(client);
-	const result = await client.execute(sql`
+async function getOpenSubIssues(executor: TenantExecutor, issueId: string): Promise<EntityRecord[]> {
+	const statusMap = await getDerivedStatusMap(executor);
+	const result = await executor.execute(sql`
 		SELECT entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${issueId}
 			AND relations.type = 'decomposes'
 		ORDER BY entities.id
@@ -744,12 +733,12 @@ async function getOpenSubIssues(client: PoolClient, issueId: string): Promise<En
 		.filter((entity) => entity.status !== "done");
 }
 
-async function getFixingIssueStatuses(client: PoolClient, storyId: string): Promise<string[]> {
-	const result = await client.execute(sql`
+async function getFixingIssueStatuses(executor: TenantExecutor, storyId: string): Promise<string[]> {
+	const result = await executor.execute(sql`
 		SELECT entities.status
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'fixes'
 			AND relations.to_id = ${storyId}
 			AND entities.kind = 'issue'
@@ -758,13 +747,13 @@ async function getFixingIssueStatuses(client: PoolClient, storyId: string): Prom
 	return (result.rows as Array<{ status: string }>).map((row) => row.status);
 }
 
-async function getCreatedStoryStatuses(client: PoolClient, prdId: string): Promise<string[]> {
-	const statusMap = await getDerivedStatusMap(client);
-	const result = await client.execute(sql`
+async function getCreatedStoryStatuses(executor: TenantExecutor, prdId: string): Promise<string[]> {
+	const statusMap = await getDerivedStatusMap(executor);
+	const result = await executor.execute(sql`
 		SELECT entities.id
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'creates'
 			AND relations.from_id = ${prdId}
 			AND entities.kind = 'userStory'
@@ -773,12 +762,12 @@ async function getCreatedStoryStatuses(client: PoolClient, prdId: string): Promi
 	return (result.rows as Array<{ id: string }>).map((row) => statusMap.get(row.id) ?? "");
 }
 
-async function getConstrainedIssueStatuses(client: PoolClient, adrId: string): Promise<string[]> {
-	const result = await client.execute(sql`
+async function getConstrainedIssueStatuses(executor: TenantExecutor, adrId: string): Promise<string[]> {
+	const result = await executor.execute(sql`
 		SELECT entities.status
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'constrains'
 			AND relations.from_id = ${adrId}
 			AND entities.kind = 'issue'
@@ -788,15 +777,15 @@ async function getConstrainedIssueStatuses(client: PoolClient, adrId: string): P
 }
 
 async function isEntitySuperseded(
-	client: PoolClient,
+	executor: TenantExecutor,
 	entityId: string,
 	kind: "prd" | "userStory" | "adr"
 ): Promise<boolean> {
-	const result = await client.execute(sql`
+	const result = await executor.execute(sql`
 		SELECT 1
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'supersedes'
 			AND relations.to_id = ${entityId}
 			AND entities.kind = ${kind}
@@ -807,14 +796,14 @@ async function isEntitySuperseded(
 }
 
 async function getInitiativeChildStatuses(
-	client: PoolClient,
+	executor: TenantExecutor,
 	initiativeId: string
 ): Promise<{ trackedIssueStatuses: string[]; ownedPrdStatuses: string[] }> {
-	const statusMap = await getDerivedStatusMap(client);
-	const structuralRelations = (await getAllRelations(client)).filter((relation) => isStructuralRelationType(relation.type));
+	const statusMap = await getDerivedStatusMap(executor);
+	const structuralRelations = (await getAllRelations(executor)).filter((relation) => isStructuralRelationType(relation.type));
 	const reachableIds = collectReachableIds(structuralRelations, initiativeId);
 	reachableIds.delete(initiativeId);
-	const entities = await getAllEntities(client);
+	const entities = await getAllEntities(executor);
 
 	return {
 		trackedIssueStatuses: entities
@@ -826,12 +815,12 @@ async function getInitiativeChildStatuses(
 	};
 }
 
-async function getAllDerivedEntities(client: PoolClient): Promise<EntityRecord[]> {
-	return deriveEntityStatuses(await getAllEntities(client), await getAllRelations(client));
+async function getAllDerivedEntities(executor: TenantExecutor): Promise<EntityRecord[]> {
+	return deriveEntityStatuses(await getAllEntities(executor), await getAllRelations(executor));
 }
 
 export async function createEntity(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: {
 		kind: string;
 		title: string;
@@ -863,11 +852,11 @@ export async function createEntity(
 	// Idempotent (ON CONFLICT DO NOTHING); simplifies this slice by not
 	// requiring a separate tenant-bootstrap lifecycle step. SqliteStore
 	// bootstraps once at open() instead - worth converging on later.
-	await ensurePgTenant(client);
+	await ensurePgTenant(executor);
 
 	const now = new Date().toISOString();
-	const parentId = input.parentId ?? (kind === "initiative" ? await resolveDefaultEpicId(client, projectIdentity) : undefined);
-	const parent = parentId ? await getEntityOrThrow(client, parentId) : null;
+	const parentId = input.parentId ?? (kind === "initiative" ? await resolveDefaultEpicId(executor, projectIdentity) : undefined);
+	const parent = parentId ? await getEntityOrThrow(executor, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
 
 	if (parent && !relationType) {
@@ -885,11 +874,11 @@ export async function createEntity(
 	const projectId =
 		kind === "project"
 			? id
-			: ((parent ? await getEntityProjectId(client, parent.id) : null) ??
-				(await resolveProjectIdForWrite(client, projectIdentity)));
+			: ((parent ? await getEntityProjectId(executor, parent.id) : null) ??
+				(await resolveProjectIdForWrite(executor, projectIdentity)));
 	const contentHash = computeEntityContentHash(title, body);
-	await client.insert(entities).values({
-		tenantId: client.tenantId,
+	await executor.insert(entities).values({
+		tenantId: executor.tenantId,
 		id,
 		reference: identity.reference,
 		kind,
@@ -905,43 +894,43 @@ export async function createEntity(
 	});
 
 	if (parent && relationType) {
-		await client
+		await executor
 			.insert(relations)
-			.values({ tenantId: client.tenantId, fromId: parent.id, toId: id, type: relationType, createdAt: now })
+			.values({ tenantId: executor.tenantId, fromId: parent.id, toId: id, type: relationType, createdAt: now })
 			.onConflictDoNothing();
 	}
 
 	for (const link of input.links ?? []) {
-		await linkEntities(client, { fromId: identity.stableId, relationType: link.relationType, toId: link.targetId });
+		await linkEntities(executor, { fromId: identity.stableId, relationType: link.relationType, toId: link.targetId });
 	}
 
 	// Write the baseline revision-1 entry: a no-op patch (predecessor ==
 	// successor) so listEntityHistory always has a real revision_entries row
 	// for every revision in the chain, including the initial one.
-	await appendDeltaEntry(client, id, 1, title, body, bodySource, input.author, now);
+	await appendDeltaEntry(executor, id, 1, title, body, bodySource, input.author, now);
 
-	return getEntityOrThrow(client, id);
+	return getEntityOrThrow(executor, id);
 }
 
-export async function getEntityDetails(client: PoolClient, entityId: string): Promise<EntityDetails> {
-	const entity = await getEntityOrThrow(client, entityId);
+export async function getEntityDetails(executor: TenantExecutor, entityId: string): Promise<EntityDetails> {
+	const entity = await getEntityOrThrow(executor, entityId);
 
-	const incomingResult = await client.execute(sql`
+	const incomingResult = await executor.execute(sql`
 		SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${client.tenantId} AND relations.to_id = ${entity.id}
+		WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
 		ORDER BY entities.id
 	`);
-	const outgoingResult = await client.execute(sql`
+	const outgoingResult = await executor.execute(sql`
 		SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${client.tenantId} AND relations.from_id = ${entity.id}
+		WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
 		ORDER BY entities.id
 	`);
 
-	const statusMap = await getDerivedStatusMap(client);
+	const statusMap = await getDerivedStatusMap(executor);
 
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
@@ -957,29 +946,29 @@ export async function getEntityDetails(client: PoolClient, entityId: string): Pr
 }
 
 export async function queryEntityRelations(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] }
 ): Promise<EntityDetails> {
-	const entity = await getEntityOrThrow(client, input.entityId);
+	const entity = await getEntityOrThrow(executor, input.entityId);
 	const typeFilter = input.types?.length ? sql`AND relations.type IN ${input.types}` : sql``;
 	const includeIncoming = input.direction === undefined || input.direction === "both" || input.direction === "incoming";
 	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
 	const incomingResult = includeIncoming
-		? await client.execute(sql`
+		? await executor.execute(sql`
 			SELECT relations.type, entities.*
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			WHERE relations.tenant_id = ${client.tenantId} AND relations.to_id = ${entity.id}
+			WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
 				AND entities.tombstone = false ${typeFilter}
 			ORDER BY entities.id
 		`)
 		: { rows: [] };
 	const outgoingResult = includeOutgoing
-		? await client.execute(sql`
+		? await executor.execute(sql`
 			SELECT relations.type, entities.*
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-			WHERE relations.tenant_id = ${client.tenantId} AND relations.from_id = ${entity.id}
+			WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
 				AND entities.tombstone = false ${typeFilter}
 			ORDER BY entities.id
 		`)
@@ -989,7 +978,7 @@ export async function queryEntityRelations(
 		...(incomingResult.rows as EntityRow[]).map((row) => row.id),
 		...(outgoingResult.rows as EntityRow[]).map((row) => row.id)
 	];
-	const statusMap = await getDerivedStatusMap(client, relatedIds);
+	const statusMap = await getDerivedStatusMap(executor, relatedIds);
 
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
@@ -1004,17 +993,17 @@ export async function queryEntityRelations(
 	};
 }
 
-export async function listEntities(client: PoolClient, kind: string): Promise<EntityRecord[]> {
+export async function listEntities(executor: TenantExecutor, kind: string): Promise<EntityRecord[]> {
 	if (!isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
 
-	const entities = deriveEntityStatuses(await getAllEntities(client), await getAllRelations(client));
+	const entities = deriveEntityStatuses(await getAllEntities(executor), await getAllRelations(executor));
 	return entities.filter((entity) => entity.kind === kind);
 }
 
 export async function queryEntities(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
 ): Promise<{ entities: EntityRecord[]; total: number }> {
 	if (!isEntityKind(input.kind)) {
@@ -1023,47 +1012,47 @@ export async function queryEntities(
 
 	let parentId: string | undefined;
 	if (input.parentId) {
-		const parent = await resolveEntity(client, input.parentId);
+		const parent = await resolveEntity(executor, input.parentId);
 		if (!parent) {
 			return { entities: [], total: 0 };
 		}
 		parentId = parent.id;
 	}
 	const candidateResult = parentId
-		? await client.execute(sql`
+		? await executor.execute(sql`
 			SELECT entity.id
 			FROM entities AS entity
 			JOIN relations AS parent_relation
 				ON parent_relation.tenant_id = entity.tenant_id AND parent_relation.to_id = entity.id
-			WHERE entity.tenant_id = ${client.tenantId}
+			WHERE entity.tenant_id = ${executor.tenantId}
 				AND entity.tombstone = false
 				AND entity.kind = ${input.kind}
 				AND parent_relation.from_id = ${parentId}
 				AND parent_relation.type IN ${STRUCTURAL_RELATION_TYPES}
 			ORDER BY entity.id
 		`)
-		: await client.execute(sql`
+		: await executor.execute(sql`
 			SELECT id FROM entities
-			WHERE tenant_id = ${client.tenantId} AND tombstone = false AND kind = ${input.kind}
+			WHERE tenant_id = ${executor.tenantId} AND tombstone = false AND kind = ${input.kind}
 			ORDER BY id
 		`);
 	let selectedIds = (candidateResult.rows as Array<{ id: string }>).map((row) => row.id);
 	let statusMap: Map<string, string>;
 	if (input.statuses?.length) {
-		statusMap = await getDerivedStatusMap(client, selectedIds);
+		statusMap = await getDerivedStatusMap(executor, selectedIds);
 		const statuses = new Set(input.statuses);
 		selectedIds = selectedIds.filter((entityId) => statuses.has(statusMap.get(entityId) ?? ""));
 	} else {
 		const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
-		statusMap = await getDerivedStatusMap(client, limitedIds);
+		statusMap = await getDerivedStatusMap(executor, limitedIds);
 	}
 	const total = selectedIds.length;
 	const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
 	if (limitedIds.length === 0) {
 		return { entities: [], total };
 	}
-	const selectedRows = await client.select().from(entities).where(and(
-		eq(entities.tenantId, client.tenantId),
+	const selectedRows = await executor.select().from(entities).where(and(
+		eq(entities.tenantId, executor.tenantId),
 		inArray(entities.id, limitedIds)
 	));
 	const selectedById = new Map(selectedRows.map((row) => [row.id, applyDerivedStatus(mapDrizzleEntityRow(row), statusMap)]));
@@ -1074,21 +1063,21 @@ export async function queryEntities(
 	};
 }
 
-export async function listEntityHistory(client: PoolClient, entityId: string): Promise<HistoryEntryRecord[]> {
-	const row = await resolveEntity(client, entityId, true);
+export async function listEntityHistory(executor: TenantExecutor, entityId: string): Promise<HistoryEntryRecord[]> {
+	const row = await resolveEntity(executor, entityId, true);
 	if (!row) {
 		return [];
 	}
 
 	const headRevision = row.revision ?? 1;
-	const currentParentIds = (await getStructuralParentRelations(client, entityId)).map((relation) => relation.fromId);
+	const currentParentIds = (await getStructuralParentRelations(executor, entityId)).map((relation) => relation.fromId);
 
-	const deltaRows = await client
+	const deltaRows = await executor
 		.select()
 		.from(revisionEntries)
 		.where(
 			and(
-				eq(revisionEntries.tenantId, client.tenantId),
+				eq(revisionEntries.tenantId, executor.tenantId),
 				eq(revisionEntries.recordKind, "entity"),
 				eq(revisionEntries.recordKey, encodeEntityRecordKey(entityId))
 			)
@@ -1168,8 +1157,8 @@ function resolveRevisionHeadParentId(
 // Relations are an idempotent key union after canonical heads import. This
 // includes structural rows: the canonical parent is already present and is a
 // no-op, while additional structural-type annotations must still transfer.
-export async function listAllRelations(client: PoolClient): Promise<RelationRecord[]> {
-	const result = await client.execute(sql`SELECT * FROM relations WHERE tenant_id = ${client.tenantId}`);
+export async function listAllRelations(executor: TenantExecutor): Promise<RelationRecord[]> {
+	const result = await executor.execute(sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
 	return (result.rows as RelationRow[]).map((row) => ({
 		fromId: row.from_id,
 		toId: row.to_id,
@@ -1181,12 +1170,12 @@ export async function listAllRelations(client: PoolClient): Promise<RelationReco
 // The write half of the relations sync seam (ISS60/ADR16): idempotent via
 // `insertRelation`'s own `ON CONFLICT DO NOTHING`, keyed on the table's
 // primary key (tenant_id, from_id, to_id, type).
-export async function applyRelations(client: PoolClient, relations: RelationRecord[]): Promise<{ inserted: number }> {
+export async function applyRelations(executor: TenantExecutor, relations: RelationRecord[]): Promise<{ inserted: number }> {
 	let inserted = 0;
 	for (const relation of relations) {
-		const from = await getEntityOrThrow(client, relation.fromId);
-		const to = await getEntityOrThrow(client, relation.toId);
-		const { inserted: wasInserted } = await insertRelation(client, { ...relation, fromId: from.id, toId: to.id });
+		const from = await getEntityOrThrow(executor, relation.fromId);
+		const to = await getEntityOrThrow(executor, relation.toId);
+		const { inserted: wasInserted } = await insertRelation(executor, { ...relation, fromId: from.id, toId: to.id });
 		if (wasInserted) {
 			inserted += 1;
 		}
@@ -1195,15 +1184,15 @@ export async function applyRelations(client: PoolClient, relations: RelationReco
 }
 
 export async function linkEntities(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): Promise<LinkResult> {
 	if (input.fromId === input.toId) {
 		throw new Error("Cannot create a relation from an entity to itself.");
 	}
 
-	const from = await getEntityOrThrow(client, input.fromId);
-	const to = await getEntityOrThrow(client, input.toId);
+	const from = await getEntityOrThrow(executor, input.fromId);
+	const to = await getEntityOrThrow(executor, input.toId);
 
 	if (!isAllowedRelation(from.kind, to.kind, input.relationType)) {
 		throw new Error(`Relation ${input.relationType} is not allowed from ${from.kind} to ${to.kind}.`);
@@ -1211,42 +1200,42 @@ export async function linkEntities(
 
 	if (
 		(input.relationType === "blocks" || input.relationType === "supersedes") &&
-		(await hasTypedPath(client, to.id, from.id, input.relationType))
+		(await hasTypedPath(executor, to.id, from.id, input.relationType))
 	) {
 		throw new Error(`Linking ${from.id} -> ${to.id} as ${input.relationType} would create a cycle.`);
 	}
 
 	const createdAt = new Date().toISOString();
 	const relation: RelationRecord = { fromId: from.id, toId: to.id, type: input.relationType as RelationType, createdAt };
-	const { inserted } = await insertRelation(client, relation);
+	const { inserted } = await insertRelation(executor, relation);
 
 	return { relation, created: inserted };
 }
 
 export async function unlinkEntities(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): Promise<UnlinkResult> {
-	const relation = await getRelationOrThrow(client, input);
+	const relation = await getRelationOrThrow(executor, input);
 
-	if (await wouldOrphanSubtree(client, relation)) {
+	if (await wouldOrphanSubtree(executor, relation)) {
 		throw new Error(
 			`Unlinking ${relation.fromId} -> ${relation.toId} as ${relation.type} would orphan a subtree. Relink or delete descendants first.`
 		);
 	}
 
-	if (await wouldBreakFullChainInvariant(client, relation)) {
-		const target = await getEntityOrThrow(client, relation.toId);
+	if (await wouldBreakFullChainInvariant(executor, relation)) {
+		const target = await getEntityOrThrow(executor, relation.toId);
 		throw new Error(
 			`Cannot unlink ${relation.fromId} -> ${relation.toId} as ${relation.type}: it is the only remaining structural parent, and every ${target.kind} must have one.`
 		);
 	}
 
-	const removed = await client
+	const removed = await executor
 		.delete(relations)
 		.where(
 			and(
-				eq(relations.tenantId, client.tenantId),
+				eq(relations.tenantId, executor.tenantId),
 				eq(relations.fromId, relation.fromId),
 				eq(relations.toId, relation.toId),
 				eq(relations.type, relation.type)
@@ -1258,10 +1247,10 @@ export async function unlinkEntities(
 }
 
 export async function updateEntityStatus(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; status: string; author?: string }
 ): Promise<StatusUpdateResult> {
-	const entity = await getEntityOrThrow(client, input.entityId);
+	const entity = await getEntityOrThrow(executor, input.entityId);
 
 	if (!isValidStatus(entity.kind, input.status)) {
 		throw new Error(`Invalid status for ${entity.kind}: ${input.status}`);
@@ -1273,33 +1262,33 @@ export async function updateEntityStatus(
 
 	if (
 		(entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") &&
-		(await isEntitySuperseded(client, entity.id, entity.kind))
+		(await isEntitySuperseded(executor, entity.id, entity.kind))
 	) {
 		throw new Error(`${entity.id} status is derived (superseded) because another ${entity.kind} supersedes it.`);
 	}
 
 	if (entity.kind === "userStory") {
-		const fixingIssueStatuses = await getFixingIssueStatuses(client, entity.id);
+		const fixingIssueStatuses = await getFixingIssueStatuses(executor, entity.id);
 		if (fixingIssueStatuses.length > 0) {
 			throw new Error(`${entity.id} status is derived from its fixing issues; update those issues instead of setting it directly.`);
 		}
 	}
 
 	if (entity.kind === "prd") {
-		const createdStoryStatuses = await getCreatedStoryStatuses(client, entity.id);
+		const createdStoryStatuses = await getCreatedStoryStatuses(executor, entity.id);
 		if (createdStoryStatuses.length > 0) {
 			throw new Error(`${entity.id} status is derived from its user stories; update the underlying issues instead of setting it directly.`);
 		}
 	}
 
 	if (entity.kind === "adr") {
-		if ((await getConstrainedIssueStatuses(client, entity.id)).length > 0) {
+		if ((await getConstrainedIssueStatuses(executor, entity.id)).length > 0) {
 			throw new Error(`${entity.id} status is derived from the issues it constrains; update those issues instead of setting it directly.`);
 		}
 	}
 
 	if (entity.kind === "initiative") {
-		const { trackedIssueStatuses, ownedPrdStatuses } = await getInitiativeChildStatuses(client, entity.id);
+		const { trackedIssueStatuses, ownedPrdStatuses } = await getInitiativeChildStatuses(executor, entity.id);
 		if (isInitiativeComplete(trackedIssueStatuses, ownedPrdStatuses)) {
 			throw new Error(`${entity.id} status is derived (done) from its tracked issues and PRDs; reopen a child to change it.`);
 		}
@@ -1311,14 +1300,14 @@ export async function updateEntityStatus(
 	}
 
 	if (entity.kind === "issue" && (input.status === "in-progress" || input.status === "done")) {
-		const openSubIssues = await getOpenSubIssues(client, entity.id);
+		const openSubIssues = await getOpenSubIssues(executor, entity.id);
 		if (openSubIssues.length > 0) {
 			throw new Error(
 				`Cannot set ${entity.id} to ${input.status} while sub-issues remain open: ${openSubIssues.map((issue) => issue.id).join(", ")}.`
 			);
 		}
 
-		const blockingIssues = await getActiveBlockingIssues(client, entity.id);
+		const blockingIssues = await getActiveBlockingIssues(executor, entity.id);
 		if (blockingIssues.length > 0) {
 			throw new Error(
 				`Cannot set ${entity.id} to ${input.status} while blocked by ${blockingIssues.map((issue) => issue.id).join(", ")}.`
@@ -1330,27 +1319,27 @@ export async function updateEntityStatus(
 	const updatedAt = new Date().toISOString();
 	const newRevision = entity.revision + 1;
 
-	const updated = await client
+	const updated = await executor
 		.update(entities)
 		.set({ status: input.status, revision: newRevision, updatedAt })
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.returning({ id: entities.id });
 	if (updated.length === 0) {
-		const current = await getEntityOrThrow(client, entity.id);
+		const current = await getEntityOrThrow(executor, entity.id);
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
-	await appendDeltaEntry(client, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
 		priorStatus: entity.status
 	});
 
-	return { entity: await getEntityOrThrow(client, entity.id), previousStatus };
+	return { entity: await getEntityOrThrow(executor, entity.id), previousStatus };
 }
 
 export async function setEntityBody(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
 ): Promise<EntityRecord> {
-	const current = await getEntityOrThrow(client, input.entityId);
+	const current = await getEntityOrThrow(executor, input.entityId);
 
 	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
@@ -1361,26 +1350,26 @@ export async function setEntityBody(
 	const newRevision = current.revision + 1;
 	const newContentHash = computeEntityContentHash(current.title, input.body);
 
-	const [guard] = await client
+	const [guard] = await executor
 		.update(entities)
 		.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
 	if (!guard) {
-		const fresh = await getEntityOrThrow(client, current.id);
+		const fresh = await getEntityOrThrow(executor, current.id);
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(client, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
-	return getEntityOrThrow(client, current.id);
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+	return getEntityOrThrow(executor, current.id);
 }
 
 export async function updateEntity(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
 ): Promise<EntityRecord> {
-	const current = await getEntityOrThrow(client, input.entityId);
+	const current = await getEntityOrThrow(executor, input.entityId);
 	if (input.title === undefined && input.body === undefined) {
 		throw new Error("Entity edit requires --title, --body, or both.");
 	}
@@ -1399,36 +1388,36 @@ export async function updateEntity(
 	const newContentHash = computeEntityContentHash(title, body);
 	const updatedAt = new Date().toISOString();
 
-	const [guard] = await client
+	const [guard] = await executor
 		.update(entities)
 		.set({ title, body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
 	if (!guard) {
-		const fresh = await getEntityOrThrow(client, current.id);
+		const fresh = await getEntityOrThrow(executor, current.id);
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(client, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
-	return getEntityOrThrow(client, current.id);
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+	return getEntityOrThrow(executor, current.id);
 }
 
 export async function materializeEntityRevision(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; revision: number }
 ): Promise<MaterializedEntityRevision> {
-	const row = await resolveEntity(client, input.entityId, true);
+	const row = await resolveEntity(executor, input.entityId, true);
 	if (!row) {
 		throw new EntityRevisionError(input.entityId, "entity-not-found", `Entity not found: ${input.entityId}`);
 	}
 
 	const entity = mapDrizzleEntityRow(row);
-	const parentId = (await getStructuralParentRelations(client, entity.id))[0]?.fromId ?? null;
-	const deltaRows = await client
+	const parentId = (await getStructuralParentRelations(executor, entity.id))[0]?.fromId ?? null;
+	const deltaRows = await executor
 		.select()
 		.from(revisionEntries)
-		.where(and(eq(revisionEntries.tenantId, client.tenantId), eq(revisionEntries.recordKind, "entity"), eq(revisionEntries.recordKey, encodeEntityRecordKey(row.id))))
+		.where(and(eq(revisionEntries.tenantId, executor.tenantId), eq(revisionEntries.recordKind, "entity"), eq(revisionEntries.recordKey, encodeEntityRecordKey(row.id))))
 		.orderBy(desc(revisionEntries.revision));
 	const patches: EntityRevisionPatch[] = deltaRows.map((delta) => ({
 		revision: delta.revision,
@@ -1460,10 +1449,10 @@ export async function materializeEntityRevision(
 }
 
 export async function restoreEntityRevision(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
 ): Promise<MaterializedEntityRevision> {
-	const row = await resolveEntity(client, input.entityId, true);
+	const row = await resolveEntity(executor, input.entityId, true);
 	if (!row) {
 		throw new EntityRevisionError(input.entityId, "entity-not-found", `Entity not found: ${input.entityId}`);
 	}
@@ -1471,24 +1460,24 @@ export async function restoreEntityRevision(
 	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
-	const source = await materializeEntityRevision(client, { entityId: current.id, revision: input.revision });
-	const currentParentId = (await getStructuralParentRelations(client, current.id))[0]?.fromId ?? null;
+	const source = await materializeEntityRevision(executor, { entityId: current.id, revision: input.revision });
+	const currentParentId = (await getStructuralParentRelations(executor, current.id))[0]?.fromId ?? null;
 	let restoredParent: EntityRecord | null = null;
 	let restoredRelationType: RelationType | null = null;
 	if (!source.tombstone && source.parentId) {
-		restoredParent = await getEntityOrThrow(client, source.parentId);
+		restoredParent = await getEntityOrThrow(executor, source.parentId);
 		restoredRelationType = getAllowedRelationType(restoredParent.kind, current.kind);
 		if (!restoredRelationType || !isStructuralRelationType(restoredRelationType)) {
 			throw new Error(`Cannot restore ${current.kind} under ${restoredParent.kind}.`);
 		}
-		if (await hasStructuralPath(client, current.id, restoredParent.id)) {
+		if (await hasStructuralPath(executor, current.id, restoredParent.id)) {
 			throw new Error(`Cannot restore ${current.id} under ${restoredParent.id} because that would create a cycle.`);
 		}
 	}
 
 	const updatedAt = new Date().toISOString();
 	const newRevision = current.revision + 1;
-	const [guard] = await client.update(entities).set({
+	const [guard] = await executor.update(entities).set({
 		title: source.title,
 		body: source.body,
 		bodySource: source.bodySource,
@@ -1497,57 +1486,57 @@ export async function restoreEntityRevision(
 		contentHash: computeEntityContentHash(source.title, source.body),
 		tombstone: source.tombstone === true,
 		updatedAt
-	}).where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash))).returning({ id: entities.id });
+	}).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash))).returning({ id: entities.id });
 	if (!guard) {
-		const [freshRow] = await client.select().from(entities).where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, current.id)));
+		const [freshRow] = await executor.select().from(entities).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id)));
 		const fresh = mapDrizzleEntityRow(freshRow!);
 		throw new EntityConflictError(current.id, fresh.revision, fresh.contentHash);
 	}
 
-	for (const relation of await getStructuralParentRelations(client, current.id)) {
-		await client.delete(relations).where(and(eq(relations.tenantId, client.tenantId), eq(relations.fromId, relation.fromId), eq(relations.toId, relation.toId), eq(relations.type, relation.type)));
+	for (const relation of await getStructuralParentRelations(executor, current.id)) {
+		await executor.delete(relations).where(and(eq(relations.tenantId, executor.tenantId), eq(relations.fromId, relation.fromId), eq(relations.toId, relation.toId), eq(relations.type, relation.type)));
 	}
 	if (restoredParent && restoredRelationType) {
-		await insertRelation(client, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdAt: updatedAt });
+		await insertRelation(executor, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdAt: updatedAt });
 	}
-	await refreshProjectAssignments(client);
+	await refreshProjectAssignments(executor);
 
-	await appendDeltaEntry(client, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt, {
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt, {
 		priorStatus: current.status,
 		priorParentId: currentParentId,
 		priorTombstone: row.tombstone,
 		restoredFromRevision: input.revision
 	});
-	return materializeEntityRevision(client, { entityId: current.id, revision: newRevision });
+	return materializeEntityRevision(executor, { entityId: current.id, revision: newRevision });
 }
 
-export async function archiveEntity(client: PoolClient, input: { entityId: string }): Promise<StatusUpdateResult> {
-	const entity = await getEntityOrThrow(client, input.entityId);
-	return updateEntityStatus(client, { entityId: input.entityId, status: getArchiveStatus(entity.kind) });
+export async function archiveEntity(executor: TenantExecutor, input: { entityId: string }): Promise<StatusUpdateResult> {
+	const entity = await getEntityOrThrow(executor, input.entityId);
+	return updateEntityStatus(executor, { entityId: input.entityId, status: getArchiveStatus(entity.kind) });
 }
 
 export async function moveEntity(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input: { entityId: string; newParentId: string; author?: string }
 ): Promise<MoveResult> {
 	if (input.entityId === input.newParentId) {
 		throw new Error("Cannot move an entity under itself.");
 	}
 
-	const entity = await getEntityOrThrow(client, input.entityId);
-	const newParent = await getEntityOrThrow(client, input.newParentId);
+	const entity = await getEntityOrThrow(executor, input.entityId);
+	const newParent = await getEntityOrThrow(executor, input.newParentId);
 
 	const relationType = getAllowedRelationType(newParent.kind, entity.kind);
 	if (!relationType || !isStructuralRelationType(relationType)) {
 		throw new Error(`Cannot move ${entity.kind} under ${newParent.kind}.`);
 	}
 
-	const currentParentRelations = await getStructuralParentRelations(client, entity.id);
+	const currentParentRelations = await getStructuralParentRelations(executor, entity.id);
 	if (currentParentRelations.length > 1) {
 		throw new Error(`Cannot move ${entity.id} because it has multiple structural parents.`);
 	}
 
-	if (await hasStructuralPath(client, entity.id, newParent.id)) {
+	if (await hasStructuralPath(executor, entity.id, newParent.id)) {
 		throw new Error(`Cannot move ${entity.id} under ${newParent.id} because that would create a cycle.`);
 	}
 
@@ -1560,11 +1549,11 @@ export async function moveEntity(
 	const newRevision = entity.revision + 1;
 
 	for (const relation of currentParentRelations) {
-		await client
+		await executor
 			.delete(relations)
 			.where(
 				and(
-					eq(relations.tenantId, client.tenantId),
+					eq(relations.tenantId, executor.tenantId),
 					eq(relations.fromId, relation.fromId),
 					eq(relations.toId, relation.toId),
 					eq(relations.type, relation.type)
@@ -1572,41 +1561,41 @@ export async function moveEntity(
 			);
 	}
 
-	await insertRelation(client, { fromId: newParent.id, toId: entity.id, type: relationType, createdAt: updatedAt });
-	await refreshProjectAssignments(client);
+	await insertRelation(executor, { fromId: newParent.id, toId: entity.id, type: relationType, createdAt: updatedAt });
+	await refreshProjectAssignments(executor);
 
-	const updated = await client
+	const updated = await executor
 		.update(entities)
 		.set({ revision: newRevision, updatedAt })
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.returning({ id: entities.id });
 	if (updated.length === 0) {
-		const current = await getEntityOrThrow(client, entity.id);
+		const current = await getEntityOrThrow(executor, entity.id);
 		throw new EntityConflictError(entity.id, current.revision, current.contentHash);
 	}
 
-	await appendDeltaEntry(client, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
 		priorParentId: previousParentId
 	});
 
 	return {
-		entity: await getEntityOrThrow(client, entity.id),
+		entity: await getEntityOrThrow(executor, entity.id),
 		previousParentId,
 		newParentId: newParent.id,
 		relationType
 	};
 }
 
-export async function deleteEntity(client: PoolClient, input: { entityId: string }): Promise<DeleteResult> {
-	const entity = await getEntityOrThrow(client, input.entityId);
-	const previousParentId = (await getStructuralParentRelations(client, entity.id))[0]?.fromId ?? null;
-	const dependentHandoffRows = await client
+export async function deleteEntity(executor: TenantExecutor, input: { entityId: string }): Promise<DeleteResult> {
+	const entity = await getEntityOrThrow(executor, input.entityId);
+	const previousParentId = (await getStructuralParentRelations(executor, entity.id))[0]?.fromId ?? null;
+	const dependentHandoffRows = await executor
 		.select({ id: entities.id })
 		.from(entities)
 		.innerJoin(relations, and(eq(relations.tenantId, entities.tenantId), eq(relations.fromId, entities.id)))
 		.where(
 			and(
-				eq(entities.tenantId, client.tenantId),
+				eq(entities.tenantId, executor.tenantId),
 				eq(entities.kind, "handoff"),
 				eq(entities.tombstone, false),
 				eq(relations.toId, entity.id),
@@ -1614,40 +1603,40 @@ export async function deleteEntity(client: PoolClient, input: { entityId: string
 			)
 		);
 	for (const { id: handoffId } of dependentHandoffRows) {
-		const handoff = await getEntityOrThrow(client, handoffId);
+		const handoff = await getEntityOrThrow(executor, handoffId);
 		const handoffUpdatedAt = new Date().toISOString();
 		const handoffRevision = handoff.revision + 1;
-		await client
+		await executor
 			.delete(relations)
-			.where(and(eq(relations.tenantId, client.tenantId), or(eq(relations.fromId, handoff.id), eq(relations.toId, handoff.id))));
-		await client
+			.where(and(eq(relations.tenantId, executor.tenantId), or(eq(relations.fromId, handoff.id), eq(relations.toId, handoff.id))));
+		await executor
 			.update(entities)
 			.set({ tombstone: true, revision: handoffRevision, updatedAt: handoffUpdatedAt })
-			.where(and(eq(entities.tenantId, client.tenantId), eq(entities.id, handoff.id), eq(entities.tombstone, false)));
-		await appendDeltaEntry(client, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, undefined, handoffUpdatedAt, {
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, handoff.id), eq(entities.tombstone, false)));
+		await appendDeltaEntry(executor, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, undefined, handoffUpdatedAt, {
 			priorTombstone: false
 		});
 	}
 
-	const [outgoingResult] = await client
+	const [outgoingResult] = await executor
 		.select({ count: sql<number>`count(*)` })
 		.from(relations)
-		.where(and(eq(relations.tenantId, client.tenantId), eq(relations.fromId, entity.id)));
+		.where(and(eq(relations.tenantId, executor.tenantId), eq(relations.fromId, entity.id)));
 	if (Number(outgoingResult?.count ?? 0) > 0) {
 		throw new Error(`Cannot delete ${entity.id} while it still has outgoing relations. Unlink or delete dependents first.`);
 	}
 
 	const updatedAt = new Date().toISOString();
 	const newRevision = entity.revision + 1;
-	await client
+	await executor
 		.delete(relations)
-		.where(and(eq(relations.tenantId, client.tenantId), or(eq(relations.fromId, entity.id), eq(relations.toId, entity.id))));
-	const removed = await client
+		.where(and(eq(relations.tenantId, executor.tenantId), or(eq(relations.fromId, entity.id), eq(relations.toId, entity.id))));
+	const removed = await executor
 		.update(entities)
 		.set({ tombstone: true, revision: newRevision, updatedAt })
 		.where(
 			and(
-				eq(entities.tenantId, client.tenantId),
+				eq(entities.tenantId, executor.tenantId),
 				eq(entities.id, entity.id),
 				eq(entities.tombstone, false),
 				eq(entities.revision, entity.revision)
@@ -1655,10 +1644,10 @@ export async function deleteEntity(client: PoolClient, input: { entityId: string
 		)
 		.returning({ id: entities.id });
 	if (removed.length === 0) {
-		const current = await getEntityOrThrow(client, entity.id);
+		const current = await getEntityOrThrow(executor, entity.id);
 		throw new EntityConflictError(entity.id, current.revision, current.contentHash);
 	}
-	await appendDeltaEntry(client, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
+	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
 		priorParentId: previousParentId,
 		priorTombstone: false
 	});
@@ -1666,13 +1655,13 @@ export async function deleteEntity(client: PoolClient, input: { entityId: string
 	return { entity, removed: removed.length > 0 };
 }
 
-export async function listOrphans(client: PoolClient, kind?: string): Promise<EntityRecord[]> {
+export async function listOrphans(executor: TenantExecutor, kind?: string): Promise<EntityRecord[]> {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
 
-	const entities = await getAllEntities(client);
-	const relations = await getAllRelations(client);
+	const entities = await getAllEntities(executor);
+	const relations = await getAllRelations(executor);
 	const reachable = new Set<string>();
 
 	for (const entity of entities) {
@@ -1685,7 +1674,7 @@ export async function listOrphans(client: PoolClient, kind?: string): Promise<En
 		}
 	}
 
-	const statusMap = await getDerivedStatusMap(client);
+	const statusMap = await getDerivedStatusMap(executor);
 	return entities
 		.filter((entity) => {
 			if (entity.kind === "initiative" || entity.kind === "adr" || entity.kind === "project" || entity.kind === "epic") {
@@ -1701,35 +1690,35 @@ export async function listOrphans(client: PoolClient, kind?: string): Promise<En
 		.map((entity) => applyDerivedStatus(entity, statusMap));
 }
 
-export async function listProjectAdrs(client: PoolClient, projectId?: string): Promise<EntityRecord[]> {
-	const entityRecords = await getAllEntities(client);
-	const relations = await getAllRelations(client);
+export async function listProjectAdrs(executor: TenantExecutor, projectId?: string): Promise<EntityRecord[]> {
+	const entityRecords = await getAllEntities(executor);
+	const relations = await getAllRelations(executor);
 	const childIds = new Set(relations.filter((relation) => isStructuralRelationType(relation.type)).map((relation) => relation.toId));
 
 	if (!projectId) {
 		return entityRecords.filter((entity) => entity.kind === "adr" && !childIds.has(entity.id));
 	}
 
-	const rows = await client
+	const rows = await executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.kind, "adr"), eq(entities.projectId, projectId)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "adr"), eq(entities.projectId, projectId)))
 		.orderBy(asc(entities.id));
 	return rows.map(mapDrizzleEntityRow).filter((entity) => !childIds.has(entity.id));
 }
 
 export async function getInitiativeBundle(
-	client: PoolClient,
+	executor: TenantExecutor,
 	initiativeId: string,
 	allowedIds?: ReadonlySet<string>,
 	statusMap?: ReadonlyMap<string, string>
 ): Promise<InitiativeBundle> {
-	const initiative = await getEntityOrThrow(client, initiativeId);
+	const initiative = await getEntityOrThrow(executor, initiativeId);
 	if (initiative.kind !== "initiative") {
 		throw new Error(`${initiativeId} is not an initiative.`);
 	}
 
-	const reachableResult = await client.execute(sql`
+	const reachableResult = await executor.execute(sql`
 		WITH RECURSIVE reachable(id) AS (
 			SELECT ${initiative.id}::uuid
 			UNION
@@ -1742,19 +1731,19 @@ export async function getInitiativeBundle(
 				relations.from_id = reachable.id
 				OR (relations.type = 'handsOff' AND relations.to_id = reachable.id)
 			)
-			WHERE relations.tenant_id = ${client.tenantId}
+			WHERE relations.tenant_id = ${executor.tenantId}
 		)
 		SELECT id FROM reachable
 	`);
 	const reachableIds = (reachableResult.rows as Array<{ id: string }>).map((row) => row.id);
 	const selectedIds = new Set(reachableIds.filter((id) => !allowedIds || allowedIds.has(id)));
 
-	const entityResult = await client.execute(sql`
+	const entityResult = await executor.execute(sql`
 		SELECT * FROM entities
-		WHERE tenant_id = ${client.tenantId} AND id = ANY(ARRAY[${sql.join([...selectedIds], sql`, `)}]::uuid[])
+		WHERE tenant_id = ${executor.tenantId} AND id = ANY(ARRAY[${sql.join([...selectedIds], sql`, `)}]::uuid[])
 		ORDER BY id
 	`);
-	const relationResult = await client.execute(sql`SELECT * FROM relations WHERE tenant_id = ${client.tenantId}`);
+	const relationResult = await executor.execute(sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
 	const entityRows = entityResult.rows as EntityRow[];
 	const relationRows = relationResult.rows as RelationRow[];
 
@@ -1762,7 +1751,7 @@ export async function getInitiativeBundle(
 	const selectedRelations = relationRows.filter(
 		(relation) => selectedIds.has(relation.from_id) && selectedIds.has(relation.to_id)
 	);
-	const derivedStatusMap = statusMap ?? (await getDerivedStatusMap(client));
+	const derivedStatusMap = statusMap ?? (await getDerivedStatusMap(executor));
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, derivedStatusMap));
 	const entityById = new Map(derivedEntities.map((entity) => [entity.id, entity]));
 
@@ -1788,38 +1777,38 @@ export async function getInitiativeBundle(
 	};
 }
 
-export async function getDatabaseSnapshot(client: PoolClient, projectIdentity: string | undefined): Promise<DatabaseSnapshot>;
-export async function getDatabaseSnapshot(client: PoolClient, projectIdentity: string | undefined, input: { projectId: string }): Promise<ProjectSnapshot>;
+export async function getDatabaseSnapshot(executor: TenantExecutor, projectIdentity: string | undefined): Promise<DatabaseSnapshot>;
+export async function getDatabaseSnapshot(executor: TenantExecutor, projectIdentity: string | undefined, input: { projectId: string }): Promise<ProjectSnapshot>;
 export async function getDatabaseSnapshot(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input?: { projectId: string }
 ): Promise<DatabaseSnapshot | ProjectSnapshot> {
 	if (input?.projectId) {
-		const discovery = await getProjectDiscovery(client, input);
+		const discovery = await getProjectDiscovery(executor, input);
 		if (discovery.kind === "unavailable") {
 			return { kind: "unavailable" };
 		}
 
 		const project = discovery.projects.find((entry) => entry.project.id === input.projectId)!.project;
-		const snapshot = await withCurrentProject(client, project.id, () => getProjectSnapshot(client, project));
+		const snapshot = await withCurrentProject(executor, project.id, () => getProjectSnapshot(executor, project));
 		return { kind: "available", snapshot };
 	}
 
-	const entities = await getAllDerivedEntities(client);
-	const relations = await getAllRelations(client);
+	const entities = await getAllDerivedEntities(executor);
+	const relations = await getAllRelations(executor);
 	const initiatives = entities.filter((entity) => entity.kind === "initiative");
 	const statusMap = new Map(entities.map((entity) => [entity.id, entity.status]));
 
-	const orphans = await listOrphans(client);
-	const projectAdrs = await listProjectAdrs(client);
+	const orphans = await listOrphans(executor);
+	const projectAdrs = await listProjectAdrs(executor);
 	const initiativeBundles = await Promise.all(
-		initiatives.map((entity) => getInitiativeBundle(client, entity.id, undefined, statusMap))
+		initiatives.map((entity) => getInitiativeBundle(executor, entity.id, undefined, statusMap))
 	);
 
-	const sharedContext: ContextDetails = await queryContextDetails(client, projectIdentity);
+	const sharedContext: ContextDetails = await queryContextDetails(executor, projectIdentity);
 	const initiativeContexts = await Promise.all(
-		initiatives.map((entity) => queryContextDetails(client, projectIdentity, entity.id))
+		initiatives.map((entity) => queryContextDetails(executor, projectIdentity, entity.id))
 	);
 
 	return {
@@ -1836,16 +1825,16 @@ export async function getDatabaseSnapshot(
 	};
 }
 
-async function getProjectSnapshot(client: PoolClient, project: EntityRecord): Promise<DatabaseSnapshot> {
-	const allEntities = await getAllDerivedEntities(client);
-	const allRelations = await getAllRelations(client);
+async function getProjectSnapshot(executor: TenantExecutor, project: EntityRecord): Promise<DatabaseSnapshot> {
+	const allEntities = await getAllDerivedEntities(executor);
+	const allRelations = await getAllRelations(executor);
 	const selectedIds = collectReachableIds(allRelations.filter((relation) => isStructuralRelationType(relation.type)), project.id);
 	const entities = allEntities.filter((entity) => selectedIds.has(entity.id));
 	const relations = allRelations.filter((relation) => selectedIds.has(relation.fromId) && selectedIds.has(relation.toId));
 	const initiatives = entities.filter((entity) => entity.kind === "initiative");
 	const structuralRelations = allRelations.filter((relation) => isStructuralRelationType(relation.type));
 	const statusMap = new Map(allEntities.map((entity) => [entity.id, entity.status]));
-	const projectAdrs = await listProjectAdrs(client, project.id);
+	const projectAdrs = await listProjectAdrs(executor, project.id);
 
 	return {
 		generatedAt: new Date().toISOString(),
@@ -1855,19 +1844,19 @@ async function getProjectSnapshot(client: PoolClient, project: EntityRecord): Pr
 		projectAdrs,
 		initiatives: await Promise.all(
 			initiatives.map((entity) =>
-				getInitiativeBundle(client, entity.id, collectReachableIds(structuralRelations, entity.id), statusMap)
+				getInitiativeBundle(executor, entity.id, collectReachableIds(structuralRelations, entity.id), statusMap)
 			)
 		),
 		contexts: {
-			shared: await queryProjectContextDetails(client, project),
-			initiatives: await Promise.all(initiatives.map((entity) => queryProjectContextDetails(client, project, entity.id)))
+			shared: await queryProjectContextDetails(executor, project),
+			initiatives: await Promise.all(initiatives.map((entity) => queryProjectContextDetails(executor, project, entity.id)))
 		}
 	};
 }
 
-async function getEntityProjectId(client: PoolClient, entityId: string): Promise<string | null> {
-	const result = await client.execute(sql`
-		SELECT project_id FROM entities WHERE tenant_id = ${client.tenantId} AND id = ${entityId}
+async function getEntityProjectId(executor: TenantExecutor, entityId: string): Promise<string | null> {
+	const result = await executor.execute(sql`
+		SELECT project_id FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${entityId}
 	`);
 	return (result.rows as Array<{ project_id: string | null }>)[0]?.project_id ?? null;
 }
@@ -1880,18 +1869,18 @@ async function getEntityProjectId(client: PoolClient, entityId: string): Promise
  * epic for a request carrying no identity at all, or for a project that
  * somehow has no epic of its own.
  */
-async function resolveDefaultEpicId(client: PoolClient, projectIdentity: string | undefined): Promise<string> {
+async function resolveDefaultEpicId(executor: TenantExecutor, projectIdentity: string | undefined): Promise<string> {
 	const sentinelEpicId = deriveMigratedEntityIdentity("epic", DEFAULT_EPIC_ID).stableId;
 	if (!projectIdentity) {
 		return sentinelEpicId;
 	}
 
-	const projectId = await resolveProjectIdForWrite(client, projectIdentity);
-	const result = await client.execute(sql`
+	const projectId = await resolveProjectIdForWrite(executor, projectIdentity);
+	const result = await executor.execute(sql`
 		SELECT entities.id AS id
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${client.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${projectId}
 			AND relations.type = 'contains'
 			AND entities.kind = 'epic'
@@ -1911,18 +1900,18 @@ async function resolveDefaultEpicId(client: PoolClient, projectIdentity: string 
  * (the tenant-wide backfill in `refreshProjectAssignments`) still resolves to
  * the sentinel, which is the only project it can mean.
  */
-async function resolveProjectIdForWrite(client: PoolClient, projectIdentity: string | undefined): Promise<string> {
+async function resolveProjectIdForWrite(executor: TenantExecutor, projectIdentity: string | undefined): Promise<string> {
 	if (projectIdentity) {
-		return (await getOrCreateProjectByIdentity(client, projectIdentity)).id;
+		return (await getOrCreateProjectByIdentity(executor, projectIdentity)).id;
 	}
 
-	return (await getEntityOrThrow(client, deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId)).id;
+	return (await getEntityOrThrow(executor, deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId)).id;
 }
 
-async function refreshProjectAssignments(client: PoolClient, projectIdentity?: string): Promise<void> {
-	const entityResult = await client.execute(sql`SELECT id, kind FROM entities WHERE tenant_id = ${client.tenantId}`);
-	const relationResult = await client.execute(sql`
-		SELECT from_id, to_id, type FROM relations WHERE tenant_id = ${client.tenantId}
+async function refreshProjectAssignments(executor: TenantExecutor, projectIdentity?: string): Promise<void> {
+	const entityResult = await executor.execute(sql`SELECT id, kind FROM entities WHERE tenant_id = ${executor.tenantId}`);
+	const relationResult = await executor.execute(sql`
+		SELECT from_id, to_id, type FROM relations WHERE tenant_id = ${executor.tenantId}
 	`);
 	const entities = entityResult.rows as Array<{ id: string; kind: string }>;
 	const relations = relationResult.rows as Array<{ from_id: string; to_id: string; type: string }>;
@@ -1931,24 +1920,24 @@ async function refreshProjectAssignments(client: PoolClient, projectIdentity?: s
 		relations.map((relation) => ({ fromId: relation.from_id, toId: relation.to_id, type: relation.type })),
 		deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId
 	);
-	const fallbackProjectId = await resolveProjectIdForWrite(client, projectIdentity);
+	const fallbackProjectId = await resolveProjectIdForWrite(executor, projectIdentity);
 
 	for (const entity of entities) {
 		const projectId = entity.kind === "project" ? entity.id : (assignment.get(entity.id) ?? fallbackProjectId);
-		await client.execute(sql`
-			UPDATE entities SET project_id = ${projectId} WHERE tenant_id = ${client.tenantId} AND id = ${entity.id}
+		await executor.execute(sql`
+			UPDATE entities SET project_id = ${projectId} WHERE tenant_id = ${executor.tenantId} AND id = ${entity.id}
 		`);
 	}
 }
 
 export async function getProjectDiscovery(
-	client: PoolClient,
+	executor: TenantExecutor,
 	input?: { projectId?: string }
 ): Promise<ProjectDiscovery> {
 	// Deliberately tenant-wide (as local's is): this is the call that tells a
 	// caller which projects exist, so it cannot itself require knowing one.
-	const entities = await getTenantEntities(client);
-	const relations = await getTenantRelations(client);
+	const entities = await getTenantEntities(executor);
+	const relations = await getTenantRelations(executor);
 	const statusMap = new Map(deriveEntityStatuses(entities, relations).map((entity) => [entity.id, entity.status]));
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, statusMap));
 	const defaultProjectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
@@ -1998,17 +1987,17 @@ export async function getProjectDiscovery(
 // it is order-independent, so it needs no sort, and constant-memory, so it
 // costs one extra aggregate over a scan `count(*)` was doing anyway rather
 // than building a digest string proportional to the relation count.
-export async function getSnapshotSignature(client: PoolClient): Promise<string> {
-	const result = await client.execute(sql`
+export async function getSnapshotSignature(executor: TenantExecutor): Promise<string> {
+	const result = await executor.execute(sql`
 		SELECT
-			(SELECT count(*) FROM entities WHERE tenant_id = ${client.tenantId}) AS entity_count,
-			(SELECT max(updated_at) FROM entities WHERE tenant_id = ${client.tenantId}) AS entity_max_updated,
-			(SELECT count(*) FROM relations WHERE tenant_id = ${client.tenantId}) AS relation_count,
-			(SELECT sum(hashtext(from_id::text || to_id::text || type)::bigint) FROM relations WHERE tenant_id = ${client.tenantId}) AS relation_digest,
-			(SELECT count(*) FROM contexts WHERE tenant_id = ${client.tenantId}) AS context_count,
-			(SELECT max(updated_at) FROM contexts WHERE tenant_id = ${client.tenantId}) AS context_max_updated,
-			(SELECT count(*) FROM context_terms WHERE tenant_id = ${client.tenantId}) AS term_count,
-			(SELECT max(updated_at) FROM context_terms WHERE tenant_id = ${client.tenantId}) AS term_max_updated
+			(SELECT count(*) FROM entities WHERE tenant_id = ${executor.tenantId}) AS entity_count,
+			(SELECT max(updated_at) FROM entities WHERE tenant_id = ${executor.tenantId}) AS entity_max_updated,
+			(SELECT count(*) FROM relations WHERE tenant_id = ${executor.tenantId}) AS relation_count,
+			(SELECT sum(hashtext(from_id::text || to_id::text || type)::bigint) FROM relations WHERE tenant_id = ${executor.tenantId}) AS relation_digest,
+			(SELECT count(*) FROM contexts WHERE tenant_id = ${executor.tenantId}) AS context_count,
+			(SELECT max(updated_at) FROM contexts WHERE tenant_id = ${executor.tenantId}) AS context_max_updated,
+			(SELECT count(*) FROM context_terms WHERE tenant_id = ${executor.tenantId}) AS term_count,
+			(SELECT max(updated_at) FROM context_terms WHERE tenant_id = ${executor.tenantId}) AS term_max_updated
 	`);
 	const row = (result.rows as Array<{
 		entity_count: string;
@@ -2026,4 +2015,128 @@ export async function getSnapshotSignature(client: PoolClient): Promise<string> 
 		`contexts:${row.context_count}:${row.context_max_updated}`,
 		`terms:${row.term_count}:${row.term_max_updated}`
 	].join("|");
+}
+
+/**
+ * The entity/relation feature class (ADR "Backends mirror one another per
+ * feature, behind all-async feature interfaces"): a thin wrapper over the
+ * executor-holding free functions above, constructed fresh inside one
+ * `PgStore` transaction and composed alongside the other three feature
+ * classes.
+ */
+export class PgEntityStore implements EntityStore {
+	public constructor(
+		private readonly executor: TenantExecutor,
+		private readonly projectIdentity?: string
+	) {}
+
+	public async createEntity(input: {
+		kind: string;
+		title: string;
+		parentId?: string;
+		status?: string;
+		body?: string;
+		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
+	}): Promise<EntityRecord> {
+		return createEntity(this.executor, input, this.projectIdentity);
+	}
+
+	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
+		return getEntityDetails(this.executor, entityId);
+	}
+
+	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): Promise<EntityDetails> {
+		return queryEntityRelations(this.executor, input);
+	}
+
+	public async listEntities(kind: string): Promise<EntityRecord[]> {
+		return listEntities(this.executor, kind);
+	}
+
+	public async queryEntities(input: Parameters<EntityStore["queryEntities"]>[0]) {
+		return queryEntities(this.executor, input);
+	}
+
+	public async listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {
+		return listEntityHistory(this.executor, entityId);
+	}
+
+	public async listAllRelations(): Promise<RelationRecord[]> {
+		return listAllRelations(this.executor);
+	}
+
+	public async applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
+		return applyRelations(this.executor, relations);
+	}
+
+	public async listOrphans(kind?: string): Promise<EntityRecord[]> {
+		return listOrphans(this.executor, kind);
+	}
+
+	public async listProjectAdrs(): Promise<EntityRecord[]> {
+		return listProjectAdrs(this.executor);
+	}
+
+	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
+		return updateEntityStatus(this.executor, input);
+	}
+
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+		return updateEntity(this.executor, input);
+	}
+
+	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+		return setEntityBody(this.executor, input);
+	}
+
+	public async materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision> {
+		return materializeEntityRevision(this.executor, input);
+	}
+
+	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedEntityRevision> {
+		return restoreEntityRevision(this.executor, input);
+	}
+
+	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
+		return archiveEntity(this.executor, input);
+	}
+
+	public async deleteEntity(input: { entityId: string }): Promise<DeleteResult> {
+		return deleteEntity(this.executor, input);
+	}
+
+	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult> {
+		return moveEntity(this.executor, input);
+	}
+
+	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
+		return linkEntities(this.executor, input);
+	}
+
+	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult> {
+		return unlinkEntities(this.executor, input);
+	}
+
+	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
+		if (input) {
+			return getDatabaseSnapshot(this.executor, this.projectIdentity, input);
+		}
+
+		return getDatabaseSnapshot(this.executor, this.projectIdentity);
+	}
+
+	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
+		return getProjectDiscovery(this.executor, input);
+	}
+
+	public async getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
+		return getInitiativeBundle(this.executor, initiativeId);
+	}
+
+	public async getSnapshotSignature(): Promise<string> {
+		return getSnapshotSignature(this.executor);
+	}
 }

@@ -1,0 +1,71 @@
+import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord, MaterializedEntityRevision } from "../entity-store/domain.js";
+import type {
+	DatabaseSnapshot,
+	DeleteResult,
+	EntityDetails,
+	InitiativeBundle,
+	LinkResult,
+	MoveResult,
+	ProjectDiscovery,
+	ProjectSnapshot,
+	QueryEntitiesInput,
+	QueryEntitiesResult,
+	QueryEntityRelationsInput,
+	StatusUpdateResult,
+	UnlinkResult
+} from "../entity-store/store-types.js";
+
+/**
+ * The entity/relation half of the storage-driver seam (ADR "Backends mirror
+ * one another per feature, behind all-async feature interfaces"), split out
+ * of `StorageDriver` so a reader who knows one backend's `LocalEntityStore`/
+ * `PgEntityStore` can read the other. All methods return promises; local's
+ * synchronous free functions still do the actual work beneath the class that
+ * implements this interface.
+ */
+export interface EntityStore {
+	createEntity(input: {
+		kind: string;
+		title: string;
+		parentId?: string;
+		status?: string;
+		body?: string;
+		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
+	}): Promise<EntityRecord>;
+	getEntityDetails(entityId: string): Promise<EntityDetails>;
+	queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails>;
+	listEntities(kind: string): Promise<EntityRecord[]>;
+	queryEntities(input: QueryEntitiesInput): Promise<QueryEntitiesResult>;
+	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
+	/** Non-structural relations transferred after canonical entity import. */
+	listAllRelations(): Promise<RelationRecord[]>;
+	applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }>;
+	listOrphans(kind?: string): Promise<EntityRecord[]>;
+	listProjectAdrs(): Promise<EntityRecord[]>;
+	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;
+	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
+	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
+	/** Materializes entity facts at a specific historical revision by walking the reverse-delta chain (ADR55/ISS261). */
+	materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision>;
+	restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedEntityRevision>;
+	archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult>;
+	deleteEntity(input: { entityId: string }): Promise<DeleteResult>;
+	moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult>;
+	linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult>;
+	unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult>;
+	getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery>;
+	getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle>;
+	/**
+	 * A cheap, opaque string that changes whenever this tenant's own data
+	 * changes and stays stable otherwise (ISS191) - the site server's
+	 * local-mode live-refresh polls this instead of directly `stat()`-ing
+	 * the sqlite file, so local mode never bypasses this seam the way cloud
+	 * mode (which already only ever talks through `StorageDriver`) doesn't.
+	 * Callers must never parse or compare its internal shape - only
+	 * equality across two calls is meaningful.
+	 */
+	getSnapshotSignature(): Promise<string>;
+}

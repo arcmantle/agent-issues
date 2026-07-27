@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
 
 import { and, eq, sql, type SQL } from "drizzle-orm";
 
@@ -40,6 +41,7 @@ import {
 	type EntityKind,
 	type EntityRecord,
 	type EntityRevisionPatch,
+	type EntityStore,
 	type HistoryEntryRecord,
 	type InitiativeBundle,
 	type LinkResult,
@@ -114,7 +116,6 @@ export function createEntity(
 		links?: Array<{ relationType: string; targetId: string }>;
 	}
 ): EntityRecord {
-	const db = executor;
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
 	}
@@ -145,7 +146,7 @@ export function createEntity(
 	// always share their parent's owning project); a parentless entity -
 	// an orphan issue or a project-scoped ADR - belongs to this workspace's
 	// own resolved project (ISS166 follow-up).
-	const inheritedProjectId = (parent ? getEntityProjectId(executor, parent.id) : null) ?? db.currentProjectId;
+	const inheritedProjectId = (parent ? getEntityProjectId(executor, parent.id) : null) ?? executor.currentProjectId;
 
 	return executor.drizzle.transaction(() => {
 		const identity = generateCanonicalIdentity(kind);
@@ -153,7 +154,7 @@ export function createEntity(
 		// A project owns itself, so scoped reads from its own workspace see it.
 		const projectId = kind === "project" ? id : inheritedProjectId;
 		const contentHash = computeEntityContentHash(title, body);
-		const values = tenantParams(db, {
+		const values = tenantParams(executor, {
 			id,
 			reference: identity.reference,
 			kind,
@@ -193,15 +194,15 @@ export function createEntity(
 }
 
 export function linkEntities(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): LinkResult {
 	if (input.fromId === input.toId) {
 		throw new Error("Cannot create a relation from an entity to itself.");
 	}
 
-	const from = getEntityOrThrow(db, input.fromId);
-	const to = getEntityOrThrow(db, input.toId);
+	const from = getEntityOrThrow(executor, input.fromId);
+	const to = getEntityOrThrow(executor, input.toId);
 
 	if (!isAllowedRelation(from.kind, to.kind, input.relationType)) {
 		throw new Error(`Relation ${input.relationType} is not allowed from ${from.kind} to ${to.kind}.`);
@@ -209,13 +210,13 @@ export function linkEntities(
 
 	if (
 		(input.relationType === "blocks" || input.relationType === "supersedes") &&
-		hasTypedPath(db, to.id, from.id, input.relationType)
+		hasTypedPath(executor, to.id, from.id, input.relationType)
 	) {
 		throw new Error(`Linking ${from.id} -> ${to.id} as ${input.relationType} would create a cycle.`);
 	}
 
 	const createdAt = new Date().toISOString();
-	const result = insertRelation(db, {
+	const result = insertRelation(executor, {
 		fromId: from.id,
 		toId: to.id,
 		type: input.relationType,
@@ -237,7 +238,6 @@ export function updateEntityStatus(
 	executor: SqliteExecutor,
 	input: { entityId: string; status: string; author?: string }
 ): StatusUpdateResult {
-	const db = executor;
 	const entity = getEntityOrThrow(executor, input.entityId);
 
 	if (!isValidStatus(entity.kind, input.status)) {
@@ -250,13 +250,13 @@ export function updateEntityStatus(
 
 	if (
 		(entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") &&
-		isEntitySuperseded(db, entity.id, entity.kind)
+		isEntitySuperseded(executor, entity.id, entity.kind)
 	) {
 		throw new Error(`${entity.id} status is derived (superseded) because another ${entity.kind} supersedes it.`);
 	}
 
 	if (entity.kind === "userStory") {
-		const fixingIssueStatuses = getFixingIssueStatuses(db, entity.id);
+		const fixingIssueStatuses = getFixingIssueStatuses(executor, entity.id);
 		if (fixingIssueStatuses.length > 0) {
 			throw new Error(
 				`${entity.id} status is derived from its fixing issues; update those issues instead of setting it directly.`
@@ -265,7 +265,7 @@ export function updateEntityStatus(
 	}
 
 	if (entity.kind === "prd") {
-		const createdStoryStatuses = getCreatedStoryStatuses(db, entity.id);
+		const createdStoryStatuses = getCreatedStoryStatuses(executor, entity.id);
 		if (createdStoryStatuses.length > 0) {
 			throw new Error(
 				`${entity.id} status is derived from its user stories; update the underlying issues instead of setting it directly.`
@@ -273,14 +273,14 @@ export function updateEntityStatus(
 		}
 	}
 
-	if (entity.kind === "adr" && getConstrainedIssueStatuses(db, entity.id).length > 0) {
+	if (entity.kind === "adr" && getConstrainedIssueStatuses(executor, entity.id).length > 0) {
 		throw new Error(
 			`${entity.id} status is derived from the issues it constrains; update those issues instead of setting it directly.`
 		);
 	}
 
 	if (entity.kind === "initiative") {
-		const { trackedIssueStatuses, ownedPrdStatuses } = getInitiativeChildStatuses(db, entity.id);
+		const { trackedIssueStatuses, ownedPrdStatuses } = getInitiativeChildStatuses(executor, entity.id);
 		if (isInitiativeComplete(trackedIssueStatuses, ownedPrdStatuses)) {
 			throw new Error(
 				`${entity.id} status is derived (done) from its tracked issues and PRDs; reopen a child to change it.`
@@ -294,14 +294,14 @@ export function updateEntityStatus(
 	}
 
 	if (entity.kind === "issue" && (input.status === "in-progress" || input.status === "done")) {
-		const openSubIssues = getOpenSubIssues(db, entity.id);
+		const openSubIssues = getOpenSubIssues(executor, entity.id);
 		if (openSubIssues.length > 0) {
 			throw new Error(
 				`Cannot set ${entity.id} to ${input.status} while sub-issues remain open: ${openSubIssues.map((issue) => issue.id).join(", ")}.`
 			);
 		}
 
-		const blockingIssues = getActiveBlockingIssues(db, entity.id);
+		const blockingIssues = getActiveBlockingIssues(executor, entity.id);
 		if (blockingIssues.length > 0) {
 			throw new Error(
 				`Cannot set ${entity.id} to ${input.status} while blocked by ${blockingIssues.map((issue) => issue.id).join(", ")}.`
@@ -315,20 +315,20 @@ export function updateEntityStatus(
 	const result = executor.drizzle
 		.update(entities)
 		.set({ status: input.status, revision: newRevision, updatedAt })
-		.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.run();
 
 	if (result.changes === 0) {
-		const current = getEntityOrThrow(db, entity.id);
+		const current = getEntityOrThrow(executor, entity.id);
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
 
-	appendDeltaEntry(db, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+	appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
 		priorStatus: entity.status
 	});
 
 	return {
-		entity: getEntityOrThrow(db, entity.id),
+		entity: getEntityOrThrow(executor, entity.id),
 		previousStatus
 	};
 }
@@ -337,7 +337,6 @@ export function setEntityBody(
 	executor: SqliteExecutor,
 	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
 ): EntityRecord {
-	const db = executor;
 	return executor.drizzle.transaction(() => {
 		const current = getEntityOrThrow(executor, input.entityId);
 
@@ -353,7 +352,7 @@ export function setEntityBody(
 		const result = executor.drizzle
 			.update(entities)
 			.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
-			.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 			.run();
 
 		if (result.changes === 0) {
@@ -361,8 +360,8 @@ export function setEntityBody(
 			throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 		}
 
-		appendDeltaEntry(db, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
-		return getEntityOrThrow(db, current.id);
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+		return getEntityOrThrow(executor, current.id);
 	});
 }
 
@@ -370,7 +369,6 @@ export function updateEntity(
 	executor: SqliteExecutor,
 	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
 ): EntityRecord {
-	const db = executor;
 	if (input.title === undefined && input.body === undefined) {
 		throw new Error("Entity edit requires --title, --body, or both.");
 	}
@@ -395,7 +393,7 @@ export function updateEntity(
 		const result = executor.drizzle
 			.update(entities)
 			.set({ body, bodySource, title, revision: newRevision, contentHash: newContentHash, updatedAt })
-			.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 			.run();
 
 		if (result.changes === 0) {
@@ -403,14 +401,14 @@ export function updateEntity(
 			throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 		}
 
-		appendDeltaEntry(db, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
 		return getEntityOrThrow(executor, current.id);
 	});
 }
 
-export function archiveEntity(db: SqliteExecutor, input: { entityId: string }): StatusUpdateResult {
-	const entity = getEntityOrThrow(db, input.entityId);
-	return updateEntityStatus(db, {
+export function archiveEntity(executor: SqliteExecutor, input: { entityId: string }): StatusUpdateResult {
+	const entity = getEntityOrThrow(executor, input.entityId);
+	return updateEntityStatus(executor, {
 		entityId: input.entityId,
 		status: getArchiveStatus(entity.kind)
 	});
@@ -422,7 +420,7 @@ export function archiveEntity(db: SqliteExecutor, input: { entityId: string }): 
  * Does not mutate the head or any delta row.
  */
 export function materializeEntityRevision(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { entityId: string; revision: number }
 ): MaterializedEntityRevision {
 	type DeltaRow = {
@@ -436,7 +434,7 @@ export function materializeEntityRevision(
 		created_at: string;
 	};
 
-	const row = resolveSqliteEntity(db, input.entityId, true);
+	const row = resolveSqliteEntity(executor, input.entityId, true);
 
 	if (!row) {
 		throw new EntityRevisionError(
@@ -452,17 +450,17 @@ export function materializeEntityRevision(
 		body: row.body,
 		bodySource: (isBodySource(row.bodySource ?? "") ? row.bodySource : "authored") as BodySource,
 		status: row.status,
-		parentId: getStructuralParentRelations(db, row.id)[0]?.fromId ?? null,
+		parentId: getStructuralParentRelations(executor, row.id)[0]?.fromId ?? null,
 		revision: row.revision ?? 1,
 		createdAt: row.createdAt,
 		tombstone: row.tombstone
 	};
 
 	const deltaRows = all<DeltaRow>(
-		db,
+		executor,
 		sql`SELECT revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at
 			FROM revision_entries
-			WHERE tenant_id = ${db.tenantId}
+			WHERE tenant_id = ${executor.tenantId}
 				AND record_kind = 'entity'
 				AND record_key = ${encodeEntityRecordKey(row.id)}
 			ORDER BY revision DESC`
@@ -480,15 +478,15 @@ export function materializeEntityRevision(
 	}));
 
 	const result = materializeFromPatches(input.entityId, head, patches, input.revision);
-	recordHistoryMaterialization(db, "entity", result.headRevision, result.targetRevision);
+	recordHistoryMaterialization(executor, "entity", result.headRevision, result.targetRevision);
 	return result;
 }
 
 export function restoreEntityRevision(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
 ): MaterializedEntityRevision {
-	const row = resolveSqliteEntity(db, input.entityId, true);
+	const row = resolveSqliteEntity(executor, input.entityId, true);
 	if (!row) {
 		throw new EntityRevisionError(input.entityId, "entity-not-found", `Entity not found: ${input.entityId}`);
 	}
@@ -496,25 +494,25 @@ export function restoreEntityRevision(
 	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
-	const source = materializeEntityRevision(db, { entityId: current.id, revision: input.revision });
-	const currentParentId = getStructuralParentRelations(db, current.id)[0]?.fromId ?? null;
+	const source = materializeEntityRevision(executor, { entityId: current.id, revision: input.revision });
+	const currentParentId = getStructuralParentRelations(executor, current.id)[0]?.fromId ?? null;
 	let restoredParent: EntityRecord | null = null;
 	let restoredRelationType: RelationType | null = null;
 	if (!source.tombstone && source.parentId) {
-		restoredParent = getEntityOrThrow(db, source.parentId);
+		restoredParent = getEntityOrThrow(executor, source.parentId);
 		restoredRelationType = getAllowedRelationType(restoredParent.kind, current.kind);
 		if (!restoredRelationType || !isStructuralRelationType(restoredRelationType)) {
 			throw new Error(`Cannot restore ${current.kind} under ${restoredParent.kind}.`);
 		}
-		if (hasStructuralPath(db, current.id, restoredParent.id)) {
+		if (hasStructuralPath(executor, current.id, restoredParent.id)) {
 			throw new Error(`Cannot restore ${current.id} under ${restoredParent.id} because that would create a cycle.`);
 		}
 	}
 
-	return db.drizzle.transaction(() => {
+	return executor.drizzle.transaction(() => {
 		const updatedAt = new Date().toISOString();
 		const newRevision = current.revision + 1;
-		const result = db.drizzle.update(entities).set({
+		const result = executor.drizzle.update(entities).set({
 			title: source.title,
 			body: source.body,
 			bodySource: source.bodySource,
@@ -523,64 +521,64 @@ export function restoreEntityRevision(
 			contentHash: computeEntityContentHash(source.title, source.body),
 			tombstone: source.tombstone === true,
 			updatedAt
-		}).where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash))).run();
+		}).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash))).run();
 		if (result.changes === 0) {
-			const freshRow = first<EntityRow>(db, sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${current.id}`)!;
+			const freshRow = first<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${current.id}`)!;
 			const fresh = mapEntityRow(freshRow);
 			throw new EntityConflictError(current.id, fresh.revision, fresh.contentHash);
 		}
 
-		for (const relation of getStructuralParentRelations(db, current.id)) {
-			run(db, sql`DELETE FROM relations WHERE tenant_id = ${db.tenantId} AND from_id = ${relation.fromId} AND to_id = ${relation.toId} AND type = ${relation.type}`);
+		for (const relation of getStructuralParentRelations(executor, current.id)) {
+			run(executor, sql`DELETE FROM relations WHERE tenant_id = ${executor.tenantId} AND from_id = ${relation.fromId} AND to_id = ${relation.toId} AND type = ${relation.type}`);
 		}
 		if (restoredParent && restoredRelationType) {
-			insertRelation(db, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdAt: updatedAt });
+			insertRelation(executor, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdAt: updatedAt });
 		}
-		const projectId = restoredParent ? getEntityProjectId(db, restoredParent.id) ?? db.currentProjectId : db.currentProjectId;
-		run(db, sql`WITH RECURSIVE subtree(id) AS (
+		const projectId = restoredParent ? getEntityProjectId(executor, restoredParent.id) ?? executor.currentProjectId : executor.currentProjectId;
+		run(executor, sql`WITH RECURSIVE subtree(id) AS (
 			SELECT ${current.id}
 			UNION
 			SELECT relations.to_id
 			FROM relations
 			JOIN subtree ON relations.from_id = subtree.id
-			WHERE relations.tenant_id = ${db.tenantId}
+			WHERE relations.tenant_id = ${executor.tenantId}
 		)
 		UPDATE entities
 		SET project_id = ${projectId}
-		WHERE tenant_id = ${db.tenantId} AND id IN (SELECT id FROM subtree)`);
+		WHERE tenant_id = ${executor.tenantId} AND id IN (SELECT id FROM subtree)`);
 
-		appendDeltaEntry(db, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt, {
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt, {
 			priorStatus: current.status,
 			priorParentId: currentParentId,
 			priorTombstone: row.tombstone,
 			restoredFromRevision: input.revision
 		});
-		return materializeEntityRevision(db, { entityId: current.id, revision: newRevision });
+		return materializeEntityRevision(executor, { entityId: current.id, revision: newRevision });
 	});
 }
 
 export function moveEntity(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { entityId: string; newParentId: string; author?: string }
 ): MoveResult {
 	if (input.entityId === input.newParentId) {
 		throw new Error("Cannot move an entity under itself.");
 	}
 
-	const entity = getEntityOrThrow(db, input.entityId);
-	const newParent = getEntityOrThrow(db, input.newParentId);
+	const entity = getEntityOrThrow(executor, input.entityId);
+	const newParent = getEntityOrThrow(executor, input.newParentId);
 
 	const relationType = getAllowedRelationType(newParent.kind, entity.kind);
 	if (!relationType || !isStructuralRelationType(relationType)) {
 		throw new Error(`Cannot move ${entity.kind} under ${newParent.kind}.`);
 	}
 
-	const currentParentRelations = getStructuralParentRelations(db, entity.id);
+	const currentParentRelations = getStructuralParentRelations(executor, entity.id);
 	if (currentParentRelations.length > 1) {
 		throw new Error(`Cannot move ${entity.id} because it has multiple structural parents.`);
 	}
 
-	if (hasStructuralPath(db, entity.id, newParent.id)) {
+	if (hasStructuralPath(executor, entity.id, newParent.id)) {
 		throw new Error(`Cannot move ${entity.id} under ${newParent.id} because that would create a cycle.`);
 	}
 
@@ -597,16 +595,16 @@ export function moveEntity(
 	const updatedAt = new Date().toISOString();
 	const newRevision = entity.revision + 1;
 
-	db.drizzle.transaction(() => {
+	executor.drizzle.transaction(() => {
 		for (const relation of currentParentRelations) {
-			run(db, sql`DELETE FROM relations
-				WHERE tenant_id = ${db.tenantId}
+			run(executor, sql`DELETE FROM relations
+				WHERE tenant_id = ${executor.tenantId}
 					AND from_id = ${relation.fromId}
 					AND to_id = ${relation.toId}
 					AND type = ${relation.type}`);
 		}
 
-		insertRelation(db, {
+		insertRelation(executor, {
 			fromId: newParent.id,
 			toId: entity.id,
 			type: relationType,
@@ -616,31 +614,31 @@ export function moveEntity(
 		// A move can re-home the entity into a different project (ISS166);
 		// its whole structural subtree inherits the new parent's owning
 		// project so `project_id` stays consistent with the structure.
-		const projectId = getEntityProjectId(db, newParent.id) ?? db.currentProjectId;
-		run(db, sql`WITH RECURSIVE subtree(id) AS (
+		const projectId = getEntityProjectId(executor, newParent.id) ?? executor.currentProjectId;
+		run(executor, sql`WITH RECURSIVE subtree(id) AS (
 			SELECT ${entity.id}
 			UNION
 			SELECT relations.to_id
 			FROM relations
 			JOIN subtree ON relations.from_id = subtree.id
-			WHERE relations.tenant_id = ${db.tenantId}
+			WHERE relations.tenant_id = ${executor.tenantId}
 		)
 		UPDATE entities
 		SET project_id = ${projectId}
-		WHERE tenant_id = ${db.tenantId} AND id IN (SELECT id FROM subtree)`);
+		WHERE tenant_id = ${executor.tenantId} AND id IN (SELECT id FROM subtree)`);
 
-		run(db, sql`UPDATE entities
+		run(executor, sql`UPDATE entities
 			SET revision = ${newRevision}, updated_at = ${updatedAt}
-			WHERE tenant_id = ${db.tenantId}
+			WHERE tenant_id = ${executor.tenantId}
 				AND id = ${entity.id}`);
 
-		appendDeltaEntry(db, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+		appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
 			priorParentId: previousParentId
 		});
 	});
 
 	return {
-		entity: getEntityOrThrow(db, entity.id),
+		entity: getEntityOrThrow(executor, entity.id),
 		previousParentId,
 		newParentId: newParent.id,
 		relationType
@@ -648,25 +646,25 @@ export function moveEntity(
 }
 
 export function unlinkEntities(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): UnlinkResult {
-	const relation = getRelationOrThrow(db, input);
+	const relation = getRelationOrThrow(executor, input);
 
-	if (wouldOrphanSubtree(db, relation)) {
+	if (wouldOrphanSubtree(executor, relation)) {
 		throw new Error(
 			`Unlinking ${relation.fromId} -> ${relation.toId} as ${relation.type} would orphan a subtree. Relink or delete descendants first.`
 		);
 	}
 
-	if (wouldBreakFullChainInvariant(db, relation)) {
+	if (wouldBreakFullChainInvariant(executor, relation)) {
 		throw new Error(
-			`Cannot unlink ${relation.fromId} -> ${relation.toId} as ${relation.type}: it is the only remaining structural parent, and every ${getEntityOrThrow(db, relation.toId).kind} must have one.`
+			`Cannot unlink ${relation.fromId} -> ${relation.toId} as ${relation.type}: it is the only remaining structural parent, and every ${getEntityOrThrow(executor, relation.toId).kind} must have one.`
 		);
 	}
 
-	const result = run(db, sql`DELETE FROM relations
-		WHERE tenant_id = ${db.tenantId}
+	const result = run(executor, sql`DELETE FROM relations
+		WHERE tenant_id = ${executor.tenantId}
 			AND from_id = ${relation.fromId}
 			AND to_id = ${relation.toId}
 			AND type = ${relation.type}`);
@@ -678,14 +676,13 @@ export function unlinkEntities(
 }
 
 export function deleteEntity(executor: SqliteExecutor, input: { entityId: string }): DeleteResult {
-	const db = executor;
 	const entity = getEntityOrThrow(executor, input.entityId);
-	const previousParentId = getStructuralParentRelations(db, entity.id)[0]?.fromId ?? null;
+	const previousParentId = getStructuralParentRelations(executor, entity.id)[0]?.fromId ?? null;
 
-	return db.drizzle.transaction(() => {
-		const dependentHandoffRows = all<EntityRow>(db, sql`SELECT entities.* FROM entities
+	return executor.drizzle.transaction(() => {
+		const dependentHandoffRows = all<EntityRow>(executor, sql`SELECT entities.* FROM entities
 			JOIN relations ON relations.tenant_id = entities.tenant_id AND relations.from_id = entities.id
-			WHERE entities.tenant_id = ${db.tenantId}
+			WHERE entities.tenant_id = ${executor.tenantId}
 				AND entities.kind = 'handoff'
 				AND entities.tombstone = 0
 				AND relations.to_id = ${entity.id}
@@ -694,19 +691,19 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 			const handoff = mapEntityRow(handoffRow);
 			const handoffUpdatedAt = new Date().toISOString();
 			const handoffRevision = handoff.revision + 1;
-			run(db, sql`DELETE FROM relations WHERE tenant_id = ${db.tenantId} AND (from_id = ${handoff.id} OR to_id = ${handoff.id})`);
+			run(executor, sql`DELETE FROM relations WHERE tenant_id = ${executor.tenantId} AND (from_id = ${handoff.id} OR to_id = ${handoff.id})`);
 			executor.drizzle
 				.update(entities)
 				.set({ tombstone: true, revision: handoffRevision, updatedAt: handoffUpdatedAt })
-				.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, handoff.id), eq(entities.tombstone, false)))
+				.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, handoff.id), eq(entities.tombstone, false)))
 				.run();
-			appendDeltaEntry(db, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, undefined, handoffUpdatedAt, {
+			appendDeltaEntry(executor, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, undefined, handoffUpdatedAt, {
 				priorTombstone: false
 			});
 		}
 			const outgoingCount = first<{ count: number }>(
-				db,
-				sql`SELECT COUNT(*) as count FROM relations WHERE tenant_id = ${db.tenantId} AND from_id = ${entity.id}`
+				executor,
+				sql`SELECT COUNT(*) as count FROM relations WHERE tenant_id = ${executor.tenantId} AND from_id = ${entity.id}`
 			)!;
 
 			if (outgoingCount.count > 0) {
@@ -715,15 +712,15 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 
 			const updatedAt = new Date().toISOString();
 			const newRevision = entity.revision + 1;
-			run(db, sql`DELETE FROM relations
-				WHERE tenant_id = ${db.tenantId}
+			run(executor, sql`DELETE FROM relations
+				WHERE tenant_id = ${executor.tenantId}
 					AND (from_id = ${entity.id} OR to_id = ${entity.id})`);
 			const result = executor.drizzle
 				.update(entities)
 				.set({ tombstone: true, revision: newRevision, updatedAt })
-				.where(and(eq(entities.tenantId, db.tenantId), eq(entities.id, entity.id), eq(entities.tombstone, false)))
+				.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.tombstone, false)))
 				.run();
-			appendDeltaEntry(db, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
+			appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
 				priorParentId: previousParentId,
 				priorTombstone: false
 			});
@@ -736,22 +733,21 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 }
 
 export function getEntityDetails(executor: SqliteExecutor, entityId: string): EntityDetails {
-	const db = executor;
 	const entity = getEntityOrThrow(executor, entityId);
-	const incomingRows = all<EntityRow & { type: string }>(db, sql`SELECT relations.type, entities.*
+	const incomingRows = all<EntityRow & { type: string }>(executor, sql`SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.to_id = ${entity.id}
 		ORDER BY entities.id`);
-	const outgoingRows = all<EntityRow & { type: string }>(db, sql`SELECT relations.type, entities.*
+	const outgoingRows = all<EntityRow & { type: string }>(executor, sql`SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${entity.id}
 		ORDER BY entities.id`);
 
-	const statusMap = getDerivedStatusMap(db);
+	const statusMap = getDerivedStatusMap(executor);
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
 		incoming: incomingRows.map((row) => ({
@@ -781,39 +777,39 @@ export function queryEntityRelations(
 	};
 }
 
-export function getInitiativeBundle(db: SqliteExecutor, initiativeId: string, allowedIds?: ReadonlySet<string>): InitiativeBundle {
-	const initiative = getEntityOrThrow(db, initiativeId);
+export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: string, allowedIds?: ReadonlySet<string>): InitiativeBundle {
+	const initiative = getEntityOrThrow(executor, initiativeId);
 
 	if (initiative.kind !== "initiative") {
 		throw new Error(`${initiativeId} is not an initiative.`);
 	}
 
-	const entityRows = all<EntityRow>(db, sql`WITH RECURSIVE reachable(id) AS (
+	const entityRows = all<EntityRow>(executor, sql`WITH RECURSIVE reachable(id) AS (
 		SELECT ${initiativeId}
 		UNION
 		SELECT relations.to_id
 		FROM relations
 		JOIN reachable ON relations.from_id = reachable.id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 		UNION
 		SELECT relations.from_id
 		FROM relations
 		JOIN reachable ON relations.to_id = reachable.id
-		WHERE relations.tenant_id = ${db.tenantId} AND relations.type = 'handsOff'
+		WHERE relations.tenant_id = ${executor.tenantId} AND relations.type = 'handsOff'
 	)
 	SELECT entities.*
 	FROM entities
 	JOIN reachable ON entities.id = reachable.id
-	WHERE entities.tenant_id = ${db.tenantId}
+	WHERE entities.tenant_id = ${executor.tenantId}
 	ORDER BY entities.id`);
-	const relationRows = all<RelationRow>(db, sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId}`);
+	const relationRows = all<RelationRow>(executor, sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
 
 	const entities = entityRows.map(mapEntityRow).filter((entity) => !allowedIds || allowedIds.has(entity.id));
 	const allowedEntityIds = new Set(entities.map((entity) => entity.id));
 	const filteredRelationRows = relationRows.filter(
 		(relation) => allowedEntityIds.has(relation.from_id) && allowedEntityIds.has(relation.to_id)
 	);
-	const statusMap = getDerivedStatusMap(db);
+	const statusMap = getDerivedStatusMap(executor);
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, statusMap));
 	const entityById = new Map(derivedEntities.map((entity) => [entity.id, entity]));
 
@@ -851,29 +847,29 @@ export function getInitiativeBundle(db: SqliteExecutor, initiativeId: string, al
 	};
 }
 
-export function listEntities(db: SqliteExecutor, kind: string): EntityRecord[] {
+export function listEntities(executor: SqliteExecutor, kind: string): EntityRecord[] {
 	if (!isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
 
-	return getAllDerivedEntities(db).filter((entity) => entity.kind === kind);
+	return getAllDerivedEntities(executor).filter((entity) => entity.kind === kind);
 }
 
 export function queryEntities(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
 ): { entities: EntityRecord[]; total: number } {
-	let selected = listEntities(db, input.kind);
+	let selected = listEntities(executor, input.kind);
 	if (input.statuses?.length) {
 		const statuses = new Set(input.statuses);
 		selected = selected.filter((entity) => statuses.has(entity.status));
 	}
 	if (input.parentId) {
-		const parent = resolveSqliteEntity(db, input.parentId);
+		const parent = resolveSqliteEntity(executor, input.parentId);
 		if (!parent) {
 			return { entities: [], total: 0 };
 		}
-		const childIds = new Set(listAllRelations(db)
+		const childIds = new Set(listAllRelations(executor)
 			.filter((relation) => relation.fromId === parent.id && isStructuralRelationType(relation.type))
 			.map((relation) => relation.toId));
 		selected = selected.filter((entity) => childIds.has(entity.id));
@@ -890,14 +886,14 @@ export function queryEntities(
 // require the entity to be live: tombstoned entities (deleted but still in
 // the DB) return their complete chain.  Returns [] only when the entity
 // does not exist at all.
-export function listEntityHistory(db: SqliteExecutor, entityId: string): HistoryEntryRecord[] {
-	const row = first<EntityRow>(db, sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`);
+export function listEntityHistory(executor: SqliteExecutor, entityId: string): HistoryEntryRecord[] {
+	const row = first<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${entityId}`);
 	if (!row) {
 		return [];
 	}
 
 	const headRevision = row.revision ?? 1;
-	const currentParentId = getStructuralParentRelations(db, entityId)[0]?.fromId ?? null;
+	const currentParentId = getStructuralParentRelations(executor, entityId)[0]?.fromId ?? null;
 
 	type DeltaRow = {
 		id: string;
@@ -911,10 +907,10 @@ export function listEntityHistory(db: SqliteExecutor, entityId: string): History
 	};
 
 	const deltaRows = all<DeltaRow>(
-		db,
+		executor,
 		sql`SELECT id, revision, author, patch_format, reverse_patch, source_hash, target_hash, created_at
 			FROM revision_entries
-			WHERE tenant_id = ${db.tenantId}
+			WHERE tenant_id = ${executor.tenantId}
 				AND record_kind = 'entity'
 				AND record_key = ${encodeEntityRecordKey(entityId)}
 			ORDER BY revision DESC`
@@ -969,8 +965,8 @@ export function listEntityHistory(db: SqliteExecutor, entityId: string): History
 // Relations are an idempotent key union after canonical heads import. This
 // includes structural rows: the canonical parent is already present and is a
 // no-op, while additional structural-type annotations must still transfer.
-export function listAllRelations(db: SqliteExecutor): RelationRecord[] {
-	const rows = all<RelationRow>(db, sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId}`);
+export function listAllRelations(executor: SqliteExecutor): RelationRecord[] {
+	const rows = all<RelationRow>(executor, sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
 
 	return rows.map((row) => ({
 		fromId: row.from_id,
@@ -985,25 +981,25 @@ export function listAllRelations(db: SqliteExecutor): RelationRecord[] {
 // (tenantId, fromId, toId, type). Must run after canonical entity import, so both endpoints of every relation already
 // exist as entities on this side (`relations` has FK constraints on both
 // from_id and to_id).
-export function applyRelations(db: SqliteExecutor, relations: RelationRecord[]): { inserted: number } {
+export function applyRelations(executor: SqliteExecutor, relations: RelationRecord[]): { inserted: number } {
 	let inserted = 0;
 	for (const relation of relations) {
-		const from = getEntityOrThrow(db, relation.fromId);
-		const to = getEntityOrThrow(db, relation.toId);
-		const result = insertRelation(db, { ...relation, fromId: from.id, toId: to.id });
+		const from = getEntityOrThrow(executor, relation.fromId);
+		const to = getEntityOrThrow(executor, relation.toId);
+		const result = insertRelation(executor, { ...relation, fromId: from.id, toId: to.id });
 		inserted += result.changes;
 	}
 
 	return { inserted };
 }
 
-export function listOrphans(db: SqliteExecutor, kind?: string): EntityRecord[] {
+export function listOrphans(executor: SqliteExecutor, kind?: string): EntityRecord[] {
 	if (kind && !isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
 
-	const entities = getAllEntities(db);
-	const relations = getAllRelations(db);
+	const entities = getAllEntities(executor);
+	const relations = getAllRelations(executor);
 	const reachable = new Set<string>();
 
 	for (const entity of entities) {
@@ -1016,7 +1012,7 @@ export function listOrphans(db: SqliteExecutor, kind?: string): EntityRecord[] {
 		}
 	}
 
-	const statusMap = getDerivedStatusMap(db);
+	const statusMap = getDerivedStatusMap(executor);
 	return entities
 		.filter((entity) => {
 			if (entity.kind === "initiative") {
@@ -1040,9 +1036,9 @@ export function listOrphans(db: SqliteExecutor, kind?: string): EntityRecord[] {
 		.map((entity) => applyDerivedStatus(entity, statusMap));
 }
 
-export function listProjectAdrs(db: SqliteExecutor): EntityRecord[] {
-	const entities = getAllEntities(db);
-	const relations = getAllRelations(db);
+export function listProjectAdrs(executor: SqliteExecutor): EntityRecord[] {
+	const entities = getAllEntities(executor);
+	const relations = getAllRelations(executor);
 	const childIds = new Set(
 		relations.filter((relation) => isStructuralRelationType(relation.type)).map((relation) => relation.toId)
 	);
@@ -1050,30 +1046,30 @@ export function listProjectAdrs(db: SqliteExecutor): EntityRecord[] {
 	return entities.filter((entity) => entity.kind === "adr" && !childIds.has(entity.id));
 }
 
-export function getDatabaseSnapshot(db: SqliteExecutor): DatabaseSnapshot;
-export function getDatabaseSnapshot(db: SqliteExecutor, input: { projectId: string }): ProjectSnapshot;
-export function getDatabaseSnapshot(db: SqliteExecutor, input?: { projectId: string }): DatabaseSnapshot | ProjectSnapshot {
-	if (input?.projectId && getProjectDiscovery(db, input).kind === "unavailable") {
+export function getDatabaseSnapshot(executor: SqliteExecutor): DatabaseSnapshot;
+export function getDatabaseSnapshot(executor: SqliteExecutor, input: { projectId: string }): ProjectSnapshot;
+export function getDatabaseSnapshot(executor: SqliteExecutor, input?: { projectId: string }): DatabaseSnapshot | ProjectSnapshot {
+	if (input?.projectId && getProjectDiscovery(executor, input).kind === "unavailable") {
 		return { kind: "unavailable" };
 	}
 
-	const currentProjectId = db.currentProjectId;
+	const currentProjectId = executor.currentProjectId;
 	if (input?.projectId) {
-		db.currentProjectId = input.projectId;
+		executor.currentProjectId = input.projectId;
 	}
 
 	try {
-		const snapshot = getCurrentProjectSnapshot(db);
+		const snapshot = getCurrentProjectSnapshot(executor);
 		return input ? { kind: "available", snapshot } : snapshot;
 	} finally {
-		db.currentProjectId = currentProjectId;
+		executor.currentProjectId = currentProjectId;
 	}
 }
 
-function getCurrentProjectSnapshot(db: SqliteExecutor): DatabaseSnapshot {
-	const entities = getAllDerivedEntities(db);
+function getCurrentProjectSnapshot(executor: SqliteExecutor): DatabaseSnapshot {
+	const entities = getAllDerivedEntities(executor);
 	const entityIds = new Set(entities.map((entity) => entity.id));
-	const relations = getAllRelations(db).filter((relation) => entityIds.has(relation.fromId) && entityIds.has(relation.toId));
+	const relations = getAllRelations(executor).filter((relation) => entityIds.has(relation.fromId) && entityIds.has(relation.toId));
 	const initiatives = entities.filter((entity) => entity.kind === "initiative");
 	const structuralRelations = relations.filter((relation) => isStructuralRelationType(relation.type));
 
@@ -1081,22 +1077,22 @@ function getCurrentProjectSnapshot(db: SqliteExecutor): DatabaseSnapshot {
 		generatedAt: new Date().toISOString(),
 		entities,
 		relations,
-		orphans: listOrphans(db),
-		projectAdrs: listProjectAdrs(db),
-		initiatives: initiatives.map((entity) => getInitiativeBundle(db, entity.id, collectReachableIds(structuralRelations, entity.id))),
+		orphans: listOrphans(executor),
+		projectAdrs: listProjectAdrs(executor),
+		initiatives: initiatives.map((entity) => getInitiativeBundle(executor, entity.id, collectReachableIds(structuralRelations, entity.id))),
 		contexts: {
-			shared: getContextDetails(db),
-			initiatives: initiatives.map((entity) => getContextDetails(db, { scopeRef: entity.id }))
+			shared: getContextDetails(executor),
+			initiatives: initiatives.map((entity) => getContextDetails(executor, { scopeRef: entity.id }))
 		}
 	};
 }
 
-export function getProjectDiscovery(db: SqliteExecutor, input?: { projectId?: string }): ProjectDiscovery {
-	const tenantEntities = getTenantEntities(db);
-	const relations = getTenantRelations(db);
+export function getProjectDiscovery(executor: SqliteExecutor, input?: { projectId?: string }): ProjectDiscovery {
+	const tenantEntities = getTenantEntities(executor);
+	const relations = getTenantRelations(executor);
 	const statusMap = new Map(deriveEntityStatuses(tenantEntities, relations).map((entity) => [entity.id, entity.status]));
 	const entities = tenantEntities.map((entity) => applyDerivedStatus(entity, statusMap));
-	const defaultProject = getEntityOrThrow(db, deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId);
+	const defaultProject = getEntityOrThrow(executor, deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId);
 	const projects = entities.filter((entity) => entity.kind === "project" && entity.id !== defaultProject.id);
 	if (input?.projectId && !projects.some((project) => project.id === input.projectId)) {
 		return { kind: "unavailable" };
@@ -1148,13 +1144,13 @@ function mapDrizzleEntityRow(row: DrizzleEntityRow): EntityRecord {
 }
 
 function getRelationOrThrow(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): RelationRecord {
-	const from = getEntityOrThrow(db, input.fromId);
-	const to = getEntityOrThrow(db, input.toId);
-	const row = first<RelationRow>(db, sql`SELECT * FROM relations
-		WHERE tenant_id = ${db.tenantId}
+	const from = getEntityOrThrow(executor, input.fromId);
+	const to = getEntityOrThrow(executor, input.toId);
+	const row = first<RelationRow>(executor, sql`SELECT * FROM relations
+		WHERE tenant_id = ${executor.tenantId}
 			AND from_id = ${from.id}
 			AND to_id = ${to.id}
 			AND type = ${input.relationType}`);
@@ -1171,10 +1167,10 @@ function getRelationOrThrow(
 	};
 }
 
-function getStructuralParentRelations(db: SqliteExecutor, entityId: string): RelationRecord[] {
+function getStructuralParentRelations(executor: SqliteExecutor, entityId: string): RelationRecord[] {
 	const rows = all<RelationRow>(
-		db,
-		sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId} AND to_id = ${entityId} ORDER BY created_at, from_id, type`
+		executor,
+		sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId} AND to_id = ${entityId} ORDER BY created_at, from_id, type`
 	);
 
 	return rows
@@ -1187,13 +1183,13 @@ function getStructuralParentRelations(db: SqliteExecutor, entityId: string): Rel
 		}));
 }
 
-function getStructuralPath(db: SqliteExecutor, entityId: string): Array<{ relationType: RelationType; entity: EntityRecord }> {
+function getStructuralPath(executor: SqliteExecutor, entityId: string): Array<{ relationType: RelationType; entity: EntityRecord }> {
 	const path: Array<{ relationType: RelationType; entity: EntityRecord }> = [];
 	const seen = new Set<string>([entityId]);
 	let currentId = entityId;
 
 	while (true) {
-		const parents = getStructuralParentRelations(db, currentId);
+		const parents = getStructuralParentRelations(executor, currentId);
 
 		if (parents.length === 0) {
 			return path.reverse();
@@ -1211,15 +1207,15 @@ function getStructuralPath(db: SqliteExecutor, entityId: string): Array<{ relati
 		seen.add(parent.fromId);
 		path.push({
 			relationType: parent.type,
-			entity: getEntityOrThrow(db, parent.fromId)
+			entity: getEntityOrThrow(executor, parent.fromId)
 		});
 		currentId = parent.fromId;
 	}
 }
 
-function insertRelation(db: SqliteExecutor, relation: RelationRecord) {
-	return run(db, sql`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
-		VALUES (${db.tenantId}, ${relation.fromId}, ${relation.toId}, ${relation.type}, ${relation.createdAt})`);
+function insertRelation(executor: SqliteExecutor, relation: RelationRecord) {
+	return run(executor, sql`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
+		VALUES (${executor.tenantId}, ${relation.fromId}, ${relation.toId}, ${relation.type}, ${relation.createdAt})`);
 }
 
 // Appends an entity reverse-patch entry to `revision_entries` for one atomic
@@ -1227,7 +1223,7 @@ function insertRelation(db: SqliteExecutor, relation: RelationRecord) {
 // title/body/bodySource so ISS261's history materializer can reconstruct
 // prior states by walking the chain backwards from the current head.
 function appendDeltaEntry(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	entityId: string,
 	newRevision: number,
 	priorTitle: string,
@@ -1237,11 +1233,11 @@ function appendDeltaEntry(
 	createdAt: string,
 	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; restoredFromRevision?: number } = {}
 ): void {
-	const row = first<EntityRow>(db, sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`);
+	const row = first<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${entityId}`);
 	if (!row) {
 		throw new Error(`Cannot append reverse patch for missing entity ${entityId}.`);
 	}
-	const successor = { title: row.title, body: row.body, bodySource: row.body_source ?? "authored", status: row.status, parentId: getStructuralParentRelations(db, entityId)[0]?.fromId ?? null, tombstone: row.tombstone !== 0 };
+	const successor = { title: row.title, body: row.body, bodySource: row.body_source ?? "authored", status: row.status, parentId: getStructuralParentRelations(executor, entityId)[0]?.fromId ?? null, tombstone: row.tombstone !== 0 };
 	const predecessor = {
 		...successor,
 		title: priorTitle,
@@ -1255,37 +1251,37 @@ function appendDeltaEntry(
 	if (!row.project_id) {
 		throw new Error(`Cannot append reverse patch for entity ${entityId} without a project.`);
 	}
-	run(db, sql`INSERT INTO revision_entries
+	run(executor, sql`INSERT INTO revision_entries
 		(id, tenant_id, project_id, record_kind, record_key, revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
-		VALUES (${randomUUID()}, ${db.tenantId}, ${row.project_id}, 'entity', ${encodeEntityRecordKey(row.id)}, ${newRevision}, ${author?.trim() || RESERVED_SYSTEM_AUTHOR}, ${transition.patchFormat}, ${Buffer.from(transition.reversePatch)}, ${encodeRevisionPatchHash(transition.sourceHash)}, ${encodeRevisionPatchHash(transition.targetHash)}, ${lifecycle.restoredFromRevision ?? null}, ${createdAt})`);
+		VALUES (${randomUUID()}, ${executor.tenantId}, ${row.project_id}, 'entity', ${encodeEntityRecordKey(row.id)}, ${newRevision}, ${author?.trim() || RESERVED_SYSTEM_AUTHOR}, ${transition.patchFormat}, ${Buffer.from(transition.reversePatch)}, ${encodeRevisionPatchHash(transition.sourceHash)}, ${encodeRevisionPatchHash(transition.targetHash)}, ${lifecycle.restoredFromRevision ?? null}, ${createdAt})`);
 }
 
-function getAllEntities(db: SqliteExecutor): EntityRecord[] {
+function getAllEntities(executor: SqliteExecutor): EntityRecord[] {
 	const rows = all<EntityRow>(
-		db,
-		sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} AND tombstone = 0 ORDER BY id`
+		executor,
+		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND tombstone = 0 ORDER BY id`
 	);
 	return rows.map(mapEntityRow);
 }
 
-function getTenantEntities(db: SqliteExecutor): EntityRecord[] {
-	const rows = all<EntityRow>(db, sql`SELECT * FROM entities WHERE tenant_id = ${db.tenantId} AND tombstone = 0 ORDER BY id`);
+function getTenantEntities(executor: SqliteExecutor): EntityRecord[] {
+	const rows = all<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND tombstone = 0 ORDER BY id`);
 	return rows.map(mapEntityRow);
 }
 
-function getTenantRelations(db: SqliteExecutor): RelationRecord[] {
+function getTenantRelations(executor: SqliteExecutor): RelationRecord[] {
 	const rows = all<RelationRow>(
-		db,
-		sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId} ORDER BY from_id, to_id, type`
+		executor,
+		sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId} ORDER BY from_id, to_id, type`
 	);
 	return rows.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
 }
 
 /** The `project_id` an entity is stamped with, or null if it predates the ISS166 backfill. */
-function getEntityProjectId(db: SqliteExecutor, entityId: string): string | null {
+function getEntityProjectId(executor: SqliteExecutor, entityId: string): string | null {
 	const row = first<{ projectId: string | null }>(
-		db,
-		sql`SELECT project_id AS projectId FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${entityId}`
+		executor,
+		sql`SELECT project_id AS projectId FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${entityId}`
 	);
 	return row?.projectId ?? null;
 }
@@ -1297,12 +1293,12 @@ function getEntityProjectId(db: SqliteExecutor, entityId: string): string | null
  * workspace (ISS63) lands under that project, not the sentinel one. Falls
  * back to `DEFAULT_EPIC_ID` for the sentinel/single-project case.
  */
-function resolveDefaultEpicId(db: SqliteExecutor): string {
-	const row = first<{ id: string }>(db, sql`SELECT entities.id AS id
+function resolveDefaultEpicId(executor: SqliteExecutor): string {
+	const row = first<{ id: string }>(executor, sql`SELECT entities.id AS id
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${db.tenantId}
-			AND relations.from_id = ${db.currentProjectId}
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND relations.from_id = ${executor.currentProjectId}
 			AND relations.type = 'contains'
 			AND entities.kind = 'epic'
 		ORDER BY entities.id
@@ -1310,12 +1306,12 @@ function resolveDefaultEpicId(db: SqliteExecutor): string {
 	return row?.id ?? deriveMigratedEntityIdentity("epic", DEFAULT_EPIC_ID).stableId;
 }
 
-function getAllDerivedEntities(db: SqliteExecutor): EntityRecord[] {
-	return deriveEntityStatuses(getAllEntities(db), getAllRelations(db));
+function getAllDerivedEntities(executor: SqliteExecutor): EntityRecord[] {
+	return deriveEntityStatuses(getAllEntities(executor), getAllRelations(executor));
 }
 
-function getDerivedStatusMap(db: SqliteExecutor): Map<string, string> {
-	return new Map(getAllDerivedEntities(db).map((entity) => [entity.id, entity.status]));
+function getDerivedStatusMap(executor: SqliteExecutor): Map<string, string> {
+	return new Map(getAllDerivedEntities(executor).map((entity) => [entity.id, entity.status]));
 }
 
 function applyDerivedStatus(entity: EntityRecord, statusMap: Map<string, string>): EntityRecord {
@@ -1323,11 +1319,11 @@ function applyDerivedStatus(entity: EntityRecord, statusMap: Map<string, string>
 	return derived === undefined || derived === entity.status ? entity : { ...entity, status: derived };
 }
 
-function getFixingIssueStatuses(db: SqliteExecutor, storyId: string): string[] {
-	const rows = all<{ status: string }>(db, sql`SELECT entities.status
+function getFixingIssueStatuses(executor: SqliteExecutor, storyId: string): string[] {
+	const rows = all<{ status: string }>(executor, sql`SELECT entities.status
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'fixes'
 			AND relations.to_id = ${storyId}
 			AND entities.kind = 'issue'`);
@@ -1335,12 +1331,12 @@ function getFixingIssueStatuses(db: SqliteExecutor, storyId: string): string[] {
 	return rows.map((row) => row.status);
 }
 
-function getCreatedStoryStatuses(db: SqliteExecutor, prdId: string): string[] {
-	const statusMap = getDerivedStatusMap(db);
-	const rows = all<{ id: string }>(db, sql`SELECT entities.id
+function getCreatedStoryStatuses(executor: SqliteExecutor, prdId: string): string[] {
+	const statusMap = getDerivedStatusMap(executor);
+	const rows = all<{ id: string }>(executor, sql`SELECT entities.id
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'creates'
 			AND relations.from_id = ${prdId}
 			AND entities.kind = 'userStory'`);
@@ -1348,11 +1344,11 @@ function getCreatedStoryStatuses(db: SqliteExecutor, prdId: string): string[] {
 	return rows.map((row) => statusMap.get(row.id) ?? "");
 }
 
-function getConstrainedIssueStatuses(db: SqliteExecutor, adrId: string): string[] {
-	const rows = all<{ status: string }>(db, sql`SELECT entities.status
+function getConstrainedIssueStatuses(executor: SqliteExecutor, adrId: string): string[] {
+	const rows = all<{ status: string }>(executor, sql`SELECT entities.status
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'constrains'
 			AND relations.from_id = ${adrId}
 			AND entities.kind = 'issue'`);
@@ -1360,11 +1356,11 @@ function getConstrainedIssueStatuses(db: SqliteExecutor, adrId: string): string[
 	return rows.map((row) => row.status);
 }
 
-function isEntitySuperseded(db: SqliteExecutor, entityId: string, kind: "prd" | "userStory" | "adr"): boolean {
-	const row = first(db, sql`SELECT 1
+function isEntitySuperseded(executor: SqliteExecutor, entityId: string, kind: "prd" | "userStory" | "adr"): boolean {
+	const row = first(executor, sql`SELECT 1
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'supersedes'
 			AND relations.to_id = ${entityId}
 			AND entities.kind = ${kind}
@@ -1374,16 +1370,16 @@ function isEntitySuperseded(db: SqliteExecutor, entityId: string, kind: "prd" | 
 }
 
 function getInitiativeChildStatuses(
-	db: SqliteExecutor,
+	executor: SqliteExecutor,
 	initiativeId: string
 ): { trackedIssueStatuses: string[]; ownedPrdStatuses: string[] } {
-	const statusMap = getDerivedStatusMap(db);
+	const statusMap = getDerivedStatusMap(executor);
 	const reachableIds = collectReachableIds(
-		getAllRelations(db).filter((relation) => isStructuralRelationType(relation.type)),
+		getAllRelations(executor).filter((relation) => isStructuralRelationType(relation.type)),
 		initiativeId
 	);
 	reachableIds.delete(initiativeId);
-	const entities = getAllEntities(db);
+	const entities = getAllEntities(executor);
 
 	return {
 		trackedIssueStatuses: entities
@@ -1395,11 +1391,11 @@ function getInitiativeChildStatuses(
 	};
 }
 
-function getAllRelations(db: SqliteExecutor): RelationRecord[] {
-	const rows = all<RelationRow>(db, sql`SELECT relations.*
+function getAllRelations(executor: SqliteExecutor): RelationRecord[] {
+	const rows = all<RelationRow>(executor, sql`SELECT relations.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${db.tenantId} AND entities.project_id = ${db.currentProjectId}
+		WHERE relations.tenant_id = ${executor.tenantId} AND entities.project_id = ${executor.currentProjectId}
 		ORDER BY relations.from_id, relations.to_id, relations.type`);
 	return rows.map((row) => ({
 		fromId: row.from_id,
@@ -1409,10 +1405,10 @@ function getAllRelations(db: SqliteExecutor): RelationRecord[] {
 	}));
 }
 
-function hasTypedPath(db: SqliteExecutor, startId: string, targetId: string, relationType: string): boolean {
+function hasTypedPath(executor: SqliteExecutor, startId: string, targetId: string, relationType: string): boolean {
 	const rows = all<RelationRow>(
-		db,
-		sql`SELECT * FROM relations WHERE tenant_id = ${db.tenantId} AND type = ${relationType} ORDER BY from_id, to_id`
+		executor,
+		sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId} AND type = ${relationType} ORDER BY from_id, to_id`
 	);
 	const relations = rows.map((row) => ({
 		fromId: row.from_id,
@@ -1424,13 +1420,13 @@ function hasTypedPath(db: SqliteExecutor, startId: string, targetId: string, rel
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-function hasStructuralPath(db: SqliteExecutor, startId: string, targetId: string): boolean {
-	const relations = getAllRelations(db).filter((relation) => isStructuralRelationType(relation.type));
+function hasStructuralPath(executor: SqliteExecutor, startId: string, targetId: string): boolean {
+	const relations = getAllRelations(executor).filter((relation) => isStructuralRelationType(relation.type));
 	return collectReachableIds(relations, startId).has(targetId);
 }
 
-function wouldOrphanSubtree(db: SqliteExecutor, relation: RelationRecord): boolean {
-	return wouldOrphanSubtreeInGraph(getAllEntities(db), getAllRelations(db), relation);
+function wouldOrphanSubtree(executor: SqliteExecutor, relation: RelationRecord): boolean {
+	return wouldOrphanSubtreeInGraph(getAllEntities(executor), getAllRelations(executor), relation);
 }
 
 /**
@@ -1441,28 +1437,28 @@ function wouldOrphanSubtree(db: SqliteExecutor, relation: RelationRecord): boole
  * same logic, epics reached only through their own descendants) are always
  * their own downward-reachability root.
  */
-function wouldBreakFullChainInvariant(db: SqliteExecutor, relation: RelationRecord): boolean {
+function wouldBreakFullChainInvariant(executor: SqliteExecutor, relation: RelationRecord): boolean {
 	if (relation.type !== "contains") {
 		return false;
 	}
 
-	const target = getEntityOrThrow(db, relation.toId);
+	const target = getEntityOrThrow(executor, relation.toId);
 	if (target.kind !== "epic" && target.kind !== "initiative") {
 		return false;
 	}
 
-	const remainingContainsParents = first<{ count: number }>(db, sql`SELECT COUNT(*) AS count FROM relations
-		WHERE tenant_id = ${db.tenantId} AND to_id = ${relation.toId} AND type = 'contains'
+	const remainingContainsParents = first<{ count: number }>(executor, sql`SELECT COUNT(*) AS count FROM relations
+		WHERE tenant_id = ${executor.tenantId} AND to_id = ${relation.toId} AND type = 'contains'
 			AND NOT (from_id = ${relation.fromId} AND to_id = ${relation.toId} AND type = 'contains')`)!;
 
 	return remainingContainsParents.count === 0;
 }
 
-function getActiveBlockingIssues(db: SqliteExecutor, entityId: string): EntityRecord[] {
-	const rows = all<EntityRow>(db, sql`SELECT entities.*
+function getActiveBlockingIssues(executor: SqliteExecutor, entityId: string): EntityRecord[] {
+	const rows = all<EntityRow>(executor, sql`SELECT entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'blocks'
 			AND relations.to_id = ${entityId}
 			AND entities.status != 'done'
@@ -1471,12 +1467,12 @@ function getActiveBlockingIssues(db: SqliteExecutor, entityId: string): EntityRe
 	return rows.map(mapEntityRow);
 }
 
-function getOpenSubIssues(db: SqliteExecutor, issueId: string): EntityRecord[] {
-	const statusMap = getDerivedStatusMap(db);
-	const rows = all<EntityRow>(db, sql`SELECT entities.*
+function getOpenSubIssues(executor: SqliteExecutor, issueId: string): EntityRecord[] {
+	const statusMap = getDerivedStatusMap(executor);
+	const rows = all<EntityRow>(executor, sql`SELECT entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${db.tenantId}
+		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${issueId}
 			AND relations.type = 'decomposes'
 		ORDER BY entities.id`);
@@ -1509,9 +1505,148 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 	};
 }
 
-function tenantParams<T extends Record<string, unknown>>(db: SqliteExecutor, values: T): T & { tenantId: string } {
+function tenantParams<T extends Record<string, unknown>>(executor: SqliteExecutor, values: T): T & { tenantId: string } {
 	return {
-		tenantId: db.tenantId,
+		tenantId: executor.tenantId,
 		...values
 	};
+}
+
+/**
+ * A stat-based signature of the sqlite file backing this store and its WAL/
+ * SHM sidecar files (ISS191): `size:mtime` per candidate path, joined -
+ * changes whenever any write reaches the file (any tenant, since one file
+ * can hold several - matching the pre-ISS191 direct-`stat()` polling
+ * behavior exactly), and stays stable with no writes. Missing sidecar files
+ * (e.g. before WAL mode ever checkpoints) are represented explicitly rather
+ * than omitted, so a file's mere appearance/disappearance also counts as a
+ * change.
+ */
+function computeFileStatSignature(dbPath: string): string {
+	return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+		.map((candidate) => {
+			if (!existsSync(candidate)) {
+				return `${candidate}:missing`;
+			}
+
+			const stats = statSync(candidate);
+			return `${candidate}:${stats.size}:${stats.mtimeMs}`;
+		})
+		.join("|");
+}
+
+/**
+ * The entity/relation feature class (ADR "Backends mirror one another per
+ * feature, behind all-async feature interfaces"): a thin, promise-returning
+ * wrapper over the executor-holding local free functions above, which
+ * `SqliteStore` composes alongside the other three feature classes.
+ */
+export class LocalEntityStore implements EntityStore {
+	public constructor(private readonly executor: SqliteExecutor) {}
+
+	public async createEntity(input: {
+		kind: string;
+		title: string;
+		parentId?: string;
+		status?: string;
+		body?: string;
+		author?: string;
+		links?: Array<{ relationType: string; targetId: string }>;
+	}): Promise<EntityRecord> {
+		return createEntity(this.executor, input);
+	}
+
+	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
+		return getEntityDetails(this.executor, entityId);
+	}
+
+	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): Promise<EntityDetails> {
+		return queryEntityRelations(this.executor, input);
+	}
+
+	public async listEntities(kind: string): Promise<EntityRecord[]> {
+		return listEntities(this.executor, kind);
+	}
+
+	public async queryEntities(input: Parameters<EntityStore["queryEntities"]>[0]) {
+		return queryEntities(this.executor, input);
+	}
+
+	public async listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {
+		return listEntityHistory(this.executor, entityId);
+	}
+
+	public async listAllRelations(): Promise<RelationRecord[]> {
+		return listAllRelations(this.executor);
+	}
+
+	public async applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
+		return applyRelations(this.executor, relations);
+	}
+
+	public async listOrphans(kind?: string): Promise<EntityRecord[]> {
+		return kind ? listOrphans(this.executor, kind) : listOrphans(this.executor);
+	}
+
+	public async listProjectAdrs(): Promise<EntityRecord[]> {
+		return listProjectAdrs(this.executor);
+	}
+
+	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
+		return updateEntityStatus(this.executor, input);
+	}
+
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+		return updateEntity(this.executor, input);
+	}
+
+	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+		return setEntityBody(this.executor, input);
+	}
+
+	public async materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision> {
+		return materializeEntityRevision(this.executor, input);
+	}
+
+	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedEntityRevision> {
+		return restoreEntityRevision(this.executor, input);
+	}
+
+	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
+		return archiveEntity(this.executor, input);
+	}
+
+	public async deleteEntity(input: { entityId: string }): Promise<DeleteResult> {
+		return deleteEntity(this.executor, input);
+	}
+
+	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult> {
+		return moveEntity(this.executor, input);
+	}
+
+	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
+		return linkEntities(this.executor, input);
+	}
+
+	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult> {
+		return unlinkEntities(this.executor, input);
+	}
+
+	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
+	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
+		return input ? getDatabaseSnapshot(this.executor, input) : getDatabaseSnapshot(this.executor);
+	}
+
+	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
+		return getProjectDiscovery(this.executor, input);
+	}
+
+	public async getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
+		return getInitiativeBundle(this.executor, initiativeId);
+	}
+
+	public async getSnapshotSignature(): Promise<string> {
+		return computeFileStatSignature(this.executor.dbPath);
+	}
 }

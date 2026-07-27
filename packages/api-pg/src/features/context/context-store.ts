@@ -25,6 +25,7 @@ import {
 	type ContextDirectory,
 	type ContextListResult,
 	type ContextRecord,
+	type ContextStore,
 	type ContextTermRecord,
 	type DefineContextTermResult,
 	type EntityRecord,
@@ -38,7 +39,7 @@ import { randomUUID } from "node:crypto";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import type { TenantExecutor as PoolClient } from "../../db/connection.js";
+import type { TenantExecutor } from "../../db/connection.js";
 import { contextTerms, contexts, entities, relations, revisionEntries } from "../../schema.js";
 
 import {
@@ -47,7 +48,7 @@ import {
 	mapEntityRow,
 	nextEntityId,
 	type EntityRow
-} from "../entity-store/pg-entity-store.js";
+} from "../entity-store/store.js";
 
 export type ContextRow = {
 	id: string;
@@ -124,12 +125,12 @@ function createProjectScope(project: EntityRecord): ResolvedContextScope {
  * in a multi-project tenant would otherwise collide on. Undefined
  * `projectIdentity` (no header sent) keeps today's sentinel-only behavior.
  */
-async function resolveDefaultContextScope(client: PoolClient, projectIdentity: string | undefined): Promise<ResolvedContextScope> {
+async function resolveDefaultContextScope(executor: TenantExecutor, projectIdentity: string | undefined): Promise<ResolvedContextScope> {
 	if (!projectIdentity) {
 		return getDefaultContextScope();
 	}
 
-	const project = await getOrCreateProjectByIdentity(client, projectIdentity);
+	const project = await getOrCreateProjectByIdentity(executor, projectIdentity);
 	return createProjectScope(project);
 }
 
@@ -231,16 +232,16 @@ function normalizeAvoidTerms(avoid: string[], term: string): string[] {
 
 // Walks record-to-initiative structural relations from `entityId` up to its
 // owning initiative.
-async function getOwningInitiativeOrThrow(client: PoolClient, entityId: string): Promise<EntityRecord> {
+async function getOwningInitiativeOrThrow(executor: TenantExecutor, entityId: string): Promise<EntityRecord> {
 	let currentId = entityId;
 	const seen = new Set<string>([entityId]);
 
 	while (true) {
-		const result = await client.execute(sql`
+		const result = await executor.execute(sql`
 			SELECT entities.*
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-			WHERE relations.tenant_id = ${client.tenantId}
+			WHERE relations.tenant_id = ${executor.tenantId}
 				AND relations.to_id = ${currentId}
 				AND relations.type IN ('owns', 'records', 'tracks', 'creates', 'decomposes')
 			ORDER BY entities.id
@@ -270,37 +271,37 @@ async function getOwningInitiativeOrThrow(client: PoolClient, entityId: string):
 }
 
 async function resolveContextScope(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	scopeRef?: string
 ): Promise<ResolvedContextScope> {
 	if (!scopeRef || scopeRef === DEFAULT_CONTEXT_KEY) {
-		return resolveDefaultContextScope(client, projectIdentity);
+		return resolveDefaultContextScope(executor, projectIdentity);
 	}
 
-	const entity = await getEntityOrThrow(client, scopeRef);
+	const entity = await getEntityOrThrow(executor, scopeRef);
 	if (entity.kind === "initiative") {
-		return createInitiativeScope(entity, await getInitiativeContextKey(client, entity.id));
+		return createInitiativeScope(entity, await getInitiativeContextKey(executor, entity.id));
 	}
 
-	const initiative = await getOwningInitiativeOrThrow(client, entity.id);
-	return createInitiativeScope(initiative, await getInitiativeContextKey(client, initiative.id));
+	const initiative = await getOwningInitiativeOrThrow(executor, entity.id);
+	return createInitiativeScope(initiative, await getInitiativeContextKey(executor, initiative.id));
 }
 
-async function getInitiativeContextKey(client: PoolClient, initiativeId: string): Promise<string | undefined> {
-	const [row] = await client
+async function getInitiativeContextKey(executor: TenantExecutor, initiativeId: string): Promise<string | undefined> {
+	const [row] = await executor
 		.select({ key: contexts.key })
 		.from(contexts)
-		.where(and(eq(contexts.tenantId, client.tenantId), eq(contexts.scopeEntityId, initiativeId)))
+		.where(and(eq(contexts.tenantId, executor.tenantId), eq(contexts.scopeEntityId, initiativeId)))
 		.limit(1);
 	return row?.key;
 }
 
-async function fetchContextRow(client: PoolClient, key: string): Promise<ContextRow | undefined> {
-	const [row] = await client
+async function fetchContextRow(executor: TenantExecutor, key: string): Promise<ContextRow | undefined> {
+	const [row] = await executor
 		.select()
 		.from(contexts)
-		.where(and(eq(contexts.tenantId, client.tenantId), eq(contexts.key, key)))
+		.where(and(eq(contexts.tenantId, executor.tenantId), eq(contexts.key, key)))
 		.limit(1);
 	return row && {
 		id: row.id,
@@ -316,11 +317,11 @@ async function fetchContextRow(client: PoolClient, key: string): Promise<Context
 	};
 }
 
-async function fetchContextTermRows(client: PoolClient, key: string): Promise<ContextTermRow[]> {
-	const rows = await client
+async function fetchContextTermRows(executor: TenantExecutor, key: string): Promise<ContextTermRow[]> {
+	const rows = await executor
 		.select()
 		.from(contextTerms)
-		.where(and(eq(contextTerms.tenantId, client.tenantId), eq(contextTerms.contextKey, key), eq(contextTerms.tombstone, false)))
+		.where(and(eq(contextTerms.tenantId, executor.tenantId), eq(contextTerms.contextKey, key), eq(contextTerms.tombstone, false)))
 		.orderBy(sql`lower(${contextTerms.term})`, asc(contextTerms.term));
 	return rows.map((row) => ({
 		id: row.id,
@@ -336,13 +337,13 @@ async function fetchContextTermRows(client: PoolClient, key: string): Promise<Co
 }
 
 async function queryContextDetails(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	scopeRef?: string
 ): Promise<ContextDetails> {
-	const scope = await resolveContextScope(client, projectIdentity, scopeRef);
-	const row = await fetchContextRow(client, scope.key);
-	const termRows = row ? await fetchContextTermRows(client, scope.key) : [];
+	const scope = await resolveContextScope(executor, projectIdentity, scopeRef);
+	const row = await fetchContextRow(executor, scope.key);
+	const termRows = row ? await fetchContextTermRows(executor, scope.key) : [];
 
 	return {
 		context: row ? mapContextRow(row, scope) : createContextRecord(scope),
@@ -351,13 +352,13 @@ async function queryContextDetails(
 }
 
 export async function queryProjectContextDetails(
-	client: PoolClient,
+	executor: TenantExecutor,
 	project: EntityRecord,
 	scopeRef?: string
 ): Promise<ContextDetails> {
-	const scope = scopeRef ? await resolveContextScope(client, undefined, scopeRef) : createProjectScope(project);
-	const row = await fetchContextRow(client, scope.key);
-	const termRows = row ? await fetchContextTermRows(client, scope.key) : [];
+	const scope = scopeRef ? await resolveContextScope(executor, undefined, scopeRef) : createProjectScope(project);
+	const row = await fetchContextRow(executor, scope.key);
+	const termRows = row ? await fetchContextTermRows(executor, scope.key) : [];
 
 	return {
 		context: row ? mapContextRow(row, scope) : createContextRecord(scope),
@@ -365,28 +366,28 @@ export async function queryProjectContextDetails(
 	};
 }
 
-async function queryContextTermCount(client: PoolClient, contextKey: string): Promise<number> {
-	const [result] = await client
+async function queryContextTermCount(executor: TenantExecutor, contextKey: string): Promise<number> {
+	const [result] = await executor
 		.select({ count: sql<number>`count(*)` })
 		.from(contextTerms)
-		.where(and(eq(contextTerms.tenantId, client.tenantId), eq(contextTerms.contextKey, contextKey), eq(contextTerms.tombstone, false)));
+		.where(and(eq(contextTerms.tenantId, executor.tenantId), eq(contextTerms.contextKey, contextKey), eq(contextTerms.tombstone, false)));
 	return Number(result?.count ?? 0);
 }
 
-async function queryListContexts(client: PoolClient, projectIdentity: string | undefined): Promise<ContextListResult> {
-	const defaultScope = await resolveDefaultContextScope(client, projectIdentity);
-	const defaultRow = await fetchContextRow(client, defaultScope.key);
+async function queryListContexts(executor: TenantExecutor, projectIdentity: string | undefined): Promise<ContextListResult> {
+	const defaultScope = await resolveDefaultContextScope(executor, projectIdentity);
+	const defaultRow = await fetchContextRow(executor, defaultScope.key);
 	const contexts = [
 		{
 			context: defaultRow ? mapContextRow(defaultRow, defaultScope) : createContextRecord(defaultScope),
-			termCount: await queryContextTermCount(client, defaultScope.key)
+			termCount: await queryContextTermCount(executor, defaultScope.key)
 		}
 	];
 
-	const initiativeRows = await client
+	const initiativeRows = await executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.kind, "initiative")))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative")))
 		.orderBy(asc(entities.id));
 
 	for (const initiativeRow of initiativeRows) {
@@ -404,35 +405,35 @@ async function queryListContexts(client: PoolClient, projectIdentity: string | u
 			updatedAt: initiativeRow.updatedAt
 		};
 		const scope = createInitiativeScope(initiative);
-		const row = await fetchContextRow(client, scope.key);
+		const row = await fetchContextRow(executor, scope.key);
 		contexts.push({
 			context: row ? mapContextRow(row, scope) : createContextRecord(scope),
-			termCount: await queryContextTermCount(client, scope.key)
+			termCount: await queryContextTermCount(executor, scope.key)
 		});
 	}
 
 	return { contexts };
 }
 
-async function buildContextDirectory(client: PoolClient, projectIdentity: string | undefined): Promise<ContextDirectory> {
-	const shared = await queryContextDetails(client, projectIdentity);
-	const initiativeRows = await client
+async function buildContextDirectory(executor: TenantExecutor, projectIdentity: string | undefined): Promise<ContextDirectory> {
+	const shared = await queryContextDetails(executor, projectIdentity);
+	const initiativeRows = await executor
 		.select({ id: entities.id })
 		.from(entities)
-		.where(and(eq(entities.tenantId, client.tenantId), eq(entities.kind, "initiative")))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative")))
 		.orderBy(asc(entities.id));
-	const initiatives = await Promise.all(initiativeRows.map((row) => queryContextDetails(client, projectIdentity, row.id)));
+	const initiatives = await Promise.all(initiativeRows.map((row) => queryContextDetails(executor, projectIdentity, row.id)));
 
 	return mergeContextDirectory(shared, initiatives);
 }
 
 async function ensureContextExists(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	scopeRef?: string
 ): Promise<ResolvedContextScope> {
-	const scope = await resolveContextScope(client, projectIdentity, scopeRef);
-	const existing = await fetchContextRow(client, scope.key);
+	const scope = await resolveContextScope(executor, projectIdentity, scopeRef);
+	const existing = await fetchContextRow(executor, scope.key);
 	if (existing) {
 		return scope;
 	}
@@ -440,8 +441,8 @@ async function ensureContextExists(
 	const now = new Date().toISOString();
 	const contentHash = computeContextContentHash(scope.defaultTitle, scope.defaultSummary);
 	const identity = generateContextIdentity();
-	await client.insert(contexts).values({
-		tenantId: client.tenantId,
+	await executor.insert(contexts).values({
+		tenantId: executor.tenantId,
 		id: identity.stableId,
 		reference: identity.reference,
 		key: scope.key,
@@ -453,16 +454,16 @@ async function ensureContextExists(
 		createdAt: now,
 		updatedAt: now
 	});
-	await appendContextDeltaEntry(client, scope.key, 1, scope.defaultTitle, scope.defaultSummary, undefined, now);
+	await appendContextDeltaEntry(executor, scope.key, 1, scope.defaultTitle, scope.defaultSummary, undefined, now);
 
 	return scope;
 }
 
-async function getContextTermRecord(client: PoolClient, contextKey: string, term: string): Promise<ContextTermHead | null> {
-	const [row] = await client
+async function getContextTermRecord(executor: TenantExecutor, contextKey: string, term: string): Promise<ContextTermHead | null> {
+	const [row] = await executor
 		.select()
 		.from(contextTerms)
-		.where(and(eq(contextTerms.tenantId, client.tenantId), eq(contextTerms.contextKey, contextKey), eq(contextTerms.term, term)))
+		.where(and(eq(contextTerms.tenantId, executor.tenantId), eq(contextTerms.contextKey, contextKey), eq(contextTerms.term, term)))
 		.limit(1);
 	return row
 		? {
@@ -490,34 +491,34 @@ async function getContextTermRecord(client: PoolClient, contextKey: string, term
  * with a raw `scopeRef`.
  */
 export async function getContextDetails(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input?: { scopeRef?: string }
 ): Promise<ContextDetails> {
-	return queryContextDetails(client, projectIdentity, input?.scopeRef);
+	return queryContextDetails(executor, projectIdentity, input?.scopeRef);
 }
 
 export { queryContextDetails };
 
-export async function listContexts(client: PoolClient, projectIdentity: string | undefined): Promise<ContextListResult> {
-	return queryListContexts(client, projectIdentity);
+export async function listContexts(executor: TenantExecutor, projectIdentity: string | undefined): Promise<ContextListResult> {
+	return queryListContexts(executor, projectIdentity);
 }
 
-export async function getContextDirectory(client: PoolClient, projectIdentity: string | undefined): Promise<ContextDirectory> {
-	return buildContextDirectory(client, projectIdentity);
+export async function getContextDirectory(executor: TenantExecutor, projectIdentity: string | undefined): Promise<ContextDirectory> {
+	return buildContextDirectory(executor, projectIdentity);
 }
 
 export async function queryContextDirectory(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: QueryContextDirectoryInput = {}
 ): Promise<QueryContextDirectoryResult> {
-	const directory = await buildContextDirectory(client, projectIdentity);
+	const directory = await buildContextDirectory(executor, projectIdentity);
 	return filterContextDirectory(directory, input);
 }
 
 export async function upsertContext(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }
 ): Promise<ContextDetails> {
@@ -532,8 +533,8 @@ export async function upsertContext(
 		throw new Error("Context summary must not be empty.");
 	}
 
-	const scope = await resolveContextScope(client, projectIdentity, input.scopeRef);
-	const existingDetails = await queryContextDetails(client, projectIdentity, input.scopeRef);
+	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
+	const existingDetails = await queryContextDetails(executor, projectIdentity, input.scopeRef);
 	const existing = existingDetails.context;
 	const now = new Date().toISOString();
 	const newContentHash = computeContextContentHash(title, summary);
@@ -549,30 +550,30 @@ export async function upsertContext(
 			throw new ContextConflictError(scope.key, existing.revision, existing.contentHash);
 		}
 
-		const result = await client.execute(sql`
+		const result = await executor.execute(sql`
 			UPDATE contexts
 			SET title = ${title}, summary = ${summary},
 			    revision = ${newRevision}, content_hash = ${newContentHash},
 			    updated_at = ${now}
-			WHERE tenant_id = ${client.tenantId}
+			WHERE tenant_id = ${executor.tenantId}
 			  AND key = ${scope.key}
 			  AND revision = ${input.expectedRevision}
 			  AND content_hash = ${input.expectedContentHash}
 		`);
 
 		if ((result.rowCount ?? 0) === 0) {
-			const fresh = await fetchContextRow(client, scope.key);
+			const fresh = await fetchContextRow(executor, scope.key);
 			if (!fresh) {
 				throw new Error(`Context ${scope.key} disappeared during CAS update.`);
 			}
 			throw new ContextConflictError(scope.key, fresh.revision, fresh.content_hash);
 		}
 
-		await appendContextDeltaEntry(client, scope.key, newRevision, existing.title, existing.summary, input.author, now);
+		await appendContextDeltaEntry(executor, scope.key, newRevision, existing.title, existing.summary, input.author, now);
 	} else {
 		const identity = generateContextIdentity();
-		await client.insert(contexts).values({
-			tenantId: client.tenantId,
+		await executor.insert(contexts).values({
+			tenantId: executor.tenantId,
 			id: identity.stableId,
 			reference: identity.reference,
 			key: scope.key,
@@ -584,14 +585,14 @@ export async function upsertContext(
 			createdAt: now,
 			updatedAt: now
 		});
-		await appendContextDeltaEntry(client, scope.key, 1, title, summary, input.author, now);
+		await appendContextDeltaEntry(executor, scope.key, 1, title, summary, input.author, now);
 	}
 
-	return queryContextDetails(client, projectIdentity, input.scopeRef);
+	return queryContextDetails(executor, projectIdentity, input.scopeRef);
 }
 
 async function appendContextDeltaEntry(
-	client: PoolClient,
+	executor: TenantExecutor,
 	contextKey: string,
 	revision: number,
 	priorTitle: string,
@@ -602,15 +603,15 @@ async function appendContextDeltaEntry(
 ): Promise<void> {
 	const id = randomUUID();
 	const authorValue = author?.trim() || RESERVED_SYSTEM_AUTHOR;
-	const [row] = await client.select({ id: contexts.id, title: contexts.title, summary: contexts.summary }).from(contexts).where(and(eq(contexts.tenantId, client.tenantId), eq(contexts.key, contextKey)));
+	const [row] = await executor.select({ id: contexts.id, title: contexts.title, summary: contexts.summary }).from(contexts).where(and(eq(contexts.tenantId, executor.tenantId), eq(contexts.key, contextKey)));
 	if (!row) {
 		throw new Error(`Cannot append reverse patch for missing context ${contextKey}.`);
 	}
 	const transition = createReverseFieldPatch({ title: row.title, summary: row.summary }, { title: priorTitle, summary: priorSummary }, CONTEXT_REVERSE_PATCH_REGISTRY);
-	await client.insert(revisionEntries).values({
+	await executor.insert(revisionEntries).values({
 		id,
-		tenantId: client.tenantId,
-		projectId: await resolveContextProjectId(client, contextKey),
+		tenantId: executor.tenantId,
+		projectId: await resolveContextProjectId(executor, contextKey),
 		recordKind: "context",
 		recordKey: encodeContextRecordKey(row.id),
 		revision,
@@ -625,7 +626,7 @@ async function appendContextDeltaEntry(
 }
 
 export async function defineContextTerm(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }
 ): Promise<DefineContextTermResult> {
@@ -640,26 +641,26 @@ export async function defineContextTerm(
 		throw new Error("Context term definition must not be empty.");
 	}
 
-	const scope = await ensureContextExists(client, projectIdentity, input.scopeRef);
+	const scope = await ensureContextExists(executor, projectIdentity, input.scopeRef);
 	const normalizedAvoid = normalizeAvoidTerms(input.avoid ?? [], term);
-	const existing = await getContextTermRecord(client, scope.key, term);
+	const existing = await getContextTermRecord(executor, scope.key, term);
 	const now = new Date().toISOString();
 	const contentHash = computeContextTermContentHash(term, definition, normalizedAvoid, false);
 
 	if (existing) {
 		assertContextTermHead(scope.key, term, existing, input.expectedRevision, input.expectedContentHash);
 		const revision = existing.revision + 1;
-		const result = await client.execute(sql`UPDATE context_terms SET definition = ${definition}, avoid_terms = ${JSON.stringify(normalizedAvoid)}, revision = ${revision}, content_hash = ${contentHash}, tombstone = FALSE, updated_at = ${now}
-			WHERE tenant_id = ${client.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
+		const result = await executor.execute(sql`UPDATE context_terms SET definition = ${definition}, avoid_terms = ${JSON.stringify(normalizedAvoid)}, revision = ${revision}, content_hash = ${contentHash}, tombstone = FALSE, updated_at = ${now}
+			WHERE tenant_id = ${executor.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
 		if ((result.rowCount ?? 0) === 0) {
-			const fresh = await getContextTermRecord(client, scope.key, term);
+			const fresh = await getContextTermRecord(executor, scope.key, term);
 			throw new ContextTermConflictError(scope.key, term, fresh!.revision, fresh!.contentHash);
 		}
-		await appendContextTermDeltaEntry(client, scope.key, term, revision, existing, input.author, now);
+		await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, input.author, now);
 	} else {
 		const id = generateContextTermId();
-		await client.insert(contextTerms).values({
-			tenantId: client.tenantId,
+		await executor.insert(contextTerms).values({
+			tenantId: executor.tenantId,
 			id,
 			contextKey: scope.key,
 			term,
@@ -671,24 +672,24 @@ export async function defineContextTerm(
 			createdAt: now,
 			updatedAt: now
 		});
-		await appendContextTermDeltaEntry(client, scope.key, term, 1, { id, reference: encodeCanonicalReference("contextTerm", id), term, definition, avoid: normalizedAvoid, revision: 1, contentHash, createdAt: now, updatedAt: now, tombstone: false }, input.author, now);
+		await appendContextTermDeltaEntry(executor, scope.key, term, 1, { id, reference: encodeCanonicalReference("contextTerm", id), term, definition, avoid: normalizedAvoid, revision: 1, contentHash, createdAt: now, updatedAt: now, tombstone: false }, input.author, now);
 	}
 
-	const storedTerm = await getContextTermRecord(client, scope.key, term);
+	const storedTerm = await getContextTermRecord(executor, scope.key, term);
 	if (!storedTerm) {
 		throw new Error(`Failed to persist context term: ${term}`);
 	}
 	const { tombstone: _tombstone, ...publicTerm } = storedTerm;
 
 	return {
-		context: (await queryContextDetails(client, projectIdentity, input.scopeRef)).context,
+		context: (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context,
 		term: publicTerm,
 		created: existing === null
 	};
 }
 
 export async function forgetContextTerm(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }
 ): Promise<ForgetContextTermResult> {
@@ -697,28 +698,28 @@ export async function forgetContextTerm(
 		throw new Error("Context term must not be empty.");
 	}
 
-	const scope = await resolveContextScope(client, projectIdentity, input.scopeRef);
-	const existing = await getContextTermRecord(client, scope.key, term);
+	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
+	const existing = await getContextTermRecord(executor, scope.key, term);
 	if (!existing) {
-		return { context: (await queryContextDetails(client, projectIdentity, input.scopeRef)).context, term, removed: false };
+		return { context: (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context, term, removed: false };
 	}
 	assertContextTermHead(scope.key, term, existing, input.expectedRevision, input.expectedContentHash);
 	if (existing.tombstone) {
-		return { context: (await queryContextDetails(client, projectIdentity, input.scopeRef)).context, term, removed: false, currentRevision: existing.revision, currentContentHash: existing.contentHash };
+		return { context: (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context, term, removed: false, currentRevision: existing.revision, currentContentHash: existing.contentHash };
 	}
 	const revision = existing.revision + 1;
 	const contentHash = computeContextTermContentHash(existing.term, existing.definition, existing.avoid, true);
 	const now = new Date().toISOString();
-	const result = await client.execute(sql`UPDATE context_terms SET revision = ${revision}, content_hash = ${contentHash}, tombstone = TRUE, updated_at = ${now}
-		WHERE tenant_id = ${client.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
+	const result = await executor.execute(sql`UPDATE context_terms SET revision = ${revision}, content_hash = ${contentHash}, tombstone = TRUE, updated_at = ${now}
+		WHERE tenant_id = ${executor.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
 	if ((result.rowCount ?? 0) === 0) {
-		const fresh = await getContextTermRecord(client, scope.key, term);
+		const fresh = await getContextTermRecord(executor, scope.key, term);
 		throw new ContextTermConflictError(scope.key, term, fresh!.revision, fresh!.contentHash);
 	}
-	await appendContextTermDeltaEntry(client, scope.key, term, revision, existing, input.author, now);
+	await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, input.author, now);
 
 	return {
-		context: (await queryContextDetails(client, projectIdentity, input.scopeRef)).context,
+		context: (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context,
 		term,
 		removed: true,
 		currentRevision: revision,
@@ -727,17 +728,17 @@ export async function forgetContextTerm(
 }
 
 export async function materializeContextRevision(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; revision: number }
 ): Promise<MaterializedContextRevision> {
-	const scope = await resolveContextScope(client, projectIdentity, input.scopeRef);
-	const head = await fetchContextRow(client, scope.key);
+	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
+	const head = await fetchContextRow(executor, scope.key);
 	if (!head) {
 		throw new ContextRevisionError(scope.key, "context-not-found", `Context not found: ${scope.key}`);
 	}
-	const rows = await client.select().from(revisionEntries)
-		.where(and(eq(revisionEntries.tenantId, client.tenantId), eq(revisionEntries.projectId, await resolveContextProjectId(client, scope.key)), eq(revisionEntries.recordKind, "context"), eq(revisionEntries.recordKey, encodeContextRecordKey(head.id))))
+	const rows = await executor.select().from(revisionEntries)
+		.where(and(eq(revisionEntries.tenantId, executor.tenantId), eq(revisionEntries.projectId, await resolveContextProjectId(executor, scope.key)), eq(revisionEntries.recordKind, "context"), eq(revisionEntries.recordKey, encodeContextRecordKey(head.id))))
 		.orderBy(desc(revisionEntries.revision));
 	return materializeContextFromPatches(
 		{ key: head.key, title: head.title, summary: head.summary, revision: head.revision, createdAt: head.created_at },
@@ -747,52 +748,52 @@ export async function materializeContextRevision(
 }
 
 export async function restoreContextRevision(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
 ): Promise<MaterializedContextRevision> {
-	const scope = await resolveContextScope(client, projectIdentity, input.scopeRef);
-	const current = (await queryContextDetails(client, projectIdentity, input.scopeRef)).context;
+	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
+	const current = (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context;
 	if (!current.exists) {
 		throw new ContextRevisionError(scope.key, "context-not-found", `Context not found: ${scope.key}`);
 	}
 	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
 		throw new ContextConflictError(scope.key, current.revision, current.contentHash);
 	}
-	const source = await materializeContextRevision(client, projectIdentity, { scopeRef: input.scopeRef, revision: input.revision });
+	const source = await materializeContextRevision(executor, projectIdentity, { scopeRef: input.scopeRef, revision: input.revision });
 	const revision = current.revision + 1;
 	const contentHash = computeContextContentHash(source.title, source.summary);
 	const updatedAt = new Date().toISOString();
-	const [updated] = await client.update(contexts).set({
+	const [updated] = await executor.update(contexts).set({
 		title: source.title,
 		summary: source.summary,
 		revision,
 		contentHash,
 		updatedAt
-	}).where(and(eq(contexts.tenantId, client.tenantId), eq(contexts.key, scope.key), eq(contexts.revision, input.expectedRevision), eq(contexts.contentHash, input.expectedContentHash))).returning({ key: contexts.key });
+	}).where(and(eq(contexts.tenantId, executor.tenantId), eq(contexts.key, scope.key), eq(contexts.revision, input.expectedRevision), eq(contexts.contentHash, input.expectedContentHash))).returning({ key: contexts.key });
 	if (!updated) {
-		const fresh = await fetchContextRow(client, scope.key);
+		const fresh = await fetchContextRow(executor, scope.key);
 		if (!fresh) {
 			throw new ContextRevisionError(scope.key, "context-not-found", `Context not found: ${scope.key}`);
 		}
 		throw new ContextConflictError(scope.key, fresh.revision, fresh.content_hash);
 	}
-	await appendContextDeltaEntry(client, scope.key, revision, current.title, current.summary, input.author, updatedAt, input.revision);
-	return materializeContextRevision(client, projectIdentity, { scopeRef: input.scopeRef, revision });
+	await appendContextDeltaEntry(executor, scope.key, revision, current.title, current.summary, input.author, updatedAt, input.revision);
+	return materializeContextRevision(executor, projectIdentity, { scopeRef: input.scopeRef, revision });
 }
 
 export async function materializeContextTermRevision(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; term: string; revision: number }
 ): Promise<MaterializedContextTermRevision> {
-	const scope = await resolveContextScope(client, projectIdentity, input.scopeRef);
-	const head = await getContextTermRecord(client, scope.key, input.term.trim());
+	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
+	const head = await getContextTermRecord(executor, scope.key, input.term.trim());
 	if (!head) {
 		throw new ContextRevisionError(scope.key, "term-not-found", `Context term not found: ${input.term}`, undefined, input.term);
 	}
-	const rows = await client.select().from(revisionEntries)
-		.where(and(eq(revisionEntries.tenantId, client.tenantId), eq(revisionEntries.projectId, await resolveContextProjectId(client, scope.key)), eq(revisionEntries.recordKind, "context-term"), eq(revisionEntries.recordKey, encodeContextTermRecordKey(head.id))))
+	const rows = await executor.select().from(revisionEntries)
+		.where(and(eq(revisionEntries.tenantId, executor.tenantId), eq(revisionEntries.projectId, await resolveContextProjectId(executor, scope.key)), eq(revisionEntries.recordKind, "context-term"), eq(revisionEntries.recordKey, encodeContextTermRecordKey(head.id))))
 		.orderBy(desc(revisionEntries.revision));
 	return materializeContextTermFromPatches(
 		{ id: head.id, contextKey: scope.key, term: head.term, definition: head.definition, avoid: head.avoid, tombstone: head.tombstone, revision: head.revision, createdAt: head.createdAt },
@@ -802,38 +803,38 @@ export async function materializeContextTermRevision(
 }
 
 export async function restoreContextTermRevision(
-	client: PoolClient,
+	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
 ): Promise<MaterializedContextTermRevision> {
-	const scope = await resolveContextScope(client, projectIdentity, input.scopeRef);
+	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
 	const term = input.term.trim();
-	const current = await getContextTermRecord(client, scope.key, term);
+	const current = await getContextTermRecord(executor, scope.key, term);
 	if (!current) {
 		throw new ContextRevisionError(scope.key, "term-not-found", `Context term not found: ${term}`, undefined, term);
 	}
 	assertContextTermHead(scope.key, term, current, input.expectedRevision, input.expectedContentHash);
-	const source = await materializeContextTermRevision(client, projectIdentity, { scopeRef: input.scopeRef, term, revision: input.revision });
+	const source = await materializeContextTermRevision(executor, projectIdentity, { scopeRef: input.scopeRef, term, revision: input.revision });
 	const revision = current.revision + 1;
 	const contentHash = computeContextTermContentHash(source.term, source.definition, source.avoid, source.tombstone);
 	const updatedAt = new Date().toISOString();
-	const [updated] = await client.update(contextTerms).set({
+	const [updated] = await executor.update(contextTerms).set({
 		definition: source.definition,
 		avoidTerms: JSON.stringify(source.avoid),
 		revision,
 		contentHash,
 		tombstone: source.tombstone,
 		updatedAt
-	}).where(and(eq(contextTerms.tenantId, client.tenantId), eq(contextTerms.contextKey, scope.key), eq(contextTerms.term, term), eq(contextTerms.revision, input.expectedRevision), eq(contextTerms.contentHash, input.expectedContentHash))).returning({ term: contextTerms.term });
+	}).where(and(eq(contextTerms.tenantId, executor.tenantId), eq(contextTerms.contextKey, scope.key), eq(contextTerms.term, term), eq(contextTerms.revision, input.expectedRevision), eq(contextTerms.contentHash, input.expectedContentHash))).returning({ term: contextTerms.term });
 	if (!updated) {
-		const fresh = await getContextTermRecord(client, scope.key, term);
+		const fresh = await getContextTermRecord(executor, scope.key, term);
 		if (!fresh) {
 			throw new ContextRevisionError(scope.key, "term-not-found", `Context term not found: ${term}`, undefined, term);
 		}
 		throw new ContextTermConflictError(scope.key, term, fresh.revision, fresh.contentHash);
 	}
-	await appendContextTermDeltaEntry(client, scope.key, term, revision, current, input.author, updatedAt, input.revision);
-	return materializeContextTermRevision(client, projectIdentity, { scopeRef: input.scopeRef, term, revision });
+	await appendContextTermDeltaEntry(executor, scope.key, term, revision, current, input.author, updatedAt, input.revision);
+	return materializeContextTermRevision(executor, projectIdentity, { scopeRef: input.scopeRef, term, revision });
 }
 
 function assertContextTermHead(contextKey: string, term: string, existing: ContextTermHead, expectedRevision: number | undefined, expectedContentHash: string | undefined): void {
@@ -842,8 +843,8 @@ function assertContextTermHead(contextKey: string, term: string, existing: Conte
 	}
 }
 
-async function appendContextTermDeltaEntry(client: PoolClient, contextKey: string, term: string, revision: number, prior: ContextTermHead, author: string | undefined, createdAt: string, restoredFromRevision?: number): Promise<void> {
-	const successor = await getContextTermRecord(client, contextKey, term);
+async function appendContextTermDeltaEntry(executor: TenantExecutor, contextKey: string, term: string, revision: number, prior: ContextTermHead, author: string | undefined, createdAt: string, restoredFromRevision?: number): Promise<void> {
+	const successor = await getContextTermRecord(executor, contextKey, term);
 	if (!successor) {
 		throw new Error(`Cannot append reverse patch for missing context term ${term}.`);
 	}
@@ -852,19 +853,77 @@ async function appendContextTermDeltaEntry(client: PoolClient, contextKey: strin
 		{ term: prior.term, definition: prior.definition, avoid: prior.avoid, tombstone: prior.tombstone },
 		CONTEXT_TERM_REVERSE_PATCH_REGISTRY
 	);
-	await client.insert(revisionEntries).values({ id: randomUUID(), tenantId: client.tenantId, projectId: await resolveContextProjectId(client, contextKey), recordKind: "context-term", recordKey: encodeContextTermRecordKey(successor.id), revision, author: author?.trim() || RESERVED_SYSTEM_AUTHOR, patchFormat: transition.patchFormat, reversePatch: Buffer.from(transition.reversePatch), sourceHash: encodeRevisionPatchHash(transition.sourceHash), targetHash: encodeRevisionPatchHash(transition.targetHash), restoredFromRevision: restoredFromRevision ?? null, createdAt });
+	await executor.insert(revisionEntries).values({ id: randomUUID(), tenantId: executor.tenantId, projectId: await resolveContextProjectId(executor, contextKey), recordKind: "context-term", recordKey: encodeContextTermRecordKey(successor.id), revision, author: author?.trim() || RESERVED_SYSTEM_AUTHOR, patchFormat: transition.patchFormat, reversePatch: Buffer.from(transition.reversePatch), sourceHash: encodeRevisionPatchHash(transition.sourceHash), targetHash: encodeRevisionPatchHash(transition.targetHash), restoredFromRevision: restoredFromRevision ?? null, createdAt });
 }
 
-async function resolveContextProjectId(client: PoolClient, contextKey: string): Promise<string> {
-	const result = await client.execute(sql`SELECT scope.project_id
+async function resolveContextProjectId(executor: TenantExecutor, contextKey: string): Promise<string> {
+	const result = await executor.execute(sql`SELECT scope.project_id
 		FROM contexts AS context
 		LEFT JOIN entities AS scope ON scope.tenant_id = context.tenant_id AND scope.id = context.scope_entity_id
-		WHERE context.tenant_id = ${client.tenantId} AND context.key = ${contextKey}`);
+		WHERE context.tenant_id = ${executor.tenantId} AND context.key = ${contextKey}`);
 	const projectId = (result.rows[0] as { project_id: string | null } | undefined)?.project_id;
 	if (projectId) return projectId;
 	if (contextKey === DEFAULT_CONTEXT_KEY) return deriveMigratedEntityIdentity("project", "PROJ0").stableId;
 	if (contextKey.startsWith(`${DEFAULT_CONTEXT_KEY}:`)) {
-		return (await getEntityOrThrow(client, contextKey.slice(DEFAULT_CONTEXT_KEY.length + 1))).id;
+		return (await getEntityOrThrow(executor, contextKey.slice(DEFAULT_CONTEXT_KEY.length + 1))).id;
 	}
 	throw new Error(`Cannot resolve project for context ${contextKey}.`);
+}
+
+/**
+ * The context/glossary feature class (ADR "Backends mirror one another per
+ * feature, behind all-async feature interfaces"): a thin wrapper over the
+ * executor-holding free functions above, constructed fresh inside one
+ * `PgStore` transaction and composed alongside the other three feature
+ * classes.
+ */
+export class PgContextStore implements ContextStore {
+	public constructor(
+		private readonly executor: TenantExecutor,
+		private readonly projectIdentity: string | undefined
+	) {}
+
+	public async listContexts(): Promise<ContextListResult> {
+		return listContexts(this.executor, this.projectIdentity);
+	}
+
+	public async getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails> {
+		return getContextDetails(this.executor, this.projectIdentity, input);
+	}
+
+	public async getContextDirectory(): Promise<ContextDirectory> {
+		return getContextDirectory(this.executor, this.projectIdentity);
+	}
+
+	public async queryContextDirectory(input?: QueryContextDirectoryInput): Promise<QueryContextDirectoryResult> {
+		return queryContextDirectory(this.executor, this.projectIdentity, input);
+	}
+
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
+		return upsertContext(this.executor, this.projectIdentity, input);
+	}
+
+	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<DefineContextTermResult> {
+		return defineContextTerm(this.executor, this.projectIdentity, input);
+	}
+
+	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {
+		return forgetContextTerm(this.executor, this.projectIdentity, input);
+	}
+
+	public async materializeContextRevision(input: { scopeRef?: string; revision: number }): Promise<MaterializedContextRevision> {
+		return materializeContextRevision(this.executor, this.projectIdentity, input);
+	}
+
+	public async materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }): Promise<MaterializedContextTermRevision> {
+		return materializeContextTermRevision(this.executor, this.projectIdentity, input);
+	}
+
+	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextRevision> {
+		return restoreContextRevision(this.executor, this.projectIdentity, input);
+	}
+
+	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextTermRevision> {
+		return restoreContextTermRevision(this.executor, this.projectIdentity, input);
+	}
 }

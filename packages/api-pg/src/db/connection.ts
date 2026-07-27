@@ -35,14 +35,15 @@ export type TenantExecutor = NodePgDatabase<typeof schema> & QueryExecutor & {
 	projectIdentity?: string;
 	/**
 	 * The project every project-scoped read filters by - local's
-	 * `SqliteConnection.currentProjectId`, resolved lazily here instead of
-	 * eagerly at open. Lazy because cloud, unlike a local CLI invocation,
-	 * serves callers that legitimately have no project: project discovery
+	 * `SqliteConnection.currentProjectId`, matching its plain-string shape.
+	 * `PgStore.transaction()` resolves and assigns it before running the
+	 * request body, so callers below never observe an unresolved value; empty
+	 * means no project in scope, exactly as `tenantWideTransaction` leaves it
+	 * for the callers that legitimately span every project: project discovery
 	 * (which lists the projects you would pick from), tenant administration,
-	 * and whole-tenant synchronize. Resolving eagerly would make those fail
-	 * in exactly the multi-project tenants they exist for.
+	 * and whole-tenant synchronize.
 	 */
-	currentProjectId?: Promise<string>;
+	currentProjectId: string;
 };
 
 export function createPgPool(options: PgConnectionOptions): Pool {
@@ -93,7 +94,8 @@ export async function withTenantTransaction<T>(
 		const executor: TenantExecutor = Object.assign(drizzle(client, { schema }), {
 			query: client.query.bind(client),
 			tenantId,
-			projectIdentity
+			projectIdentity,
+			currentProjectId: ""
 		});
 		const result = await fn(executor);
 		await client.query("COMMIT");
