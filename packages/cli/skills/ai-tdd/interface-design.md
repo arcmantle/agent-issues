@@ -1,14 +1,14 @@
 # Interface Design for Testability
 
-Good interfaces make testing natural:
+A good interface makes testing easy:
 
-1. Accept dependencies instead of creating them.
+1. Accept dependencies. Do not create them inside the function.
 
    ```typescript
    function processOrder(order, paymentGateway) {}
    ```
 
-2. Return results instead of producing side effects.
+2. Return a result. Do not rely on a side effect.
 
    ```typescript
    function calculateDiscount(cart): Discount {}
@@ -16,5 +16,5 @@ Good interfaces make testing natural:
 
 3. Keep the surface area small.
 
-- Fewer methods mean fewer tests.
-- Fewer parameters mean simpler test setup.
+- Fewer methods need fewer tests.
+- Fewer parameters need simpler test setup.

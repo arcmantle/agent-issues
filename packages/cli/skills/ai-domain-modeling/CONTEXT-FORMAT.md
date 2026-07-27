@@ -1,18 +1,18 @@
 # Context Record Format
 
-The canonical glossary lives in the `agent-issues` database, not in a raw file.
+The canonical glossary lives in the `agent-issues` database. It does not live in a raw file.
 
-Initiative-scoped context is the database equivalent of `CONTEXT.md` files inside initiative folders.
+Initiative-scoped context is the database equivalent of a `CONTEXT.md` file inside an initiative folder.
 
 Read the relevant initiative glossary with `agent-issues context show <entityOrInitiativeId> --json`.
 
-When you need project-wide discovery across shared and initiative scopes, use `agent-issues context search <query> --json`.
+For project-wide discovery across shared and initiative scopes, use `agent-issues context search <query> --json`.
 
-When you suspect the same label already exists in another scope, use `agent-issues context conflicts --json` before you add or rename a term.
+Before you add or rename a term, check whether the same label already exists in another scope with `agent-issues context conflicts --json`.
 
 Use `agent-issues context list --json` only when you need the raw list of stored scopes.
 
-Initialize or update the shared context with:
+Set up or update the shared context with:
 
 ```bash
 agent-issues context set --scope INIT1 --title "Payments Context" --summary "Glossary of initiative-specific terms for Payments." --json
@@ -54,10 +54,10 @@ agent-issues context define "Order" --scope INIT1 --definition "A customer reque
 
 ## Rules
 
-- Be opinionated. When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
-- Keep definitions tight. One or two sentences max. Define what it is, not what it does.
-- Only include terms specific to this project's context. General programming concepts do not belong.
-- Group terms under subheadings when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
-- Keep initiative context in the database. Do not duplicate it into a raw markdown file.
+- Be decisive. When more than one word exists for the same idea, pick the best one. List the others under `avoid`.
+- Keep each definition short: one or two sentences. Define what the term is, not what it does.
+- Include only terms specific to this project's context. Do not include general programming concepts.
+- Group terms under subheadings when a natural cluster forms. If all terms belong to one area, a flat list is fine.
+- Keep initiative context in the database. Do not copy it into a raw markdown file.
 
-The current `agent-issues` context model is initiative-scoped by default, with an optional shared default context. Read the relevant initiative context first, use project-wide search only when needed to disambiguate, then update the scoped glossary term by term as the vocabulary becomes precise.
+The `agent-issues` context model is initiative-scoped by default, with an optional shared default context. Read the relevant initiative context first. Use project-wide search only when you need to resolve which term is correct. Then update the scoped glossary, one term at a time, as the vocabulary becomes precise.

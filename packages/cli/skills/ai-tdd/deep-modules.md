@@ -1,8 +1,8 @@
 # Deep Modules
 
-From "A Philosophy of Software Design":
+From *A Philosophy of Software Design*:
 
-**Deep module** = small interface + lots of implementation
+**Deep module**: a small interface with a lot of implementation behind it.
 
 ```
 ┌─────────────────────┐
@@ -16,7 +16,7 @@ From "A Philosophy of Software Design":
 └─────────────────────┘
 ```
 
-**Shallow module** = large interface + little implementation
+**Shallow module**: a large interface with little implementation behind it.
 
 ```
 ┌─────────────────────────────────┐
@@ -26,8 +26,8 @@ From "A Philosophy of Software Design":
 └─────────────────────────────────┘
 ```
 
-When designing interfaces, ask:
+When you design an interface, ask:
 
-- Can I reduce the number of methods?
-- Can I simplify the parameters?
-- Can I hide more complexity inside?
+- Can you reduce the number of methods?
+- Can you simplify the parameters?
+- Can you hide more complexity inside?

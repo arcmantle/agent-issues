@@ -12,17 +12,17 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 Test observable behavior through public interfaces. Prefer integration-style tests that survive internal refactors.
 
-See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
+See [tests.md](tests.md) for examples. See [mocking.md](mocking.md) for mocking rules.
 
 ## Anti-pattern: horizontal slices
 
-Use vertical tracer bullets. Do not write all tests first and all implementation second.
+Use vertical tracer bullets. Do not write all the tests first and all the implementation second.
 
 ## Workflow
 
 ### 1. Planning
 
-Read the active issue, relations, and scoped context. Confirm the public interface, prioritized behaviors, and approach. Resolve hard-to-reverse ambiguity before coding. See [deep modules](deep-modules.md) and [interface design](interface-design.md) when those concerns are material.
+Read the active issue, its relations, and its scoped context. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you code. See [deep modules](deep-modules.md) and [interface design](interface-design.md) when these concerns matter.
 
 ### 2. Tracer bullet
 
@@ -33,7 +33,7 @@ RED:   Write test for first behavior -> test fails
 GREEN: Write minimal code to pass -> test passes
 ```
 
-Confirm the test fails for the expected reason before implementation.
+Confirm the test fails for the expected reason before you write the implementation.
 
 ### 3. Incremental loop
 
@@ -44,34 +44,34 @@ RED:   Write next test -> fails
 GREEN: Minimal code to pass -> passes
 ```
 
-Run one test at a time. Write only enough code to pass it, then continue with the next behavior.
+Run one test at a time. Write only enough code to pass it. Then move to the next behavior.
 
 ### 4. Refactor
 
-Refactor only while green, using [refactoring guidance](refactoring.md), and rerun focused tests after each step.
+Refactor only while the tests are green. Use the [refactoring guidance](refactoring.md). Run the focused tests again after each step.
 
 ### 5. Implementation review gate
 
-Delegate the confirmed issue and approach to one implementation subagent. It owns the TDD cycles, focused validation, and repairs. Do not treat the first passing test as completion.
+You, the visible `ai-tdd` agent, own the TDD cycles, the focused validation, and any repairs. Do not hand the build to a subagent: you hold the context on what the active `ai-*` skills expect, and a subagent does not have it. Do not treat the first passing test as the end of the work.
 
-After the implementation subagent's initial validation, the visible `ai-tdd` orchestrator must launch one read-only review subagent. Do not delegate this gate to the implementation subagent: the orchestrator must retain the reviewer report as auditable evidence.
+After your first focused validation passes, start one read-only review subagent. This is the only step that runs as a subagent. Give the reviewer the active issue context, the changed-file diff, the validation you already ran, and the shared [language standard](../agent-issues-language.md). The reviewer's report, its findings, and every message it writes must follow that standard.
 
-The reviewer must cover both dimensions:
+The reviewer must cover both of these:
 
-- **Behavior and contract:** Compare the implementation and tests against the active issue, linked user stories, relevant ADRs, and observable public behavior. Identify missing behaviors, incorrect semantics, and insufficient behavior coverage.
-- **Code and regression risk:** Inspect the changed code for correctness defects, unintended scope, regressions, error handling gaps, maintainability concerns, and validation gaps.
+- **Behavior and contract:** Compare the implementation and tests against the active issue, the linked user stories, the relevant ADRs, and the observable public behavior. Find missing behaviors, wrong semantics, and gaps in behavior coverage.
+- **Code and regression risk:** Inspect the changed code for correctness defects, unplanned scope, regressions, gaps in error handling, maintainability concerns, and gaps in validation.
 
-Give the reviewer the active issue context, the changed-file diff, and the validation already run. The reviewer must not edit files. It must return either no findings or structured findings with severity, file and location, evidence, and a concrete correction.
+The reviewer must not edit files. It must return either no findings, or structured findings with a severity, a file and location, evidence, and a concrete fix.
 
-`ai-tdd` rejects only findings it can explain as invalid or out of scope. It gives every valid material finding to the implementation subagent for repair, then requires the focused validation that covers the repair. If no material findings exist, `ai-tdd` records the reviewer report before final validation. Do not mark the issue done until this gate is complete.
+`ai-tdd` rejects a finding only when it can explain why the finding is invalid or out of scope. For every valid, material finding, fix it yourself. Then run the focused validation that covers the fix. Do not hand repairs to a subagent. If there are no material findings, `ai-tdd` records the reviewer report before the final validation. Do not mark the issue done until this gate is complete.
 
 ### 6. Complete and report
 
-After the review gate and final focused validation pass, mark the active issue `done`. Invoke the `ai-next-work` skill with the active initiative and include its result in the completion report. Do not start the selected issue.
+After the review gate and the final focused validation pass, mark the active issue `done`. Start the `ai-next-work` skill with the active initiative. Include its result in the completion report. Do not start the selected issue.
 
 ## Implementer standards
 
-If you need a paragraph-long comment to justify why the workaround is OK, the code is wrong — fix the code.
+If you need a paragraph-long comment to justify a workaround, the code is wrong. Fix the code.
 
 ## Checklist per cycle
 

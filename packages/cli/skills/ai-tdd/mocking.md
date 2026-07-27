@@ -1,28 +1,28 @@
 # When to Mock
 
-Mock at system boundaries only:
+Mock only at system boundaries:
 
-- External APIs
-- Databases when a test database is not practical
-- Time and randomness
-- File system access when needed
+- External APIs.
+- Databases, when a test database is not practical.
+- Time and randomness.
+- File system access, when you need it.
 
 Do not mock:
 
-- Your own classes or modules
-- Internal collaborators
-- Anything you control
+- Your own classes or modules.
+- Internal collaborators.
+- Anything you control.
 
-## Designing for Mockability
+## Design for Mockability
 
-At system boundaries, design interfaces that are easy to mock.
+At system boundaries, design an interface that is easy to mock.
 
 1. Use dependency injection.
-2. Prefer SDK-style interfaces over generic fetchers.
+2. Prefer an SDK-style interface over a generic fetcher.
 
-The SDK approach means:
+The SDK approach gives you:
 
-- Each mock returns one specific shape.
+- One specific shape per mock.
 - No conditional logic in test setup.
-- Easier to see which endpoints a test exercises.
-- Better type safety per endpoint.
+- A clear view of which endpoints a test uses.
+- Better type safety for each endpoint.

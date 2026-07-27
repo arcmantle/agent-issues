@@ -1,6 +1,6 @@
 ---
 name: ai-next-work
-description: Selects the next workable issue from a tracked scope and reports why it should be next. Use after completing an issue or when choosing the next implementation slice.
+description: Selects the next workable issue from a tracked scope and reports the reason to work on it next. Use after completing an issue or when choosing the next implementation slice.
 argument-hint: Initiative or issue ID
 ---
 
@@ -9,23 +9,23 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 # Next Work
 
-Select work; do not implement it or change issue status.
+Select work. Do not implement it or change the issue status.
 
 ## Input
 
-Accept the active initiative or an issue whose initiative can be resolved from its relations.
+Accept the active initiative, or an issue whose initiative you can resolve from its relations.
 
 ## Selection
 
 1. List unfinished issues with `agent-issues list issue --status todo,in-progress,blocked --parent <initiativeId> --json`.
-2. Inspect each candidate's blockers with `agent-issues relations <id> --direction incoming --type blocks --json` and its open targets with `--direction outgoing --type blocks`.
-3. Use `agent-issues show <id> --view full --json` only when the issue's authored outcome or acceptance criteria are needed to distinguish candidates.
-4. Reserve `bundle` for an intentional initiative-wide read when compact lists and edges cannot establish workability.
+2. Check each candidate's blockers with `agent-issues relations <id> --direction incoming --type blocks --json`, and its open targets with `--direction outgoing --type blocks`.
+3. Use `agent-issues show <id> --view full --json` only when you need the issue's authored outcome or acceptance criteria to tell candidates apart.
+4. Use `bundle` only for a planned initiative-wide read, when compact lists and edges cannot show whether the work is ready.
 5. A candidate is **workable** when it is not `done` and no open source issue blocks it.
-6. Rank workable leaf issues ahead of parent issues.
-7. Within that ordering, prefer the issue that unblocks the most open targets, then the thinnest tracer-bullet slice.
+6. Rank workable leaf issues above parent issues.
+7. Within that order, prefer the issue that unblocks the most open targets. Then prefer the thinnest tracer-bullet slice.
 
-Use the refreshed graph each time. Do not rely on state captured before the previous issue completed.
+Use the refreshed graph each time. Do not rely on state you captured before the previous issue finished.
 
 ## Result
 
@@ -35,11 +35,11 @@ Return the selected issue's:
 - parent or leaf classification
 - user stories it `fixes`
 - open blockers
-- short selection rationale
+- short reason for the selection
 
 If no issue is workable, return one of:
 
-- **Complete:** every issue in the initiative is `done`, regardless of the initiative's manual status.
-- **Blocked:** unfinished issues remain; report the blocker chain.
+- **Complete:** every issue in the initiative is `done`, no matter what the initiative's manual status says.
+- **Blocked:** unfinished issues remain. Report the blocker chain.
 
-Do not set the selected issue to `in-progress`. The caller decides whether to begin it.
+Do not set the selected issue to `in-progress`. The caller decides whether to start it.

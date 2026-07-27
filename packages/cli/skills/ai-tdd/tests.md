@@ -2,7 +2,7 @@
 
 ## Good tests
 
-Integration-style tests go through real interfaces instead of mocks of internal parts.
+An integration-style test goes through a real interface. It does not mock internal parts.
 
 ```typescript
 test("user can checkout with valid cart", async () => {
@@ -13,17 +13,17 @@ test("user can checkout with valid cart", async () => {
 });
 ```
 
-Characteristics:
+Look for these traits:
 
-- Tests behavior users or callers care about.
-- Uses public API only.
-- Survives internal refactors.
-- Describes what, not how.
+- Tests behavior that users or callers care about.
+- Uses the public API only.
+- Survives an internal refactor.
+- Describes what the code does, not how.
 - Has one logical assertion per test.
 
 ## Bad tests
 
-Implementation-detail tests are coupled to internal structure.
+An implementation-detail test is tied to the internal structure.
 
 ```typescript
 test("checkout calls paymentService.process", async () => {
@@ -33,14 +33,14 @@ test("checkout calls paymentService.process", async () => {
 });
 ```
 
-Red flags:
+Watch for these warning signs:
 
 - Mocking internal collaborators.
 - Testing private methods.
-- Asserting on call counts or order.
-- Breaking on refactor without a behavior change.
-- Test names that describe how rather than what.
-- Verifying through external means instead of the interface.
+- Asserting on call counts or call order.
+- Breaking on a refactor with no behavior change.
+- Test names that describe how, not what.
+- Checking through an external system instead of through the interface.
 
 ```typescript
 test("createUser saves to database", async () => {

@@ -1,7 +1,7 @@
 ---
 name: ai-agent-issues
-description: Internal orientation guide for agents working in repos that use agent-issues. Use when you need to understand the CLI, tracker model, command selection, or workflow before taking action.
-argument-hint: What part of agent-issues do you need to orient on before proceeding?
+description: Internal orientation guide for agents working in repos that use agent-issues. Use when you need to understand the CLI, tracker model, command selection, or workflow before you act.
+argument-hint: Which part of agent-issues do you need to review before you continue?
 ---
 
 Follow the shared [language standard](../agent-issues-language.md).
@@ -9,106 +9,104 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 # Agent-Issues Tooling Guide
 
-This is an internal reference skill for the agent.
+This is an internal reference skill for the agent. Use it before you continue with real work, when you need more information about how `agent-issues` operates.
 
-Use it when you need to orient yourself on how `agent-issues` works before you continue with real work.
-
-Do not invoke it just because the repository uses `agent-issues`. Invoke it when you are missing operational context: which command to run, how entities relate, how statuses behave, or which `ai-*` skill should own the next step.
+Do not start this skill only because the repository uses `agent-issues`. Start it when you lack operational context: which command to run, how entities relate, how statuses change, or which `ai-*` skill owns the next step.
 
 ## What to do
 
-Start from the built-in discovery surfaces before improvising:
+Start from the built-in discovery commands before you guess:
 
-- Use `agent-issues capabilities --json` when you want one combined snapshot of command help, schema, and packaged skill installation state.
-- Use `agent-issues help --json` or `agent-issues help <command> --json` when you need command shapes, options, examples, or expected output.
-- Use `agent-issues schema --json` when you need entity kinds, statuses, structural parent rules, or allowed relations.
+- Use `agent-issues capabilities --json` for one combined view of command help, schema, and installed skill state.
+- Use `agent-issues help --json` or `agent-issues help <command> --json` for command shapes, options, examples, and expected output.
+- Use `agent-issues schema --json` for entity kinds, statuses, structural parent rules, and allowed relations.
 
-Once oriented, stop explaining to yourself and act. Map the task to the smallest command sequence or `ai-*` skill that moves the work forward.
+Once you have this information, act. Do not keep explaining the task to yourself. Match the task to the smallest command sequence or `ai-*` skill that moves the work forward.
 
 ## Core mental model
 
-`agent-issues` tracks work as a graph, not as loose markdown files.
+`agent-issues` tracks work as a graph. It does not track work as loose markdown files.
 
 - `initiative`: the top-level workstream.
 - `prd`: the plan or product requirement for an initiative.
-- `userStory`: the user-visible slice promised by the PRD.
-- `issue`: the executable implementation unit.
-- `adr`: a hard-to-reverse architectural decision.
-- `context`: the database-backed glossary for shared or initiative-scoped language.
+- `userStory`: the user-visible slice that the PRD commits to.
+- `issue`: the unit of work you can execute.
+- `adr`: a hard-to-reverse architecture decision.
+- `context`: the database-backed glossary for shared or initiative-scoped terms.
 
-Issues are not always flat leaves. An issue may structurally `decompose` into sub-issues.
+An issue is not always a flat leaf. An issue can `decompose` into sub-issues.
 
 - Use `agent-issues create issue --parent ISSx ...` to create a sub-issue under another issue.
-- Use `agent-issues move ISSx ISSy` to reparent a sub-issue under a different parent issue.
-- Treat leaf issues as the normal place for `fixes` links to user stories; parent issues represent grouped work and can own sub-issues.
+- Use `agent-issues move ISSx ISSy` to move a sub-issue to a different parent issue.
+- Link `fixes` from leaf issues to user stories. Parent issues group work and can own sub-issues.
 
-Use `agent-issues list <kind> --json` for discovery and add `--status`, `--parent`, or `--limit` to bound the result. Use `agent-issues relations <id> --json` for edge inspection and add `--direction` or `--type` to select relevant edges. Use `agent-issues show <id> --view full --json` when you need authored content or the complete record. Reserve `bundle` for intentional initiative-wide reads.
+Use `agent-issues list <kind> --json` to find records. Add `--status`, `--parent`, or `--limit` to narrow the result. Use `agent-issues relations <id> --json` to inspect edges. Add `--direction` or `--type` to select the edges you need. Use `agent-issues show <id> --view full --json` when you need the authored content or the complete record. Use `bundle` only for a planned initiative-wide read.
 
 ## Initiative reads
 
-For real work, start with compact discovery and edge inspection. Escalate to authored or initiative-wide content only when the task needs it:
+For real work, start with compact discovery and edge inspection. Use authored or initiative-wide content only when the task needs it:
 
-- To resume an existing workstream, run `agent-issues list handoff --json`, then inspect candidates with `agent-issues relations <handoffId> --direction outgoing --type handsOff --json`.
-- Read the selected handoff with `agent-issues show <handoffId> --view full --json` because its authored body carries the session context.
-- Use filtered compact lists and relations to navigate from the target to the active issue and blockers.
-- Use `agent-issues bundle <initiativeId> --view full --json` only when the work intentionally requires the whole initiative graph and authored records.
-- Read `agent-issues context show <initiativeId> --json` immediately after that so your language and planning match the initiative glossary.
-- If the right term is still unclear after the initiative read, use `agent-issues context search <query> --view <all|global|initiatives> --json` for project-wide discovery and `agent-issues context conflicts --json` when you suspect the same label is defined in more than one scope.
-- Only fall back to `show <id>` or `relations <id>` when you need a narrower read on one entity or one edge set.
+- To resume a workstream, run `agent-issues list handoff --json`. Then inspect candidates with `agent-issues relations <handoffId> --direction outgoing --type handsOff --json`.
+- Read the selected handoff with `agent-issues show <handoffId> --view full --json`. Its authored body carries the session context.
+- Use filtered compact lists and relations to move from the target to the active issue and its blockers.
+- Use `agent-issues bundle <initiativeId> --view full --json` only when the task needs the whole initiative graph and its authored records.
+- Read `agent-issues context show <initiativeId> --json` right after that, so your language and plan match the initiative glossary.
+- If a term is still unclear after the initiative read, use `agent-issues context search <query> --view <all|global|initiatives> --json` for project-wide discovery. Use `agent-issues context conflicts --json` when you suspect that one label has more than one definition.
+- Fall back to `show <id>` or `relations <id>` only when you need a narrower read on one entity or one edge set.
 
-Default heuristic:
+Default steps:
 
-1. Discover with compact filtered `list`.
+1. Find candidates with compact filtered `list`.
 2. Navigate with compact filtered `relations`.
 3. Read one record's authored content with `show --view full`.
-4. Read `bundle` only when the entire initiative is intentional input.
+4. Read `bundle` only when the whole initiative is a planned input.
 
-Do not fetch full records and trim them with routine `jq` projections. That indicates a missing CLI capability; use compact views and server-side filters, or track the recurring gap.
+Do not fetch full records and trim them with routine `jq` filters. That shows a missing CLI feature. Use compact views and server-side filters, or track the recurring gap.
 
 ## Command selection
 
-Use the right command family for the job:
+Use the right command group for the job:
 
-- Discover entities: `list`, `show`, `relations`, `bundle`
-- Change tracking data: `create`, `edit`, `link`, `status`
-- Manage vocabulary: `context list`, `context show`, `context search`, `context conflicts`, `context set`, `context define`, `context forget`
-- Inspect the live graph visually: `serve-site`, `open-site`, `stop-site`
-- Discover agent integration surfaces: `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `capabilities`
+- Find entities: `list`, `show`, `relations`, `bundle`.
+- Change tracked data: `create`, `edit`, `link`, `status`.
+- Manage vocabulary: `context list`, `context show`, `context search`, `context conflicts`, `context set`, `context define`, `context forget`.
+- View the live graph: `serve-site`, `open-site`, `stop-site`.
+- Find agent integration commands: `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `capabilities`.
 
-Prefer `--json` whenever you are reading output programmatically or using the results to drive the next action. Entity reads and mutation acknowledgements are compact by default; add `--view full` only for complete records or authored content.
+Use `--json` whenever a program will read the output, or you will use the result to drive the next action. Entity reads and mutation replies are compact by default. Add `--view full` only for the complete record or its authored content.
 
 ## Workflow map
 
-When you need to choose the next packaged skill, route yourself explicitly:
+When you must choose the next packaged skill, pick it clearly:
 
-1. `ai-domain-modeling` to actively sharpen terminology, boundaries, glossary context, and architectural decisions.
-2. `ai-grill-with-docs` to challenge and sharpen a plan one question at a time using domain modeling.
-3. `ai-plan` for the same domain-modeling outcome at a faster pace through batches of questions.
+1. `ai-domain-modeling` to sharpen terms, boundaries, glossary context, and architecture decisions.
+2. `ai-grill-with-docs` to challenge and sharpen a plan one question at a time, with domain modeling.
+3. `ai-plan` for the same domain-modeling result at a faster pace, through batches of questions.
 4. `ai-to-prd` to capture the plan as a PRD and user stories.
-5. `ai-to-issues` to break the plan into executable issues.
-6. `ai-handoff` to capture where the work stands for the next session.
-7. `ai-start-work` to pick the next workable issue and prepare execution.
-8. `ai-tdd` to implement one issue through a red-green-refactor loop.
-9. `ai-migrate-docs` when importing existing documentation into the tracker.
+5. `ai-to-issues` to break the plan into issues you can execute.
+6. `ai-handoff` to record where the work stands for the next session.
+7. `ai-start-work` to pick the next workable issue and prepare to start it.
+8. `ai-tdd` to build one issue through a red-green-refactor loop.
+9. `ai-migrate-docs` to import existing documentation into the tracker.
 
-If you are unsure where the work sits in the workflow, inspect compact entity and relation results first. Use `bundle` only if choosing the workflow genuinely requires the whole initiative.
+If you are unsure where the work sits in the workflow, inspect compact entity and relation results first. Use `bundle` only if you must see the whole initiative to choose the workflow.
 
-To persist a handoff, create it as an ordinary graph entity: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>`. Use `agent-issues edit <handoffId> --title "<title>" --body-file -` to correct its title or body.
+To save a handoff, create it as a normal graph entity: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>`. Use `agent-issues edit <handoffId> --title "<title>" --body-file -` to fix its title or body.
 
 ## Initiative default
 
 For new feature planning, assume a new initiative by default.
 
-- A new grilling session for a new feature normally means a new initiative.
-- A new PRD for a new feature normally means a new initiative.
-- Reuse an existing initiative only when the user explicitly asks for that, or when the work is plainly a continuation of an already-tracked initiative rather than a new feature.
+- A new grilling session for a new feature normally needs a new initiative.
+- A new PRD for a new feature normally needs a new initiative.
+- Reuse an existing initiative only when the user asks for that directly, or when the work is clearly a continuation of an initiative that is already tracked.
 
-Do not silently stuff fresh feature work into an existing initiative just because the themes seem adjacent.
+Do not add new feature work to an existing initiative only because the themes seem close.
 
 ## Working rules
 
-- Prefer acting from real command output over memory.
-- Keep `agent-issues` as the source of truth; do not invent tracker state.
-- If the task depends on tenant or scope, include `--tenant` or the relevant entity ID explicitly in the command you run or recommend.
-- Do not turn this skill into a tutorial unless the user explicitly asks for an explanation of the tooling.
-- If the next step is execution rather than explanation, hand off immediately to the matching `ai-*` skill.
+- Act from real command output, not from memory.
+- Keep `agent-issues` as the source of truth. Do not invent tracker state.
+- If the task depends on a tenant or a scope, put `--tenant` or the entity ID directly in the command you run or recommend.
+- Do not turn this skill into a tutorial unless the user asks directly for an explanation of the tooling.
+- If the next step is to execute rather than to explain, hand off right away to the matching `ai-*` skill.

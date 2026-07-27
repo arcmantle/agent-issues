@@ -8,36 +8,36 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 # To Issues
 
-Break a plan into independently grabbable issues using tracer-bullet vertical slices.
+Break a plan into issues you can grab independently. Use tracer-bullet vertical slices.
 
 ## Process
 
 ### 1. Gather context
 
-Work from whatever is already in the conversation context. If the user passes an entity ID or a file path as an argument, resolve it first.
+Work from what is already in the conversation context. If the user gives an entity ID or a file path as an argument, resolve it first.
 
-Use the active initiative and its records to identify:
+Use the active initiative and its records to find:
 
-- the parent initiative that should structurally own the new issues
-- the PRD and user stories the issues should satisfy
-- any existing issues or blockers that should be reused instead of duplicated
+- the parent initiative that must structurally own the new issues
+- the PRD and user stories the issues must satisfy
+- any existing issues or blockers you must reuse instead of duplicate
 
 ### 2. Explore the codebase
 
-If you have not already explored the codebase, do so to understand the current state of the code. Issue titles and descriptions should use the established vocabulary and respect ADRs in the area you are touching.
+If you have not explored the codebase yet, do so now to understand the current state of the code. Issue titles and descriptions must use the established vocabulary and respect the ADRs in the area you touch.
 
 ### 3. Draft vertical slices
 
-Break the plan into tracer-bullet issues. Each issue is a thin vertical slice that cuts through all relevant integration layers end to end, not a horizontal slice of one layer.
+Break the plan into tracer-bullet issues. Each issue is a thin vertical slice that cuts through every relevant integration layer end to end. It is not a horizontal slice of one layer.
 
-Slices may be `HITL` or `AFK`. Prefer `AFK` over `HITL` where possible. If the distinction matters to the user, include it in the prose you present. Do not invent extra tracker fields that the CLI does not support.
+A slice can be `HITL` or `AFK`. Prefer `AFK` over `HITL` when you can. If the choice matters to the user, state it in the text you present. Do not invent tracker fields the CLI does not support.
 
 Rules:
 
 - Each slice delivers a narrow but complete path through the affected behavior.
-- A completed slice is demoable or verifiable on its own.
+- A finished slice is demoable or verifiable on its own.
 - Prefer many thin slices over a few thick ones.
-- Use sub-issues when one approved issue clearly decomposes into smaller executable steps but should still roll up under one parent issue. In that shape, leaf sub-issues normally carry the `fixes` links to user stories.
+- Use sub-issues when one approved issue clearly breaks into smaller steps but must still roll up under one parent issue. In this shape, leaf sub-issues normally carry the `fixes` links to user stories.
 
 ### 4. Quiz the user
 
@@ -48,21 +48,21 @@ Present the proposed breakdown as a numbered list. For each slice, show:
 - Blocked by
 - User stories covered
 
-Ask whether the granularity and dependency relationships feel right, whether any slices should be merged or split, and whether the `HITL` versus `AFK` split is correct.
+Ask whether the size of each slice and the dependencies feel right, whether to merge or split any slices, and whether the `HITL` and `AFK` split is correct.
 
-Iterate until the user approves the breakdown.
+Repeat until the user approves the breakdown.
 
 ### 5. Publish the issues in agent-issues
 
 For each approved slice:
 
-1. Write a concise markdown issue body before publishing. Preserve the substance of the approved slice in the body, not just the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, acceptance criteria, and any explicit blockers or dependencies that were part of the approved breakdown.
-2. For multiline bodies, write the markdown to a temporary file first and publish it with `--body-file` rather than relying on fragile shell quoting.
-3. Create the issue under the correct structural parent with `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json` for top-level initiative work, or `agent-issues create issue --title ... --parent ISSx --body-file "$issueBodyFile" --json` for sub-issues.
-4. If you are reusing an existing issue whose body is missing or stale, refresh it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json` before linking anything else.
+1. Write a short markdown issue body before you publish it. Keep the substance of the approved slice in the body, not just in the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, the acceptance criteria, and any explicit blocker or dependency from the approved breakdown.
+2. For a multiline body, write the markdown to a temporary file first. Publish it with `--body-file` instead of relying on fragile shell quoting.
+3. Create the issue under the correct structural parent: `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json` for top-level initiative work, or `agent-issues create issue --title ... --parent ISSx --body-file "$issueBodyFile" --json` for a sub-issue.
+4. If you reuse an existing issue whose body is missing or old, refresh it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json` before you link anything else.
 5. Link each leaf issue to every user story it satisfies with `agent-issues link ISSx fixes USy`.
 6. Record dependencies with `agent-issues link BLOCKER_ISS blocks BLOCKED_ISS`.
 
-Publish blockers first so that later issues can link to real issue IDs.
+Publish blockers first, so later issues can link to real issue IDs.
 
-Return a concise summary that shows each created issue ID, its linked user stories, and its blockers.
+Return a short summary that shows each created issue ID, its linked user stories, and its blockers.
