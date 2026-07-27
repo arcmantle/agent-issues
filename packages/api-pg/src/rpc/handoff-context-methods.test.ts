@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import request from "supertest";
+import type { Server } from "node:http";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
@@ -45,6 +46,18 @@ describe("JSON-RPC gate: context/glossary methods", () => {
 		return createJsonRpcApp({ authProvider, createStore: (identity) => new PgStore(appPool, identity.tenantId) });
 	}
 
+	// One long-lived server for the file; see `entity-methods.test.ts` for why
+	// binding a fresh ephemeral port per request goes wrong under parallel runs.
+	let server: Server;
+
+	beforeAll(() => {
+		server = app().listen(0);
+	});
+
+	afterAll(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+
 	async function tenantAndToken() {
 		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
@@ -52,7 +65,7 @@ describe("JSON-RPC gate: context/glossary methods", () => {
 	}
 
 	async function call(token: string, method: string, params?: unknown) {
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({ jsonrpc: "2.0", id: 1, method, params: params ?? {} });

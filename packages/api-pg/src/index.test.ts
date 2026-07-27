@@ -35,7 +35,12 @@ describe("createApiServer", () => {
 
 	it("listens over real HTTP and serves the JSON-RPC gate end to end", async () => {
 		const authProvider = new LocalAuthProvider({ secret: "test-only-secret-never-used-in-production" });
-		handle = createApiServer({ authProvider, pool: appPool, port: 4491 });
+		handle = createApiServer({
+			authMetadata: { provider: "entra", tenantId: "tenant-a", clientId: "client-a" },
+			authProvider,
+			pool: appPool,
+			port: 4491
+		});
 		await new Promise<void>((resolve) => handle!.server.once("listening", resolve));
 
 		const tenantId = createTestTenantId();

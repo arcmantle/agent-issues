@@ -1,6 +1,6 @@
 import { HttpStore, LocalAuthProvider, type StorageDriver } from "@agent-issues/core";
 import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
@@ -31,7 +31,12 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 		await migratePgDatabase(adminPool);
 		appPool = createPgPool({ connectionString: APP_CONNECTION_STRING });
 		authProvider = new LocalAuthProvider({ secret: "test-only-secret-never-used-in-production" });
-		handle = createApiServer({ authProvider, pool: appPool, port: 4492 });
+		handle = createApiServer({
+			authMetadata: { provider: "entra", tenantId: "tenant-a", clientId: "client-a" },
+			authProvider,
+			pool: appPool,
+			port: 4492
+		});
 		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
 	});
 
@@ -48,7 +53,25 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 		return new HttpStore({ baseUrl: handle.url, bearerToken, tenantId });
 	}
 
-	runStorageDriverContractSuite({ label: "HttpStore (JSON-RPC gate over Postgres)", openStore: openHttpTestStore });
+	// Every identity-scoped store shares one tenant, so the contract can assert
+	// that two identities stay separate inside it rather than trivially passing
+	// because they were in different tenants all along.
+	let contractTenantId: string | undefined;
+	async function openHttpTestStoreForProject(projectIdentity: string): Promise<StorageDriver> {
+		contractTenantId ??= createTestTenantId();
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: contractTenantId });
+		return new HttpStore({ baseUrl: handle.url, bearerToken, tenantId: contractTenantId, projectIdentity });
+	}
+
+	beforeEach(() => {
+		contractTenantId = undefined;
+	});
+
+	runStorageDriverContractSuite({
+		label: "HttpStore (JSON-RPC gate over Postgres)",
+		openStore: openHttpTestStore,
+		openStoreForProject: openHttpTestStoreForProject
+	});
 
 	// Tenant administration is deliberately excluded from the shared contract
 	// (Postgres RLS makes it structurally per-backend, see

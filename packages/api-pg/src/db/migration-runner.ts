@@ -21,7 +21,10 @@ const LEDGER_TABLE = "schema_migrations";
  * migration content.
  */
 class PgMigrationEngine implements MigrationEngine {
-	constructor(private readonly client: PoolClient) {}
+	constructor(
+		private readonly client: PoolClient,
+		private readonly transactionIsManagedByCaller: boolean
+	) {}
 
 	async ensureLedgerTable(): Promise<void> {
 		await this.client.query(`
@@ -38,7 +41,7 @@ class PgMigrationEngine implements MigrationEngine {
 	}
 
 	async recordApplied(id: string): Promise<void> {
-		await this.client.query(`INSERT INTO ${LEDGER_TABLE} (id, applied_at) VALUES ($1, now())`, [id]);
+		await this.client.query(`INSERT INTO ${LEDGER_TABLE} (id, applied_at) VALUES ($1, clock_timestamp())`, [id]);
 	}
 
 	async backup(): Promise<void> {
@@ -48,6 +51,9 @@ class PgMigrationEngine implements MigrationEngine {
 	}
 
 	async withTransaction<T>(migrationId: string, fn: () => Promise<T>): Promise<T> {
+		if (this.transactionIsManagedByCaller) {
+			return fn();
+		}
 		await this.client.query("BEGIN");
 		try {
 			// Advisory-locked in place of a file-copy backup (Postgres has no
@@ -98,10 +104,18 @@ export function createPgMigrationConn(client: PoolClient): MigrationConn {
 export async function runMigrations(pool: Pool, migrations: Migration[]): Promise<void> {
 	const client = await pool.connect();
 	try {
-		const engine = new PgMigrationEngine(client);
-		const conn = createPgMigrationConn(client);
-		await runMigrationSequence(migrations, engine, conn);
+		await runMigrationsWithClient(client, migrations);
 	} finally {
 		client.release();
 	}
+}
+
+export async function runMigrationsWithClient(
+	client: PoolClient,
+	migrations: Migration[],
+	options?: { transactionIsManagedByCaller?: boolean }
+): Promise<void> {
+	const engine = new PgMigrationEngine(client, options?.transactionIsManagedByCaller === true);
+	const conn = createPgMigrationConn(client);
+	await runMigrationSequence(migrations, engine, conn);
 }

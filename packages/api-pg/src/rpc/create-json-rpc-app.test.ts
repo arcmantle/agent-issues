@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import request from "supertest";
+import type { Server } from "node:http";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
@@ -40,8 +41,20 @@ describe("JSON-RPC gate", () => {
 		return createJsonRpcApp({ authProvider, createStore: (identity) => new PgStore(appPool, identity.tenantId) });
 	}
 
+	// One long-lived server for the file; see `entity-methods.test.ts` for why
+	// binding a fresh ephemeral port per request goes wrong under parallel runs.
+	let server: Server;
+
+	beforeAll(() => {
+		server = app().listen(0);
+	});
+
+	afterAll(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+
 	it("rejects a request with no Authorization header before it ever reaches PgStore", async () => {
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Should not be created" } });
 
@@ -49,7 +62,7 @@ describe("JSON-RPC gate", () => {
 	});
 
 	it("rejects a request with an invalid bearer token", async () => {
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", "Bearer not-a-real-token")
 			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Should not be created" } });
@@ -61,7 +74,7 @@ describe("JSON-RPC gate", () => {
 		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Ship the gate" } });
@@ -81,7 +94,7 @@ describe("JSON-RPC gate", () => {
 		const spoofedTenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId: realTenantId });
 
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({
@@ -104,7 +117,7 @@ describe("JSON-RPC gate", () => {
 		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "not-a-real-kind", title: "Bad kind" } });
@@ -118,7 +131,7 @@ describe("JSON-RPC gate", () => {
 		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({ jsonrpc: "2.0", id: 1, method: "notARealMethod", params: {} });
@@ -131,7 +144,7 @@ describe("JSON-RPC gate", () => {
 		const tenantId = createTestTenantId();
 		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
 
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({ notJsonRpc: true });

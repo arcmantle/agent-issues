@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "./connection.js";
 import { cleanupTestTenants, createTestTenantId } from "./test-tenant-cleanup.js";
@@ -20,17 +21,26 @@ const APP_CONNECTION_STRING =
 describe("tenant administration", () => {
 	let adminPool: Pool;
 	let appPool: Pool;
+	let databasePool: Pool;
+	const schemaName = `tenant_admin_${randomUUID().replace(/-/g, "_")}`;
+	const schemaOptions = `-c search_path=${schemaName}`;
 
 	beforeAll(async () => {
-		adminPool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
+		databasePool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
+		await databasePool.query(`CREATE SCHEMA ${schemaName}`);
+		adminPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: schemaOptions });
 		await migratePgDatabase(adminPool);
-		appPool = createPgPool({ connectionString: APP_CONNECTION_STRING });
+		await databasePool.query(`GRANT USAGE ON SCHEMA ${schemaName} TO agent_issues_app`);
+		await databasePool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schemaName} TO agent_issues_app`);
+		appPool = new Pool({ connectionString: APP_CONNECTION_STRING, options: schemaOptions });
 	});
 
 	afterAll(async () => {
 		await cleanupTestTenants(adminPool);
 		await adminPool.end();
 		await appPool.end();
+		await databasePool.query(`DROP SCHEMA ${schemaName} CASCADE`);
+		await databasePool.end();
 	});
 
 	it("reports no tenants until the tenant has rows, then its own summary", async () => {

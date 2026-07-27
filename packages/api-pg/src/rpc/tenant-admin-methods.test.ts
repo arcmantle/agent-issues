@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import request from "supertest";
+import type { Server } from "node:http";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
@@ -24,26 +26,53 @@ const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";
  * delete or rename a tenant other than the auth-seam-resolved one.
  */
 describe("JSON-RPC gate: tenant-administration methods", () => {
+	let databasePool: Pool;
 	let adminPool: Pool;
 	let appPool: Pool;
 	let authProvider: LocalAuthProvider;
+	const schemaName = `rpc_tenant_admin_${randomUUID().replace(/-/g, "_")}`;
+	const schemaOptions = `-c search_path=${schemaName}`;
 
 	beforeAll(async () => {
-		adminPool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
+		databasePool = createPgPool({ connectionString: ADMIN_CONNECTION_STRING });
+		await databasePool.query(`CREATE SCHEMA ${schemaName}`);
+		adminPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: schemaOptions });
 		await migratePgDatabase(adminPool);
-		appPool = createPgPool({ connectionString: APP_CONNECTION_STRING });
+		await databasePool.query(`GRANT USAGE ON SCHEMA ${schemaName} TO agent_issues_app`);
+		await databasePool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schemaName} TO agent_issues_app`);
+		appPool = new Pool({ connectionString: APP_CONNECTION_STRING, options: schemaOptions });
 		authProvider = new LocalAuthProvider({ secret: LOCAL_AUTH_SECRET });
 	});
 
 	afterAll(async () => {
-		await cleanupTestTenants(adminPool);
-		await adminPool.end();
-		await appPool.end();
+		if (adminPool) {
+			await cleanupTestTenants(adminPool);
+			await adminPool.end();
+		}
+		if (appPool) {
+			await appPool.end();
+		}
+		if (databasePool) {
+			await databasePool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+			await databasePool.end();
+		}
 	});
 
 	function app() {
 		return createJsonRpcApp({ authProvider, createStore: (identity) => new PgStore(appPool, identity.tenantId) });
 	}
+
+	// One long-lived server for the file; see `entity-methods.test.ts` for why
+	// binding a fresh ephemeral port per request goes wrong under parallel runs.
+	let server: Server;
+
+	beforeAll(() => {
+		server = app().listen(0);
+	});
+
+	afterAll(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
 
 	async function tenantAndToken() {
 		const tenantId = createTestTenantId();
@@ -52,7 +81,7 @@ describe("JSON-RPC gate: tenant-administration methods", () => {
 	}
 
 	async function call(token: string, method: string, params?: unknown) {
-		const response = await request(app())
+		const response = await request(server)
 			.post("/rpc")
 			.set("authorization", `Bearer ${token}`)
 			.send({ jsonrpc: "2.0", id: 1, method, params: params ?? {} });

@@ -41,11 +41,11 @@ function mapDelta(delta: LedgerRow) {
 	};
 }
 
-export async function exportCanonicalChains(client: TenantExecutor, tenantId: string): Promise<CanonicalChainBundle> {
-	const entitiesResult = await client.execute(sql`SELECT entities.*, (SELECT relations.from_id FROM relations WHERE relations.tenant_id=entities.tenant_id AND relations.to_id=entities.id AND relations.type IN ('contains','owns','records','tracks','creates','decomposes') ORDER BY relations.created_at, relations.from_id LIMIT 1) AS parent_id FROM entities WHERE tenant_id=${tenantId}`);
-	const contextsResult = await client.execute(sql`SELECT * FROM contexts WHERE tenant_id=${tenantId}`);
-	const termsResult = await client.execute(sql`SELECT * FROM context_terms WHERE tenant_id=${tenantId}`);
-	const ledgerResult = await client.execute(sql`SELECT * FROM revision_entries WHERE tenant_id=${tenantId} ORDER BY project_id,record_kind,record_key,revision`);
+export async function exportCanonicalChains(client: TenantExecutor): Promise<CanonicalChainBundle> {
+	const entitiesResult = await client.execute(sql`SELECT entities.*, (SELECT relations.from_id FROM relations WHERE relations.tenant_id=entities.tenant_id AND relations.to_id=entities.id AND relations.type IN ('contains','owns','records','tracks','creates','decomposes') ORDER BY relations.created_at, relations.from_id LIMIT 1) AS parent_id FROM entities WHERE tenant_id=${client.tenantId}`);
+	const contextsResult = await client.execute(sql`SELECT * FROM contexts WHERE tenant_id=${client.tenantId}`);
+	const termsResult = await client.execute(sql`SELECT * FROM context_terms WHERE tenant_id=${client.tenantId}`);
+	const ledgerResult = await client.execute(sql`SELECT * FROM revision_entries WHERE tenant_id=${client.tenantId} ORDER BY project_id,record_kind,record_key,revision`);
 	const ledgerRows = ledgerResult.rows as LedgerRow[];
 	return {
 		entities: (entitiesResult.rows as EntityHeadRow[]).map((row): CanonicalEntityChain => {
@@ -57,40 +57,40 @@ export async function exportCanonicalChains(client: TenantExecutor, tenantId: st
 	};
 }
 
-export async function importCanonicalChains(client: TenantExecutor, tenantId: string, incoming: CanonicalChainBundle): Promise<CanonicalChainImportResult> {
-	const current = await exportCanonicalChains(client, tenantId);
+export async function importCanonicalChains(client: TenantExecutor, incoming: CanonicalChainBundle): Promise<CanonicalChainImportResult> {
+	const current = await exportCanonicalChains(client);
 	const merged = mergeCanonicalChainBundles(current, incoming);
 	const result: CanonicalChainImportResult = { entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] };
 	const currentEntities = new Map(current.entities.map((chain) => [chain.head.id, chain]));
 	for (const chain of merged.entities) {
 		const existing = currentEntities.get(chain.head.id);
 		if (existing?.head.revision === chain.head.revision) continue;
-		await writeEntity(client, tenantId, chain, existing === undefined, resolveCanonicalProjectId(chain, merged.entities));
+		await writeEntity(client, chain, existing === undefined, resolveCanonicalProjectId(chain, merged.entities));
 		(existing ? result.entitiesAdvanced : result.entitiesCreated).push(chain.head.id);
 	}
-	await rebuildStructuralParents(client, tenantId, merged.entities);
+	await rebuildStructuralParents(client, merged.entities);
 	const currentContexts = new Map(current.contexts.map((chain) => [chain.head.id, chain]));
 	for (const chain of merged.contexts) {
 		const existing = currentContexts.get(chain.head.id);
 		if (existing?.head.revision === chain.head.revision) continue;
-		await writeContext(client, tenantId, chain, existing === undefined);
+		await writeContext(client, chain, existing === undefined);
 		(existing ? result.contextsAdvanced : result.contextsCreated).push(chain.head.key);
 	}
 	const currentTerms = new Map(current.contextTerms.map((chain) => [chain.head.id, chain]));
 	for (const chain of merged.contextTerms) {
 		const existing = currentTerms.get(chain.head.id);
 		if (existing?.head.revision === chain.head.revision) continue;
-		await writeTerm(client, tenantId, chain, existing === undefined);
+		await writeTerm(client, chain, existing === undefined);
 		(existing ? result.contextTermsAdvanced : result.contextTermsCreated).push(`${chain.head.contextKey}:${chain.head.term}`);
 	}
 	return result;
 }
 
-async function writeEntity(client: TenantExecutor, tenantId: string, chain: CanonicalEntityChain, created: boolean, projectId: string): Promise<void> {
+async function writeEntity(client: TenantExecutor, chain: CanonicalEntityChain, created: boolean, projectId: string): Promise<void> {
 	const head = chain.head;
-	if (created) await client.execute(sql`INSERT INTO entities (tenant_id,id,reference,kind,title,status,body,body_source,revision,content_hash,tombstone,project_id,created_at,updated_at) VALUES (${tenantId},${head.id}::uuid,${head.reference},${head.kind},${head.title},${head.status},${head.body},${head.bodySource},${head.revision},${head.contentHash},${head.tombstone},${projectId},${head.createdAt},${head.updatedAt})`);
-	else await client.execute(sql`UPDATE entities SET title=${head.title},status=${head.status},body=${head.body},body_source=${head.bodySource},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone},project_id=${projectId},updated_at=${head.updatedAt} WHERE tenant_id=${tenantId} AND id=${head.id}`);
-	for (const delta of chain.deltas) await client.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${tenantId},${projectId},'entity',${encodeEntityRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
+	if (created) await client.execute(sql`INSERT INTO entities (tenant_id,id,reference,kind,title,status,body,body_source,revision,content_hash,tombstone,project_id,created_at,updated_at) VALUES (${client.tenantId},${head.id}::uuid,${head.reference},${head.kind},${head.title},${head.status},${head.body},${head.bodySource},${head.revision},${head.contentHash},${head.tombstone},${projectId},${head.createdAt},${head.updatedAt})`);
+	else await client.execute(sql`UPDATE entities SET title=${head.title},status=${head.status},body=${head.body},body_source=${head.bodySource},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone},project_id=${projectId},updated_at=${head.updatedAt} WHERE tenant_id=${client.tenantId} AND id=${head.id}`);
+	for (const delta of chain.deltas) await client.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${client.tenantId},${projectId},'entity',${encodeEntityRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
 }
 
 function resolveCanonicalProjectId(chain: CanonicalEntityChain, chains: CanonicalEntityChain[]): string {
@@ -114,52 +114,52 @@ function resolveCanonicalProjectId(chain: CanonicalEntityChain, chains: Canonica
 	return current.head.id;
 }
 
-async function rebuildStructuralParents(client: TenantExecutor, tenantId: string, chains: CanonicalEntityChain[]): Promise<void> {
+async function rebuildStructuralParents(client: TenantExecutor, chains: CanonicalEntityChain[]): Promise<void> {
 	for (const chain of chains) {
-		await client.execute(sql`DELETE FROM relations WHERE tenant_id=${tenantId} AND to_id=${chain.head.id} AND type IN ('contains','owns','records','tracks','creates','decomposes')`);
+		await client.execute(sql`DELETE FROM relations WHERE tenant_id=${client.tenantId} AND to_id=${chain.head.id} AND type IN ('contains','owns','records','tracks','creates','decomposes')`);
 		if (!chain.head.parentId || chain.head.tombstone) continue;
 		const parent = chains.find((candidate) => candidate.head.id === chain.head.parentId)?.head;
 		if (!parent) throw new Error(`Missing canonical parent ${chain.head.parentId} for ${chain.head.id}.`);
 		const relationType = getAllowedRelationType(parent.kind, chain.head.kind);
 		if (!relationType || !isStructuralRelationType(relationType)) throw new Error(`Invalid canonical parent ${parent.id} for ${chain.head.id}.`);
-		await client.execute(sql`INSERT INTO relations (tenant_id,from_id,to_id,type,created_at) VALUES (${tenantId},${parent.id},${chain.head.id},${relationType},${chain.head.updatedAt}) ON CONFLICT DO NOTHING`);
-		await client.execute(sql`UPDATE entities SET project_id=CASE WHEN ${parent.kind}='project' THEN ${parent.id} ELSE (SELECT project_id FROM entities WHERE tenant_id=${tenantId} AND id=${parent.id}) END WHERE tenant_id=${tenantId} AND id=${chain.head.id}`);
+		await client.execute(sql`INSERT INTO relations (tenant_id,from_id,to_id,type,created_at) VALUES (${client.tenantId},${parent.id},${chain.head.id},${relationType},${chain.head.updatedAt}) ON CONFLICT DO NOTHING`);
+		await client.execute(sql`UPDATE entities SET project_id=CASE WHEN ${parent.kind}='project' THEN ${parent.id} ELSE (SELECT project_id FROM entities WHERE tenant_id=${client.tenantId} AND id=${parent.id}) END WHERE tenant_id=${client.tenantId} AND id=${chain.head.id}`);
 	}
 }
 
-async function writeContext(client: TenantExecutor, tenantId: string, chain: CanonicalContextChain, created: boolean): Promise<void> {
+async function writeContext(client: TenantExecutor, chain: CanonicalContextChain, created: boolean): Promise<void> {
 	const head = chain.head;
-	if (created) await client.execute(sql`INSERT INTO contexts (tenant_id,id,reference,key,scope_entity_id,title,summary,revision,content_hash,created_at,updated_at) VALUES (${tenantId},${head.id}::uuid,${head.reference},${head.key},${head.scopeEntityId},${head.title},${head.summary},${head.revision},${head.contentHash},${head.createdAt},${head.updatedAt})`);
-	else await client.execute(sql`UPDATE contexts SET scope_entity_id=${head.scopeEntityId},title=${head.title},summary=${head.summary},revision=${head.revision},content_hash=${head.contentHash},updated_at=${head.updatedAt} WHERE tenant_id=${tenantId} AND key=${head.key}`);
-	const projectId = await getContextProjectId(client, tenantId, head.key, head.scopeEntityId);
-	for (const delta of chain.deltas) await client.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${tenantId},${projectId},'context',${encodeContextRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
+	if (created) await client.execute(sql`INSERT INTO contexts (tenant_id,id,reference,key,scope_entity_id,title,summary,revision,content_hash,created_at,updated_at) VALUES (${client.tenantId},${head.id}::uuid,${head.reference},${head.key},${head.scopeEntityId},${head.title},${head.summary},${head.revision},${head.contentHash},${head.createdAt},${head.updatedAt})`);
+	else await client.execute(sql`UPDATE contexts SET scope_entity_id=${head.scopeEntityId},title=${head.title},summary=${head.summary},revision=${head.revision},content_hash=${head.contentHash},updated_at=${head.updatedAt} WHERE tenant_id=${client.tenantId} AND key=${head.key}`);
+	const projectId = await getContextProjectId(client, head.key, head.scopeEntityId);
+	for (const delta of chain.deltas) await client.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${client.tenantId},${projectId},'context',${encodeContextRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
 }
 
-async function writeTerm(client: TenantExecutor, tenantId: string, chain: CanonicalContextTermChain, created: boolean): Promise<void> {
+async function writeTerm(client: TenantExecutor, chain: CanonicalContextTermChain, created: boolean): Promise<void> {
 	const head = chain.head;
-	if (created) await client.execute(sql`INSERT INTO context_terms (tenant_id,id,context_key,term,definition,avoid_terms,revision,content_hash,tombstone,created_at,updated_at) VALUES (${tenantId},${head.id}::uuid,${head.contextKey},${head.term},${head.definition},${JSON.stringify(head.avoid)},${head.revision},${head.contentHash},${head.tombstone},${head.createdAt},${head.updatedAt})`);
-	else await client.execute(sql`UPDATE context_terms SET context_key=${head.contextKey},term=${head.term},definition=${head.definition},avoid_terms=${JSON.stringify(head.avoid)},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone},updated_at=${head.updatedAt} WHERE tenant_id=${tenantId} AND id=${head.id}::uuid`);
-	const projectId = await getContextProjectId(client, tenantId, head.contextKey);
-	for (const delta of chain.deltas) await client.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${tenantId},${projectId},'context-term',${encodeContextTermRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
+	if (created) await client.execute(sql`INSERT INTO context_terms (tenant_id,id,context_key,term,definition,avoid_terms,revision,content_hash,tombstone,created_at,updated_at) VALUES (${client.tenantId},${head.id}::uuid,${head.contextKey},${head.term},${head.definition},${JSON.stringify(head.avoid)},${head.revision},${head.contentHash},${head.tombstone},${head.createdAt},${head.updatedAt})`);
+	else await client.execute(sql`UPDATE context_terms SET context_key=${head.contextKey},term=${head.term},definition=${head.definition},avoid_terms=${JSON.stringify(head.avoid)},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone},updated_at=${head.updatedAt} WHERE tenant_id=${client.tenantId} AND id=${head.id}::uuid`);
+	const projectId = await getContextProjectId(client, head.contextKey);
+	for (const delta of chain.deltas) await client.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${client.tenantId},${projectId},'context-term',${encodeContextTermRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
 }
 
-async function getEntityProjectId(client: TenantExecutor, tenantId: string, entityId: string): Promise<string> {
-	const result = await client.execute(sql`SELECT project_id FROM entities WHERE tenant_id=${tenantId} AND id=${entityId}`);
+async function getEntityProjectId(client: TenantExecutor, entityId: string): Promise<string> {
+	const result = await client.execute(sql`SELECT project_id FROM entities WHERE tenant_id=${client.tenantId} AND id=${entityId}`);
 	const projectId = (result.rows[0] as { project_id: string | null } | undefined)?.project_id;
 	if (!projectId) throw new Error(`Cannot resolve project for entity ${entityId}.`);
 	return projectId;
 }
 
-async function getContextProjectId(client: TenantExecutor, tenantId: string, contextKey: string, scopeEntityId?: string | null): Promise<string> {
-	if (scopeEntityId) return getEntityProjectId(client, tenantId, scopeEntityId);
+async function getContextProjectId(client: TenantExecutor, contextKey: string, scopeEntityId?: string | null): Promise<string> {
+	if (scopeEntityId) return getEntityProjectId(client, scopeEntityId);
 	if (contextKey === "default") return deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
 	if (contextKey.startsWith("default:")) {
 		const projectId = contextKey.slice("default:".length);
 		return projectId === DEFAULT_PROJECT_ID ? deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId : projectId;
 	}
-	const result = await client.execute(sql`SELECT scope_entity_id FROM contexts WHERE tenant_id=${tenantId} AND key=${contextKey}`);
+	const result = await client.execute(sql`SELECT scope_entity_id FROM contexts WHERE tenant_id=${client.tenantId} AND key=${contextKey}`);
 	const storedScope = (result.rows[0] as { scope_entity_id: string | null } | undefined)?.scope_entity_id;
-	if (storedScope) return getEntityProjectId(client, tenantId, storedScope);
+	if (storedScope) return getEntityProjectId(client, storedScope);
 	throw new Error(`Cannot resolve project for context ${contextKey}.`);
 }
 

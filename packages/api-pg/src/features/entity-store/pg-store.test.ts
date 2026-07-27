@@ -73,6 +73,53 @@ describe("PgStore entity lifecycle", () => {
 		});
 	});
 
+	it("creates a parent-less entity under the request's own project identity, not the sentinel", async () => {
+		const tenantId = createTestTenantId();
+		const store = new PgStore(appPool, tenantId, "fresh-workspace");
+
+		const initiative = await store.createEntity({ kind: "initiative", title: "First initiative" });
+		const adr = await store.createEntity({ kind: "adr", title: "Project ADR" });
+
+		// The sentinel PROJ0 is excluded from discovery, so an initiative that
+		// wrongly landed there shows up as a project with zero initiatives -
+		// which is exactly what happened before this identity was minted on
+		// first write instead of silently falling back to PROJ0.
+		const discovery = await store.getProjectDiscovery();
+		expect(discovery).toEqual({
+			kind: "available",
+			projects: [
+				expect.objectContaining({
+					project: expect.objectContaining({ kind: "project", title: "fresh-workspace" }),
+					epicCount: 1,
+					initiativeCount: 1
+				})
+			]
+		});
+		const projectId = discovery.kind === "available" ? discovery.projects[0]!.project.id : "";
+
+		const snapshot = await store.getDatabaseSnapshot({ projectId });
+		expect(snapshot.kind).toBe("available");
+		if (snapshot.kind === "available") {
+			expect(snapshot.snapshot.projectAdrs.map((entity) => entity.id)).toContain(adr.id);
+		}
+
+		// The glossary path already minted per-identity projects; both paths
+		// now resolve to the same one rather than disagreeing about which
+		// project this workspace is.
+		const contexts = await store.listContexts();
+		expect(contexts.contexts.map((item) => item.context.key)).toContain(`default:${projectId}`);
+
+		// A second request for the same identity joins the project rather than minting another.
+		const reopened = new PgStore(appPool, tenantId, "fresh-workspace");
+		await reopened.createEntity({ kind: "initiative", title: "Second initiative" });
+		const secondDiscovery = await reopened.getProjectDiscovery();
+		expect(secondDiscovery).toEqual({
+			kind: "available",
+			projects: [expect.objectContaining({ project: expect.objectContaining({ id: projectId }), initiativeCount: 2 })]
+		});
+		expect(await reopened.getEntityDetails(initiative.id)).toBeDefined();
+	});
+
 	it("lists entities of a kind and records an explicit author on the history entry", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 
@@ -145,6 +192,23 @@ describe("PgStore entity lifecycle", () => {
 		);
 
 		expect(rows).toEqual([{ title: "Tenant A's executor-visible initiative" }]);
+	});
+
+	it("changes the snapshot signature when a relation is swapped without changing the count", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const issueA = await store.createEntity({ kind: "issue", title: "Issue A" });
+		const issueB = await store.createEntity({ kind: "issue", title: "Issue B" });
+		await store.linkEntities({ fromId: issueA.id, toId: issueB.id, relationType: "blocks" });
+
+		const before = await store.getSnapshotSignature();
+
+		// Reversing the direction leaves the relation count identical, so a
+		// count-only signature would report "nothing changed" and leave a
+		// polling client on a stale view.
+		await store.unlinkEntities({ fromId: issueA.id, toId: issueB.id, relationType: "blocks" });
+		await store.linkEntities({ fromId: issueB.id, toId: issueA.id, relationType: "blocks" });
+
+		expect(await store.getSnapshotSignature()).not.toBe(before);
 	});
 
 	it("creates, reads, updates, and deletes an entity through the tenant executor", async () => {
@@ -361,14 +425,21 @@ describe("PgStore entity lifecycle", () => {
 
 	it("keeps project-level ADRs within the explicitly selected project snapshot", async () => {
 		const tenantId = createTestTenantId();
+		// Each identity registers its own project on first use, so seeding one
+		// explicitly here would make the identity resolve to two projects.
 		const selectedStore = new PgStore(appPool, tenantId, "Selected project");
-		const selectedProject = await selectedStore.createEntity({ kind: "project", title: "Selected project" });
 		const selectedAdr = await selectedStore.createEntity({ kind: "adr", title: "Selected project ADR" });
 
 		const otherStore = new PgStore(appPool, tenantId, "Other project");
-		await otherStore.createEntity({ kind: "project", title: "Other project" });
 		const otherAdr = await otherStore.createEntity({ kind: "adr", title: "Other project ADR" });
 
+		const discovery = await selectedStore.getProjectDiscovery();
+		expect(discovery.kind).toBe("available");
+		if (discovery.kind !== "available") {
+			return;
+		}
+
+		const selectedProject = discovery.projects.find((entry) => entry.project.title === "Selected project")!.project;
 		const result = await selectedStore.getDatabaseSnapshot({ projectId: selectedProject.id });
 		expect(result).toEqual(expect.objectContaining({ kind: "available" }));
 		if (result.kind !== "available") {

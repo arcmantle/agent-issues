@@ -11,6 +11,12 @@ export { createJsonRpcApp, type CreateJsonRpcAppOptions } from "@agent-issues/co
 export { EntraIdAuthProvider, type EntraIdAuthProviderOptions } from "./auth/entra-id-auth-provider.js";
 export { LocalAuthProvider, type LocalAuthProviderOptions } from "@agent-issues/core";
 
+export type ApiAuthMetadata = {
+	provider: "entra";
+	tenantId: string;
+	clientId: string;
+};
+
 /**
  * Configuration for the agent-issues cloud API host: the single Postgres
  * gate (ADR13). `pool` and `authProvider` are required with no defaults, so
@@ -22,6 +28,7 @@ export interface ApiServerOptions {
 	port?: number;
 	pool: Pool;
 	authProvider: AuthProvider;
+	authMetadata: ApiAuthMetadata;
 }
 
 export interface ApiServerHandle {
@@ -36,6 +43,9 @@ export function createApiServer(options: ApiServerOptions): ApiServerHandle {
 	const app = createJsonRpcApp({
 		authProvider: options.authProvider,
 		createStore: (identity, projectIdentity) => new PgStore(options.pool, identity.tenantId, projectIdentity)
+	});
+	app.get("/.well-known/agent-issues", (_request, response) => {
+		response.json({ auth: options.authMetadata });
 	});
 	const server = createServer(app);
 

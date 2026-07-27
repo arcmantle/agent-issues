@@ -32,7 +32,7 @@ import type {
 import { measureHistory } from "@agent-issues/core";
 import type { Pool } from "pg";
 
-import { withTenantTransaction } from "./db/connection.js";
+import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
 import { exportCanonicalChains, importCanonicalChains } from "./features/synchronize/pg-canonical-chain-store.js";
 import { deleteTenant, listTenants, renameTenant } from "./db/tenant-admin.js";
 import {
@@ -60,6 +60,7 @@ import {
 	getSnapshotSignature,
 	linkEntities,
 	listAllRelations,
+	primeCurrentProjectId,
 	listEntities,
 	listEntityHistory,
 	listOrphans,
@@ -111,12 +112,66 @@ export class PgStore implements StorageDriver {
 		private readonly projectIdentity?: string
 	) {}
 
+	/**
+	 * The project this store settled on, kept for its lifetime. See
+	 * `transaction` for why it is resolved once rather than per call.
+	 */
+	protected currentProjectId?: string;
+
+	/**
+	 * One `withTenantTransaction` per store method (ADR9), carrying this
+	 * request's `projectIdentity` onto the executor so project-scoped reads can
+	 * resolve it.
+	 *
+	 * The project is resolved on this store's FIRST transaction and remembered
+	 * for its lifetime, which is what makes cloud behave like local rather than
+	 * merely look like it: local resolves `currentProjectId` once when the
+	 * database is opened, so a session that later creates a second project
+	 * keeps operating as the project it opened against. Resolving lazily or
+	 * per-transaction instead would make the same sequence start failing the
+	 * moment a second project appeared. Only harvested after `fn` succeeds - a
+	 * rolled-back transaction may have resolved to a project that no longer
+	 * exists.
+	 */
+	protected transaction<T>(fn: (client: TenantExecutor) => Promise<T>): Promise<T> {
+		return withTenantTransaction(
+			this.pool,
+			this.tenantId,
+			async (client) => {
+				// Awaited before `fn` runs, not merely started: the advisory lock
+				// inside project registration is transaction-scoped, so it cannot
+				// serialize two resolutions racing within this same transaction.
+				// Letting `fn` start first is how a store ends up minting two
+				// projects for one identity and making it ambiguous forever.
+				const projectId = this.currentProjectId ?? (await primeCurrentProjectId(client));
+				client.currentProjectId = Promise.resolve(projectId);
+
+				const result = await fn(client);
+				this.currentProjectId = projectId;
+				return result;
+			},
+			this.projectIdentity
+		);
+	}
+
+	/**
+	 * For the methods that legitimately span every project - project discovery
+	 * (the call that tells you which projects exist), whole-tenant synchronize,
+	 * and tenant administration. These deliberately skip project resolution:
+	 * requiring one would make discovery fail in exactly the multi-project
+	 * tenants it exists for, and would let a `deleteTenant` call register a
+	 * project in the tenant it is about to remove.
+	 */
+	protected tenantWideTransaction<T>(fn: (client: TenantExecutor) => Promise<T>): Promise<T> {
+		return withTenantTransaction(this.pool, this.tenantId, fn, this.projectIdentity);
+	}
+
 	public async exportCanonicalChains() {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => exportCanonicalChains(client, this.tenantId));
+		return this.tenantWideTransaction((client) => exportCanonicalChains(client));
 	}
 
 	public async importCanonicalChains(bundle: CanonicalChainBundle) {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => importCanonicalChains(client, this.tenantId, bundle));
+		return this.tenantWideTransaction((client) => importCanonicalChains(client, bundle));
 	}
 
 	public async getHistoryDiagnostics() {
@@ -132,133 +187,129 @@ export class PgStore implements StorageDriver {
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => createEntity(client, this.tenantId, input, this.projectIdentity));
+		return this.transaction((client) => createEntity(client, input, this.projectIdentity));
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getEntityDetails(client, this.tenantId, entityId));
+		return this.transaction((client) => getEntityDetails(client, entityId));
 	}
 
 	public async queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => queryEntityRelations(client, this.tenantId, input));
+		return this.transaction((client) => queryEntityRelations(client, input));
 	}
 
 	public async listEntities(kind: string): Promise<EntityRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listEntities(client, this.tenantId, kind));
+		return this.transaction((client) => listEntities(client, kind));
 	}
 
 	public async queryEntities(input: QueryEntitiesInput): Promise<QueryEntitiesResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => queryEntities(client, this.tenantId, input));
+		return this.transaction((client) => queryEntities(client, input));
 	}
 
 	public async listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listEntityHistory(client, this.tenantId, entityId));
+		return this.transaction((client) => listEntityHistory(client, entityId));
 	}
 
 	public async listAllRelations(): Promise<RelationRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listAllRelations(client, this.tenantId));
+		return this.transaction((client) => listAllRelations(client));
 	}
 
 	public async applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => applyRelations(client, this.tenantId, relations));
+		return this.transaction((client) => applyRelations(client, relations));
 	}
 
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => linkEntities(client, this.tenantId, input));
+		return this.transaction((client) => linkEntities(client, input));
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => unlinkEntities(client, this.tenantId, input));
+		return this.transaction((client) => unlinkEntities(client, input));
 	}
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => updateEntityStatus(client, this.tenantId, input));
+		return this.transaction((client) => updateEntityStatus(client, input));
 	}
 
 	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => updateEntity(client, this.tenantId, input));
+		return this.transaction((client) => updateEntity(client, input));
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => setEntityBody(client, this.tenantId, input));
+		return this.transaction((client) => setEntityBody(client, input));
 	}
 
 	public async materializeEntityRevision(input: { entityId: string; revision: number }) {
-		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => materializeEntityRevision(client, this.tenantId, input));
+		const result = await this.transaction((client) => materializeEntityRevision(client, input));
 		recordHistoryMaterialization(this.pool, this.tenantId, "entity", result.headRevision, result.targetRevision);
 		return result;
 	}
 
 	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => restoreEntityRevision(client, this.tenantId, input));
+		const result = await this.transaction((client) => restoreEntityRevision(client, input));
 		recordHistoryMaterialization(this.pool, this.tenantId, "entity", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => archiveEntity(client, this.tenantId, input));
+		return this.transaction((client) => archiveEntity(client, input));
 	}
 
 	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => moveEntity(client, this.tenantId, input));
+		return this.transaction((client) => moveEntity(client, input));
 	}
 
 	public async deleteEntity(input: { entityId: string }): Promise<DeleteResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => deleteEntity(client, this.tenantId, input));
+		return this.transaction((client) => deleteEntity(client, input));
 	}
 
 	public async listOrphans(kind?: string): Promise<EntityRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listOrphans(client, this.tenantId, kind));
+		return this.transaction((client) => listOrphans(client, kind));
 	}
 
 	public async listProjectAdrs(): Promise<EntityRecord[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listProjectAdrs(client, this.tenantId));
+		return this.transaction((client) => listProjectAdrs(client));
 	}
 
 	public async getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getInitiativeBundle(client, this.tenantId, initiativeId));
+		return this.transaction((client) => getInitiativeBundle(client, initiativeId));
 	}
 
 	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
 	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
 	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
 		if (input) {
-			return withTenantTransaction(this.pool, this.tenantId, (client) =>
-				getDatabaseSnapshot(client, this.tenantId, this.projectIdentity, input)
-			);
+			return this.transaction((client) => getDatabaseSnapshot(client, this.projectIdentity, input));
 		}
 
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getDatabaseSnapshot(client, this.tenantId, this.projectIdentity));
+		return this.transaction((client) => getDatabaseSnapshot(client, this.projectIdentity));
 	}
 
 	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getProjectDiscovery(client, this.tenantId, input));
+		return this.tenantWideTransaction((client) => getProjectDiscovery(client, input));
 	}
 
 	public async getSnapshotSignature(): Promise<string> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getSnapshotSignature(client, this.tenantId));
+		return this.tenantWideTransaction((client) => getSnapshotSignature(client));
 	}
 
 	public async listContexts(): Promise<ContextListResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listContexts(client, this.tenantId, this.projectIdentity));
+		return this.transaction((client) => listContexts(client, this.projectIdentity));
 	}
 
 	public async getContextDetails(input?: { scopeRef?: string }): Promise<ContextDetails> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getContextDetails(client, this.tenantId, this.projectIdentity, input));
+		return this.transaction((client) => getContextDetails(client, this.projectIdentity, input));
 	}
 
 	public async getContextDirectory(): Promise<ContextDirectory> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => getContextDirectory(client, this.tenantId, this.projectIdentity));
+		return this.transaction((client) => getContextDirectory(client, this.projectIdentity));
 	}
 
 	public async queryContextDirectory(input: QueryContextDirectoryInput = {}): Promise<QueryContextDirectoryResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) =>
-			queryContextDirectory(client, this.tenantId, this.projectIdentity, input)
-		);
+		return this.transaction((client) => queryContextDirectory(client, this.projectIdentity, input));
 	}
 
 	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => upsertContext(client, this.tenantId, this.projectIdentity, input));
+		return this.transaction((client) => upsertContext(client, this.projectIdentity, input));
 	}
 
 	public async defineContextTerm(input: {
@@ -270,47 +321,47 @@ export class PgStore implements StorageDriver {
 		expectedRevision?: number;
 		expectedContentHash?: string;
 	}): Promise<DefineContextTermResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => defineContextTerm(client, this.tenantId, this.projectIdentity, input));
+		return this.transaction((client) => defineContextTerm(client, this.projectIdentity, input));
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => forgetContextTerm(client, this.tenantId, this.projectIdentity, input));
+		return this.transaction((client) => forgetContextTerm(client, this.projectIdentity, input));
 	}
 
 	public async materializeContextRevision(input: { scopeRef?: string; revision: number }) {
-		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => materializeContextRevision(client, this.tenantId, this.projectIdentity, input));
+		const result = await this.transaction((client) => materializeContextRevision(client, this.projectIdentity, input));
 		recordHistoryMaterialization(this.pool, this.tenantId, "context", result.headRevision, result.targetRevision);
 		return result;
 	}
 
 	public async materializeContextTermRevision(input: { scopeRef?: string; term: string; revision: number }) {
-		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => materializeContextTermRevision(client, this.tenantId, this.projectIdentity, input));
+		const result = await this.transaction((client) => materializeContextTermRevision(client, this.projectIdentity, input));
 		recordHistoryMaterialization(this.pool, this.tenantId, "context-term", result.headRevision, result.targetRevision);
 		return result;
 	}
 
 	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => restoreContextRevision(client, this.tenantId, this.projectIdentity, input));
+		const result = await this.transaction((client) => restoreContextRevision(client, this.projectIdentity, input));
 		recordHistoryMaterialization(this.pool, this.tenantId, "context", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await withTenantTransaction(this.pool, this.tenantId, (client) => restoreContextTermRevision(client, this.tenantId, this.projectIdentity, input));
+		const result = await this.transaction((client) => restoreContextTermRevision(client, this.projectIdentity, input));
 		recordHistoryMaterialization(this.pool, this.tenantId, "context-term", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async listTenants(): Promise<TenantSummary[]> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => listTenants(client, this.tenantId));
+		return this.tenantWideTransaction((client) => listTenants(client, this.tenantId));
 	}
 
 	public async deleteTenant(tenantId: string): Promise<DeleteTenantResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => deleteTenant(client, this.tenantId, tenantId));
+		return this.tenantWideTransaction((client) => deleteTenant(client, this.tenantId, tenantId));
 	}
 
 	public async renameTenant(previousTenantId: string, newTenantId: string): Promise<RenameTenantResult> {
-		return withTenantTransaction(this.pool, this.tenantId, (client) => renameTenant(client, this.tenantId, previousTenantId, newTenantId));
+		return this.tenantWideTransaction((client) => renameTenant(client, this.tenantId, previousTenantId, newTenantId));
 	}
 
 	public async close(): Promise<void> {
