@@ -63,10 +63,77 @@ describe("Drizzle runtime access boundary", () => {
 		expect(findRuntimeAccessBoundaryViolations(root)).toEqual([
 			{
 				file: "api-local/src/features/widgets/widget-store.ts",
+				line: 1,
+				driver: "better-sqlite3",
+				method: "import"
+			},
+			{
+				file: "api-local/src/features/widgets/widget-store.ts",
 				line: 4,
 				driver: "better-sqlite3",
 				method: "prepare"
 			}
+		]);
+	});
+
+	it("reports native better-sqlite3 construction outside the private adapter", () => {
+		const root = writeFixture(
+			"api-local/src/db/source-profile.ts",
+			[
+				'import Database from "better-sqlite3";',
+				"",
+				"export function open(path: string) {",
+				"\tconst db = new Database(path);",
+				"\treturn db;",
+				"}",
+				""
+			].join("\n")
+		);
+
+		expect(findRuntimeAccessBoundaryViolations(root)).toEqual([
+			{
+				file: "api-local/src/db/source-profile.ts",
+				line: 1,
+				driver: "better-sqlite3",
+				method: "import"
+			},
+			{
+				file: "api-local/src/db/source-profile.ts",
+				line: 4,
+				driver: "better-sqlite3",
+				method: "construct"
+			}
+		]);
+	});
+
+	it("reports escape-hatch property access and all raw sqlite wrapper calls", () => {
+		const root = writeFixture(
+			"api-local/src/features/widgets/widget-store.ts",
+			[
+				"type SqliteLike = { db: unknown; identityToken: object; pragma(q: string): unknown; exec(q: string): void; transaction<T>(fn: () => T): T; get(q: string): unknown; run(q: string): unknown; all(q: string): unknown[]; };",
+				"",
+				"export function inspect(connection: SqliteLike) {",
+				"\tvoid connection.db;",
+				"\tvoid connection.identityToken;",
+				"\tconnection.pragma('foreign_keys = ON');",
+				"\tconnection.exec('BEGIN');",
+				"\tconnection.transaction(() => connection.run('SELECT 1'));",
+				"\tconnection.get('SELECT 1');",
+				"\tconnection.all('SELECT 1');",
+				"}",
+				""
+			].join("\n")
+		);
+
+		expect(findRuntimeAccessBoundaryViolations(root)).toEqual([
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 4, driver: "better-sqlite3", method: "db" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 5, driver: "better-sqlite3", method: "identityToken" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 6, driver: "better-sqlite3", method: "pragma" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 7, driver: "better-sqlite3", method: "exec" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 8, driver: "better-sqlite3", method: "transaction" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 8, driver: "better-sqlite3", method: "run" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 9, driver: "better-sqlite3", method: "get" },
+			{ file: "api-local/src/features/widgets/widget-store.ts", line: 10, driver: "better-sqlite3", method: "all" }
 		]);
 	});
 
@@ -102,6 +169,23 @@ describe("Drizzle runtime access boundary", () => {
 				"export async function beginTenantTransaction(client: PoolClient, tenantId: string) {",
 				'\tawait client.query("BEGIN");',
 				'\tawait client.query("SELECT set_config(\'app.tenant_id\', $1, true)", [tenantId]);',
+				"}",
+				""
+			].join("\n")
+		);
+
+		expect(findRuntimeAccessBoundaryViolations(root)).toEqual([]);
+	});
+
+	it("permits better-sqlite3 access only in the dedicated adapter module", () => {
+		const root = writeFixture(
+			"api-local/src/db/sqlite-connection.ts",
+			[
+				'import Database from "better-sqlite3";',
+				"",
+				"export function open(path: string) {",
+				"\tconst db = new Database(path);",
+				"\treturn db.name;",
 				"}",
 				""
 			].join("\n")

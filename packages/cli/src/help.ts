@@ -295,83 +295,90 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
-		name: "auth login",
-		summary: "Sign in with Entra ID via the interactive device-code flow, or issue a local dev session with --local, and cache the resulting session.",
-		usage: ["agent-issues auth login --tenant-id <guid> --client-id <guid>", "agent-issues auth login --local --secret <secret>"],
-		options: [
-			{
-				name: "--tenant-id <guid>",
-				description: "Entra ID (Azure AD) tenant GUID. Falls back to AGENT_ISSUES_ENTRA_TENANT_ID. With --local, the local dev tenant id (defaults to \"local-dev\", or AGENT_ISSUES_LOCAL_AUTH_TENANT_ID)."
-			},
-			{
-				name: "--client-id <guid>",
-				description: "Entra ID app registration's client (application) GUID. Falls back to AGENT_ISSUES_ENTRA_CLIENT_ID. Ignored with --local."
-			},
-			{
-				name: "--local",
-				description: "Skip the Entra device-code flow and issue a locally-signed dev session instead (ADR21). For local development and AFK testing only; never a production auth path."
-			},
-			{
-				name: "--user-id <id>",
-				description: "With --local, the dev identity to issue a session for. Defaults to the current OS username, or AGENT_ISSUES_LOCAL_AUTH_USER_ID."
-			},
-			{
-				name: "--secret <secret>",
-				description: "With --local, the shared secret used to sign/validate local dev sessions. Required, with no default. Falls back to AGENT_ISSUES_LOCAL_AUTH_SECRET.",
-				required: true
-			}
-		],
-		examples: [
-			"agent-issues auth login --tenant-id 11111111-1111-1111-1111-111111111111 --client-id 22222222-2222-2222-2222-222222222222",
-			"agent-issues auth login --local --secret dev-only-secret"
-		],
+		name: "auth list",
+		summary: "List saved logins in switching order and mark the active saved login.",
+		usage: ["agent-issues auth list"],
+		examples: ["agent-issues auth list", "agent-issues auth list --json"],
 		notes: [
-			"Without --local: prints a verification URL and device code; open the URL in a browser and enter the code to complete sign-in. See docs/auth-entra-id-setup.md for how to create the Azure app registration this needs.",
-			"With --local: no browser step, no Azure tenant, no network call - see docs/local-dev-setup.md.",
-			"On success, replaces any previously cached session for the same tenant and makes it current."
+			"The permanent local login is listed first, followed by remote saved logins in creation order.",
+			"Never prints raw access tokens, in either human or --json output."
 		],
 		output: {
-			human: ["Signed-in identity, tenant, and session expiry"],
-			json: ["command", "session"]
+			human: ["One line per saved login, with * marking the active login"],
+			json: ["command", "logins"]
+		}
+	},
+	{
+		name: "auth login",
+		summary: "Discover a remote service's Entra configuration and create or refresh a named saved login.",
+		usage: ["agent-issues auth login", "agent-issues auth login --name <name> --url <url>"],
+		options: [
+			{
+				name: "--name <name>",
+				description: "Unique saved-login name for one-shot use. Prompted when omitted interactively."
+			},
+			{
+				name: "--url <url>",
+				description: "Remote agent-issues service URL for one-shot use. Prompted when omitted interactively."
+			}
+		],
+		examples: ["agent-issues auth login", "agent-issues auth login --name work --url https://agent-issues.example.com"],
+		notes: [
+			"Remote login fetches /.well-known/agent-issues from the normalized service URL and uses its tenant and client IDs for device-code sign-in.",
+			"Interactive login prompts for the saved-login name and service URL.",
+			"When --json is present, --name and --url are required so prompt text never mixes with JSON output.",
+			"Refreshing an existing name preserves saved-login switching order and makes that login active."
+		],
+		output: {
+			human: ["Saved-login destination, signed-in identity, tenant, and session expiry"],
+			json: ["command", "login"]
 		}
 	},
 	{
 		name: "auth logout",
-		summary: "Remove a cached Entra ID session.",
-		usage: ["agent-issues auth logout", "agent-issues auth logout --tenant-id <guid>"],
-		options: [
+		summary: "Remove a remote saved login.",
+		usage: ["agent-issues auth logout [name]"],
+		positionals: [
 			{
-				name: "--tenant-id <guid>",
-				description: "Tenant to log out of. Defaults to the current tenant."
+				name: "name",
+				description: "Remote saved login to remove. Defaults to the active saved login.",
+				required: false
 			}
 		],
-		examples: ["agent-issues auth logout", "agent-issues auth logout --tenant-id 11111111-1111-1111-1111-111111111111 --json"],
+		examples: ["agent-issues auth logout work", "agent-issues auth logout --json"],
+		notes: [
+			"Removing the active remote saved login activates local atomically.",
+			"The permanent local saved login cannot be removed."
+		],
 		output: {
-			human: ["Confirmation of which tenant was logged out, or a not-logged-in message"],
-			json: ["command", "loggedOut", "tenantId"]
+			human: ["Confirmation of which saved login was removed"],
+			json: ["command", "name"]
 		}
 	},
 	{
 		name: "auth status",
-		summary: "Show the current Entra ID session, if any.",
+		summary: "Show the active saved login and its destination and identity details.",
 		usage: ["agent-issues auth status"],
 		examples: ["agent-issues auth status", "agent-issues auth status --json"],
-		notes: ["Never prints the raw access token, in either human or --json output."],
+		notes: ["Never prints raw access tokens, in either human or --json output."],
 		output: {
-			human: ["Signed-in identity, tenant, and session expiry, or a not-logged-in message"],
-			json: ["command", "loggedIn", "session"]
+			human: ["Active saved-login name, destination kind, remote URL when applicable, identity, and expiry"],
+			json: ["command", "login"]
 		}
 	},
 	{
 		name: "auth switch",
-		summary: "Switch the current tenant to an already-cached Entra ID session, without re-authenticating.",
-		usage: ["agent-issues auth switch <tenantId>"],
-		positionals: [{ name: "tenantId", description: "Tenant to switch to. Must already have a cached session.", required: true }],
-		examples: ["agent-issues auth switch 11111111-1111-1111-1111-111111111111"],
-		notes: ["Run `agent-issues auth login --tenant-id <id> --client-id <id>` first if the tenant has no cached session."],
+		summary: "Activate a named saved login or advance to the next saved login.",
+		usage: ["agent-issues auth switch [name]"],
+		positionals: [{ name: "name", description: "Saved login to activate. Omit to advance in switching order.", required: false }],
+		examples: ["agent-issues auth switch work", "agent-issues auth switch local", "agent-issues auth switch"],
+		notes: [
+			"Without a name, advances from local through remote saved logins in creation order, then wraps to local.",
+			"Never prints the raw access token, in either human or --json output."
+		],
 		output: {
-			human: ["Confirmation of the tenant switched to"],
-			json: ["command", "session"]
+			human: ["Confirmation of the saved login switched to"],
+			json: ["command", "login"]
 		}
 	},
 	{

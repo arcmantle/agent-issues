@@ -6,8 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpStore, type RunCredentialCommand } from "@agent-issues/core";
 import { saveDaemonState, saveDaemonToken, SqliteStore } from "@agent-issues/api-local";
-import { saveAuthSession } from "./auth-session.js";
-import { bindCloudProject } from "./cloud-binding.js";
+import { saveSavedLogin, setActiveSavedLogin } from "./auth-session.js";
 import { LocalDaemonStore } from "./daemon/local-daemon-store.js";
 import { assertNoDaemonAllowed, openStorageDriver } from "./open-storage-driver.js";
 import { resolveProjectIdentity } from "./project-identity.js";
@@ -45,8 +44,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-storage-driver-home-"));
 		// The local backend resolves its SQLite db path from the real OS home
 		// directory (`resolveAgentIssuesHomeDirectory`), which only reads
-		// `homedir()` - unlike cloudBindingOptions/authSessionOptions below, it
-		// has no options-based override. Redirecting HOME is the only way to
+		// `homedir()` and has no options-based override. Redirecting HOME is the only way to
 		// keep the "local backend" cases in this file from writing real
 		// entities into the developer's actual ~/.agent-issues/agent-issues.db.
 		originalHome = process.env.HOME;
@@ -71,7 +69,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 	it("opens a direct SqliteStore when AGENT_ISSUES_NO_DAEMON=1 forces the escape hatch (ISS190)", async () => {
 		const result = await openStorageDriver({
 			databaseOptions: { currentWorkingDirectory: projectDirectory },
-			cloudBindingOptions: { homeDirectory },
+			authSessionOptions: { homeDirectory, ...fakeCredentialStore() },
 			env: { AGENT_ISSUES_NO_DAEMON: "1" }
 		});
 
@@ -123,7 +121,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 
 			const result = await openStorageDriver({
 				databaseOptions: { currentWorkingDirectory: projectDirectory },
-				cloudBindingOptions: { homeDirectory },
+				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
 				env: {},
 				localDaemon: { homeDirectory, credentialStoreOptions, spawn }
 			});
@@ -161,7 +159,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 
 			const result = await openStorageDriver({
 				databaseOptions: { currentWorkingDirectory: projectDirectory },
-				cloudBindingOptions: { homeDirectory },
+				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
 				env: {},
 				localDaemon: { homeDirectory, credentialStoreOptions, spawn }
 			});
@@ -182,7 +180,7 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 
 			const result = await openStorageDriver({
 				databaseOptions: { currentWorkingDirectory: projectDirectory },
-				cloudBindingOptions: { homeDirectory },
+				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
 				env: {},
 				localDaemon: { homeDirectory, credentialStoreOptions, spawn, waitTimeoutMs: 50, pollIntervalMs: 5 }
 			});
@@ -197,23 +195,25 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 		});
 	});
 
-	it("opens an HttpStore when the project is cloud-bound and a valid session is cached", async () => {
-		const { identity: projectIdentity } = resolveProjectIdentity(projectDirectory);
+	it("opens an HttpStore for the active remote saved login", async () => {
 		const credentialStoreOptions = fakeCredentialStore();
-		bindCloudProject(
-			{ projectIdentity, cloudApiUrl: "https://api.example.com", tenantId: "tenant-a" },
-			{ homeDirectory }
-		);
-		await saveAuthSession(
-			{ tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z" },
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://api.example.com",
+				tenantId: "tenant-a",
+				userId: "user-1",
+				accessToken: "token-a",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
 			{ homeDirectory, ...credentialStoreOptions }
 		);
 
 		const result = await openStorageDriver({
 			databaseOptions: { currentWorkingDirectory: projectDirectory },
-			cloudBindingOptions: { homeDirectory },
 			authSessionOptions: { homeDirectory, ...credentialStoreOptions },
-			env: {}
+			env: { AGENT_ISSUES_NO_DAEMON: "1" }
 		});
 
 		try {
@@ -231,63 +231,63 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 		}
 	});
 
-	it("throws a clear error directing to auth login when cloud-bound but no session is cached", async () => {
-		const { identity: projectIdentity } = resolveProjectIdentity(projectDirectory);
+	it("switching the active saved login controls routing and AGENT_ISSUES_BACKEND is ignored", async () => {
 		const credentialStoreOptions = fakeCredentialStore();
-		bindCloudProject(
-			{ projectIdentity, cloudApiUrl: "https://api.example.com", tenantId: "tenant-a" },
-			{ homeDirectory }
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://work.example.com",
+				tenantId: "tenant-work",
+				userId: "user-1",
+				accessToken: "token-work",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
+			{ homeDirectory, ...credentialStoreOptions }
 		);
-
-		await expect(
-			openStorageDriver({
-				databaseOptions: { currentWorkingDirectory: projectDirectory },
-				cloudBindingOptions: { homeDirectory },
-				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
-				env: {}
-			})
-		).rejects.toThrow(/auth login/);
-	});
-
-	it("throws the same clear error when the cached session for the bound tenant has expired", async () => {
-		const { identity: projectIdentity } = resolveProjectIdentity(projectDirectory);
-		const credentialStoreOptions = fakeCredentialStore();
-		bindCloudProject(
-			{ projectIdentity, cloudApiUrl: "https://api.example.com", tenantId: "tenant-a" },
-			{ homeDirectory }
-		);
-		await saveAuthSession(
-			{ tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2000-01-01T00:00:00.000Z" },
+		await saveSavedLogin(
+			{
+				name: "personal",
+				kind: "remote",
+				serviceUrl: "https://personal.example.com",
+				tenantId: "tenant-personal",
+				userId: "user-1",
+				accessToken: "token-personal",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
 			{ homeDirectory, ...credentialStoreOptions }
 		);
 
-		await expect(
-			openStorageDriver({
-				databaseOptions: { currentWorkingDirectory: projectDirectory },
-				cloudBindingOptions: { homeDirectory },
-				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
-				env: {}
-			})
-		).rejects.toThrow(/auth login/);
-	});
-
-	it("an env var forcing local wins even when the project is cloud-bound", async () => {
-		const { identity: projectIdentity } = resolveProjectIdentity(projectDirectory);
-		bindCloudProject(
-			{ projectIdentity, cloudApiUrl: "https://api.example.com", tenantId: "tenant-a" },
-			{ homeDirectory }
-		);
-
-		const result = await openStorageDriver({
+		const personal = await openStorageDriver({
 			databaseOptions: { currentWorkingDirectory: projectDirectory },
-			cloudBindingOptions: { homeDirectory },
-			env: { AGENT_ISSUES_BACKEND: "local", AGENT_ISSUES_NO_DAEMON: "1" }
+			authSessionOptions: { homeDirectory, ...credentialStoreOptions },
+			env: { AGENT_ISSUES_BACKEND: "local" }
+		});
+		await setActiveSavedLogin("work", { homeDirectory, ...credentialStoreOptions });
+		const work = await openStorageDriver({
+			databaseOptions: { currentWorkingDirectory: projectDirectory },
+			authSessionOptions: { homeDirectory, ...credentialStoreOptions },
+			env: { AGENT_ISSUES_BACKEND: "local" }
 		});
 
 		try {
-			expect(result.backend).toBe("local");
+			expect(personal.backend).toBe("cloud");
+			expect(personal.dbPath).toBe("https://personal.example.com");
+			expect(personal.cloudConnection).toEqual({
+				baseUrl: "https://personal.example.com",
+				bearerToken: "token-personal",
+				tenantId: "tenant-personal"
+			});
+			expect(work.backend).toBe("cloud");
+			expect(work.dbPath).toBe("https://work.example.com");
+			expect(work.cloudConnection).toEqual({
+				baseUrl: "https://work.example.com",
+				bearerToken: "token-work",
+				tenantId: "tenant-work"
+			});
 		} finally {
-			await result.store.close();
+			await personal.store.close();
+			await work.store.close();
 		}
 	});
 });

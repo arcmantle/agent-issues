@@ -1,32 +1,32 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-	getCurrentAuthSession,
-	listAuthSessions,
-	removeAuthSession,
-	saveAuthSession,
-	switchAuthSession,
-	toAuthSessionView,
-	type AuthSessionStoreOptions
+	getActiveSavedLogin,
+	listSavedLogins,
+	removeSavedLogin,
+	saveSavedLogin,
+	setActiveSavedLogin,
+	toSavedLoginView,
+	type SavedLoginStoreOptions
 } from "./auth-session.js";
-import { setCredential, type CredentialCommand, type RunCredentialCommand } from "@agent-issues/core";
+import { getCredential, setCredential, type CredentialCommand, type RunCredentialCommand } from "@agent-issues/core";
 
 /** Fake in-memory credential store standing in for a real OS credential tool, keyed the same way `os-credential-store.ts` addresses a real one (mirrors `daemon-token.test.ts`'s helper). */
 function fakeCredentialStore(): { runCommand: RunCredentialCommand } {
 	const store = new Map<string, string>();
 
 	const runCommand: RunCredentialCommand = async (command: CredentialCommand) => {
-		const [, account, , service] = command.args; // "-a" <account> "-s" <service> ...
+		const [action, , account, , service] = command.args;
 		const key = `${service}:${account}`;
 
-		if (command.args[0] === "add-generic-password") {
+		if (action === "add-generic-password") {
 			store.set(key, command.args[6]);
 			return { stdout: "", exitCode: 0 };
 		}
-		if (command.args[0] === "find-generic-password") {
+		if (action === "find-generic-password") {
 			const value = store.get(key);
 			return value === undefined ? { stdout: "", exitCode: 44 } : { stdout: `${value}\n`, exitCode: 0 };
 		}
@@ -40,7 +40,7 @@ function fakeCredentialStore(): { runCommand: RunCredentialCommand } {
 
 describe("auth-session storage (ISS185)", () => {
 	let homeDirectory: string;
-	let options: AuthSessionStoreOptions;
+	let options: SavedLoginStoreOptions;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-auth-session-"));
@@ -51,142 +51,241 @@ describe("auth-session storage (ISS185)", () => {
 		rmSync(homeDirectory, { recursive: true, force: true });
 	});
 
-	it("saves a session and reads it back as the current session", async () => {
-		await saveAuthSession(
+	it("synthesizes local as the first and active saved login by default", async () => {
+		await expect(listSavedLogins(options)).resolves.toEqual([{ name: "local", kind: "local" }]);
+		await expect(getActiveSavedLogin(options)).resolves.toEqual({ name: "local", kind: "local" });
+	});
+
+	it("rejects activating an unknown saved-login name without changing the active login", async () => {
+		await expect(setActiveSavedLogin("missing", options)).rejects.toThrow(/No saved login named/);
+		await expect(getActiveSavedLogin(options)).resolves.toEqual({ name: "local", kind: "local" });
+	});
+
+	it("lists uniquely named remote logins in creation order even when they share a service URL", async () => {
+		await saveSavedLogin(
 			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://agent-issues.example.com",
 				tenantId: "tenant-a",
-				userId: "user-1",
-				displayName: "Ada Lovelace",
+				userId: "user-a",
+				accessToken: "token-a",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
+			options
+		);
+		await saveSavedLogin(
+			{
+				name: "personal",
+				kind: "remote",
+				serviceUrl: "https://agent-issues.example.com",
+				tenantId: "tenant-b",
+				userId: "user-b",
+				accessToken: "token-b",
+				expiresAt: "2099-01-02T00:00:00.000Z"
+			},
+			options
+		);
+
+		expect((await listSavedLogins(options)).map(({ name }) => name)).toEqual(["local", "work", "personal"]);
+	});
+
+	it("persists exactly one globally active saved-login name", async () => {
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://agent-issues.example.com",
+				tenantId: "tenant-a",
+				userId: "user-a",
+				accessToken: "token-a",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
+			options
+		);
+		await expect(getActiveSavedLogin(options)).resolves.toMatchObject({ name: "work", kind: "remote" });
+
+		await setActiveSavedLogin("local", options);
+
+		await expect(getActiveSavedLogin(options)).resolves.toEqual({ name: "local", kind: "local" });
+	});
+
+	it("rejects local as a remote saved-login name", async () => {
+		await expect(
+			saveSavedLogin(
+				{
+					name: "local",
+					kind: "remote",
+					serviceUrl: "https://agent-issues.example.com",
+					tenantId: "tenant-a",
+					userId: "user-a",
+					accessToken: "token-a",
+					expiresAt: "2099-01-01T00:00:00.000Z"
+				},
+				options
+			)
+		).rejects.toThrow(/reserved/);
+		await expect(listSavedLogins(options)).resolves.toEqual([{ name: "local", kind: "local" }]);
+	});
+
+	it("rejects removing the permanent local login", async () => {
+		await expect(removeSavedLogin("local", options)).rejects.toThrow(/cannot be removed/);
+		await expect(getActiveSavedLogin(options)).resolves.toEqual({ name: "local", kind: "local" });
+	});
+
+	it("falls back to local when the active remote login is removed", async () => {
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://agent-issues.example.com",
+				tenantId: "tenant-a",
+				userId: "user-a",
 				accessToken: "token-a",
 				expiresAt: "2099-01-01T00:00:00.000Z"
 			},
 			options
 		);
 
-		const current = await getCurrentAuthSession(options);
+		await removeSavedLogin("work", options);
 
-		expect(current).toEqual({
-			tenantId: "tenant-a",
-			userId: "user-1",
+		await expect(getActiveSavedLogin(options)).resolves.toEqual({ name: "local", kind: "local" });
+		await expect(listSavedLogins(options)).resolves.toEqual([{ name: "local", kind: "local" }]);
+	});
+
+	it("refreshes an existing remote name without changing its order", async () => {
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://old.example.com",
+				tenantId: "tenant-old",
+				userId: "user-old",
+				accessToken: "token-old",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
+			options
+		);
+		await saveSavedLogin(
+			{
+				name: "personal",
+				kind: "remote",
+				serviceUrl: "https://personal.example.com",
+				tenantId: "tenant-personal",
+				userId: "user-personal",
+				accessToken: "token-personal",
+				expiresAt: "2099-01-02T00:00:00.000Z"
+			},
+			options
+		);
+
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://new.example.com",
+				tenantId: "tenant-new",
+				userId: "user-new",
+				displayName: "Ada Lovelace",
+				accessToken: "token-new",
+				expiresAt: "2099-02-01T00:00:00.000Z"
+			},
+			options
+		);
+
+		const logins = await listSavedLogins(options);
+		expect(logins.map(({ name }) => name)).toEqual(["local", "work", "personal"]);
+		expect(logins[1]).toEqual({
+			name: "work",
+			kind: "remote",
+			serviceUrl: "https://new.example.com",
+			tenantId: "tenant-new",
+			userId: "user-new",
 			displayName: "Ada Lovelace",
-			accessToken: "token-a",
-			expiresAt: "2099-01-01T00:00:00.000Z"
+			accessToken: "token-new",
+			expiresAt: "2099-02-01T00:00:00.000Z"
 		});
 	});
 
-	it("returns undefined when no session has ever been saved", async () => {
-		await expect(getCurrentAuthSession(options)).resolves.toBeUndefined();
-	});
-
-	it("lists every cached session, regardless of which is current", async () => {
-		await saveAuthSession({ tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-		await saveAuthSession({ tenantId: "tenant-b", userId: "user-2", accessToken: "token-b", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-
-		const sessions = await listAuthSessions(options);
-
-		expect(sessions.map((session) => session.tenantId).sort()).toEqual(["tenant-a", "tenant-b"]);
-	});
-
-	it("switches the current tenant to an already-cached session without touching its accessToken", async () => {
-		await saveAuthSession({ tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-		await saveAuthSession({ tenantId: "tenant-b", userId: "user-2", accessToken: "token-b", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-
-		const switched = await switchAuthSession("tenant-a", options);
-
-		expect(switched).toEqual({
+	it("redacts access tokens from printable saved-login views", () => {
+		const view = toSavedLoginView({
+			name: "work",
+			kind: "remote",
+			serviceUrl: "https://agent-issues.example.com",
 			tenantId: "tenant-a",
-			userId: "user-1",
-			accessToken: "token-a",
-			expiresAt: "2099-01-01T00:00:00.000Z"
-		});
-		await expect(getCurrentAuthSession(options)).resolves.toMatchObject({ tenantId: "tenant-a" });
-	});
-
-	it("throws when switching to a tenant with no cached session", async () => {
-		await expect(switchAuthSession("tenant-unknown", options)).rejects.toThrow(/No cached auth session/);
-	});
-
-	it("removes a session and clears the current pointer if it was current", async () => {
-		await saveAuthSession({ tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-
-		await removeAuthSession("tenant-a", options);
-
-		await expect(getCurrentAuthSession(options)).resolves.toBeUndefined();
-		await expect(listAuthSessions(options)).resolves.toEqual([]);
-	});
-
-	it("removes a non-current session without disturbing the current pointer", async () => {
-		await saveAuthSession({ tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-		await saveAuthSession({ tenantId: "tenant-b", userId: "user-2", accessToken: "token-b", expiresAt: "2099-01-01T00:00:00.000Z" }, options);
-
-		await removeAuthSession("tenant-a", options);
-
-		await expect(getCurrentAuthSession(options)).resolves.toMatchObject({ tenantId: "tenant-b" });
-		const remaining = await listAuthSessions(options);
-		expect(remaining.map((session) => session.tenantId)).toEqual(["tenant-b"]);
-	});
-
-	it("treats no cached credential as empty rather than throwing", async () => {
-		await expect(listAuthSessions(options)).resolves.toEqual([]);
-		await expect(getCurrentAuthSession(options)).resolves.toBeUndefined();
-	});
-
-	it("treats a corrupt cached credential as empty rather than throwing", async () => {
-		await setCredential("agent-issues-auth", "sessions", "{ not valid json", options);
-
-		await expect(listAuthSessions(options)).resolves.toEqual([]);
-		await expect(getCurrentAuthSession(options)).resolves.toBeUndefined();
-	});
-
-	it("redacts the accessToken from a session view", () => {
-		const view = toAuthSessionView({
-			tenantId: "tenant-a",
-			userId: "user-1",
+			userId: "user-a",
 			displayName: "Ada Lovelace",
 			accessToken: "super-secret-token",
 			expiresAt: "2099-01-01T00:00:00.000Z"
 		});
 
 		expect(view).toEqual({
+			name: "work",
+			kind: "remote",
+			serviceUrl: "https://agent-issues.example.com",
 			tenantId: "tenant-a",
-			userId: "user-1",
+			userId: "user-a",
 			displayName: "Ada Lovelace",
 			expiresAt: "2099-01-01T00:00:00.000Z"
 		});
 		expect(view).not.toHaveProperty("accessToken");
 	});
 
-	describe("migrating a pre-ISS185 plain-file session cache", () => {
-		it("imports an existing plain-file cache into the credential store on first read, then deletes the plain file", async () => {
-			mkdirSync(homeDirectory, { recursive: true });
-			const legacyFilePath = path.join(homeDirectory, "auth.json");
-			writeFileSync(
-				legacyFilePath,
-				JSON.stringify({
-					currentTenantId: "tenant-a",
-					sessions: {
-						"tenant-a": { tenantId: "tenant-a", userId: "user-1", accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z" }
+	it("scrubs legacy routing state to a versioned local login exactly once", async () => {
+		const legacyAuthFilePath = path.join(homeDirectory, "auth.json");
+		const legacyBindingsFilePath = path.join(homeDirectory, "cloud-bindings.json");
+		writeFileSync(legacyAuthFilePath, JSON.stringify({ accessToken: "plain-auth-secret" }), "utf8");
+		writeFileSync(legacyBindingsFilePath, JSON.stringify({ project: { accessToken: "plain-binding-secret" } }), "utf8");
+		await setCredential(
+			"agent-issues-auth",
+			"sessions",
+			JSON.stringify({
+				currentTenantId: "tenant-a",
+				sessions: {
+					"tenant-a": {
+						tenantId: "tenant-a",
+						userId: "user-a",
+						accessToken: "credential-secret",
+						expiresAt: "2099-01-01T00:00:00.000Z"
 					}
-				}),
-				"utf8"
-			);
+				}
+			}),
+			options
+		);
 
-			const current = await getCurrentAuthSession(options);
+		await expect(getActiveSavedLogin(options)).resolves.toEqual({ name: "local", kind: "local" });
+		expect(existsSync(legacyAuthFilePath)).toBe(false);
+		expect(existsSync(legacyBindingsFilePath)).toBe(false);
 
-			expect(current).toEqual({
-				tenantId: "tenant-a",
-				userId: "user-1",
-				accessToken: "token-a",
-				expiresAt: "2099-01-01T00:00:00.000Z"
-			});
-			expect(existsSync(legacyFilePath)).toBe(false);
+		const migratedCredential = await getCredential("agent-issues-auth", "sessions", options);
+		expect(JSON.parse(migratedCredential ?? "null")).toEqual({ version: 1, activeName: "local", remoteLogins: [] });
+		expect(migratedCredential).not.toContain("credential-secret");
 
-			// Second read must come from the credential store, not require the (now-deleted) plain file.
-			await expect(getCurrentAuthSession(options)).resolves.toMatchObject({ tenantId: "tenant-a" });
-		});
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://agent-issues.example.com",
+				tenantId: "tenant-b",
+				userId: "user-b",
+				accessToken: "current-secret",
+				expiresAt: "2099-01-02T00:00:00.000Z"
+			},
+			options
+		);
 
-		it("does not touch the credential store when there is no legacy plain file", async () => {
-			await expect(getCurrentAuthSession(options)).resolves.toBeUndefined();
+		await expect(getActiveSavedLogin(options)).resolves.toMatchObject({ name: "work", kind: "remote" });
+		expect(await getCredential("agent-issues-auth", "sessions", options)).toContain("current-secret");
+	});
+
+	it("scrubs a corrupt cached credential to the local saved login", async () => {
+		await setCredential("agent-issues-auth", "sessions", "{ not valid json", options);
+
+		await expect(listSavedLogins(options)).resolves.toEqual([{ name: "local", kind: "local" }]);
+		expect(JSON.parse((await getCredential("agent-issues-auth", "sessions", options)) ?? "null")).toEqual({
+			version: 1,
+			activeName: "local",
+			remoteLogins: []
 		});
 	});
 });

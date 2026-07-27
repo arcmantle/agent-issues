@@ -1,9 +1,8 @@
-# Local development setup: local auth, no Azure required
+# Local development setup
 
 This guide covers `LocalAuthProvider`, the dev-only second implementation of
-the auth-provider seam (ADR12, ADR21). It lets you exercise `agent-issues
-auth login`/`logout`/`status`/`switch` end to end without a real Entra ID
-tenant, a human browser step, or any network call.
+the auth-provider seam (ADR12, ADR21). It supports API tests and local service
+development without a real Entra ID tenant.
 
 If you're looking for the production Entra ID setup instead, see
 [`docs/auth-entra-id-setup.md`](auth-entra-id-setup.md).
@@ -23,35 +22,11 @@ explicit opt-in.
 
 ## Using it today
 
-```bash
-agent-issues auth login --local --secret <any-shared-secret>
-agent-issues auth status
-agent-issues auth switch <tenantId>
-agent-issues auth logout
-```
-
-- `--local` skips the Entra device-code flow entirely and issues a
-  locally-signed dev credential instead - no network call, no Azure tenant.
-- `--secret` is required, with no default, so this path can never be
-  reached without an explicit opt-in. You can also set it via the
-  `AGENT_ISSUES_LOCAL_AUTH_SECRET` environment variable.
-- `--tenant-id` defaults to `local-dev` (or `AGENT_ISSUES_LOCAL_AUTH_TENANT_ID`).
-- `--user-id` defaults to your OS username (or `AGENT_ISSUES_LOCAL_AUTH_USER_ID`).
-- The resulting session is cached exactly like an Entra session, under
-  `~/.agent-issues/auth.json`; `auth status`/`auth switch`/`auth logout`
-  all work identically regardless of which provider issued the session.
-
-Example:
-
-```bash
-$ agent-issues auth login --local --secret dev-only-secret
-Logged in as roen (tenant local-dev)
-Session expires: 2026-07-09T13:22:21.198Z
-
-$ agent-issues auth status
-Logged in as roen (tenant local-dev)
-Session expires: 2026-07-09T13:22:21.198Z
-```
+`LocalAuthProvider` is available only to API service tests and local API
+service setup code. The CLI does not expose local credential issuance. Its
+permanent built-in `local` saved login routes directly to local storage, is
+active by default, and cannot be removed or overwritten. It is a request
+destination, not a `LocalAuthProvider` session.
 
 ## What this does not cover yet
 
@@ -59,8 +34,8 @@ Running the cloud API and Postgres locally (so the whole dual-mode cloud
 path - not just the auth seam - runs without any Azure dependency) was
 tracked under ISS39 (cloud API single Postgres gate) and ISS40
 (HttpStore/backend switch). Both are now complete: `PgStore`, the Express
-JSON-RPC gate, the change/event stream, and `cloud bind`/`unbind`/`status`
-plus `synchronize` all work end to end against the local Postgres started
+JSON-RPC gate, the change/event stream, saved remote logins, and `synchronize`
+work end to end against the local Postgres started
 below (see "Local Postgres"). There's no bundled long-running local cloud
 API server yet, though - starting one for manual testing still means
 writing a small script that calls `createApiServer` directly with a

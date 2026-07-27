@@ -2,7 +2,7 @@ import type { installAgent, listAgent, uninstallAgent } from "../agent-installer
 import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
 import type { SynchronizeSummary } from "@agent-issues/core";
 import type { listTenants } from "@agent-issues/api-local";
-import type { AuthSessionView } from "../auth-session.js";
+import type { SavedLoginView } from "../auth-session.js";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
 
@@ -293,46 +293,43 @@ function indentBlock(text: string): string {
 		.join("\n");
 }
 
-export function renderAuthLogin(session: AuthSessionView): string {
+export function renderAuthLogin(session: Extract<SavedLoginView, { kind: "remote" }>): string {
 	return [
 		`Logged in as ${session.displayName ?? session.userId} (tenant ${session.tenantId})`,
 		`Session expires: ${session.expiresAt}`
 	].join("\n");
 }
 
-export function renderAuthLogout(tenantId: string): string {
-	return `Logged out of tenant ${tenantId}.`;
+export function renderAuthList(logins: Array<{ login: SavedLoginView; active: boolean }>): string {
+	return logins
+		.map(({ login, active }) => {
+			const destination = login.kind === "local" ? "local" : `remote ${login.serviceUrl}`;
+			return `${active ? "*" : "-"} ${login.name} (${destination})`;
+		})
+		.join("\n");
 }
 
-export function renderAuthStatus(session: AuthSessionView): string {
-	return [
-		`Logged in as ${session.displayName ?? session.userId} (tenant ${session.tenantId})`,
-		`Session expires: ${session.expiresAt}`
-	].join("\n");
+export function renderAuthLogout(name: string): string {
+	return `Removed saved login ${name}.`;
 }
 
-export function renderAuthSwitch(session: AuthSessionView): string {
-	return `Switched to tenant ${session.tenantId} (${session.displayName ?? session.userId}).`;
-}
 
-export function renderCloudBind(binding: { projectIdentity: string; cloudApiUrl: string; tenantId: string }): string {
-	return `Bound project "${binding.projectIdentity}" to ${binding.cloudApiUrl} (tenant ${binding.tenantId}).`;
-}
-
-export function renderCloudUnbind(projectIdentity: string, wasBound: boolean): string {
-	return wasBound ? `Unbound project "${projectIdentity}" from cloud.` : `Project "${projectIdentity}" has no cloud binding.`;
-}
-
-export function renderCloudStatus(status: {
-	projectIdentity: string;
-	backend: "local" | "cloud";
-	binding?: { cloudApiUrl: string; tenantId: string };
-}): string {
-	if (status.backend === "local") {
-		return `Project "${status.projectIdentity}" is local.`;
+export function renderAuthStatus(login: SavedLoginView): string {
+	if (login.kind === "local") {
+		return ["Active saved login: local", "Destination: local"].join("\n");
 	}
 
-	return `Project "${status.projectIdentity}" is cloud-bound to ${status.binding?.cloudApiUrl} (tenant ${status.binding?.tenantId}).`;
+	return [
+		`Active saved login: ${login.name}`,
+		"Destination: remote",
+		`Remote URL: ${login.serviceUrl}`,
+		`Identity: ${login.displayName ?? login.userId} (tenant ${login.tenantId})`,
+		`Session expires: ${login.expiresAt}`
+	].join("\n");
+}
+
+export function renderAuthSwitch(login: SavedLoginView): string {
+	return `Switched to saved login ${login.name}.`;
 }
 
 export function renderSynchronize(result: {

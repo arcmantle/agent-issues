@@ -15,14 +15,14 @@ export class SynchronizeCommand extends BaseCommand {
 	public static paths = [["synchronize"]];
 
 	public async execute(): Promise<number> {
-		const { local, cloud, binding } = await openSynchronizeStores({
+		const { local, cloud, destination } = await openSynchronizeStores({
 			databaseOptions: { currentWorkingDirectory: this.context.cwd },
 			authSessionOptions: this.context.credentialStoreOptions
 		});
 
 		try {
 			const summary = await synchronizeStores(local, cloud);
-			const result = { command: "synchronize" as const, cloudApiUrl: binding.cloudApiUrl, tenantId: binding.tenantId, summary };
+			const result = { command: "synchronize" as const, cloudApiUrl: destination.serviceUrl, tenantId: destination.tenantId, summary };
 
 			this.print(result, renderSynchronize(result));
 			return 0;

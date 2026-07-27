@@ -1,19 +1,21 @@
-import { userInfo } from "node:os";
+import { createInterface } from "node:readline/promises";
 
 import { Option } from "clipanion";
 
 import {
-	getCurrentAuthSession,
-	removeAuthSession,
-	saveAuthSession,
-	switchAuthSession,
-	toAuthSessionView,
-	type AuthSession,
-	type AuthSessionStoreOptions
+	getActiveSavedLogin,
+	listSavedLogins,
+	removeSavedLogin,
+	saveSavedLogin,
+	setActiveSavedLogin,
+	toSavedLoginView,
+	type SavedLoginStoreOptions,
+	type RemoteSavedLogin
 } from "../../auth-session.js";
+import { discoverServiceAuth } from "../../service-discovery.js";
 
-import { renderAuthLogin, renderAuthLogout, renderAuthStatus, renderAuthSwitch } from "../renderers.js";
-import { BaseCommand, requireOption, requirePositional } from "../shared.js";
+import { renderAuthList, renderAuthLogin, renderAuthLogout, renderAuthStatus, renderAuthSwitch } from "../renderers.js";
+import { BaseCommand } from "../shared.js";
 
 export type DeviceCodeLoginResult = {
 	tenantId: string;
@@ -39,20 +41,31 @@ export type DeviceCodeLoginFn = (options: {
 	onDeviceCode: DeviceCodePrompt;
 }) => Promise<DeviceCodeLoginResult>;
 
-/**
- * Orchestrates login end to end: run the device-code exchange, then persist
- * the resulting session as current. Kept standalone from `AuthLoginCommand`
- * so tests can inject a fake `deviceCodeLogin` and verify the orchestration
- * (prompt forwarding, session persistence) without a real Azure tenant.
- */
-export async function performLogin(
-	options: { tenantId: string; clientId: string },
-	deviceCodeLogin: DeviceCodeLoginFn,
-	onDeviceCode: DeviceCodePrompt,
-	storeOptions?: AuthSessionStoreOptions
-): Promise<AuthSession> {
-	const result = await deviceCodeLogin({ tenantId: options.tenantId, clientId: options.clientId, onDeviceCode });
-	const session: AuthSession = {
+export type RemoteLoginDependencies = {
+	deviceCodeLogin: DeviceCodeLoginFn;
+	fetch?: typeof globalThis.fetch;
+	onDeviceCode: DeviceCodePrompt;
+	storeOptions?: SavedLoginStoreOptions;
+};
+
+export async function performRemoteLogin(
+	input: { name: string; serviceUrl: string },
+	dependencies: RemoteLoginDependencies
+): Promise<RemoteSavedLogin> {
+	if (input.name === "local") {
+		throw new Error('Saved-login name "local" is reserved.');
+	}
+
+	const discovered = await discoverServiceAuth(input.serviceUrl, dependencies.fetch);
+	const result = await dependencies.deviceCodeLogin({
+		tenantId: discovered.auth.tenantId,
+		clientId: discovered.auth.clientId,
+		onDeviceCode: dependencies.onDeviceCode
+	});
+	const login: RemoteSavedLogin = {
+		name: input.name,
+		kind: "remote",
+		serviceUrl: discovered.serviceUrl,
 		tenantId: result.tenantId,
 		userId: result.userId,
 		displayName: result.displayName,
@@ -60,82 +73,95 @@ export async function performLogin(
 		expiresAt: result.expiresAt
 	};
 
-	await saveAuthSession(session, storeOptions);
-	return session;
+	await saveSavedLogin(login, dependencies.storeOptions);
+	return login;
 }
 
 export class AuthLoginCommand extends BaseCommand {
 	public static paths = [["auth", "login"]];
 
-	public local = Option.Boolean("--local", false);
-	public tenantId = Option.String("--tenant-id");
-	public clientId = Option.String("--client-id");
-	public userId = Option.String("--user-id");
-	public secret = Option.String("--secret");
+	public name = Option.String("--name");
+	public serviceUrl = Option.String("--url");
 
 	public async execute(): Promise<number> {
-		const session = this.local ? await this.loginLocal() : await this.loginEntra();
-
-		const view = toAuthSessionView(session);
-		this.print({ command: "auth-login" as const, session: view }, renderAuthLogin(view));
+		const login = await this.loginRemote();
+		const view = toSavedLoginView(login);
+		this.print({ command: "auth-login" as const, login: view }, renderAuthLogin(view));
 		return 0;
 	}
 
-	private async loginEntra(): Promise<AuthSession> {
-		const tenantId = requireOption(
-			this.tenantId ?? process.env.AGENT_ISSUES_ENTRA_TENANT_ID,
-			"`auth login` requires --tenant-id (or AGENT_ISSUES_ENTRA_TENANT_ID). See docs/auth-entra-id-setup.md."
-		);
-		const clientId = requireOption(
-			this.clientId ?? process.env.AGENT_ISSUES_ENTRA_CLIENT_ID,
-			"`auth login` requires --client-id (or AGENT_ISSUES_ENTRA_CLIENT_ID). See docs/auth-entra-id-setup.md."
-		);
+	private async loginRemote(): Promise<RemoteSavedLogin> {
+		const { name, serviceUrl } = await this.resolveRemoteInput();
+		const dependencies = this.context.authLoginDependencies;
+		const deviceCodeLogin = dependencies?.deviceCodeLogin
+			?? (await import("../../entra-device-login.js")).acquireEntraDeviceCodeSession;
 
-		const { acquireEntraDeviceCodeSession } = await import("../../entra-device-login.js");
-
-		return performLogin(
-			{ tenantId, clientId },
-			acquireEntraDeviceCodeSession,
-			(message) => {
-				this.context.stdout.write(`${message}\n`);
-			},
-			this.context.credentialStoreOptions
+		return performRemoteLogin(
+			{ name, serviceUrl },
+			{
+				deviceCodeLogin,
+				fetch: dependencies?.fetch,
+				onDeviceCode: (message) => this.context.stdout.write(`${message}\n`),
+				storeOptions: this.context.credentialStoreOptions
+			}
 		);
 	}
 
-	private async loginLocal(): Promise<AuthSession> {
-		const tenantId = this.tenantId ?? process.env.AGENT_ISSUES_LOCAL_AUTH_TENANT_ID ?? "local-dev";
-		const userId = this.userId ?? process.env.AGENT_ISSUES_LOCAL_AUTH_USER_ID ?? userInfo().username;
-		const secret = requireOption(
-			this.secret ?? process.env.AGENT_ISSUES_LOCAL_AUTH_SECRET,
-			"`auth login --local` requires --secret (or AGENT_ISSUES_LOCAL_AUTH_SECRET). See docs/local-dev-setup.md."
-		);
+	private async resolveRemoteInput(): Promise<{ name: string; serviceUrl: string }> {
+		let name = this.name?.trim();
+		let serviceUrl = this.serviceUrl?.trim();
+		if (this.asJson) {
+			if (!name) throw new Error("`auth login --json` requires --name <name>.");
+			if (!serviceUrl) throw new Error("`auth login --json` requires --url <url>.");
+			return { name, serviceUrl };
+		}
 
-		const { issueLocalDevSession } = await import("../../local-dev-login.js");
+		const dependencies = this.context.authLoginDependencies;
+		const interactive = dependencies?.interactive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
+		if ((!name || !serviceUrl) && !interactive) {
+			throw new Error("`auth login` requires --name <name> and --url <url> outside an interactive terminal.");
+		}
+		const prompt = dependencies?.prompt ?? ((question: string) => this.prompt(question));
+		name ||= (await prompt("Saved login name: ")).trim();
+		serviceUrl ||= (await prompt("Service URL: ")).trim();
+		if (!name) throw new Error("Saved-login name cannot be empty.");
+		if (!serviceUrl) throw new Error("Service URL cannot be empty.");
+		return { name, serviceUrl };
+	}
 
-		const localDevLogin: DeviceCodeLoginFn = ({ tenantId: sessionTenantId }) =>
-			issueLocalDevSession({ tenantId: sessionTenantId, userId, secret });
+	private async prompt(question: string): Promise<string> {
+		const readline = createInterface({ input: process.stdin, output: this.context.stdout, terminal: true });
+		try {
+			return await readline.question(question);
+		} finally {
+			readline.close();
+		}
+	}
 
-		return performLogin({ tenantId, clientId: "local" }, localDevLogin, () => {}, this.context.credentialStoreOptions);
+}
+
+export class AuthListCommand extends BaseCommand {
+	public static paths = [["auth", "list"]];
+
+	public async execute(): Promise<number> {
+		const logins = await listSavedLogins(this.context.credentialStoreOptions);
+		const active = await getActiveSavedLogin(this.context.credentialStoreOptions);
+		const views = logins.map((login) => ({ login: toSavedLoginView(login), active: login.name === active.name }));
+		this.print({ command: "auth-list" as const, logins: views }, renderAuthList(views));
+		return 0;
 	}
 }
 
 export class AuthLogoutCommand extends BaseCommand {
 	public static paths = [["auth", "logout"]];
 
-	public tenantId = Option.String("--tenant-id");
+	public positionals = Option.Rest();
 
 	public async execute(): Promise<number> {
-		const current = await getCurrentAuthSession(this.context.credentialStoreOptions);
-		const tenantId = this.tenantId ?? current?.tenantId;
-
-		if (!tenantId) {
-			this.print({ command: "auth-logout" as const, loggedOut: false }, "Not logged in.");
-			return 0;
-		}
-
-		await removeAuthSession(tenantId, this.context.credentialStoreOptions);
-		this.print({ command: "auth-logout" as const, loggedOut: true, tenantId }, renderAuthLogout(tenantId));
+		const active = await getActiveSavedLogin(this.context.credentialStoreOptions);
+		const name = this.positionals[0] ?? active.name;
+		await removeSavedLogin(name, this.context.credentialStoreOptions);
+		this.print({ command: "auth-logout" as const, name }, renderAuthLogout(name));
 		return 0;
 	}
 }
@@ -144,18 +170,9 @@ export class AuthStatusCommand extends BaseCommand {
 	public static paths = [["auth", "status"]];
 
 	public async execute(): Promise<number> {
-		const current = await getCurrentAuthSession(this.context.credentialStoreOptions);
-
-		if (!current) {
-			this.print(
-				{ command: "auth-status" as const, loggedIn: false },
-				"Not logged in. Run `agent-issues auth login --tenant-id <id> --client-id <id>`."
-			);
-			return 0;
-		}
-
-		const view = toAuthSessionView(current);
-		this.print({ command: "auth-status" as const, loggedIn: true, session: view }, renderAuthStatus(view));
+		const login = await getActiveSavedLogin(this.context.credentialStoreOptions);
+		const view = toSavedLoginView(login);
+		this.print({ command: "auth-status" as const, login: view }, renderAuthStatus(view));
 		return 0;
 	}
 }
@@ -166,10 +183,18 @@ export class AuthSwitchCommand extends BaseCommand {
 	public positionals = Option.Rest();
 
 	public async execute(): Promise<number> {
-		const tenantId = requirePositional(this.positionals, 0, "auth switch <tenantId>");
-		const session = await switchAuthSession(tenantId, this.context.credentialStoreOptions);
-		const view = toAuthSessionView(session);
-		this.print({ command: "auth-switch" as const, session: view }, renderAuthSwitch(view));
+		const name = this.positionals[0] ?? (await this.getNextSavedLoginName());
+		await setActiveSavedLogin(name, this.context.credentialStoreOptions);
+		const login = await getActiveSavedLogin(this.context.credentialStoreOptions);
+		const view = toSavedLoginView(login);
+		this.print({ command: "auth-switch" as const, login: view }, renderAuthSwitch(view));
 		return 0;
+	}
+
+	private async getNextSavedLoginName(): Promise<string> {
+		const logins = await listSavedLogins(this.context.credentialStoreOptions);
+		const active = await getActiveSavedLogin(this.context.credentialStoreOptions);
+		const activeIndex = logins.findIndex(({ name }) => name === active.name);
+		return logins[(activeIndex + 1) % logins.length].name;
 	}
 }

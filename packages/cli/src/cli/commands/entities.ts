@@ -58,7 +58,7 @@ export class CreateCommand extends BodyTenantCommand {
 				title: requireOption(this.title, "--title is required for create.")
 			});
 
-			this.print(this.asJson && view === "compact" ? toCompactCreateAcknowledgement(entity) : entity, `${entity.id} ${entity.kind} ${entity.status} ${entity.title}`);
+			this.print(this.asJson && view === "compact" ? toCompactCreateAcknowledgement(entity) : entity, `${entity.reference} ${entity.kind} ${entity.status} ${entity.title}`);
 			return 0;
 		});
 	}

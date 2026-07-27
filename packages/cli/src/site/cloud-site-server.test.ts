@@ -5,8 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { RunCredentialCommand } from "@agent-issues/core";
-import { bindCloudProject } from "../cloud-binding.js";
-import { saveAuthSession, type AuthSessionStoreOptions } from "../auth-session.js";
+import { saveSavedLogin, type SavedLoginStoreOptions } from "../auth-session.js";
 
 import { startLiveSite, type LiveSiteHandle } from "./index.js";
 
@@ -127,7 +126,7 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 	let originalHome: string | undefined;
 	let projectDirectory: string;
 	let handle: LiveSiteHandle | undefined;
-	let credentialStoreOptions: AuthSessionStoreOptions;
+	let credentialStoreOptions: SavedLoginStoreOptions;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-site-cloud-home-"));
@@ -150,7 +149,7 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 		rmSync(projectDirectory, { force: true, recursive: true });
 	});
 
-	it("serves snapshot/site-config through HttpStore once bound, with no site-specific branching", async () => {
+	it("serves snapshot/site-config through the active remote saved login", async () => {
 		const gate = startFakeCloudGate((method) => {
 			if (method === "listTenants") {
 				return [{ id: "tenant-a", displayName: "tenant-a", counts: { entities: 0, relations: 0, contexts: 0, contextTerms: 0, handoffs: 0, historyEntries: 0 } }];
@@ -165,9 +164,16 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 		});
 
 		try {
-			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			await saveAuthSession(
-				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+			await saveSavedLogin(
+				{
+					name: "work",
+					kind: "remote",
+					serviceUrl: gate.url,
+					accessToken: "token-a",
+					expiresAt: "2099-01-01T00:00:00.000Z",
+					tenantId: "tenant-a",
+					userId: "user-1"
+				},
 				credentialStoreOptions
 			);
 
@@ -192,13 +198,20 @@ describe("site server follows the seam in cloud mode (ISS56)", () => {
 		}
 	});
 
-	it("relays cloud snapshot-changed events to the site's own /events clients", async () => {
+	it("relays snapshot-changed events from the same active remote saved login", async () => {
 		const gate = startFakeCloudGate(() => ({}));
 
 		try {
-			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			await saveAuthSession(
-				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+			await saveSavedLogin(
+				{
+					name: "work",
+					kind: "remote",
+					serviceUrl: gate.url,
+					accessToken: "token-a",
+					expiresAt: "2099-01-01T00:00:00.000Z",
+					tenantId: "tenant-a",
+					userId: "user-1"
+				},
 				credentialStoreOptions
 			);
 

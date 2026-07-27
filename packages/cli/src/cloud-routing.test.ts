@@ -6,8 +6,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { RunCredentialCommand } from "@agent-issues/core";
-import { bindCloudProject } from "./cloud-binding.js";
-import { saveAuthSession, type AuthSessionStoreOptions } from "./auth-session.js";
+import { saveSavedLogin, type SavedLoginStoreOptions } from "./auth-session.js";
 
 import { runCli } from "./cli.js";
 
@@ -42,7 +41,7 @@ function createCapture() {
 	return { stream, read: () => text };
 }
 
-type RpcRequestLog = { method: string; params: unknown; authorization: string | undefined };
+type RpcRequestLog = { method: string; params: unknown; authorization: string | undefined; projectIdentity: string | undefined };
 
 /** A minimal fake JSON-RPC gate, standing in for the real cloud API (proven separately in packages/api-pg/src/http-store-contract.test.ts) so this suite can verify CLI-level plumbing without a Postgres dependency. */
 function startFakeRpcGate(handleMethod: (method: string, params: unknown) => unknown): {
@@ -57,7 +56,12 @@ function startFakeRpcGate(handleMethod: (method: string, params: unknown) => unk
 		request.on("data", (chunk: Buffer) => chunks.push(chunk));
 		request.on("end", () => {
 			const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id: string; method: string; params: unknown };
-			requests.push({ authorization: request.headers.authorization, method: body.method, params: body.params });
+			requests.push({
+				authorization: request.headers.authorization,
+				method: body.method,
+				params: body.params,
+				projectIdentity: request.headers["x-agent-issues-project-identity"] as string | undefined
+			});
 
 			try {
 				const result = handleMethod(body.method, body.params);
@@ -79,16 +83,16 @@ function startFakeRpcGate(handleMethod: (method: string, params: unknown) => unk
 }
 
 /**
- * Proves the seam ISS55 wires up: an ordinary command (not `cloud status`)
+ * Proves the seam ISS55 wires up: an ordinary entity command
  * routes through `withStore` -> `openStorageDriver` -> `HttpStore` and hits
- * a real HTTP endpoint once a project is cloud-bound with a cached session,
- * with no behavior change to the command itself.
+ * the globally active remote saved login with no behavior change to the
+ * command itself.
  */
-describe("CLI commands route through the cloud backend once bound", () => {
+describe("CLI commands route through the active remote saved login", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
 	let projectDirectory: string;
-	let credentialStoreOptions: AuthSessionStoreOptions;
+	let credentialStoreOptions: SavedLoginStoreOptions;
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-cloud-routing-home-"));
@@ -104,7 +108,7 @@ describe("CLI commands route through the cloud backend once bound", () => {
 		rmSync(projectDirectory, { force: true, recursive: true });
 	});
 
-	it("creates an entity against the cloud API when bound with a valid session", async () => {
+	it("creates an entity using the saved URL, bearer token, tenant, and resolved project identity", async () => {
 		const gate = startFakeRpcGate((method, params) => {
 			expect(method).toBe("createEntity");
 			expect(params).toEqual({ kind: "initiative", title: "Ship it" });
@@ -121,11 +125,11 @@ describe("CLI commands route through the cloud backend once bound", () => {
 		});
 
 		try {
-			bindCloudProject(
-				{ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" }
-			);
-			await saveAuthSession(
+			await saveSavedLogin(
 				{
+					name: "work",
+					kind: "remote",
+					serviceUrl: gate.url,
 					accessToken: "token-a",
 					expiresAt: "2099-01-01T00:00:00.000Z",
 					tenantId: "tenant-a",
@@ -136,7 +140,7 @@ describe("CLI commands route through the cloud backend once bound", () => {
 
 			const stdout = createCapture();
 			const stderr = createCapture();
-			const exitCode = await runCli(["create", "initiative", "--title", "Ship it", "--json"], {
+			const exitCode = await runCli(["create", "initiative", "--title", "Ship it", "--json", "--view", "full"], {
 				credentialStoreOptions,
 				cwd: projectDirectory,
 				stderr: stderr.stream,
@@ -148,22 +152,32 @@ describe("CLI commands route through the cloud backend once bound", () => {
 			expect(JSON.parse(stdout.read())).toMatchObject({ id: "iss-1", kind: "initiative", title: "Ship it" });
 			expect(gate.requests).toHaveLength(1);
 			expect(gate.requests[0]?.authorization).toBe("Bearer token-a");
+			expect(gate.requests[0]?.projectIdentity).toBe(path.basename(projectDirectory).toLowerCase());
 		} finally {
 			gate.server.close();
 		}
 	});
 
-	it("surfaces a clear auth-login error instead of a raw HTTP failure when no session is cached", async () => {
+	it("surfaces the named refresh command before HTTP when the active saved login is expired", async () => {
 		const gate = startFakeRpcGate(() => ({}));
 
 		try {
-			bindCloudProject(
-				{ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" }
+			await saveSavedLogin(
+				{
+					name: "work",
+					kind: "remote",
+					serviceUrl: gate.url,
+					accessToken: "token-a",
+					expiresAt: "2000-01-01T00:00:00.000Z",
+					tenantId: "tenant-a",
+					userId: "user-1"
+				},
+				credentialStoreOptions
 			);
 
 			await expect(
 				runCli(["create", "initiative", "--title", "Ship it"], { credentialStoreOptions, cwd: projectDirectory })
-			).rejects.toThrow(/auth login/);
+			).rejects.toThrow(/auth login --name work --url http:\/\/127\.0\.0\.1:/);
 			expect(gate.requests).toHaveLength(0);
 		} finally {
 			gate.server.close();

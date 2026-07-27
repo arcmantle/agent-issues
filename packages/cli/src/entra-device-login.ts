@@ -8,9 +8,9 @@ import type { DeviceCodeLoginFn } from "./cli/commands/auth.js";
  * verification URL in a browser and enter the device code against a real
  * Azure app registration. Not unit-tested for that reason - see
  * docs/auth-entra-id-setup.md for how to obtain the tenant/client IDs this
- * needs, and `agent-issues auth login --help` for usage. `performLogin` in
- * `./cli/commands/auth.js` covers everything downstream of this exchange
- * with a fake implementation of `DeviceCodeLoginFn`.
+ * needs, and `agent-issues auth login --help` for usage. Remote-login tests
+ * cover everything downstream of this exchange with a fake implementation
+ * of `DeviceCodeLoginFn`.
  */
 export const acquireEntraDeviceCodeSession: DeviceCodeLoginFn = async ({ tenantId, clientId, onDeviceCode }) => {
 	const app = new PublicClientApplication({

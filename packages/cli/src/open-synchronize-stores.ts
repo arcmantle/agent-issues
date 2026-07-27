@@ -1,66 +1,53 @@
 import { HttpStore, type StorageDriver } from "@agent-issues/core";
 import { openSqliteStore, type DatabaseLocationOptions } from "@agent-issues/api-local";
-import { listAuthSessions, type AuthSessionStoreOptions } from "./auth-session.js";
-import { resolveBackendSelection } from "./backend-selection.js";
-import type { CloudBinding, CloudBindingStoreOptions } from "./cloud-binding.js";
+import { getActiveSavedLogin, type SavedLoginStoreOptions } from "./auth-session.js";
 import { isSessionExpired } from "./open-storage-driver.js";
 import { resolveProjectIdentity } from "./project-identity.js";
 
 export type OpenSynchronizeStoresOptions = {
-	/** Only used for the local backend; ignored otherwise. */
+	/** The local source database path. */
 	dbPath?: string;
 	databaseOptions?: DatabaseLocationOptions;
-	cloudBindingOptions?: CloudBindingStoreOptions;
-	authSessionOptions?: AuthSessionStoreOptions;
-	/** Injectable for tests; defaults to `process.env`. */
-	env?: Record<string, string | undefined>;
+	authSessionOptions?: SavedLoginStoreOptions;
 };
 
 export type OpenSynchronizeStoresResult = {
 	local: StorageDriver;
 	cloud: StorageDriver;
-	binding: CloudBinding;
+	destination: { name: string; serviceUrl: string; tenantId: string };
 };
 
 /**
- * The seam-boundary entry point synchronize (ISS59) uses instead of
- * `openStorageDriver`: unlike every other command, synchronize always needs
- * BOTH the local `SqliteStore` and the cloud `HttpStore` open at once,
- * rather than picking one per the project's backend selection. Requires an
- * actual cloud binding (forcing `resolveBackendSelection`'s cloud path, so a
- * missing binding throws the exact same "agent-issues cloud bind" error
- * every other cloud-mode command already throws) and a valid cached session
- * for that binding's tenant (same "agent-issues auth login" error
- * `openStorageDriver` throws).
+ * Opens the local source and the globally active remote saved login as the
+ * synchronization destination. Synchronization cannot target the local login
+ * because its source is already local.
  */
 export async function openSynchronizeStores(options: OpenSynchronizeStoresOptions = {}): Promise<OpenSynchronizeStoresResult> {
 	const currentWorkingDirectory = options.databaseOptions?.currentWorkingDirectory ?? process.cwd();
 	const { identity: projectIdentity } = resolveProjectIdentity(currentWorkingDirectory);
+	const activeLogin = await getActiveSavedLogin(options.authSessionOptions);
 
-	const selection = resolveBackendSelection({
-		projectIdentity,
-		explicitBackend: "cloud",
-		env: options.env,
-		...options.cloudBindingOptions
-	});
-
-	if (selection.backend !== "cloud") {
-		// Unreachable: `explicitBackend: "cloud"` either returns a cloud
-		// selection or throws. Narrows the type for the rest of this function.
-		throw new Error("Expected a cloud backend selection.");
+	if (activeLogin.kind === "local") {
+		throw new Error('Synchronization requires an active remote saved login. Run "agent-issues auth switch <name>" or "agent-issues auth login" first.');
 	}
 
-	const { binding } = selection;
-	const session = (await listAuthSessions(options.authSessionOptions)).find((candidate) => candidate.tenantId === binding.tenantId);
-
-	if (!session || isSessionExpired(session.expiresAt)) {
+	if (isSessionExpired(activeLogin.expiresAt)) {
 		throw new Error(
-			`Project is cloud-bound to tenant "${binding.tenantId}" but there is no valid cached session. Run "agent-issues auth login" first.`
+			`Saved login "${activeLogin.name}" has expired. Run "agent-issues auth login --name ${activeLogin.name} --url ${activeLogin.serviceUrl}" to refresh it.`
 		);
 	}
 
 	const { store: local } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
-	const cloud = new HttpStore({ baseUrl: binding.cloudApiUrl, bearerToken: session.accessToken, tenantId: binding.tenantId, projectIdentity });
+	const cloud = new HttpStore({
+		baseUrl: activeLogin.serviceUrl,
+		bearerToken: activeLogin.accessToken,
+		tenantId: activeLogin.tenantId,
+		projectIdentity
+	});
 
-	return { local, cloud, binding };
+	return {
+		local,
+		cloud,
+		destination: { name: activeLogin.name, serviceUrl: activeLogin.serviceUrl, tenantId: activeLogin.tenantId }
+	};
 }

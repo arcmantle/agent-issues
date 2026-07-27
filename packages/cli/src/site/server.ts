@@ -6,7 +6,7 @@ import { readBuildContentHash, resolveDatabasePath, resolveTenantSlug } from "@a
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
-import type { AuthSessionStoreOptions } from "../auth-session.js";
+import type { SavedLoginStoreOptions } from "../auth-session.js";
 import { openStorageDriver } from "../open-storage-driver.js";
 
 export type LiveSiteInfo = {
@@ -45,12 +45,12 @@ export async function startLiveSite(input: {
 	pollIntervalMs?: number;
 	/**
 	 * Overrides how `auth-session.ts` reaches the native OS credential store
-	 * (ISS185, ADR46) for the cloud-mode bearer-token lookup. Production
+	 * (ISS185, ADR46) for the remote saved-login lookup. Production
 	 * never sets this - the real OS tool is used. Tests inject an
-	 * in-memory fake so a cloud-bound site server never shells out to the
+	 * in-memory fake so a remote-routed site server never shells out to the
 	 * real credential store.
 	 */
-	credentialStoreOptions?: AuthSessionStoreOptions;
+	credentialStoreOptions?: SavedLoginStoreOptions;
 }): Promise<LiveSiteHandle> {
 	const currentWorkingDirectory = input.currentWorkingDirectory;
 	const credentialStoreOptions = input.credentialStoreOptions;
@@ -221,7 +221,7 @@ async function handleRequest(input: {
 	currentWorkingDirectory: string | undefined;
 	defaultTenant: string;
 	server: Server;
-	credentialStoreOptions: AuthSessionStoreOptions | undefined;
+	credentialStoreOptions: SavedLoginStoreOptions | undefined;
 }) {
 	const requestUrl = new URL(input.request.url ?? "/", "http://127.0.0.1");
 	const requestedTenant = requestUrl.searchParams.get("tenant")?.trim() || input.defaultTenant;
@@ -315,7 +315,7 @@ async function readSiteConfig(
 	dbPath: string,
 	defaultTenant: string,
 	currentWorkingDirectory: string | undefined,
-	credentialStoreOptions: AuthSessionStoreOptions | undefined
+	credentialStoreOptions: SavedLoginStoreOptions | undefined
 ) {
 	return withStore(
 		dbPath,
@@ -340,7 +340,7 @@ async function readSnapshot(
 	tenant: string,
 	defaultTenant: string,
 	currentWorkingDirectory: string | undefined,
-	credentialStoreOptions: AuthSessionStoreOptions | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
 	projectId: string | undefined
 ) {
 	if (!projectId) {
@@ -366,7 +366,7 @@ async function readProjectDiscovery(
 	tenant: string,
 	defaultTenant: string,
 	currentWorkingDirectory: string | undefined,
-	credentialStoreOptions: AuthSessionStoreOptions | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
 	projectId: string | undefined
 ) {
 	if (tenant !== defaultTenant) {
@@ -391,7 +391,7 @@ async function readSnapshotSignature(
 	dbPath: string,
 	tenant: string,
 	currentWorkingDirectory: string | undefined,
-	credentialStoreOptions: AuthSessionStoreOptions | undefined
+	credentialStoreOptions: SavedLoginStoreOptions | undefined
 ) {
 	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getSnapshotSignature());
 }

@@ -12,8 +12,7 @@ import {
 	type RunCredentialCommand
 } from "@agent-issues/core";
 import { openSqliteStore, type SqliteStore } from "@agent-issues/api-local";
-import { bindCloudProject } from "../../cloud-binding.js";
-import { saveAuthSession, type AuthSessionStoreOptions } from "../../auth-session.js";
+import { saveSavedLogin, type SavedLoginStoreOptions } from "../../auth-session.js";
 
 import { runCli } from "../../cli.js";
 
@@ -111,7 +110,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	let projectRoot: string;
 	let cloudDirectory: string;
 	let cloudStore: SqliteStore;
-	let credentialStoreOptions: AuthSessionStoreOptions;
+	let credentialStoreOptions: SavedLoginStoreOptions;
 
 	beforeEach(async () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-home-"));
@@ -137,9 +136,16 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		const gate = startFakeCloudGate(cloudStore);
 
 		try {
-			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			await saveAuthSession(
-				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+			await saveSavedLogin(
+				{
+					name: "work",
+					kind: "remote",
+					serviceUrl: gate.url,
+					accessToken: "token-a",
+					expiresAt: "2099-01-01T00:00:00.000Z",
+					tenantId: "tenant-a",
+					userId: "user-1"
+				},
 				credentialStoreOptions
 			);
 
@@ -170,18 +176,23 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		const gate = startFakeCloudGate(cloudStore);
 
 		try {
-			bindCloudProject({ cloudApiUrl: gate.url, projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
-			await saveAuthSession(
-				{ accessToken: "token-a", expiresAt: "2099-01-01T00:00:00.000Z", tenantId: "tenant-a", userId: "user-1" },
+			await saveSavedLogin(
+				{
+					name: "work",
+					kind: "remote",
+					serviceUrl: gate.url,
+					accessToken: "token-a",
+					expiresAt: "2099-01-01T00:00:00.000Z",
+					tenantId: "tenant-a",
+					userId: "user-1"
+				},
 				credentialStoreOptions
 			);
 
-			// Once cloud-bound, ordinary commands (like `create`) already route
-			// through the cloud backend (ADR18/ISS55) - so this creates the
-			// entity in the cloud store, and `synchronize` is what should bring
-			// it down to local.
+			// The active remote login routes the ordinary create command to the
+			// destination; synchronize then brings that entity down to local.
 			const createOut = createCapture();
-			await runCli(["create", "initiative", "--title", "Ship synchronize", "--json"], {
+			await runCli(["create", "initiative", "--title", "Ship synchronize", "--json", "--view", "full"], {
 				credentialStoreOptions,
 				cwd: projectDirectory,
 				stdout: createOut.stream
@@ -206,13 +217,28 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		}
 	});
 
-	it("surfaces the same clear cloud-bind error openStorageDriver produces when the project has no cloud binding", async () => {
-		await expect(runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory })).rejects.toThrow(/cloud bind/);
+	it("surfaces an actionable error when the globally active login is local", async () => {
+		await expect(runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory })).rejects.toThrow(
+			/active remote saved login.*auth switch/s
+		);
 	});
 
-	it("surfaces the same clear auth-login error openStorageDriver produces when cloud-bound but no session is cached", async () => {
-		bindCloudProject({ cloudApiUrl: "https://api.example.com", projectIdentity: path.basename(projectDirectory).toLowerCase(), tenantId: "tenant-a" });
+	it("surfaces the active remote saved login's refresh command when it is expired", async () => {
+		await saveSavedLogin(
+			{
+				name: "work",
+				kind: "remote",
+				serviceUrl: "https://api.example.com",
+				accessToken: "token-a",
+				expiresAt: "2000-01-01T00:00:00.000Z",
+				tenantId: "tenant-a",
+				userId: "user-1"
+			},
+			credentialStoreOptions
+		);
 
-		await expect(runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory })).rejects.toThrow(/auth login/);
+		await expect(runCli(["synchronize"], { credentialStoreOptions, cwd: projectDirectory })).rejects.toThrow(
+			/auth login --name work --url https:\/\/api\.example\.com/
+		);
 	});
 });

@@ -111,6 +111,14 @@ async function getAvailablePort(): Promise<number> {
 }
 
 describe("cli", () => {
+	it.each(["bind", "unbind", "status"])("rejects the removed cloud %s command", async (subcommand) => {
+		await expect(runCli(["cloud", subcommand])).rejects.toThrow(/Extraneous positional argument/);
+	});
+
+	it.each(["--local", "--cloud"])("rejects the removed %s backend option", async (option) => {
+		await expect(runCli(["status", option])).rejects.toThrow(/Unsupported option name/);
+	});
+
 	it("prints help when invoked without a command", async () => {
 		const stdout = createCapture();
 		const stderr = createCapture();
@@ -143,6 +151,73 @@ describe("cli", () => {
 		expect(stderr.read()).toBe("");
 		const payload = JSON.parse(stdout.read());
 		expect(payload.command.name).toBe("auth login");
+		expect(payload.command.usage).toEqual([
+			"agent-issues auth login",
+			"agent-issues auth login --name <name> --url <url>"
+		]);
+		expect(payload.command.positionals).toBeUndefined();
+		expect(payload.command.options).toContainEqual({
+			name: "--name <name>",
+			description: "Unique saved-login name for one-shot use. Prompted when omitted interactively."
+		});
+		expect(payload.command.options).toContainEqual({
+			name: "--url <url>",
+			description: "Remote agent-issues service URL for one-shot use. Prompted when omitted interactively."
+		});
+		expect(JSON.stringify(payload.command)).not.toMatch(/--local|--cloud|cloud bind|cloud unbind|cloud status/);
+	});
+
+	it("documents direct and cyclic saved-login switching", async () => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli(["help", "auth", "switch", "--json"], { stderr: stderr.stream, stdout: stdout.stream });
+		const command = JSON.parse(stdout.read()).command;
+
+		expect(exitCode).toBe(0);
+		expect(stderr.read()).toBe("");
+		expect(command.summary).toContain("saved login");
+		expect(command.usage).toEqual(["agent-issues auth switch [name]"]);
+		expect(command.positionals).toEqual([
+			{
+				name: "name",
+				description: "Saved login to activate. Omit to advance in switching order.",
+				required: false
+			}
+		]);
+		expect(command.output.json).toEqual(["command", "login"]);
+	});
+
+	it("documents saved-login list, status, and logout", async () => {
+		const readHelp = async (command: string) => {
+			const stdout = createCapture();
+			const exitCode = await runCli(["help", "auth", command, "--json"], {
+				stderr: createCapture().stream,
+				stdout: stdout.stream
+			});
+			expect(exitCode).toBe(0);
+			return JSON.parse(stdout.read()).command;
+		};
+
+		const list = await readHelp("list");
+		expect(list.summary).toContain("saved logins");
+		expect(list.usage).toEqual(["agent-issues auth list"]);
+		expect(list.output.json).toEqual(["command", "logins"]);
+
+		const status = await readHelp("status");
+		expect(status.summary).toContain("active saved login");
+		expect(status.output.json).toEqual(["command", "login"]);
+
+		const logout = await readHelp("logout");
+		expect(logout.usage).toEqual(["agent-issues auth logout [name]"]);
+		expect(logout.positionals).toEqual([
+			{
+				name: "name",
+				description: "Remote saved login to remove. Defaults to the active saved login.",
+				required: false
+			}
+		]);
+		expect(logout.output.json).toEqual(["command", "name"]);
 	});
 
 	it("routes '--help' appended to a multi-word command through the help renderer", async () => {
@@ -153,7 +228,7 @@ describe("cli", () => {
 
 		expect(exitCode).toBe(0);
 		expect(stderr.read()).toBe("");
-		expect(stdout.read()).toContain("agent-issues auth login --tenant-id");
+		expect(stdout.read()).toContain("agent-issues auth login --name <name> --url <url>");
 	});
 
 	it("documents generic handoff creation and title or body edits in help", async () => {
@@ -344,6 +419,19 @@ describe("cli", () => {
 		} finally {
 			db.close();
 		}
+	});
+
+	it("prints the canonical reference after creating a handoff", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const stdout = createCapture();
+
+		await runCli(
+			["create", "handoff", "--title", "Resume migration work", "--db", dbPath],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(stdout.read()).toMatch(/^HO_[0-9A-HJKMNP-TV-Z]{26} handoff active Resume migration work\n$/);
 	});
 
 	it("returns compact create and edit acknowledgements without authored bodies", async () => {

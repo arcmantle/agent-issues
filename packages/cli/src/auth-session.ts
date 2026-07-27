@@ -1,9 +1,17 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import path from "node:path";
 
 import { getCredential, resolveAgentIssuesHomeDirectory, setCredential, type OsCredentialStoreOptions } from "@agent-issues/core";
 
-export type AuthSession = {
+export type LocalSavedLogin = {
+	name: "local";
+	kind: "local";
+};
+
+export type RemoteSavedLogin = {
+	name: string;
+	kind: "remote";
+	serviceUrl: string;
 	tenantId: string;
 	userId: string;
 	displayName?: string;
@@ -11,19 +19,26 @@ export type AuthSession = {
 	expiresAt: string;
 };
 
-/** An AuthSession with the raw accessToken redacted - safe to print or log. */
-export type AuthSessionView = Omit<AuthSession, "accessToken">;
+export type SavedLogin = LocalSavedLogin | RemoteSavedLogin;
 
-/** Strips the raw accessToken so callers can safely display or log a session. */
-export function toAuthSessionView(session: AuthSession): AuthSessionView {
-	const { accessToken: _accessToken, ...view } = session;
+export type SavedLoginView = LocalSavedLogin | Omit<RemoteSavedLogin, "accessToken">;
+
+const LOCAL_SAVED_LOGIN: LocalSavedLogin = { name: "local", kind: "local" };
+
+/** Strips remote credentials so callers can safely display or log a saved login. */
+export function toSavedLoginView(login: LocalSavedLogin): LocalSavedLogin;
+export function toSavedLoginView(login: RemoteSavedLogin): Omit<RemoteSavedLogin, "accessToken">;
+export function toSavedLoginView(login: SavedLogin): SavedLoginView;
+export function toSavedLoginView(login: SavedLogin): SavedLoginView {
+	if (login.kind === "local") return login;
+	const { accessToken: _accessToken, ...view } = login;
 	return view;
 }
 
-export type AuthSessionStoreOptions = OsCredentialStoreOptions & {
+export type SavedLoginStoreOptions = OsCredentialStoreOptions & {
 	/**
-	 * Overrides the directory checked for a pre-ISS185 plain-file session
-	 * cache to migrate from. Production defaults to
+	 * Overrides the directory checked for legacy plaintext routing files to
+	 * remove during upgrade. Production defaults to
 	 * `resolveAgentIssuesHomeDirectory()` (`~/.agent-issues`); tests inject a
 	 * temp directory so no real user state is touched.
 	 */
@@ -33,106 +48,115 @@ export type AuthSessionStoreOptions = OsCredentialStoreOptions & {
 const SERVICE = "agent-issues-auth";
 const ACCOUNT = "sessions";
 const LEGACY_AUTH_SESSION_FILENAME = "auth.json";
+const LEGACY_CLOUD_BINDINGS_FILENAME = "cloud-bindings.json";
+const SAVED_LOGIN_CREDENTIAL_VERSION = 1;
 
-type AuthSessionFileShape = {
-	currentTenantId?: string;
-	sessions: Record<string, AuthSession>;
+type SavedLoginCredential = {
+	version: typeof SAVED_LOGIN_CREDENTIAL_VERSION;
+	activeName: string;
+	remoteLogins: RemoteSavedLogin[];
 };
 
-function resolveLegacyAuthSessionFilePath(options?: AuthSessionStoreOptions): string {
+function resolveLegacyFilePath(filename: string, options?: SavedLoginStoreOptions): string {
 	const homeDirectory = options?.homeDirectory ?? resolveAgentIssuesHomeDirectory();
-	return path.join(homeDirectory, LEGACY_AUTH_SESSION_FILENAME);
+	return path.join(homeDirectory, filename);
 }
 
-function parseAuthSessionFileShape(raw: string): AuthSessionFileShape {
+function createLocalSavedLoginCredential(): SavedLoginCredential {
+	return { version: SAVED_LOGIN_CREDENTIAL_VERSION, activeName: LOCAL_SAVED_LOGIN.name, remoteLogins: [] };
+}
+
+function parseSavedLoginCredential(raw: string): SavedLoginCredential | undefined {
 	try {
 		const parsed: unknown = JSON.parse(raw);
-		if (typeof parsed !== "object" || parsed === null) return { sessions: {} };
+		if (typeof parsed !== "object" || parsed === null) return undefined;
 
-		const { currentTenantId, sessions } = parsed as Partial<AuthSessionFileShape>;
+		const { version, activeName, remoteLogins } = parsed as Partial<SavedLoginCredential>;
+		if (version !== SAVED_LOGIN_CREDENTIAL_VERSION || typeof activeName !== "string" || !Array.isArray(remoteLogins)) {
+			return undefined;
+		}
 		return {
-			currentTenantId: typeof currentTenantId === "string" ? currentTenantId : undefined,
-			sessions: sessions && typeof sessions === "object" ? sessions : {}
+			version,
+			activeName,
+			remoteLogins
 		};
 	} catch {
-		return { sessions: {} };
+		return undefined;
 	}
 }
 
-/**
- * Reads the cached sessions blob from the native OS credential store
- * (ISS185, ADR46). The very first read after upgrading past ISS185 instead
- * finds a pre-existing plain-file cache (if any) at the legacy location,
- * imports it into the credential store once, and deletes the plain file -
- * so upgrading users are not forced to re-authenticate.
- */
-async function readAuthSessionFile(options?: AuthSessionStoreOptions): Promise<AuthSessionFileShape> {
+async function readSavedLoginCredential(options?: SavedLoginStoreOptions): Promise<SavedLoginCredential> {
+	rmSync(resolveLegacyFilePath(LEGACY_AUTH_SESSION_FILENAME, options), { force: true });
+	rmSync(resolveLegacyFilePath(LEGACY_CLOUD_BINDINGS_FILENAME, options), { force: true });
+
 	const stored = await getCredential(SERVICE, ACCOUNT, options);
 	if (stored !== undefined) {
-		return parseAuthSessionFileShape(stored);
+		const current = parseSavedLoginCredential(stored);
+		if (current) return current;
 	}
 
-	const legacyFilePath = resolveLegacyAuthSessionFilePath(options);
-	if (!existsSync(legacyFilePath)) {
-		return { sessions: {} };
-	}
-
-	const legacyFile = parseAuthSessionFileShape(readFileSync(legacyFilePath, "utf8"));
-	await setCredential(SERVICE, ACCOUNT, JSON.stringify(legacyFile), options);
-	rmSync(legacyFilePath, { force: true });
-	return legacyFile;
+	const migrated = createLocalSavedLoginCredential();
+	await setCredential(SERVICE, ACCOUNT, JSON.stringify(migrated), options);
+	return migrated;
 }
 
-async function writeAuthSessionFile(file: AuthSessionFileShape, options?: AuthSessionStoreOptions): Promise<void> {
+async function writeSavedLoginCredential(file: SavedLoginCredential, options?: SavedLoginStoreOptions): Promise<void> {
 	await setCredential(SERVICE, ACCOUNT, JSON.stringify(file), options);
 }
 
-/** Persists a session and makes it the current tenant. */
-export async function saveAuthSession(session: AuthSession, options?: AuthSessionStoreOptions): Promise<void> {
-	const file = await readAuthSessionFile(options);
-	file.sessions[session.tenantId] = session;
-	file.currentTenantId = session.tenantId;
-	await writeAuthSessionFile(file, options);
+/** Returns every saved login in switching order, beginning with local. */
+export async function listSavedLogins(_options?: SavedLoginStoreOptions): Promise<SavedLogin[]> {
+	return [LOCAL_SAVED_LOGIN, ...(await readSavedLoginCredential(_options)).remoteLogins];
 }
 
-/** Returns the current tenant's cached session, or undefined if none is set. */
-export async function getCurrentAuthSession(options?: AuthSessionStoreOptions): Promise<AuthSession | undefined> {
-	const file = await readAuthSessionFile(options);
-	if (!file.currentTenantId) return undefined;
-	return file.sessions[file.currentTenantId];
+/** Returns the one globally active saved login. */
+export async function getActiveSavedLogin(options?: SavedLoginStoreOptions): Promise<SavedLogin> {
+	const file = await readSavedLoginCredential(options);
+	return file.remoteLogins.find(({ name }) => name === file.activeName) ?? LOCAL_SAVED_LOGIN;
 }
 
-/** Returns every cached session, regardless of which one is current. */
-export async function listAuthSessions(options?: AuthSessionStoreOptions): Promise<AuthSession[]> {
-	return Object.values((await readAuthSessionFile(options)).sessions);
-}
-
-/**
- * Removes a tenant's cached session. If it was the current tenant, clears
- * the current pointer too (there is no cached session left to fall back to).
- */
-export async function removeAuthSession(tenantId: string, options?: AuthSessionStoreOptions): Promise<void> {
-	const file = await readAuthSessionFile(options);
-	delete file.sessions[tenantId];
-	if (file.currentTenantId === tenantId) {
-		file.currentTenantId = undefined;
-	}
-	await writeAuthSessionFile(file, options);
-}
-
-/**
- * Switches the current tenant pointer to an already-cached session, without
- * touching its accessToken (no re-auth needed to switch between tenants
- * that are both already logged in).
- */
-export async function switchAuthSession(tenantId: string, options?: AuthSessionStoreOptions): Promise<AuthSession> {
-	const file = await readAuthSessionFile(options);
-	const session = file.sessions[tenantId];
-	if (!session) {
-		throw new Error(`No cached auth session for tenant "${tenantId}". Run "agent-issues auth login" first.`);
+/** Creates or refreshes a named remote login and makes it active. */
+export async function saveSavedLogin(login: RemoteSavedLogin, options?: SavedLoginStoreOptions): Promise<void> {
+	if (login.name === LOCAL_SAVED_LOGIN.name) {
+		throw new Error('Saved-login name "local" is reserved.');
 	}
 
-	file.currentTenantId = tenantId;
-	await writeAuthSessionFile(file, options);
-	return session;
+	const file = await readSavedLoginCredential(options);
+	const existingIndex = file.remoteLogins.findIndex(({ name }) => name === login.name);
+	if (existingIndex === -1) {
+		file.remoteLogins.push(login);
+	} else {
+		file.remoteLogins[existingIndex] = login;
+	}
+	file.activeName = login.name;
+	await writeSavedLoginCredential(file, options);
+}
+
+/** Persists the globally active name when it identifies an existing saved login. */
+export async function setActiveSavedLogin(name: string, options?: SavedLoginStoreOptions): Promise<void> {
+	const file = await readSavedLoginCredential(options);
+	if (name !== LOCAL_SAVED_LOGIN.name && !file.remoteLogins.some((login) => login.name === name)) {
+		throw new Error(`No saved login named "${name}".`);
+	}
+
+	file.activeName = name;
+	await writeSavedLoginCredential(file, options);
+}
+
+/** Removes a remote saved login, falling back to local when it was active. */
+export async function removeSavedLogin(name: string, options?: SavedLoginStoreOptions): Promise<void> {
+	if (name === LOCAL_SAVED_LOGIN.name) {
+		throw new Error('The local saved login cannot be removed.');
+	}
+
+	const file = await readSavedLoginCredential(options);
+	if (!file.remoteLogins.some((login) => login.name === name)) {
+		throw new Error(`No saved login named "${name}".`);
+	}
+
+	file.remoteLogins = file.remoteLogins.filter((login) => login.name !== name);
+	if (file.activeName === name) {
+		file.activeName = LOCAL_SAVED_LOGIN.name;
+	}
+	await writeSavedLoginCredential(file, options);
 }

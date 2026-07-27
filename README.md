@@ -104,10 +104,12 @@ agent-issues link ISS1 fixes US1
 agent-issues unlink ISS1 fixes US1
 agent-issues show INIT1 --view full --json
 agent-issues list issue
-agent-issues auth login --tenant-id <entra-tenant-guid> --client-id <entra-app-client-guid>
+agent-issues auth login
+agent-issues auth list
 agent-issues auth status
-agent-issues auth switch <tenantId>
-agent-issues auth logout
+agent-issues auth switch work
+agent-issues auth switch
+agent-issues auth logout work
 ```
 
 ## Current relation model
@@ -139,34 +141,31 @@ agent-issues auth logout
 
 ## Auth (Entra ID)
 
-The cloud API (`@agent-issues/api-pg`) validates requests through a swappable `AuthProvider` seam, with Entra ID (Azure AD) as the first concrete provider. The CLI ships matching `auth login`/`auth logout`/`auth status`/`auth switch` commands:
+The cloud API (`@agent-issues/api-pg`) validates requests through a swappable `AuthProvider` seam, with Entra ID (Azure AD) as the first concrete provider. The CLI stores named remote logins and includes a permanent built-in local login:
 
 ```bash
-agent-issues auth login --tenant-id <entra-tenant-guid> --client-id <entra-app-client-guid>
+agent-issues auth login
+agent-issues auth login --name work --url https://agent-issues.example.com # one-shot
+agent-issues auth list
 agent-issues auth status
-agent-issues auth switch <tenantId>
-agent-issues auth logout
+agent-issues auth switch work
+agent-issues auth switch
+agent-issues auth logout work
 ```
 
-- `auth login` runs Entra's interactive device-code flow: it prints a verification URL and code, then waits for you to complete sign-in in a browser.
-- `--tenant-id`/`--client-id` can also be set via the `AGENT_ISSUES_ENTRA_TENANT_ID`/`AGENT_ISSUES_ENTRA_CLIENT_ID` environment variables.
-- Sessions are cached user-locally under `~/.agent-issues/auth.json`; `auth switch` moves between already-cached tenants without re-authenticating.
+- `auth login` prompts for a name and service URL, discovers the service's Entra configuration, runs the interactive device-code flow, and saves the resulting remote login.
+- `auth login --name <name> --url <url>` supplies both values for one-shot or automated use.
+- `auth list` shows the permanent local login first, then remote saved logins in creation order, and marks the active login.
+- `auth switch <name>` activates local or a named remote login directly. Bare `auth switch` advances through local, each remote in creation order, and wraps to local.
+- The active saved login controls routing globally for subsequent CLI requests.
+- `auth logout [name]` removes a remote saved login; removing the active remote atomically falls back to local.
+- Remote credentials are stored in the OS credential store, not plaintext files.
 - `auth status` never prints the raw access token.
 - You need a real Entra ID app registration before `auth login` will work. See [`docs/auth-entra-id-setup.md`](docs/auth-entra-id-setup.md) for a step-by-step guide to creating one.
 
 ### Local dev auth (no Azure required)
 
-For local development and AFK testing of the auth seam and cloud path, `LocalAuthProvider` (`@agent-issues/api-pg`) issues and validates a locally-signed dev credential with no network call and no Azure tenant:
-
-```bash
-agent-issues auth login --local --secret <any-shared-secret>
-agent-issues auth status
-```
-
-- `--local` skips the Entra device-code flow entirely; nothing leaves your machine.
-- `--secret` is required (also settable via `AGENT_ISSUES_LOCAL_AUTH_SECRET`) so this path can never be reached by accident.
-- `--tenant-id` defaults to `local-dev`; `--user-id` defaults to your OS username.
-- This is dev-only tooling, never a production auth path. See [`docs/local-dev-setup.md`](docs/local-dev-setup.md).
+`LocalAuthProvider` remains available inside `@agent-issues/api-pg` for API service tests and local service development only. It is not exposed through `agent-issues auth login`; local CLI storage uses the permanent built-in `local` saved login. See [`docs/local-dev-setup.md`](docs/local-dev-setup.md).
 
 ## Discovery
 

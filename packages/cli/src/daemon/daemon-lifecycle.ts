@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Socket } from "node:net";
 
 import { DaemonHandshakeMismatchError } from "@agent-issues/core";
@@ -49,7 +49,29 @@ function resolveDaemonSpawnLockFilePath(options?: DaemonStateStoreOptions): stri
 export function tryAcquireDaemonSpawnLock(options?: DaemonStateStoreOptions): boolean {
 	const filePath = resolveDaemonSpawnLockFilePath(options);
 	try {
-		closeSync(openSync(filePath, "wx"));
+		writeFileSync(filePath, String(process.pid), { flag: "wx" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function reclaimAbandonedDaemonSpawnLock(options?: DaemonStateStoreOptions): boolean {
+	const filePath = resolveDaemonSpawnLockFilePath(options);
+	try {
+		const ownerPid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
+		if (Number.isInteger(ownerPid) && ownerPid > 0) {
+			try {
+				process.kill(ownerPid, 0);
+				return false;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
+			}
+		} else if (Date.now() - statSync(filePath).mtimeMs < 1000) {
+			return false;
+		}
+
+		unlinkSync(filePath);
 		return true;
 	} catch {
 		return false;
@@ -118,9 +140,19 @@ export async function ensureDaemonRunning(options: EnsureDaemonRunningOptions): 
 		return { port: existing.port, spawned: false };
 	}
 
-	if (!tryAcquireDaemonSpawnLock(options)) {
-		const state = await waitForReachableDaemonState(options);
-		return { port: state.port, spawned: false };
+	let ownsSpawnLock = tryAcquireDaemonSpawnLock(options);
+	if (!ownsSpawnLock && reclaimAbandonedDaemonSpawnLock(options)) {
+		ownsSpawnLock = tryAcquireDaemonSpawnLock(options);
+	}
+
+	if (!ownsSpawnLock) {
+		try {
+			const state = await waitForReachableDaemonState(options);
+			return { port: state.port, spawned: false };
+		} catch (error) {
+			if (!reclaimAbandonedDaemonSpawnLock(options) || !tryAcquireDaemonSpawnLock(options)) throw error;
+			ownsSpawnLock = true;
+		}
 	}
 
 	try {

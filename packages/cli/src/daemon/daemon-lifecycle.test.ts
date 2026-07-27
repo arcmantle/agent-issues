@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,7 @@ import {
 	tryAcquireDaemonSpawnLock,
 } from "./daemon-lifecycle.js";
 import { DaemonDbPathMismatchError, DaemonVersionMismatchError } from "@agent-issues/core";
-import { saveDaemonState } from "@agent-issues/api-local";
+import { resolveDaemonFilePath, saveDaemonState } from "@agent-issues/api-local";
 
 describe("daemon liveness probe (ISS189)", () => {
 	let server: Server | undefined;
@@ -135,6 +135,32 @@ describe("ensureDaemonRunning (ISS189)", () => {
 		expect(spawn).toHaveBeenCalledOnce();
 		expect(result.spawned).toBe(true);
 		expect(result.port).toBeGreaterThan(0);
+	});
+
+	it("recovers an abandoned spawn lock when no daemon is running", async () => {
+		writeFileSync(resolveDaemonFilePath("daemon", ".lock", { homeDirectory }), "999999");
+		const spawn = vi.fn(() => {
+			void listen().then((port) => saveDaemonState({ pid: process.pid, port }, { homeDirectory }));
+		});
+
+		const result = await ensureDaemonRunning({ homeDirectory, spawn, waitTimeoutMs: 50, pollIntervalMs: 5 });
+
+		expect(spawn).toHaveBeenCalledOnce();
+		expect(result).toEqual({ port: expect.any(Number), spawned: true });
+	});
+
+	it("recovers when the spawn lock owner exits while another caller waits", async () => {
+		tryAcquireDaemonSpawnLock({ homeDirectory });
+		const lockFilePath = resolveDaemonFilePath("daemon", ".lock", { homeDirectory });
+		const spawn = vi.fn(() => {
+			void listen().then((port) => saveDaemonState({ pid: process.pid, port }, { homeDirectory }));
+		});
+		setTimeout(() => writeFileSync(lockFilePath, "999999"), 10);
+
+		const result = await ensureDaemonRunning({ homeDirectory, spawn, waitTimeoutMs: 50, pollIntervalMs: 5 });
+
+		expect(spawn).toHaveBeenCalledOnce();
+		expect(result).toEqual({ port: expect.any(Number), spawned: true });
 	});
 
 	it("waits for a concurrent caller's spawn instead of spawning its own when the lock is already held", async () => {

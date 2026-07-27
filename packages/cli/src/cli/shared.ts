@@ -5,11 +5,27 @@ import { Command, Option, type BaseContext } from "clipanion";
 
 import type { StorageDriver } from "@agent-issues/core";
 import { readBuildContentHash, type ContextDirectoryView, type DatabaseLocationOptions } from "@agent-issues/api-local";
-import type { AuthSessionStoreOptions } from "../auth-session.js";
+import type { SavedLoginStoreOptions } from "../auth-session.js";
 import { openStorageDriver } from "../open-storage-driver.js";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;
+	authLoginDependencies?: {
+		deviceCodeLogin?: (options: {
+			tenantId: string;
+			clientId: string;
+			onDeviceCode: (message: string) => void;
+		}) => Promise<{
+			tenantId: string;
+			userId: string;
+			displayName?: string;
+			accessToken: string;
+			expiresAt: string;
+		}>;
+		fetch?: typeof globalThis.fetch;
+		interactive?: boolean;
+		prompt?: (question: string) => Promise<string>;
+	};
 	/**
 	 * Overrides how `auth-session.ts` reaches the native OS credential store
 	 * (ISS185, ADR46). Production never sets this - the real OS tool is used.
@@ -17,7 +33,7 @@ export type AgentIssuesContext = BaseContext & {
 	 * so `auth login`/`logout`/`status`/`switch` never shell out to the
 	 * developer's or CI machine's real credential store.
 	 */
-	credentialStoreOptions?: AuthSessionStoreOptions;
+	credentialStoreOptions?: SavedLoginStoreOptions;
 };
 
 export type BodyInputOptions = {
@@ -46,7 +62,7 @@ export abstract class BaseCommand extends Command<AgentIssuesContext> {
 	 */
 	protected withStoreOptions(
 		extra?: DatabaseLocationOptions
-	): DatabaseLocationOptions & { credentialStoreOptions?: AuthSessionStoreOptions } {
+	): DatabaseLocationOptions & { credentialStoreOptions?: SavedLoginStoreOptions } {
 		return { credentialStoreOptions: this.context.credentialStoreOptions, currentWorkingDirectory: this.context.cwd, ...extra };
 	}
 }
@@ -93,7 +109,7 @@ export abstract class TargetCommand extends BaseCommand {
  */
 export async function withStore<T>(
 	dbPath: string | undefined,
-	options: (DatabaseLocationOptions & { credentialStoreOptions?: AuthSessionStoreOptions }) | undefined,
+	options: (DatabaseLocationOptions & { credentialStoreOptions?: SavedLoginStoreOptions }) | undefined,
 	fn: (store: StorageDriver, dbPath: string) => Promise<T>
 ): Promise<T> {
 	const { store, dbPath: resolvedDbPath, daemonFallbackWarning } = await openStorageDriver({

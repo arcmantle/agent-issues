@@ -27,11 +27,11 @@ with its own Entra ID tenant automatically.
 
 On the app registration's **Overview** page, copy two GUIDs:
 
-- **Application (client) ID** → this is `--client-id`.
-- **Directory (tenant) ID** → this is `--tenant-id`.
+- **Application (client) ID** identifies the public client used by the service.
+- **Directory (tenant) ID** identifies the tenant accepted by the service.
 
-You'll pass both to `agent-issues auth login`, or set them as environment
-variables (see [step 4](#4-run-the-cli-login)).
+Configure both values on the remote service. The CLI discovers them from the
+service metadata endpoint during login.
 
 ## 3. Enable public-client (device-code) authentication
 
@@ -63,22 +63,21 @@ without an individual consent prompt per user.
 
 ## 4. Run the CLI login
 
-You can pass the tenant ID and client ID as flags:
+Start the interactive login:
 
 ```bash
-agent-issues auth login --tenant-id <directory-tenant-id> --client-id <application-client-id>
-```
-
-...or set them once as environment variables so you don't need the flags
-every time:
-
-```bash
-export AGENT_ISSUES_ENTRA_TENANT_ID=<directory-tenant-id>
-export AGENT_ISSUES_ENTRA_CLIENT_ID=<application-client-id>
 agent-issues auth login
 ```
 
-The command prints a verification URL (normally
+The CLI prompts for a saved-login name and service URL. For one-shot or
+automated use, supply both explicitly:
+
+```bash
+agent-issues auth login --name work --url https://agent-issues.example.com
+```
+
+The CLI reads the service's tenant and client IDs from
+`/.well-known/agent-issues`, then prints a verification URL (normally
 `https://microsoft.com/devicelogin`) and a short code. Open the URL in any
 browser, sign in with the Entra ID account you want the CLI to use, and
 enter the code when prompted. Once you approve, the CLI finishes signing in
@@ -89,14 +88,23 @@ and caches the session locally.
 Once logged in:
 
 ```bash
-agent-issues auth status          # shows who you're signed in as, and when the session expires
-agent-issues auth switch <tenant> # switches to another already-logged-in tenant, no re-auth needed
-agent-issues auth logout          # removes the cached session
+agent-issues auth list            # lists local first, then remotes in creation order
+agent-issues auth status          # shows the globally active login and destination
+agent-issues auth switch work     # activates local or a named remote directly
+agent-issues auth switch          # advances local -> each remote -> local
+agent-issues auth logout work     # removes a remote saved login
 ```
 
+The active saved login controls the destination of subsequent CLI requests.
+Bare `auth switch` follows the order shown by `auth list` and wraps to local
+after the last remote. Removing the active remote with `auth logout` changes
+the active login to local atomically. The permanent local login cannot be
+removed.
+
 `auth status` never prints the raw access token, in either human or
-`--json` output. Cached sessions live in `~/.agent-issues/auth.json` and are
-user-local, not committed to any repository.
+`--json` output; the same redaction applies to the other auth commands.
+Remote saved-login credentials live in the OS credential store, not in
+plaintext files.
 
 ## Troubleshooting
 
@@ -104,9 +112,9 @@ user-local, not committed to any repository.
   'client_assertion' or 'client_secret'"** - public client flows aren't
   enabled yet. Revisit [step 3](#3-enable-public-client-device-code-authentication).
 - **"AADSTS50020: User account ... does not exist in tenant"** - you signed
-  in with an account from a different tenant than the one registered in
-  `--tenant-id`. Either sign in with an account that belongs to that tenant,
-  or change **Supported account types** on the app registration to allow
-  accounts from other organizations/personal Microsoft accounts.
+  in with an account from a different tenant than the remote service
+  discovered for login. Either sign in with an account that belongs to that
+  tenant, or change **Supported account types** on the app registration to
+  allow accounts from other organizations/personal Microsoft accounts.
 - **The device code expires before you finish signing in** - just re-run
   `agent-issues auth login`; each attempt issues a fresh code.

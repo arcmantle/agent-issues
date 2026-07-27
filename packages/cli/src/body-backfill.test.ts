@@ -85,9 +85,18 @@ describe("body backfill", () => {
 		const first = await backfillBodies(new SqliteStore(db), { kinds: ["issue"] });
 		expect(first.updated).toBe(1);
 
-		db.db.prepare(`UPDATE entities SET body_source = 'authored' WHERE tenant_id = @tenantId AND id = @entityId`).run({
-			tenantId: db.tenantId,
-			entityId: issue.id
+		// Recreate a legacy row: the body backfill generated is still there, but
+		// marked `authored` the way rows written before body-source tracking are.
+		// Done through the seam rather than raw SQL - the CLI is a storage-driver
+		// client and has no business reaching past it into the ORM.
+		const legacyStore = new SqliteStore(db);
+		const generated = (await legacyStore.getEntityDetails(issue.id)).entity;
+		await legacyStore.setEntityBody({
+			entityId: issue.id,
+			body: generated.body,
+			bodySource: "authored",
+			expectedRevision: generated.revision,
+			expectedContentHash: generated.contentHash
 		});
 
 		const legacySnapshot = getDatabaseSnapshot(db);

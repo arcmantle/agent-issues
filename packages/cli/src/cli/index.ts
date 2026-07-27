@@ -1,8 +1,7 @@
 import { Cli } from "clipanion";
 
-import { AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
+import { AuthListCommand, AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
 import { BackfillBodiesCommand } from "./commands/backfill.js";
-import { CloudBindCommand, CloudStatusCommand, CloudUnbindCommand } from "./commands/cloud.js";
 import { ContextCommand } from "./commands/context.js";
 import {
 	ArchiveCommand,
@@ -86,13 +85,11 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(OrphansCommand);
 	cli.register(ShowCommand);
 	cli.register(ListCommand);
+	cli.register(AuthListCommand);
 	cli.register(AuthLoginCommand);
 	cli.register(AuthLogoutCommand);
 	cli.register(AuthStatusCommand);
 	cli.register(AuthSwitchCommand);
-	cli.register(CloudBindCommand);
-	cli.register(CloudUnbindCommand);
-	cli.register(CloudStatusCommand);
 	cli.register(SynchronizeCommand);
 	cli.register(FallbackCommand);
 
