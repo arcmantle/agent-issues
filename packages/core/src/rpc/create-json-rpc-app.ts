@@ -197,8 +197,14 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			return;
 		}
 
-		const store = await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER));
 		try {
+			// Inside the try on purpose: opening the store is the most common
+			// place a request fails for a reason the caller can act on (an
+			// unregistered project identity in a fresh workspace, a migration
+			// failure, a locked db file). Left outside, the rejection escapes to
+			// express' default handler and the caller only ever sees an opaque
+			// HTTP 500 instead of the actual message.
+			const store = await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER));
 			const result = await handler(store, rpcRequest.params);
 			const successResponse: JsonRpcSuccessResponse = { jsonrpc: "2.0", id: rpcRequest.id, result };
 			response.status(200).json(successResponse);

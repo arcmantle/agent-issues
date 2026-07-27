@@ -71,6 +71,29 @@ export function generateCanonicalIdentity(kind: EntityKind): { stableId: string;
 	return { stableId, reference: encodeCanonicalReference(kind, stableId) };
 }
 
+const STABLE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether a selector names one specific record - a stable id or a Canonical
+ * reference - as opposed to a human/repository-style name that is matched by
+ * normalized title. Both storage drivers key the same decision on this: a
+ * direct selector that resolves to nothing is a genuine lookup failure and
+ * must stay an error, while an unmatched repository-style identity is a
+ * workspace that has simply not registered its project yet.
+ */
+export function isDirectEntitySelector(selector: string): boolean {
+	if (STABLE_ID_PATTERN.test(selector)) {
+		return true;
+	}
+
+	try {
+		decodeCanonicalReference(selector);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export function deriveMigratedEntityIdentity(
 	kind: EntityKind,
 	legacyAlias: string

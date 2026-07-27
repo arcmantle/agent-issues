@@ -106,7 +106,9 @@ describe("runMigrationSequence", () => {
 
 	it("backs up before applying an unapplied migration, but never for one already applied", async () => {
 		const engine = createFakeEngine();
-		const migrations: Migration[] = [{ id: "0001-create-widgets", up: async () => {} }];
+		const migrations: Migration[] = [
+			{ id: "0001-create-widgets", up: async () => {} }
+		];
 
 		await runMigrationSequence(migrations, engine, fakeConn);
 		expect(engine.backupCount).toBe(1);

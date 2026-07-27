@@ -10,6 +10,15 @@ export type StorageDriverContractOptions = {
 	label: string;
 	/** Opens a fresh `StorageDriver` for a single test; the test closes it via `store.close()`. */
 	openStore: () => StorageDriver | Promise<StorageDriver>;
+	/**
+	 * Opens a store scoped to a workspace-derived project identity (ADR
+	 * "Multi-source project identity resolution"), against the same underlying
+	 * tenant as every other store the same factory returns. Required so the
+	 * contract can pin how identity maps to a project on both backends - the
+	 * seam was silent on this, and the two drivers had drifted into resolving
+	 * it completely differently without a single test noticing.
+	 */
+	openStoreForProject: (projectIdentity: string) => StorageDriver | Promise<StorageDriver>;
 };
 
 /**
@@ -28,7 +37,59 @@ export type StorageDriverContractOptions = {
  * `PgStore`).
  */
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
-	const { label, openStore } = options;
+	const { label, openStore, openStoreForProject } = options;
+
+	describe(`storage-driver seam: project identity (${label})`, () => {
+		it("registers an unseen identity as its own project and keeps each identity's work separate", async () => {
+			const repoA = await openStoreForProject("repo-a");
+			const repoB = await openStoreForProject("repo-b");
+
+			try {
+				const initiativeA = await repoA.createEntity({ kind: "initiative", title: "Initiative A" });
+				const initiativeB = await repoB.createEntity({ kind: "initiative", title: "Initiative B" });
+
+				// A parent-less initiative has to land in its own workspace's
+				// project, not a shared default one: this is what kept cloud
+				// putting every fresh workspace's first issue in Default Project.
+				expect((await repoA.listEntities("initiative")).map((entity) => entity.title)).toEqual(["Initiative A"]);
+				expect((await repoB.listEntities("initiative")).map((entity) => entity.title)).toEqual(["Initiative B"]);
+
+				expect((await repoA.listEntities("initiative")).map((entity) => entity.id)).not.toContain(initiativeB.id);
+				expect((await repoB.listEntities("initiative")).map((entity) => entity.id)).not.toContain(initiativeA.id);
+
+				const discovery = await repoA.getProjectDiscovery();
+				expect(discovery.kind).toBe("available");
+				if (discovery.kind !== "available") {
+					return;
+				}
+
+				expect(discovery.projects.map((entry) => entry.project.title).sort()).toEqual(["repo-a", "repo-b"]);
+				for (const entry of discovery.projects) {
+					expect(entry).toMatchObject({ epicCount: 1, initiativeCount: 1 });
+				}
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("resolves an identity that differs only in case and separators to the same project", async () => {
+			const store = await openStoreForProject("repo-a");
+			const restyled = await openStoreForProject("Repo A");
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Shared initiative" });
+
+				expect((await restyled.listEntities("initiative")).map((entity) => entity.id)).toEqual([initiative.id]);
+
+				const discovery = await restyled.getProjectDiscovery();
+				expect(discovery.kind === "available" && discovery.projects).toHaveLength(1);
+			} finally {
+				await store.close();
+				await restyled.close();
+			}
+		});
+	});
 
 	describe(`storage-driver seam: Stable identity and Canonical reference (${label})`, () => {
 		it("creates and resolves an entity by UUID or Canonical reference", async () => {

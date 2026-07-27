@@ -39,11 +39,11 @@ export type MigrationEngine = {
 	ensureLedgerTable(): Promise<void>;
 	isApplied(id: string): Promise<boolean>;
 	recordApplied(id: string): Promise<void>;
-	/** No-ops when the driver has nothing worth backing up (e.g. a fresh, empty SQLite file, or Postgres - which has no file to copy at all). */
+	/** Prepares one backup for the pending upgrade sequence. No-ops when the driver has nothing to back up. */
 	backup(): Promise<void>;
 	/**
 	 * Wraps `fn` in whatever transactional/locking boundary the driver needs
-	 * before applying a migration (SQLite: `db.transaction`; Postgres:
+	 * before applying a migration (SQLite: explicit `BEGIN`/`COMMIT`; Postgres:
 	 * `BEGIN` + `pg_advisory_xact_lock`, so concurrent runners against the
 	 * same database serialize on this specific migration id).
 	 */
@@ -53,7 +53,9 @@ export type MigrationEngine = {
 /**
  * Applies every migration in `migrations` that has not yet run, in order,
  * against `conn`, recording each applied id via the engine's ledger so later
- * runs skip it (ADR43). Re-checks `isApplied` once more inside the
+ * runs skip it (ADR43). Prepares one backup before the first pending migration,
+ * then preserves a separate transaction and ledger write for each migration.
+ * Re-checks `isApplied` once more inside the
  * transaction/lock boundary immediately before applying, so a driver whose
  * `withTransaction` provides a real cross-process guard (Postgres's advisory
  * lock) never double-applies a migration another concurrent runner just
@@ -65,14 +67,21 @@ export async function runMigrationSequence(
 	conn: MigrationConn
 ): Promise<void> {
 	await engine.ensureLedgerTable();
+	const pendingMigrations: Migration[] = [];
 
 	for (const migration of migrations) {
-		if (await engine.isApplied(migration.id)) {
-			continue;
+		if (!(await engine.isApplied(migration.id))) {
+			pendingMigrations.push(migration);
 		}
+	}
 
-		await engine.backup();
+	if (pendingMigrations.length === 0) {
+		return;
+	}
 
+	await engine.backup();
+
+	for (const migration of pendingMigrations) {
 		await engine.withTransaction(migration.id, async () => {
 			if (await engine.isApplied(migration.id)) {
 				return;
