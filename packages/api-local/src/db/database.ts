@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import Database from "better-sqlite3";
-import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { sql } from "drizzle-orm";
 
 import {
 	AGENT_ISSUES_DIRECTORY,
@@ -13,6 +13,8 @@ import {
 	deriveMigratedEntityIdentity,
 	ENTITY_KINDS,
 	formatTenantDisplayName,
+	formatUnsupportedSourceProfile,
+	isDirectEntitySelector,
 	resolveAgentIssuesHomeDirectory,
 	resolveWellKnownLocalTenantId,
 	sanitizePathSegment,
@@ -21,34 +23,14 @@ import {
 	type TenantRecordCounts,
 	type TenantSummary
 } from "@agent-issues/core";
-import { runMigrations } from "./migration-runner.js";
-import { createSqliteExecutor, type SqliteExecutor } from "./sqlite-executor.js";
-import { baselineV7Migration } from "../migrations/0000-baseline-v7.js";
-import { backfillTenantBootstrapMigration } from "../migrations/0004-backfill-tenant-bootstrap.js";
-import { addEntityProjectIdMigration } from "../migrations/0009-add-entity-project-id.js";
-import { migrateHandoffsToEntitiesMigration } from "../migrations/0010-migrate-handoffs-to-entities.js";
-import { entityRevisionDeltaMigration } from "../migrations/0011-entity-revision-delta.js";
-import { entityLifecycleDeltaMigration } from "../migrations/0012-entity-lifecycle-delta.js";
-import { entityParentDeltaMarkerMigration } from "../migrations/0013-entity-parent-delta-marker.js";
-import { historyEntriesToDeltasMigration } from "../migrations/0014-history-entries-to-deltas.js";
-import { contextRevisionDeltaMigration } from "../migrations/0015-context-revision-delta.js";
-import { contextTermRevisionDeltaMigration } from "../migrations/0016-context-term-revision-delta.js";
-import { entityRestorationSourceMigration } from "../migrations/0017-entity-restoration-source.js";
-import { contextRestorationSourceMigration } from "../migrations/0018-context-restoration-source.js";
-import { contextRevisionBaselinesMigration } from "../migrations/0019-context-revision-baselines.js";
-import { compactReverseFieldPatchesMigration } from "../migrations/0020-compact-reverse-field-patches.js";
-import { revisionPatchLedgerMigration } from "../migrations/0021-revision-patch-ledger.js";
-import { binaryRevisionPatchHashesMigration } from "../migrations/0022-binary-revision-patch-hashes.js";
-import { contextTermStableIdsMigration } from "../migrations/0023-context-term-stable-ids.js";
-import { entityStableIdentitiesMigration } from "../migrations/0024-entity-stable-identities.js";
-import { correctStableIdentityStorageMigration } from "../migrations/0025-correct-stable-identity-storage.js";
-import { removeEntityAliasesMigration } from "../migrations/0026-remove-entity-aliases.js";
-import { removeDrizzleLedgerMigration } from "../migrations/0027-remove-drizzle-ledger.js";
-import { renameRevisionEntriesMigration } from "../migrations/0028-rename-revision-entries.js";
-import { removeHistoryEntriesMigration } from "../migrations/0029-remove-history-entries.js";
-import { removeProjectMigrationLedgersMigration } from "../migrations/0030-remove-project-migration-ledgers.js";
-import { removeMetadataMigration } from "../migrations/0031-remove-metadata.js";
-import { buildConsolidateLegacyTenantsBackfillMigration } from "../migrations/0008-consolidate-legacy-tenants-backfill.js";
+import { createEntity } from "../features/entity-store/store.js";
+import { createSqliteUpgradeBackup, runMigrations } from "./migration-runner.js";
+import { createSqliteExecutor, type SqliteExecutor, type SqliteInternalConnection } from "./sqlite-executor.js";
+import { openSqliteConnection } from "./sqlite-connection.js";
+import { inspectSqliteSourceProfile } from "./source-profile.js";
+import { finalBaselineMigration } from "../migrations/final-baseline.js";
+import { insertLegacySqliteV7Rows, transformLegacySqliteV7 } from "../migrations/legacy-v7-direct.js";
+import { buildLegacySqliteV7Rows } from "../migrations/legacy-v7-semantic.js";
 
 export {
 	resolveAgentIssuesHomeDirectory,
@@ -60,35 +42,11 @@ export {
 	type TenantSummary
 };
 
-/**
- * The schema-shape migration (ADR43) applied on every open, before any
- * tenant is resolved - historical baseline table creation, including the
- * now-obsolete `project_migrations` input consumed by later migrations. Every statement is `IF NOT
- * EXISTS`-guarded, so re-running this against an already-shaped database
- * (including ones that pre-date this runner and only have plain tables, no
- * ledger at all) is a safe no-op that just gets recorded, rather than
- * needing a separate "does this predate the old tool" detection (ISS172
- * removed drizzle-kit and its `__drizzle_migrations` ledger entirely - one
- * ledgered runner is now the only migration mechanism).
- */
-const BASELINE_MIGRATIONS = [baselineV7Migration];
-
-export type DatabaseHandle = Database.Database & {
-	tenantId: string;
-	/**
-	 * Which `project` entity this open belongs to (ISS166), for the
-	 * well-known shared local tenant where one tenant can hold many
-	 * projects (ISS63). Resolved once per open from
-	 * `DatabaseLocationOptions.currentWorkingDirectory` via
-	 * `resolveCurrentProjectId` - never re-resolved mid-session, matching
-	 * `tenantId`'s own once-per-open lifetime.
-	 */
-	currentProjectId: string;
-};
+export type DatabaseHandle = SqliteInternalConnection;
 
 export type OpenDatabaseResult = {
 	db: DatabaseHandle;
-	executor: SqliteExecutor;
+	executor: SqliteInternalConnection;
 	dbPath: string;
 };
 
@@ -100,26 +58,7 @@ export type DatabaseLocationOptions = {
 
 const LEGACY_TENANTS_DIRECTORY = "tenants";
 
-/**
- * The one-time, all-tenants sweep migration (ADR43) that retroactively fixes
- * every tenant already present in the database file for the historical gap
- * left by `ensureFullChainInvariant`/`ensureTenantCounters`
- * only ever running for whichever tenant happened to be open. Ledgered via
- * `schema_migrations`, so this only ever runs once per database file. The
- * ongoing per-current-tenant calls to those two functions below are a
- * distinct, unaffected concern (bootstrapping brand-new tenants going
- * forward) and are not part of this list.
- *
- * The one-time legacy-tenant fold-in
- * (`buildConsolidateLegacyTenantsBackfillMigration`, ISS181) is a SEPARATE,
- * later call in `ensureDatabase` - not part of this array - because it must
- * run AFTER the per-current-tenant trio below, not alongside this migration:
- * folding in the first legacy tenant seeds the well-known tenant's own
- * counters as a side effect (so its freshly-minted project can mint ids),
- * which would otherwise trick `isTenantBootstrapped` into skipping the
- * well-known tenant's OWN PROJ0/EPIC0 sentinel if it ran any earlier.
- */
-const BOOTSTRAP_BACKFILL_MIGRATIONS = [backfillTenantBootstrapMigration];
+const EXPECTED_FINAL_LEDGER_IDS = [finalBaselineMigration.id];
 
 export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocationOptions): string {
 	if (inputPath) {
@@ -133,94 +72,36 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 	const dbPath = resolveDatabasePath(inputPath, options);
 	mkdirSync(path.dirname(dbPath), { recursive: true });
 
-	const db = new Database(dbPath) as DatabaseHandle;
-	db.tenantId = resolveTenantSlug(options);
-	db.pragma("journal_mode = WAL");
-	db.pragma("foreign_keys = ON");
-	await migrateDatabase(db);
-	if (!inputPath) {
-		importLegacyTenantDataIfNeeded(db, options);
+	const db = createSqliteExecutor(dbPath);
+	try {
+		const prepareUpgradeBackup = createSqliteUpgradeBackup(db, dbPath);
+		db.tenantId = resolveTenantSlug(options);
+		const sourceProfile = inspectSqliteSourceProfile(db, EXPECTED_FINAL_LEDGER_IDS);
+		if (!sourceProfile.supported) {
+			throw new Error(formatUnsupportedSourceProfile(sourceProfile));
+		}
+		db.drizzle.run(sql.raw("PRAGMA journal_mode = WAL"));
+		db.drizzle.run(sql.raw("PRAGMA foreign_keys = ON"));
+		if (sourceProfile.profile === "empty") {
+			await runMigrations(db, [finalBaselineMigration]);
+		} else if (sourceProfile.profile === "legacy-sqlite-v7") {
+			prepareUpgradeBackup();
+			await transformLegacySqliteV7(db);
+		}
+		if (!inputPath) {
+			importLegacyTenantDataIfNeeded(db, options);
+		}
+		if (!isTenantBootstrapped(db)) {
+			ensureFullChainInvariant(db, dbPath);
+			ensureTenantCounters(db);
+		}
+		db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory, options?.projectIdentity);
+
+		return { db, executor: db, dbPath };
+	} catch (error) {
+		db.close();
+		throw error;
 	}
-	// Captured once, before any bootstrap step below writes anything - both
-	// this open's per-current-tenant trio and the one-time legacy-tenant
-	// fold-in migration need this SAME "did the file already have real
-	// content before this open touched it at all" answer for their own
-	// backup-only-when-worth-protecting checks; a truly brand-new, empty
-	// database has nothing worth backing up no matter which of those steps
-	// ends up running first.
-	const hadPreExistingData = databaseHasAnyData(db);
-	// Runs first, before any tenant becomes "current", so its "is there
-	// any pre-existing data anywhere in this file" backup check sees the
-	// database's true pre-sweep state (ADR43). One-time, ledgered,
-	// all-tenants fix for the historical gap left by the per-current-tenant
-	// checks below only ever running for whichever tenant happened to be
-	// open - never re-runs once applied.
-	await runBootstrapBackfillMigrations(db, dbPath, hadPreExistingData);
-	// `ensureFullChainInvariant`/`ensureTenantCounters` are onboarding logic
-	// for a tenant that has never been opened before - not a migration, since
-	// a brand-new tenant created tomorrow still needs this the moment it first
-	// appears. Gated behind one indexed lookup (ISS179) so an
-	// already-bootstrapped tenant - every open after its first - pays for none
-	// of these checks' underlying queries, rather than re-deriving "has this
-	// already happened?" from live data on every single CLI invocation forever.
-	if (!isTenantBootstrapped(db)) {
-		// Runs before ensureTenantCounters so its "does this tenant already
-		// have data" backup check (tenantHasAnyRows) sees the tenant's true
-		// pre-bootstrap state, not counter rows ensureTenantCounters is
-		// about to seed.
-		ensureFullChainInvariant(db, dbPath);
-		ensureTenantCounters(db);
-	}
-	// Runs AFTER the per-current-tenant trio above, not folded into
-	// `runBootstrapBackfillMigrations` - this migration's own
-	// `consolidateLegacyTenantData` seeds the target tenant's counters
-	// as a side effect of folding in its first legacy tenant (so a
-	// freshly-minted project can mint ids), which would otherwise trick
-	// `isTenantBootstrapped` into skipping the well-known tenant's OWN
-	// PROJ0/EPIC0 sentinel above if this ran any earlier. One-time,
-	// ledgered (ISS181): never re-run once applied, regardless of which
-	// tenant this or any later open excludes. Only passes `dbPath` (and
-	// so only triggers the runner's pre-migration backup) when the file
-	// already had real pre-existing data BEFORE this open began - a
-	// brand-new, empty database has nothing worth backing up.
-	await runMigrations(
-		db,
-		[buildConsolidateLegacyTenantsBackfillMigration({ excludeTenantId: db.tenantId })],
-		hadPreExistingData ? { dbPath } : undefined
-	);
-
-	// Adds `entities.project_id` and backfills every tenant already in the
-	// file (ISS166 follow-up) - one-time and ledgered. It runs after
-	// consolidation so freshly-minted projects and their remapped subtrees
-	// are attributed too. Subsequent raw writers stamp project_id directly;
-	// no per-open migration work is needed.
-	await runMigrations(db, [addEntityProjectIdMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [migrateHandoffsToEntitiesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [entityRevisionDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [entityLifecycleDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [entityParentDeltaMarkerMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [historyEntriesToDeltasMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [contextRevisionDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [contextTermRevisionDeltaMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [entityRestorationSourceMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [contextRestorationSourceMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [contextRevisionBaselinesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [compactReverseFieldPatchesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [revisionPatchLedgerMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [binaryRevisionPatchHashesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [contextTermStableIdsMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [entityStableIdentitiesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [correctStableIdentityStorageMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [removeEntityAliasesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [removeDrizzleLedgerMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [renameRevisionEntriesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [removeHistoryEntriesMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [removeProjectMigrationLedgersMigration], hadPreExistingData ? { dbPath } : undefined);
-	await runMigrations(db, [removeMetadataMigration], hadPreExistingData ? { dbPath } : undefined);
-
-	db.currentProjectId = resolveCurrentProjectId(db, options?.currentWorkingDirectory, options?.projectIdentity);
-
-	return { db, executor: createSqliteExecutor(db), dbPath };
 }
 
 export function resolveTenantDirectory(options?: DatabaseLocationOptions): string {
@@ -250,15 +131,8 @@ export function resolveTenantSlug(options?: DatabaseLocationOptions): string {
 }
 
 /**
- * The pre-ISS63 per-workspace tenant formula (ADR7's original, incomplete
- * migration): one tenant minted per folder, named from the folder's own
- * name plus a path hash. Kept only to locate a workspace's old
- * per-tenant-directory database file (the even-older one-database-per-tenant
- * layout, see `resolveTenantDirectory`) so its data can be imported into the
- * shared database under this same id - once there, the one-time historical
- * fold-in migration (`buildConsolidateLegacyTenantsBackfillMigration`,
- * ISS181) finds and folds it into a `project` the next time it runs
- * (only once, ever, per database file - not from every later open).
+ * The pre-ISS63 per-workspace tenant formula, retained to locate old
+ * per-workspace database files for direct import into the shared database.
  */
 export function resolveLegacyWorkspaceTenantId(currentWorkingDirectory: string): string {
 	const workspacePath = resolveTenantRootPath(currentWorkingDirectory);
@@ -267,10 +141,16 @@ export function resolveLegacyWorkspaceTenantId(currentWorkingDirectory: string):
 	return `${workspaceName}-${workspaceHash}`;
 }
 
-export function listTenants(db: Database.Database): TenantSummary[] {
-	const rows = db
-		.prepare(
-			`WITH tenant_ids AS (
+export function listTenants(db: SqliteInternalConnection): TenantSummary[] {
+	const rows = db.drizzle.all<{
+		tenant_id: string;
+		entity_count: number;
+		relation_count: number;
+		context_count: number;
+		context_term_count: number;
+		history_entry_count: number;
+	}>(sql`
+			WITH tenant_ids AS (
 				SELECT tenant_id FROM entities
 				UNION
 				SELECT tenant_id FROM relations
@@ -313,16 +193,8 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 				FROM entities
 				GROUP BY tenant_id
 			) AS history_entry_counts ON history_entry_counts.tenant_id = tenant_ids.tenant_id
-			ORDER BY tenant_ids.tenant_id`
-		)
-		.all() as Array<{
-			tenant_id: string;
-			entity_count: number;
-			relation_count: number;
-			context_count: number;
-			context_term_count: number;
-			history_entry_count: number;
-		}>;
+			ORDER BY tenant_ids.tenant_id
+		`);
 
 	return rows.map((row) => ({
 		counts: {
@@ -337,23 +209,17 @@ export function listTenants(db: Database.Database): TenantSummary[] {
 	}));
 }
 
-export function deleteTenant(db: Database.Database, tenantId: string): DeleteTenantResult {
+export function deleteTenant(db: SqliteInternalConnection, tenantId: string): DeleteTenantResult {
 	const counts = getTenantRecordCounts(db, tenantId);
-	const deleteRevisionEntries = db.prepare(`DELETE FROM revision_entries WHERE tenant_id = ?`);
-	const deleteContextTerms = db.prepare(`DELETE FROM context_terms WHERE tenant_id = ?`);
-	const deleteRelations = db.prepare(`DELETE FROM relations WHERE tenant_id = ?`);
-	const deleteContexts = db.prepare(`DELETE FROM contexts WHERE tenant_id = ?`);
-	const deleteEntities = db.prepare(`DELETE FROM entities WHERE tenant_id = ?`);
-	const deleteCounters = db.prepare(`DELETE FROM counters WHERE tenant_id = ?`);
 
-	const counters = db.transaction(() => {
-		deleteRevisionEntries.run(tenantId);
-		deleteContextTerms.run(tenantId);
-		deleteRelations.run(tenantId);
-		deleteContexts.run(tenantId);
-		deleteEntities.run(tenantId);
-		return deleteCounters.run(tenantId).changes;
-	})();
+	const counters = db.drizzle.transaction(() => {
+		db.drizzle.run(sql`DELETE FROM revision_entries WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM context_terms WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM relations WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM contexts WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM entities WHERE tenant_id = ${tenantId}`);
+		return db.drizzle.run(sql`DELETE FROM counters WHERE tenant_id = ${tenantId}`).changes;
+	});
 
 	return {
 		counts,
@@ -364,7 +230,7 @@ export function deleteTenant(db: Database.Database, tenantId: string): DeleteTen
 	};
 }
 
-export function renameTenant(db: Database.Database, previousTenantId: string, newTenantId: string): RenameTenantResult {
+export function renameTenant(db: SqliteInternalConnection, previousTenantId: string, newTenantId: string): RenameTenantResult {
 	if (previousTenantId === newTenantId) {
 		throw new Error("Source and destination tenant ids are the same.");
 	}
@@ -389,25 +255,18 @@ export function renameTenant(db: Database.Database, previousTenantId: string, ne
 		};
 	}
 
-	const renameCounters = db.prepare(`UPDATE counters SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameEntities = db.prepare(`UPDATE entities SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameRelations = db.prepare(`UPDATE relations SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameContexts = db.prepare(`UPDATE contexts SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameContextTerms = db.prepare(`UPDATE context_terms SET tenant_id = ? WHERE tenant_id = ?`);
-	const renameRevisionEntries = db.prepare(`UPDATE revision_entries SET tenant_id = ? WHERE tenant_id = ?`);
-
-	db.pragma("defer_foreign_keys = ON");
+	db.drizzle.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
 	try {
-		db.transaction(() => {
-			renameCounters.run(newTenantId, previousTenantId);
-			renameEntities.run(newTenantId, previousTenantId);
-			renameRelations.run(newTenantId, previousTenantId);
-			renameContexts.run(newTenantId, previousTenantId);
-			renameContextTerms.run(newTenantId, previousTenantId);
-			renameRevisionEntries.run(newTenantId, previousTenantId);
-		})();
+		db.drizzle.transaction(() => {
+			db.drizzle.run(sql`UPDATE counters SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE entities SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE relations SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE contexts SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE context_terms SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE revision_entries SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+		});
 	} finally {
-		db.pragma("defer_foreign_keys = OFF");
+		db.drizzle.run(sql.raw("PRAGMA defer_foreign_keys = OFF"));
 	}
 
 	return {
@@ -457,23 +316,21 @@ export function resolveTenantRootPath(currentWorkingDirectory: string): string {
 	}
 }
 
-function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantRecordCounts {
-	const row = db
-		.prepare(
-			`SELECT
-				(SELECT COUNT(*) FROM entities WHERE tenant_id = @tenantId) AS entity_count,
-				(SELECT COUNT(*) FROM relations WHERE tenant_id = @tenantId) AS relation_count,
-				(SELECT COUNT(*) FROM contexts WHERE tenant_id = @tenantId) AS context_count,
-				(SELECT COUNT(*) FROM context_terms WHERE tenant_id = @tenantId) AS context_term_count,
-				(SELECT COALESCE(SUM(revision), 0) FROM entities WHERE tenant_id = @tenantId) AS history_entry_count`
-		)
-		.get({ tenantId }) as {
+function getTenantRecordCounts(db: SqliteInternalConnection, tenantId: string): TenantRecordCounts {
+	const row = db.drizzle.get<{
 			entity_count: number;
 			relation_count: number;
 			context_count: number;
 			context_term_count: number;
 			history_entry_count: number;
-		};
+		}>(sql`
+			SELECT
+				(SELECT COUNT(*) FROM entities WHERE tenant_id = ${tenantId}) AS entity_count,
+				(SELECT COUNT(*) FROM relations WHERE tenant_id = ${tenantId}) AS relation_count,
+				(SELECT COUNT(*) FROM contexts WHERE tenant_id = ${tenantId}) AS context_count,
+				(SELECT COUNT(*) FROM context_terms WHERE tenant_id = ${tenantId}) AS context_term_count,
+				(SELECT COALESCE(SUM(revision), 0) FROM entities WHERE tenant_id = ${tenantId}) AS history_entry_count
+		`)!;
 
 	return {
 		contexts: row.context_count,
@@ -484,127 +341,26 @@ function getTenantRecordCounts(db: Database.Database, tenantId: string): TenantR
 	};
 }
 
-function getTenantCounterCount(db: Database.Database, tenantId: string): number {
-	const row = db.prepare(`SELECT COUNT(*) AS counter_count FROM counters WHERE tenant_id = ?`).get(tenantId) as {
-		counter_count: number;
-	};
+function getTenantCounterCount(db: SqliteInternalConnection, tenantId: string): number {
+	const row = db.drizzle.get<{ counter_count: number }>(
+		sql`SELECT COUNT(*) AS counter_count FROM counters WHERE tenant_id = ${tenantId}`
+	)!;
 
 	return row.counter_count;
 }
 
-function tenantHasAnyRows(db: Database.Database, tenantId: string): boolean {
-	const row = db
-		.prepare(
-			`SELECT EXISTS(
-				SELECT 1 FROM counters WHERE tenant_id = @tenantId
-				UNION SELECT 1 FROM entities WHERE tenant_id = @tenantId
-				UNION SELECT 1 FROM relations WHERE tenant_id = @tenantId
-				UNION SELECT 1 FROM contexts WHERE tenant_id = @tenantId
-				UNION SELECT 1 FROM context_terms WHERE tenant_id = @tenantId
-			) AS has_rows`
-		)
-		.get({ tenantId }) as { has_rows: number };
+function tenantHasAnyRows(db: SqliteInternalConnection, tenantId: string): boolean {
+	const row = db.drizzle.get<{ has_rows: number }>(sql`
+		SELECT EXISTS(
+			SELECT 1 FROM counters WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM entities WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM relations WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM contexts WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM context_terms WHERE tenant_id = ${tenantId}
+		) AS has_rows
+	`)!;
 
 	return row.has_rows === 1;
-}
-
-/**
- * Whether the database file has any pre-existing rows at all, across every
- * tenant - used to decide whether the one-time bootstrap-backfill sweep
- * needs a pre-migration backup (ADR13/ADR20). A brand-new, genuinely empty
- * database has nothing worth protecting, mirroring `tenantHasAnyRows`'s same
- * "don't back up an empty tenant" reasoning but across the whole file.
- */
-function databaseHasAnyData(db: DatabaseHandle): boolean {
-	const row = db
-		.prepare(
-			`SELECT EXISTS(
-				SELECT 1 FROM counters
-				UNION SELECT 1 FROM entities
-				UNION SELECT 1 FROM relations
-				UNION SELECT 1 FROM contexts
-				UNION SELECT 1 FROM context_terms
-			) AS has_rows`
-		)
-		.get() as { has_rows: number };
-
-	return row.has_rows === 1;
-}
-
-/**
- * Runs the one-time, ledgered, all-tenants bootstrap-backfill sweep
- * (ADR43). Only passes `dbPath` (triggering the runner's generic
- * pre-migration file backup) when `hadPreExistingData` is true - a
- * brand-new, empty database has nothing worth backing up, matching the
- * existing per-tenant backup behavior in `ensureFullChainInvariant`.
- * Takes `hadPreExistingData` as a parameter (computed once by the caller,
- * before any bootstrap step runs) rather than recomputing
- * `databaseHasAnyData` itself, so it shares the exact same "before this
- * open touched anything" snapshot with the one-time legacy-tenant fold-in
- * migration that runs later in the same open (ISS181) - by the time that
- * later migration runs, the per-current-tenant trio below has already
- * written this tenant's own PROJ0/EPIC0/counters, which would make a
- * freshly re-computed `databaseHasAnyData` always true even for a
- * genuinely brand-new install.
- */
-function runBootstrapBackfillMigrations(db: DatabaseHandle, dbPath: string, hadPreExistingData: boolean): Promise<void> {
-	return runMigrations(db, BOOTSTRAP_BACKFILL_MIGRATIONS, hadPreExistingData ? { dbPath } : undefined);
-}
-
-async function migrateDatabase(db: DatabaseHandle): Promise<void> {
-	if (needsTenantSchemaMigration(db)) {
-		await migrateCurrentDatabaseToTenantSchema(db);
-	} else {
-		await applyBaselineAndForwardMigrations(db);
-	}
-	ensureEntityBodyColumn(db);
-	ensureEntityBodySourceColumn(db);
-}
-
-function applyBaselineAndForwardMigrations(db: DatabaseHandle): Promise<void> {
-	return runMigrations(db, BASELINE_MIGRATIONS);
-}
-
-function ensureEntityBodyColumn(db: DatabaseHandle): void {
-	if (tableExists(db, "entities") && !tableHasColumn(db, "entities", "body")) {
-		db.exec(`ALTER TABLE entities ADD COLUMN body TEXT NOT NULL DEFAULT ''`);
-	}
-}
-
-function ensureEntityBodySourceColumn(db: DatabaseHandle): void {
-	if (tableExists(db, "entities") && !tableHasColumn(db, "entities", "body_source")) {
-		db.exec(`ALTER TABLE entities ADD COLUMN body_source TEXT NOT NULL DEFAULT 'authored'`);
-	}
-}
-
-function needsTenantSchemaMigration(db: DatabaseHandle): boolean {
-	if (!tableExists(db, "entities")) {
-		return false;
-	}
-
-	return !tableHasColumn(db, "entities", "tenant_id");
-}
-
-async function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): Promise<void> {
-	db.transaction(() => {
-		renameTableIfExists(db, "counters", "legacy_counters");
-		renameTableIfExists(db, "entities", "legacy_entities");
-		renameTableIfExists(db, "relations", "legacy_relations");
-		renameTableIfExists(db, "contexts", "legacy_contexts");
-		renameTableIfExists(db, "context_terms", "legacy_context_terms");
-		dropTableIfExists(db, "metadata");
-	})();
-
-	await applyBaselineAndForwardMigrations(db);
-
-	db.transaction(() => {
-		copyLegacyTablesIntoTenant(db, "main", db.tenantId, "legacy_");
-		dropTableIfExists(db, "legacy_context_terms");
-		dropTableIfExists(db, "legacy_contexts");
-		dropTableIfExists(db, "legacy_relations");
-		dropTableIfExists(db, "legacy_entities");
-		dropTableIfExists(db, "legacy_counters");
-	})();
 }
 
 /**
@@ -621,21 +377,23 @@ async function migrateCurrentDatabaseToTenantSchema(db: DatabaseHandle): Promise
  * (a brand-new `--tenant` can still appear later).
  */
 function isTenantBootstrapped(db: DatabaseHandle): boolean {
-	return db.prepare(`SELECT 1 FROM counters WHERE tenant_id = ? LIMIT 1`).get(db.tenantId) !== undefined;
+	return db.drizzle.get(sql`SELECT 1 FROM counters WHERE tenant_id = ${db.tenantId} LIMIT 1`) !== undefined;
 }
 
 function ensureTenantCounters(db: DatabaseHandle): void {
-	const insertCounter = db.prepare(`
-		INSERT INTO counters (tenant_id, kind, next_value)
-		VALUES (@tenantId, @kind, 1)
-		ON CONFLICT(tenant_id, kind) DO NOTHING
-	`);
-
 	for (const kind of ENTITY_KINDS) {
-		insertCounter.run({ tenantId: db.tenantId, kind });
+		db.drizzle.run(sql`
+			INSERT INTO counters (tenant_id, kind, next_value)
+			VALUES (${db.tenantId}, ${kind}, 1)
+			ON CONFLICT(tenant_id, kind) DO NOTHING
+		`);
 	}
 
-	insertCounter.run({ tenantId: db.tenantId, kind: "handoff" });
+	db.drizzle.run(sql`
+		INSERT INTO counters (tenant_id, kind, next_value)
+		VALUES (${db.tenantId}, ${"handoff"}, 1)
+		ON CONFLICT(tenant_id, kind) DO NOTHING
+	`);
 }
 
 /**
@@ -646,8 +404,8 @@ function ensureTenantCounters(db: DatabaseHandle): void {
  * the database file the first time this runs against a tenant that already
  * has data (ADR20) — a fresh, empty tenant has nothing worth protecting.
  */
-function ensureFullChainInvariant(db: DatabaseHandle, dbPath: string): void {
-	if (!entityExists(db, DEFAULT_PROJECT_ID) && tenantHasAnyRows(db, db.tenantId)) {
+function ensureFullChainInvariant(db: DatabaseHandle, dbPath?: string): void {
+	if (dbPath !== undefined && !entityExists(db, DEFAULT_PROJECT_ID) && tenantHasAnyRows(db, db.tenantId)) {
 		backupDatabaseFile(db, dbPath);
 	}
 
@@ -660,57 +418,57 @@ function ensureFullChainInvariant(db: DatabaseHandle, dbPath: string): void {
 
 function entityExists(db: DatabaseHandle, entityId: string): boolean {
 	const canonicalReference = resolveEntityReference(db, entityId);
-	return db.prepare(`SELECT 1 FROM entities WHERE tenant_id = ? AND id = ?`).get(db.tenantId, canonicalReference) !== undefined;
+	return db.drizzle.get(sql`SELECT 1 FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${canonicalReference}`) !== undefined;
 }
 
 function insertSentinelEntity(db: DatabaseHandle, id: string, kind: string, title: string, now: string): void {
 	if (tableHasColumn(db, "entities", "reference")) {
 		const identity = deriveMigratedEntityIdentity(kind === "project" ? "project" : "epic", id);
 		const projectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
-		db.prepare(
-			`INSERT INTO entities (tenant_id, id, reference, kind, title, status, body, body_source, project_id, created_at, updated_at)
-			 VALUES (@tenantId, @stableId, @reference, @kind, @title, 'active', '', 'generated', @projectId, @now, @now)
-			 ON CONFLICT (tenant_id, id) DO NOTHING`
-		).run({ tenantId: db.tenantId, stableId: identity.stableId, reference: identity.reference, kind, projectId, title, now });
+		db.drizzle.run(sql`
+			INSERT INTO entities (tenant_id, id, reference, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			VALUES (${db.tenantId}, ${identity.stableId}, ${identity.reference}, ${kind}, ${title}, 'active', '', 'generated', ${projectId}, ${now}, ${now})
+			ON CONFLICT (tenant_id, id) DO NOTHING
+		`);
 		return;
 	}
 	if (tableHasColumn(db, "entities", "stable_id")) {
 		const identity = deriveMigratedEntityIdentity(kind === "project" ? "project" : "epic", id);
-		db.prepare(
-			`INSERT INTO entities (tenant_id, id, stable_id, kind, title, status, body, body_source, project_id, created_at, updated_at)
-			 VALUES (@tenantId, @canonicalReference, @stableId, @kind, @title, 'active', '', 'generated', @projectId, @now, @now)
-			 ON CONFLICT (tenant_id, id) DO NOTHING`
-		).run({ tenantId: db.tenantId, canonicalReference: identity.reference, stableId: identity.stableId, kind, projectId: identity.reference, title, now });
-		db.prepare(
-			`INSERT INTO entity_aliases (tenant_id, alias, entity_stable_id) VALUES (?, ?, ?)
-			 ON CONFLICT (tenant_id, alias) DO NOTHING`
-		).run(db.tenantId, id, identity.stableId);
+		db.drizzle.run(sql`
+			INSERT INTO entities (tenant_id, id, stable_id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			VALUES (${db.tenantId}, ${identity.reference}, ${identity.stableId}, ${kind}, ${title}, 'active', '', 'generated', ${identity.reference}, ${now}, ${now})
+			ON CONFLICT (tenant_id, id) DO NOTHING
+		`);
+		db.drizzle.run(sql`
+			INSERT INTO entity_aliases (tenant_id, alias, entity_stable_id) VALUES (${db.tenantId}, ${id}, ${identity.stableId})
+			ON CONFLICT (tenant_id, alias) DO NOTHING
+		`);
 		return;
 	}
 	if (tableHasColumn(db, "entities", "project_id")) {
-		db.prepare(
-			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
-			 VALUES (@tenantId, @id, @kind, @title, 'active', '', 'generated', @projectId, @now, @now)
-			 ON CONFLICT (tenant_id, id) DO NOTHING`
-		).run({ tenantId: db.tenantId, id, kind, projectId: DEFAULT_PROJECT_ID, title, now });
+		db.drizzle.run(sql`
+			INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			VALUES (${db.tenantId}, ${id}, ${kind}, ${title}, 'active', '', 'generated', ${DEFAULT_PROJECT_ID}, ${now}, ${now})
+			ON CONFLICT (tenant_id, id) DO NOTHING
+		`);
 		return;
 	}
 
-	db.prepare(
-		`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
-		 VALUES (@tenantId, @id, @kind, @title, 'active', '', 'generated', @now, @now)
-		 ON CONFLICT (tenant_id, id) DO NOTHING`
-	).run({ tenantId: db.tenantId, id, kind, title, now });
+	db.drizzle.run(sql`
+		INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, created_at, updated_at)
+		VALUES (${db.tenantId}, ${id}, ${kind}, ${title}, 'active', '', 'generated', ${now}, ${now})
+		ON CONFLICT (tenant_id, id) DO NOTHING
+	`);
 }
 
 function insertSentinelRelation(db: DatabaseHandle, fromId: string, toId: string, now: string): void {
 	const canonicalFromId = resolveEntityReference(db, fromId);
 	const canonicalToId = resolveEntityReference(db, toId);
-	db.prepare(
-		`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
-		 VALUES (@tenantId, @fromId, @toId, 'contains', @now)
-		 ON CONFLICT (tenant_id, from_id, to_id, type) DO NOTHING`
-	).run({ tenantId: db.tenantId, fromId: canonicalFromId, toId: canonicalToId, now });
+	db.drizzle.run(sql`
+		INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
+		VALUES (${db.tenantId}, ${canonicalFromId}, ${canonicalToId}, 'contains', ${now})
+		ON CONFLICT (tenant_id, from_id, to_id, type) DO NOTHING
+	`);
 }
 
 function resolveEntityReference(db: DatabaseHandle, reference: string): string {
@@ -720,24 +478,24 @@ function resolveEntityReference(db: DatabaseHandle, reference: string): string {
 		return reference;
 	}
 	if (!tableHasColumn(db, "entities", "stable_id")) return reference;
-	const row = db.prepare(`SELECT entities.id
+	const row = db.drizzle.get<{ id: string }>(sql`
+		SELECT entities.id
 		FROM entity_aliases
 		JOIN entities ON entities.tenant_id = entity_aliases.tenant_id
 			AND entities.stable_id = entity_aliases.entity_stable_id
-		WHERE entity_aliases.tenant_id = ? AND entity_aliases.alias = ?`).get(db.tenantId, reference) as { id: string } | undefined;
+		WHERE entity_aliases.tenant_id = ${db.tenantId} AND entity_aliases.alias = ${reference}
+	`);
 	return row?.id ?? reference;
 }
 
 function attachOrphanInitiativesToDefaultEpic(db: DatabaseHandle, now: string): void {
-	const orphanInitiatives = db
-		.prepare(
-			`SELECT id FROM entities
-			 WHERE tenant_id = @tenantId AND kind = 'initiative'
-			   AND id NOT IN (
-			     SELECT to_id FROM relations WHERE tenant_id = @tenantId AND type = 'contains'
-			   )`
-		)
-		.all({ tenantId: db.tenantId }) as Array<{ id: string }>;
+	const orphanInitiatives = db.drizzle.all<{ id: string }>(sql`
+		SELECT id FROM entities
+		WHERE tenant_id = ${db.tenantId} AND kind = 'initiative'
+		  AND id NOT IN (
+			SELECT to_id FROM relations WHERE tenant_id = ${db.tenantId} AND type = 'contains'
+		  )
+	`);
 
 	for (const { id } of orphanInitiatives) {
 		insertSentinelRelation(db, DEFAULT_EPIC_ID, id, now);
@@ -745,9 +503,56 @@ function attachOrphanInitiativesToDefaultEpic(db: DatabaseHandle, now: string): 
 }
 
 /**
+ * Every live project in this tenant whose title normalizes to `normalizedTitle`.
+ * More than one means the identity is ambiguous; none means it has not been
+ * registered yet.
+ */
+function findProjectsByNormalizedTitle(db: DatabaseHandle, normalizedTitle: string): Array<{ id: string; title: string }> {
+	const projects = db.drizzle.all<{ id: string; title: string }>(
+		sql`SELECT id, title FROM entities WHERE tenant_id = ${db.tenantId} AND kind = 'project' AND tombstone = 0`
+	) as Array<{ id: string; title: string }>;
+	return projects.filter((project) => sanitizePathSegment(project.title) === normalizedTitle);
+}
+
+/**
+ * Registers this workspace's own project the first time agent-issues runs in
+ * it, so a fresh repo is usable with no setup step - the zero-config local
+ * use ADR "Multi-source project identity resolution" commits to. Creates the
+ * project>epic chain (ADR7) the way the cloud gate's
+ * `getOrCreateProjectByIdentity` does: without the epic, an initiative
+ * created here would fall back to the sentinel `EPIC0` and land under the
+ * Default Project instead of this one. Both entities start `active` rather
+ * than `draft` - the workspace is being worked in right now, which is what
+ * brought this call here.
+ *
+ * Runs the miss-check and the write in one `immediate` transaction, which
+ * takes SQLite's write lock up front: two processes opening the same fresh
+ * workspace at once (the direct-SQLite path, where the daemon is not there to
+ * serialize them) then take turns, and the loser re-reads the winner's
+ * project instead of minting a second one. A duplicate would be worse than a
+ * failure - it makes the identity permanently ambiguous.
+ */
+function registerWorkspaceProject(db: DatabaseHandle, title: string, normalizedTitle: string): string {
+	return db.drizzle.transaction(
+		() => {
+			const alreadyRegistered = findProjectsByNormalizedTitle(db, normalizedTitle);
+			if (alreadyRegistered.length > 0) {
+				return alreadyRegistered[0]!.id;
+			}
+
+			const project = createEntity(db, { kind: "project", status: "active", title });
+			createEntity(db, { kind: "epic", parentId: project.id, status: "active", title: DEFAULT_EPIC_TITLE });
+			return project.id;
+		},
+		{ behavior: "immediate" }
+	);
+}
+
+/**
  * Resolves the current invocation's project from the identity already
  * derived by the CLI. UUID and Canonical reference selectors are direct;
- * repository-style identities use a normalized exact title match.
+ * repository-style identities use a normalized exact title match, and
+ * register themselves when no project matches yet.
  */
 export function resolveCurrentProjectId(
 	db: DatabaseHandle,
@@ -756,22 +561,21 @@ export function resolveCurrentProjectId(
 ): string {
 	const selector = projectIdentity?.trim();
 	if (selector) {
-		const directProject = db
-			.prepare(`SELECT id FROM entities WHERE tenant_id = ? AND kind = 'project' AND tombstone = 0 AND (id = ? OR reference = ?)`)
-			.get(db.tenantId, selector, selector) as { id: string } | undefined;
+		const directProject = db.drizzle.get<{ id: string }>(
+			sql`SELECT id FROM entities WHERE tenant_id = ${db.tenantId} AND kind = 'project' AND tombstone = 0 AND (id = ${selector} OR reference = ${selector})`
+		);
 		if (directProject) {
 			return directProject.id;
 		}
 
 		const normalizedSelector = sanitizePathSegment(selector);
-		const matchingProjects = (
-			db.prepare(`SELECT id, title FROM entities WHERE tenant_id = ? AND kind = 'project' AND tombstone = 0`).all(db.tenantId) as Array<{
-				id: string;
-				title: string;
-			}>
-		).filter((project) => sanitizePathSegment(project.title) === normalizedSelector);
+		const matchingProjects = findProjectsByNormalizedTitle(db, normalizedSelector);
 		if (matchingProjects.length === 0) {
-			throw new Error(`Cannot resolve project identity "${selector}" in tenant ${db.tenantId}.`);
+			if (isDirectEntitySelector(selector)) {
+				throw new Error(`Cannot resolve project identity "${selector}" in tenant ${db.tenantId}.`);
+			}
+
+			return registerWorkspaceProject(db, selector, normalizedSelector);
 		}
 		if (matchingProjects.length > 1) {
 			throw new Error(`Ambiguous project identity "${selector}" in tenant ${db.tenantId}.`);
@@ -779,9 +583,9 @@ export function resolveCurrentProjectId(
 		return matchingProjects[0]!.id;
 	}
 
-	const projects = db
-		.prepare(`SELECT id FROM entities WHERE tenant_id = ? AND kind = 'project' AND tombstone = 0 ORDER BY id`)
-		.all(db.tenantId) as Array<{ id: string }>;
+	const projects = db.drizzle.all<{ id: string }>(
+		sql`SELECT id FROM entities WHERE tenant_id = ${db.tenantId} AND kind = 'project' AND tombstone = 0 ORDER BY id`
+	);
 	if (projects.length === 1) {
 		return projects[0]!.id;
 	}
@@ -789,7 +593,7 @@ export function resolveCurrentProjectId(
 }
 
 function backupDatabaseFile(db: DatabaseHandle, dbPath: string): void {
-	db.pragma("wal_checkpoint(TRUNCATE)");
+	db.drizzle.all(sql.raw("PRAGMA wal_checkpoint(TRUNCATE)"));
 
 	// Co-located with the actual database file rather than a fixed home-directory
 	// path, so this respects an explicit --path/dbPath choice (and keeps tests
@@ -824,147 +628,42 @@ function importLegacyTenantDataIfNeeded(db: DatabaseHandle, options?: DatabaseLo
 }
 
 function tenantHasData(db: DatabaseHandle): boolean {
-	const row = db
-		.prepare(
-			`SELECT EXISTS(SELECT 1 FROM entities WHERE tenant_id = @tenantId LIMIT 1) AS has_entities,
-			        EXISTS(SELECT 1 FROM contexts WHERE tenant_id = @tenantId LIMIT 1) AS has_contexts`
-		)
-		.get({ tenantId: db.tenantId }) as { has_entities: number; has_contexts: number };
+	const row = db.drizzle.get<{ has_entities: number; has_contexts: number }>(sql`
+		SELECT EXISTS(SELECT 1 FROM entities WHERE tenant_id = ${db.tenantId} LIMIT 1) AS has_entities,
+		       EXISTS(SELECT 1 FROM contexts WHERE tenant_id = ${db.tenantId} LIMIT 1) AS has_contexts
+	`)!;
 
 	return row.has_entities === 1 || row.has_contexts === 1;
 }
 
 function importTenantDataFromExternalDatabase(db: DatabaseHandle, sourcePath: string): boolean {
-	const importAlias = "legacy_import";
-	db.prepare(`ATTACH DATABASE ? AS ${importAlias}`).run(sourcePath);
-
+	const source = openSqliteConnection(sourcePath, { fileMustExist: true, readonly: true });
 	try {
-		if (!attachedTableExists(db, importAlias, "entities")) {
+		const sourceProfile = inspectSqliteSourceProfile(source, EXPECTED_FINAL_LEDGER_IDS);
+		if (sourceProfile.profile === "empty") {
 			return false;
 		}
-
-		db.transaction(() => {
-			copyLegacyTablesIntoTenant(db, importAlias, db.tenantId);
-		})();
+		if (!sourceProfile.supported) {
+			throw new Error(formatUnsupportedSourceProfile(sourceProfile));
+		}
+		if (sourceProfile.profile !== "legacy-sqlite-v7") {
+			throw new Error(`External legacy import requires a legacy SQLite v7 source, found ${sourceProfile.profile}.`);
+		}
+		source.tenantId = db.tenantId;
+		const rows = buildLegacySqliteV7Rows(source);
+		db.drizzle.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
+		try {
+			db.drizzle.transaction(() => insertLegacySqliteV7Rows(db, rows));
+		} finally {
+			db.drizzle.run(sql.raw("PRAGMA defer_foreign_keys = OFF"));
+		}
 		return true;
 	} finally {
-		db.exec(`DETACH DATABASE ${importAlias}`);
+		source.close();
 	}
-}
-
-function copyLegacyTablesIntoTenant(
-	db: DatabaseHandle,
-	schemaName: string,
-	tenantId: string,
-	tablePrefix = ""
-): void {
-	const countersTable = `${schemaName}.${tablePrefix}counters`;
-	const entitiesTable = `${schemaName}.${tablePrefix}entities`;
-	const relationsTable = `${schemaName}.${tablePrefix}relations`;
-	const contextsTable = `${schemaName}.${tablePrefix}contexts`;
-	const contextTermsTable = `${schemaName}.${tablePrefix}context_terms`;
-	const hasContextsScopeColumn = attachedTableHasColumn(db, schemaName, `${tablePrefix}contexts`, "scope_entity_id");
-
-	if (attachedTableExists(db, schemaName, `${tablePrefix}counters`)) {
-		db.prepare(
-			`INSERT OR IGNORE INTO counters (tenant_id, kind, next_value)
-			 VALUES (@tenantId, @kind, @nextValue)`
-		);
-
-		db.prepare(
-			`INSERT OR IGNORE INTO counters (tenant_id, kind, next_value)
-			 SELECT @tenantId, kind, next_value
-			 FROM ${countersTable}`
-		).run({ tenantId });
-	}
-
-	if (attachedTableExists(db, schemaName, `${tablePrefix}entities`)) {
-		if (tableHasColumn(db, "entities", "project_id")) {
-			db.prepare(
-				`INSERT OR IGNORE INTO entities (tenant_id, id, kind, title, status, project_id, created_at, updated_at)
-				 SELECT @tenantId, id, kind, title, status, @projectId, created_at, updated_at
-				 FROM ${entitiesTable}`
-			).run({ tenantId, projectId: DEFAULT_PROJECT_ID });
-		} else {
-			db.prepare(
-				`INSERT OR IGNORE INTO entities (tenant_id, id, kind, title, status, created_at, updated_at)
-				 SELECT @tenantId, id, kind, title, status, created_at, updated_at
-				 FROM ${entitiesTable}`
-			).run({ tenantId });
-		}
-	}
-
-	if (attachedTableExists(db, schemaName, `${tablePrefix}relations`)) {
-		db.prepare(
-			`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
-			 SELECT @tenantId, from_id, to_id, type, created_at
-			 FROM ${relationsTable}`
-		).run({ tenantId });
-	}
-
-	if (attachedTableExists(db, schemaName, `${tablePrefix}contexts`)) {
-		db.prepare(
-			`INSERT OR IGNORE INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-			 SELECT @tenantId,
-			        key,
-			        ${hasContextsScopeColumn ? "scope_entity_id" : "NULL"},
-			        title,
-			        summary,
-			        created_at,
-			        updated_at
-			 FROM ${contextsTable}`
-		).run({ tenantId });
-	}
-
-	if (attachedTableExists(db, schemaName, `${tablePrefix}context_terms`)) {
-		db.prepare(
-			`INSERT OR IGNORE INTO context_terms (tenant_id, context_key, term, definition, avoid_terms, created_at, updated_at)
-			 SELECT @tenantId, context_key, term, definition, avoid_terms, created_at, updated_at
-			 FROM ${contextTermsTable}`
-		).run({ tenantId });
-	}
-}
-
-function tableExists(db: DatabaseHandle, tableName: string): boolean {
-	const row = db
-		.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`)
-		.get(tableName) as { 1: number } | undefined;
-	return Boolean(row);
-}
-
-function attachedTableExists(db: DatabaseHandle, schemaName: string, tableName: string): boolean {
-	const row = db
-		.prepare(`SELECT 1 FROM ${schemaName}.sqlite_master WHERE type = 'table' AND name = ?`)
-		.get(tableName) as { 1: number } | undefined;
-	return Boolean(row);
 }
 
 function tableHasColumn(db: DatabaseHandle, tableName: string, columnName: string): boolean {
-	const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+	const columns = db.drizzle.all<{ name: string }>(sql`PRAGMA table_info(${sql.identifier(tableName)})`);
 	return columns.some((column) => column.name === columnName);
-}
-
-function attachedTableHasColumn(db: DatabaseHandle, schemaName: string, tableName: string, columnName: string): boolean {
-	if (!attachedTableExists(db, schemaName, tableName)) {
-		return false;
-	}
-
-	const columns = db.prepare(`PRAGMA ${schemaName}.table_info(${tableName})`).all() as Array<{ name: string }>;
-	return columns.some((column) => column.name === columnName);
-}
-
-function renameTableIfExists(db: DatabaseHandle, tableName: string, nextTableName: string): void {
-	if (!tableExists(db, tableName)) {
-		return;
-	}
-
-	db.exec(`ALTER TABLE ${tableName} RENAME TO ${nextTableName}`);
-}
-
-function dropTableIfExists(db: DatabaseHandle, tableName: string): void {
-	if (!tableExists(db, tableName)) {
-		return;
-	}
-
-	db.exec(`DROP TABLE ${tableName}`);
 }

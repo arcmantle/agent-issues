@@ -5,13 +5,13 @@ import type { SqliteExecutor } from "../db/sqlite-executor.js";
 const depthsByDatabase = new WeakMap<object, HistoryMaterializationDepths>();
 
 export function getHistoryMaterializationDepths(executor: SqliteExecutor): HistoryMaterializationDepths {
-	const existing = depthsByDatabase.get(executor.db);
+	const existing = depthsByDatabase.get(executor.drizzle);
 	if (existing) {
 		return existing;
 	}
 
 	const depths = { ...EMPTY_HISTORY_MATERIALIZATION_DEPTHS };
-	depthsByDatabase.set(executor.db, depths);
+	depthsByDatabase.set(executor.drizzle, depths);
 	return depths;
 }
 

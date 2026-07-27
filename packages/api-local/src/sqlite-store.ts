@@ -22,10 +22,10 @@ import {
 	restoreContextTermRevision,
 	upsertContext
 } from "./features/context/context-store.js";
-import type { DatabaseHandle, DatabaseLocationOptions } from "./db/database.js";
+import type { DatabaseLocationOptions } from "./db/database.js";
 import { getHistoryMaterializationDepths } from "./features/history-diagnostics.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./db/database.js";
-import type { SqliteExecutor } from "./db/sqlite-executor.js";
+import type { SqliteExecutor, SqliteInternalConnection } from "./db/sqlite-executor.js";
 import {
 	applyRelations,
 	archiveEntity,
@@ -88,18 +88,14 @@ function computeFileStatSignature(dbPath: string): string {
  * can slot in without callers branching on backend.
  */
 export class SqliteStore implements StorageDriver {
-	public constructor(executor: SqliteExecutor) {
+	public constructor(executor: SqliteInternalConnection) {
 		this.executor = executor;
 	}
 
-	protected executor: SqliteExecutor;
-
-	protected get db(): DatabaseHandle {
-		return this.executor.db;
-	}
+	protected executor: SqliteInternalConnection;
 
 	public get tenantId(): string {
-		return this.db.tenantId;
+		return this.executor.tenantId;
 	}
 
 	public async exportCanonicalChains() {
@@ -217,7 +213,7 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async getSnapshotSignature(): Promise<string> {
-		return computeFileStatSignature(this.db.name);
+		return computeFileStatSignature(this.executor.dbPath);
 	}
 
 	public async listContexts(): Promise<ContextListResult> {
@@ -265,19 +261,19 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async listTenants() {
-		return listTenants(this.db);
+		return listTenants(this.executor);
 	}
 
 	public async deleteTenant(tenantId: string) {
-		return deleteTenant(this.db, tenantId);
+		return deleteTenant(this.executor, tenantId);
 	}
 
 	public async renameTenant(previousTenantId: string, newTenantId: string) {
-		return renameTenant(this.db, previousTenantId, newTenantId);
+		return renameTenant(this.executor, previousTenantId, newTenantId);
 	}
 
 	public async close(): Promise<void> {
-		this.db.close();
+		this.executor.close();
 	}
 }
 

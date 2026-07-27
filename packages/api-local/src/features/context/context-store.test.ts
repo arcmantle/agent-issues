@@ -2,17 +2,18 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { encodeContextRecordKey, encodeContextTermRecordKey, formatTenantDisplayName, sanitizePathSegment } from "@agent-issues/core";
 import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, materializeContextRevision, materializeContextTermRevision, queryContextDirectory, upsertContext } from "./context-store.js";
 import { ensureDatabase, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
-import type { SqliteExecutor } from "../../db/sqlite-executor.js";
+import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
 import { createEntity } from "../entity-store/store.js";
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<SqliteExecutor> {
+async function openTestDatabase(): Promise<SqliteInternalConnection> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-context-"));
 	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
 	return executor;
@@ -26,20 +27,23 @@ async function seedProjectContext(
 	const { db } = await ensureDatabase(dbPath, {});
 	try {
 		const projectId = "PROJ1";
+		const projectReference = "PROJ1";
+		const contextId = "CTX1";
+		const contextReference = "CTX1";
 		const now = new Date().toISOString();
-		db.prepare(
-			`INSERT INTO entities (tenant_id, id, kind, title, status, body, body_source, project_id, created_at, updated_at)
-			 VALUES (?, ?, 'project', ?, 'active', '', 'authored', ?, ?, ?)`
-		).run(db.tenantId, projectId, projectTitle, projectId, now, now);
+		db.drizzle.run(sql`
+			INSERT INTO entities (tenant_id, id, reference, kind, title, status, body, body_source, revision, content_hash, tombstone, project_id, created_at, updated_at)
+			VALUES (${db.tenantId}, ${projectId}, ${projectReference}, 'project', ${projectTitle}, 'active', '', 'authored', 1, '', 0, ${projectId}, ${now}, ${now})
+		`);
 		if (term) {
-			db.prepare(
-				`INSERT INTO contexts (tenant_id, key, scope_entity_id, title, summary, created_at, updated_at)
-				 VALUES (?, ?, NULL, ?, '', ?, ?)`
-			).run(db.tenantId, `default:${projectId}`, `${projectTitle} Context`, now, now);
-			db.prepare(
-				`INSERT INTO context_terms (tenant_id, id, context_key, term, definition, avoid_terms, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, '', ?, ?)`
-			).run(db.tenantId, randomUUID(), `default:${projectId}`, term.term, term.definition, now, now);
+			db.drizzle.run(sql`
+				INSERT INTO contexts (tenant_id, id, reference, key, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
+				VALUES (${db.tenantId}, ${contextId}, ${contextReference}, ${`default:${projectId}`}, NULL, ${`${projectTitle} Context`}, '', 1, '', ${now}, ${now})
+			`);
+			db.drizzle.run(sql`
+				INSERT INTO context_terms (tenant_id, id, context_key, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at)
+				VALUES (${db.tenantId}, ${randomUUID()}, ${`default:${projectId}`}, ${term.term}, ${term.definition}, '', 1, '', 0, ${now}, ${now})
+			`);
 		}
 		return projectId;
 	} finally {
@@ -65,15 +69,17 @@ describe("context directory", () => {
 			expectedRevision: created.context.revision,
 			expectedContentHash: created.context.contentHash
 		});
-		const storedContext = db.db.prepare("SELECT id, reference FROM contexts WHERE tenant_id = ? AND key = ?").get(db.tenantId, created.context.key) as { id: string; reference: string };
+		const storedContext = db.drizzle.get<{ id: string; reference: string }>(
+			sql`SELECT id, reference FROM contexts WHERE tenant_id = ${db.tenantId} AND key = ${created.context.key}`
+		) as { id: string; reference: string };
 		expect(created.context.id).toBe(storedContext.id);
 		expect(created.context.reference).toBe(storedContext.reference);
 		expect(created.context.reference).toMatch(/^CTX_[0-9A-HJKMNP-TV-Z]{26}$/);
 
-		const deltas = db.db.prepare(`SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash, created_at
+		const deltas = db.drizzle.all(sql`SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash, created_at
 			FROM revision_entries
-			WHERE tenant_id = ? AND project_id = ? AND record_kind = 'context' AND record_key = ?
-			ORDER BY revision`).all(db.tenantId, db.currentProjectId, encodeContextRecordKey(storedContext.id));
+			WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} AND record_kind = 'context' AND record_key = ${encodeContextRecordKey(storedContext.id)}
+			ORDER BY revision`);
 		expect(deltas).toEqual([
 			expect.objectContaining({ revision: 1, author: "alice", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) }),
 			expect.objectContaining({ revision: 2, author: "bob", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) })
@@ -98,15 +104,16 @@ describe("context directory", () => {
 			expectedRevision: updated.term.revision,
 			expectedContentHash: updated.term.contentHash
 		});
-		const storedTerm = db.db.prepare("SELECT id FROM context_terms WHERE tenant_id = ? AND context_key = ? AND term = ?").get(db.tenantId, created.context.key, "Order") as { id: string };
+		const storedTerm = db.drizzle.get<{ id: string }>(
+			sql`SELECT id FROM context_terms WHERE tenant_id = ${db.tenantId} AND context_key = ${created.context.key} AND term = ${"Order"}`
+		) as { id: string };
 		expect(created.term.id).toBe(storedTerm.id);
 		expect(created.term.reference).toMatch(/^TERM_[0-9A-HJKMNP-TV-Z]{26}$/);
 
-		const deltas = db.db.prepare(`SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash
+		const deltas = db.drizzle.all(sql`SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash
 			FROM revision_entries
-			WHERE tenant_id = ? AND project_id = ? AND record_kind = 'context-term' AND record_key = ?
-			ORDER BY revision`)
-			.all(db.tenantId, db.currentProjectId, encodeContextTermRecordKey(storedTerm.id));
+			WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} AND record_kind = 'context-term' AND record_key = ${encodeContextTermRecordKey(storedTerm.id)}
+			ORDER BY revision`);
 		expect(deltas).toEqual([
 			expect.objectContaining({ revision: 1, author: "alice", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
 			expect.objectContaining({ revision: 2, author: "bob", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
@@ -180,8 +187,7 @@ describe("context directory", () => {
 			title: "Net Migration Context",
 			summary: "Original summary."
 		});
-		db.db.prepare("UPDATE contexts SET key = ? WHERE tenant_id = ? AND scope_entity_id = ?")
-			.run("INIT15", db.tenantId, initiative.id);
+		db.drizzle.run(sql`UPDATE contexts SET key = ${"INIT15"} WHERE tenant_id = ${db.tenantId} AND scope_entity_id = ${initiative.id}`);
 
 		const updated = upsertContext(db, {
 			scopeRef: initiative.reference,
@@ -197,8 +203,11 @@ describe("context directory", () => {
 			title: "Migrate eye-share-devops to .NET 10 (Photino) Context",
 			revision: 2
 		});
-		expect(db.db.prepare("SELECT count(*) AS count FROM contexts WHERE tenant_id = ? AND scope_entity_id = ?")
-			.get(db.tenantId, initiative.id)).toEqual({ count: 1 });
+		expect(
+			db.drizzle.get<{ count: number }>(
+				sql`SELECT count(*) AS count FROM contexts WHERE tenant_id = ${db.tenantId} AND scope_entity_id = ${initiative.id}`
+			)
+		).toEqual({ count: 1 });
 	});
 
 	it("supports global-only search against shared context", async () => {
@@ -326,7 +335,7 @@ describe("project-aware default context (ISS166)", () => {
 			expect(details.context.key).toBe(`default:${projectId}`);
 			expect(details.context.scopeLabel).toBe(projectTitle);
 			expect(details.terms.map((term) => term.term)).toEqual(["Widget"]);
-			dbFromWorkspaceA.db.close();
+			dbFromWorkspaceA.close();
 
 			await expect(ensureDatabase(dbPath, {})).rejects.toThrow(/project identity is required/i);
 		} finally {
@@ -350,7 +359,7 @@ describe("project-aware default context (ISS166)", () => {
 
 			expect(details.context.key).toBe(`default:${projectId}`);
 			expect(details.context.scopeLabel).toBe(projectTitle);
-			sharedDb.db.close();
+			sharedDb.close();
 		} finally {
 			rmSync(workspaceB, { force: true, recursive: true });
 		}

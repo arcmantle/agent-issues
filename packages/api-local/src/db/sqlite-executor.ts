@@ -1,48 +1,17 @@
 import { and, eq } from "drizzle-orm";
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
-import { entities, schema } from "../schema.js";
-import type { DatabaseHandle } from "./database.js";
+import { entities } from "../schema.js";
+import { openSqliteConnection, type SqliteConnection } from "./sqlite-connection.js";
 
-const drizzleByDatabase = new WeakMap<DatabaseHandle, BetterSQLite3Database<typeof schema>>();
+export type SqliteInternalConnection = SqliteConnection;
 
-export type SqliteExecutor = {
-	db: DatabaseHandle;
-	drizzle: BetterSQLite3Database<typeof schema>;
-	tenantId: string;
-	currentProjectId: string;
-	transaction<T>(fn: () => T): T;
-};
+export type SqliteExecutor = Pick<
+	SqliteConnection,
+	"drizzle" | "tenantId" | "currentProjectId" | "dbPath" | "close"
+>;
 
-export function createSqliteExecutor(db: DatabaseHandle): SqliteExecutor {
-	const drizzleDatabase = drizzle(db, { schema });
-	drizzleByDatabase.set(db, drizzleDatabase);
-
-	return {
-		db,
-		drizzle: drizzleDatabase,
-		get tenantId() {
-			return db.tenantId;
-		},
-		get currentProjectId() {
-			return db.currentProjectId;
-		},
-		set currentProjectId(currentProjectId: string) {
-			db.currentProjectId = currentProjectId;
-		},
-		transaction<T>(fn: () => T): T {
-			return db.transaction(fn)();
-		}
-	};
-}
-
-export function getSqliteDrizzle(db: DatabaseHandle): BetterSQLite3Database<typeof schema> {
-	const drizzleDatabase = drizzleByDatabase.get(db);
-	if (!drizzleDatabase) {
-		throw new Error("Missing Drizzle SQLite executor for database handle.");
-	}
-
-	return drizzleDatabase;
+export function createSqliteExecutor(dbPath: string): SqliteInternalConnection {
+	return openSqliteConnection(dbPath);
 }
 
 export function getSqliteEntityOrThrow(executor: SqliteExecutor, entityId: string) {
@@ -60,14 +29,14 @@ export function resolveSqliteEntity(executor: SqliteExecutor, entityId: string, 
 	let row = executor.drizzle
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.id, entityId), livePredicate))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entityId), livePredicate))
 		.get();
 
 	if (!row) {
 		row = executor.drizzle
 			.select()
 			.from(entities)
-			.where(and(eq(entities.tenantId, executor.db.tenantId), eq(entities.reference, entityId), livePredicate))
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.reference, entityId), livePredicate))
 			.get();
 	}
 

@@ -15,14 +15,28 @@ function openTestStore(): Promise<StorageDriver> {
 	return openSqliteStore(path.join(tempDir, "test.db"), { tenant: "test" }).then((result) => result.store);
 }
 
+// Both identities open the same database file and tenant, so the contract's
+// separation assertions are about project scoping rather than about two
+// unrelated databases.
+let contractDir: string | null = null;
+function openTestStoreForProject(projectIdentity: string): Promise<StorageDriver> {
+	contractDir ??= mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-project-"));
+	return openSqliteStore(path.join(contractDir, "test.db"), { tenant: "test", projectIdentity }).then((result) => result.store);
+}
+
 afterEach(() => {
 	if (tempDir) {
 		rmSync(tempDir, { force: true, recursive: true });
 		tempDir = null;
 	}
+
+	if (contractDir) {
+		rmSync(contractDir, { force: true, recursive: true });
+		contractDir = null;
+	}
 });
 
-runStorageDriverContractSuite({ label: "SqliteStore", openStore: openTestStore });
+runStorageDriverContractSuite({ label: "SqliteStore", openStore: openTestStore, openStoreForProject: openTestStoreForProject });
 
 describe("storage-driver seam: persisted Stable identity (SqliteStore)", () => {
 	it("stores the UUID as entity id and the Canonical reference separately", async () => {

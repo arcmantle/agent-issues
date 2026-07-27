@@ -1,12 +1,14 @@
 import Database from "better-sqlite3";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { deriveMigratedEntityIdentity } from "@agent-issues/core";
+import { deriveMigratedEntityIdentity, MIGRATION_BENCHMARK } from "@agent-issues/core";
 import { ensureDatabase, resolveWellKnownLocalTenantId } from "../db/database.js";
+import type { SqliteInternalConnection } from "../db/sqlite-executor.js";
+import { migrations } from "./index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const GOLDEN_FIXTURE = path.join(here, "__fixtures__", "schema-v7.db");
@@ -32,6 +34,26 @@ const REAL_WORLD_LEGACY_TENANT_IDS = [
 ] as const;
 
 const tempDirs: string[] = [];
+const inspectionHandles = new Map<string, Database.Database>();
+
+function rawDb(connection: SqliteInternalConnection): Database.Database {
+	const existing = inspectionHandles.get(connection.dbPath);
+	if (existing) {
+		return existing;
+	}
+	const handle = new Database(connection.dbPath);
+	inspectionHandles.set(connection.dbPath, handle);
+	return handle;
+}
+
+function closeInspectionHandle(connection: SqliteInternalConnection): void {
+	const handle = inspectionHandles.get(connection.dbPath);
+	if (!handle) {
+		return;
+	}
+	handle.close();
+	inspectionHandles.delete(connection.dbPath);
+}
 
 function stageFixture(): string {
 	const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-golden-"));
@@ -54,13 +76,110 @@ function snapshotTables(dbPath: string): Record<string, unknown[]> {
 	}
 }
 
+async function stageLegacyTablesAlongsideFinalSchema(dbPath: string): Promise<void> {
+	const retainedSource = new Database(GOLDEN_FIXTURE, { readonly: true, fileMustExist: true });
+	const sourceTables = retainedSource.prepare(`SELECT name, sql FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as Array<{ name: string; sql: string }>;
+	const sourceRows = new Map(sourceTables.map(({ name }) => [name, retainedSource.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]));
+	retainedSource.close();
+
+	const migrated = await ensureDatabase(dbPath, { tenant: "fixture" });
+	rawDb(migrated.db).pragma("foreign_keys = OFF");
+	for (const { name, sql } of sourceTables) {
+		rawDb(migrated.db).exec(sql.replace(`CREATE TABLE ${name}`, `CREATE TABLE legacy_v7_${name}`));
+		const rows = sourceRows.get(name) ?? [];
+		if (rows.length === 0) continue;
+		const columns = Object.keys(rows[0] as Record<string, unknown>);
+		const insert = rawDb(migrated.db).prepare(`INSERT INTO legacy_v7_${name} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`);
+		for (const row of rows as Array<Record<string, unknown>>) insert.run(...columns.map((column) => row[column]));
+	}
+	rawDb(migrated.db).pragma("foreign_keys = ON");
+	closeInspectionHandle(migrated.db);
+}
+
 afterEach(() => {
+	for (const handle of inspectionHandles.values()) {
+		handle.close();
+	}
+	inspectionHandles.clear();
+
 	for (const tempDir of tempDirs.splice(0)) {
 		rmSync(tempDir, { force: true, recursive: true });
 	}
 });
 
 describe("golden-fixture migration wall", () => {
+	it("registers only the final baseline in the SQLite production migration plan", () => {
+		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline"]);
+	});
+
+	it("implements the SQLite legacy route without clone or historical migration replay", () => {
+		const directSource = readFileSync(path.join(here, "legacy-v7-direct.ts"), "utf8");
+		const databaseSource = readFileSync(path.join(here, "..", "db", "database.ts"), "utf8");
+
+		expect(directSource).not.toMatch(/\.serialize\(|mkdtempSync|tmpdir|clone\.db|buildFinalClone|runMigrations/);
+		expect(databaseSource).not.toMatch(/migrateLegacySqliteV7Sequentially|buildFinalClone/);
+		expect(databaseSource).toMatch(/transformLegacySqliteV7\(db\)/);
+	});
+
+	it("opens legacy v7 through one direct checkpoint with an exactly contracted final schema", async () => {
+		const staged = stageFixture();
+
+		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
+		db.close();
+		const backupDirectory = path.join(path.dirname(staged), "backups");
+		const backups = readdirSync(backupDirectory);
+		expect(backups).toHaveLength(MIGRATION_BENCHMARK.sqlite.legacyV7.backups);
+		const backup = new Database(path.join(backupDirectory, backups[0]!), { readonly: true, fileMustExist: true });
+		try {
+			expect(backup.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'").get()).toEqual({ name: "handoffs" });
+			expect(backup.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'revision_entries'").get()).toBeUndefined();
+		} finally {
+			backup.close();
+		}
+
+		const migrated = new Database(staged, { readonly: true, fileMustExist: true });
+		try {
+			expect(migrated.prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
+				{ id: "legacy-v7-direct" }
+			]);
+			expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+				'entity_delta_entries',
+				'context_delta_entries',
+				'context_term_delta_entries',
+				'entity_aliases',
+				'entity_revision_entries',
+				'context_revision_entries',
+				'context_term_revision_entries'
+			) ORDER BY name`).all()).toEqual([]);
+			expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_v7_%' ORDER BY name`).all()).toEqual([]);
+		} finally {
+			migrated.close();
+		}
+	});
+
+	it("rejects final schema mixed with staged legacy tables without mutation or another backup", async () => {
+		const staged = stageFixture();
+		await stageLegacyTablesAlongsideFinalSchema(staged);
+		const database = new Database(staged);
+		const schemaBefore = database.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+		const backupsDirectory = path.join(path.dirname(staged), "backups");
+		const backupsBefore = readdirSync(backupsDirectory);
+		database.close();
+
+		await expect(ensureDatabase(staged, { tenant: "fixture" })).rejects.toThrow(/unsupported source profile/i);
+
+		const inspected = new Database(staged, { readonly: true, fileMustExist: true });
+		try {
+			expect(inspected.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all()).toEqual(schemaBefore);
+			expect(inspected.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_v7_%'").get()).toEqual({ count: 7 });
+			expect(inspected.prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([{ id: "legacy-v7-direct" }]);
+		} finally {
+			inspected.close();
+		}
+		expect(readdirSync(backupsDirectory)).toEqual(backupsBefore);
+	});
+
 	it("preserves every record when a pre-Drizzle v7 database is opened", async () => {
 		const staged = stageFixture();
 		const before = snapshotTables(staged);
@@ -202,43 +321,61 @@ describe("golden-fixture migration wall", () => {
 		}
 	});
 
-	it("marks the baseline migrations as applied without re-running them", async () => {
+	it("scopes deterministic revision entry ids by tenant", async () => {
+		const staged = stageFixture();
+		const legacy = new Database(staged);
+		try {
+			for (const table of ["counters", "entities", "relations", "contexts", "context_terms"] as const) {
+				legacy.prepare(`INSERT INTO ${table} SELECT 'other-tenant', ${table === "counters"
+					? "kind, next_value"
+					: table === "entities"
+						? "id, kind, title, status, body, body_source, created_at, updated_at"
+						: table === "relations"
+							? "from_id, to_id, type, created_at"
+							: table === "contexts"
+								? "key, scope_entity_id, title, summary, created_at, updated_at"
+								: "context_key, term, definition, avoid_terms, created_at, updated_at"}
+					FROM ${table} WHERE tenant_id = 'fixture'`).run();
+			}
+		} finally {
+			legacy.close();
+		}
+
+		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
+		try {
+			const entries = rawDb(db).prepare(`SELECT id, tenant_id, record_kind FROM revision_entries ORDER BY tenant_id, record_kind, id`).all() as Array<{
+				id: string;
+				record_kind: string;
+				tenant_id: string;
+			}>;
+			expect(new Set(entries.map(({ id }) => id)).size).toBe(entries.length);
+			expect(new Set(entries.map(({ tenant_id }) => tenant_id))).toEqual(new Set(["fixture", resolveWellKnownLocalTenantId()]));
+			expect(new Set(entries.map(({ record_kind }) => record_kind))).toEqual(new Set(["context", "context-term", "entity"]));
+		} finally {
+			db.close();
+		}
+	});
+
+	it("records the legacy v7 transformation as one direct checkpoint", async () => {
 		const staged = stageFixture();
 
 		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
+		const schemaBefore = rawDb(db).prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+		const ledgerBefore = rawDb(db).prepare("SELECT id, applied_at FROM schema_migrations ORDER BY rowid").all();
 		db.close();
+
+		const reopened = await ensureDatabase(staged, { tenant: "fixture" });
+		try {
+			expect(rawDb(reopened.db).prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all()).toEqual(schemaBefore);
+			expect(rawDb(reopened.db).prepare("SELECT id, applied_at FROM schema_migrations ORDER BY rowid").all()).toEqual(ledgerBefore);
+		} finally {
+			closeInspectionHandle(reopened.db);
+		}
 
 		const db2 = new Database(staged, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
-			expect(applied).toEqual([
-				{ id: "0000-baseline-v7" },
-				{ id: "0004-backfill-tenant-bootstrap" },
-				{ id: "0008-consolidate-legacy-tenants-backfill" },
-				{ id: "0009-add-entity-project-id" },
-				{ id: "0010-migrate-handoffs-to-entities" },
-				{ id: "0011-entity-revision-delta" },
-				{ id: "0012-entity-lifecycle-delta" },
-				{ id: "0013-entity-parent-delta-marker" },
-                                { id: "0014-history-entries-to-deltas" },
-				{ id: "0015-context-revision-delta" },
-				{ id: "0016-context-term-revision-delta" },
-				{ id: "0017-entity-restoration-source" },
-				{ id: "0018-context-restoration-source" },
-				{ id: "0019-context-revision-baselines" },
-				{ id: "0020-compact-reverse-field-patches" },
-				{ id: "0021-revision-patch-ledger" },
-				{ id: "0022-binary-revision-patch-hashes" },
-				{ id: "0023-context-term-stable-ids" },
-				{ id: "0024-entity-stable-identities" },
-				{ id: "0025-correct-stable-identity-storage" },
-				{ id: "0026-remove-entity-aliases" },
-				{ id: "0027-remove-drizzle-ledger" },
-				{ id: "0028-rename-revision-entries" },
-				{ id: "0029-remove-history-entries" },
-				{ id: "0030-remove-project-migration-ledgers" },
-				{ id: "0031-remove-metadata" }
-			]);
+			expect(applied).toEqual([{ id: "legacy-v7-direct" }]);
 		} finally {
 			db2.close();
 		}
@@ -281,8 +418,8 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 			const wellKnownTenantId = resolveWellKnownLocalTenantId();
 			expect(db.tenantId).toBe(wellKnownTenantId);
 
-			expect(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('project_migrations', '__drizzle_migrations')`).all()).toEqual([]);
-			const migratedProjectTitles = db
+			expect(rawDb(db).prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('project_migrations', '__drizzle_migrations')`).all()).toEqual([]);
+			const migratedProjectTitles = rawDb(db)
 				.prepare(`SELECT title FROM entities WHERE tenant_id = ? AND kind = 'project' AND title != 'Default Project' ORDER BY title`)
 				.all(wellKnownTenantId) as Array<{ title: string }>;
 			expect(migratedProjectTitles.map((row) => row.title)).toEqual([
@@ -296,7 +433,7 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 			// well-known tenant's own PROJ0 sentinel - no ghost project should be
 			// manufactured for a counter-only tenant with no real content (ISS177).
 			const projectCount = (
-				db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ? AND kind = 'project'`).get(wellKnownTenantId) as {
+				rawDb(db).prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ? AND kind = 'project'`).get(wellKnownTenantId) as {
 					count: number;
 				}
 			).count;
@@ -306,13 +443,13 @@ describe("real-world multi-tenant migration (ISS177 regression fixture)", () => 
 			// remapped under the well-known tenant, plus one fresh project+epic
 			// pair per legacy tenant and the well-known tenant's own pair.
 			const entityCountAfter = (
-				db.prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(wellKnownTenantId) as { count: number }
+				rawDb(db).prepare(`SELECT COUNT(*) AS count FROM entities WHERE tenant_id = ?`).get(wellKnownTenantId) as { count: number }
 			).count;
 			expect(entityCountAfter).toBe(entityCountBefore + handoffCountBefore + (REAL_WORLD_LEGACY_TENANT_IDS.length + 1) * 2);
 
 			// No tenant id survives outside the well-known tenant - full
 			// consolidation, no residue left behind.
-			const remainingForeignTenants = db.prepare(`SELECT DISTINCT tenant_id FROM entities WHERE tenant_id != ?`).all(wellKnownTenantId);
+			const remainingForeignTenants = rawDb(db).prepare(`SELECT DISTINCT tenant_id FROM entities WHERE tenant_id != ?`).all(wellKnownTenantId);
 			expect(remainingForeignTenants).toEqual([]);
 		} finally {
 			db.close();
@@ -328,7 +465,7 @@ function freshDatabasePath(): string {
 }
 
 describe("fresh install schema parity", () => {
-	it("records all baseline migrations so future forward migrations are tracked", async () => {
+	it("records only the final baseline checkpoint", async () => {
 		const dbPath = freshDatabasePath();
 		const { db } = await ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
@@ -336,34 +473,7 @@ describe("fresh install schema parity", () => {
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
-			expect(applied).toEqual([
-				{ id: "0000-baseline-v7" },
-				{ id: "0004-backfill-tenant-bootstrap" },
-				{ id: "0008-consolidate-legacy-tenants-backfill" },
-				{ id: "0009-add-entity-project-id" },
-				{ id: "0010-migrate-handoffs-to-entities" },
-				{ id: "0011-entity-revision-delta" },
-				{ id: "0012-entity-lifecycle-delta" },
-				{ id: "0013-entity-parent-delta-marker" },
-                                { id: "0014-history-entries-to-deltas" },
-				{ id: "0015-context-revision-delta" },
-				{ id: "0016-context-term-revision-delta" },
-				{ id: "0017-entity-restoration-source" },
-				{ id: "0018-context-restoration-source" },
-				{ id: "0019-context-revision-baselines" },
-				{ id: "0020-compact-reverse-field-patches" },
-				{ id: "0021-revision-patch-ledger" },
-				{ id: "0022-binary-revision-patch-hashes" },
-				{ id: "0023-context-term-stable-ids" },
-				{ id: "0024-entity-stable-identities" },
-				{ id: "0025-correct-stable-identity-storage" },
-				{ id: "0026-remove-entity-aliases" },
-				{ id: "0027-remove-drizzle-ledger" },
-				{ id: "0028-rename-revision-entries" },
-				{ id: "0029-remove-history-entries" },
-				{ id: "0030-remove-project-migration-ledgers" },
-				{ id: "0031-remove-metadata" }
-			]);
+			expect(applied).toEqual([{ id: "final-baseline" }]);
 		} finally {
 			db2.close();
 		}
@@ -435,67 +545,21 @@ describe("legacy pre-tenant migration through the ADR43 runner", () => {
 		}
 	}
 
-	it("moves legacy data into the tenant schema and records the baseline", async () => {
+	it("rejects a pre-ledger schema that does not match either complete v7 fixture", async () => {
 		const dbPath = freshDatabasePath();
 		writePreTenantDatabase(dbPath);
+		const before = new Database(dbPath, { readonly: true, fileMustExist: true });
+		const schemaBefore = before.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+		const entitiesBefore = before.prepare("SELECT * FROM entities ORDER BY id").all();
+		before.close();
 
-		const { db } = await ensureDatabase(dbPath, { tenant: "legacy" });
-		db.close();
+		await expect(ensureDatabase(dbPath, { tenant: "legacy" })).rejects.toThrow(/unsupported source profile.*evidence:.*recovery:/i);
 
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
-			const entities = db2.prepare(`SELECT tenant_id, id, reference, kind, body, body_source FROM entities ORDER BY id`).all();
-			expect(entities).toEqual([
-				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("epic", "EPIC0").stableId, reference: deriveMigratedEntityIdentity("epic", "EPIC0").reference, kind: "epic", body: "", body_source: "generated" },
-				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("initiative", "INIT1").stableId, reference: deriveMigratedEntityIdentity("initiative", "INIT1").reference, kind: "initiative", body: "", body_source: "authored" },
-				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("project", "PROJ0").stableId, reference: deriveMigratedEntityIdentity("project", "PROJ0").reference, kind: "project", body: "", body_source: "generated" },
-				{ tenant_id: "legacy", id: deriveMigratedEntityIdentity("issue", "ISS1").stableId, reference: deriveMigratedEntityIdentity("issue", "ISS1").reference, kind: "issue", body: "", body_source: "authored" }
-			]);
-
-			const relations = db2.prepare(`SELECT tenant_id, from_id, to_id, type FROM relations ORDER BY from_id, to_id`).all();
-			expect(relations).toEqual([
-				{ tenant_id: "legacy", from_id: deriveMigratedEntityIdentity("epic", "EPIC0").stableId, to_id: deriveMigratedEntityIdentity("initiative", "INIT1").stableId, type: "contains" },
-				{ tenant_id: "legacy", from_id: deriveMigratedEntityIdentity("initiative", "INIT1").stableId, to_id: deriveMigratedEntityIdentity("issue", "ISS1").stableId, type: "tracks" },
-				{ tenant_id: "legacy", from_id: deriveMigratedEntityIdentity("project", "PROJ0").stableId, to_id: deriveMigratedEntityIdentity("epic", "EPIC0").stableId, type: "contains" }
-			]);
-
-			const terms = db2.prepare(`SELECT tenant_id, context_key, term FROM context_terms`).all();
-			expect(terms).toEqual([{ tenant_id: "legacy", context_key: "INIT1", term: "Widget" }]);
-
-			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
-			expect(applied).toEqual([
-				{ id: "0000-baseline-v7" },
-				{ id: "0004-backfill-tenant-bootstrap" },
-				{ id: "0008-consolidate-legacy-tenants-backfill" },
-				{ id: "0009-add-entity-project-id" },
-				{ id: "0010-migrate-handoffs-to-entities" },
-				{ id: "0011-entity-revision-delta" },
-				{ id: "0012-entity-lifecycle-delta" },
-				{ id: "0013-entity-parent-delta-marker" },
-                                { id: "0014-history-entries-to-deltas" },
-				{ id: "0015-context-revision-delta" },
-				{ id: "0016-context-term-revision-delta" },
-				{ id: "0017-entity-restoration-source" },
-				{ id: "0018-context-restoration-source" },
-				{ id: "0019-context-revision-baselines" },
-				{ id: "0020-compact-reverse-field-patches" },
-				{ id: "0021-revision-patch-ledger" },
-				{ id: "0022-binary-revision-patch-hashes" },
-				{ id: "0023-context-term-stable-ids" },
-				{ id: "0024-entity-stable-identities" },
-				{ id: "0025-correct-stable-identity-storage" },
-				{ id: "0026-remove-entity-aliases" },
-				{ id: "0027-remove-drizzle-ledger" },
-				{ id: "0028-rename-revision-entries" },
-				{ id: "0029-remove-history-entries" },
-				{ id: "0030-remove-project-migration-ledgers" },
-				{ id: "0031-remove-metadata" }
-			]);
-
-			const legacyTables = db2
-				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_%'`)
-				.all();
-			expect(legacyTables).toEqual([]);
+			expect(db2.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all()).toEqual(schemaBefore);
+			expect(db2.prepare("SELECT * FROM entities ORDER BY id").all()).toEqual(entitiesBefore);
+			expect(db2.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()).toBeUndefined();
 		} finally {
 			db2.close();
 		}

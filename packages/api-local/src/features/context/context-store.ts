@@ -218,7 +218,7 @@ export function upsertContext(db: SqliteExecutor, input: { scopeRef?: string; ti
 
 	const scope = resolveContextScope(db, input.scopeRef);
 
-	return db.transaction(() => {
+	return db.drizzle.transaction(() => {
 		const existing = getContextDetails(db, { scopeRef: input.scopeRef }).context;
 		const now = new Date().toISOString();
 		const newContentHash = computeContextContentHash(title, summary);
@@ -280,7 +280,7 @@ export function defineContextTerm(
 	const now = new Date().toISOString();
 
 	const contentHash = computeContextTermContentHash(term, definition, normalizedAvoid, false);
-	db.transaction(() => {
+	db.drizzle.transaction(() => {
 		if (existing) {
 			assertContextTermHead(scope.key, term, existing, input.expectedRevision, input.expectedContentHash);
 			const revision = existing.revision + 1;
@@ -347,7 +347,7 @@ export function forgetContextTerm(db: SqliteExecutor, input: { scopeRef?: string
 	const revision = existing.revision + 1;
 	const contentHash = computeContextTermContentHash(existing.term, existing.definition, existing.avoid, true);
 	const now = new Date().toISOString();
-	db.transaction(() => {
+	db.drizzle.transaction(() => {
 		const result = db.drizzle.run(sql`UPDATE context_terms SET revision = ${revision}, content_hash = ${contentHash}, tombstone = TRUE, updated_at = ${now}
 			WHERE tenant_id = ${db.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
 		if (result.changes === 0) {
@@ -405,7 +405,7 @@ export function restoreContextRevision(
 	}
 	const source = materializeContextRevision(db, { scopeRef: input.scopeRef, revision: input.revision });
 
-	return db.transaction(() => {
+	return db.drizzle.transaction(() => {
 		const revision = current.revision + 1;
 		const contentHash = computeContextContentHash(source.title, source.summary);
 		const updatedAt = new Date().toISOString();
@@ -458,7 +458,7 @@ export function restoreContextTermRevision(
 	assertContextTermHead(scope.key, term, current, input.expectedRevision, input.expectedContentHash);
 	const source = materializeContextTermRevision(db, { scopeRef: input.scopeRef, term, revision: input.revision });
 
-	return db.transaction(() => {
+	return db.drizzle.transaction(() => {
 		const revision = current.revision + 1;
 		const contentHash = computeContextTermContentHash(source.term, source.definition, source.avoid, source.tombstone);
 		const updatedAt = new Date().toISOString();

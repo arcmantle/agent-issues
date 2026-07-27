@@ -147,7 +147,7 @@ export function createEntity(
 	// own resolved project (ISS166 follow-up).
 	const inheritedProjectId = (parent ? getEntityProjectId(executor, parent.id) : null) ?? db.currentProjectId;
 
-	return executor.transaction(() => {
+	return executor.drizzle.transaction(() => {
 		const identity = generateCanonicalIdentity(kind);
 		const id = identity.stableId;
 		// A project owns itself, so scoped reads from its own workspace see it.
@@ -338,7 +338,7 @@ export function setEntityBody(
 	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
 ): EntityRecord {
 	const db = executor;
-	return executor.transaction(() => {
+	return executor.drizzle.transaction(() => {
 		const current = getEntityOrThrow(executor, input.entityId);
 
 		if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
@@ -375,7 +375,7 @@ export function updateEntity(
 		throw new Error("Entity edit requires --title, --body, or both.");
 	}
 
-	return executor.transaction(() => {
+	return executor.drizzle.transaction(() => {
 		const current = getEntityOrThrow(executor, input.entityId);
 
 		if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
@@ -511,7 +511,7 @@ export function restoreEntityRevision(
 		}
 	}
 
-	return db.transaction(() => {
+	return db.drizzle.transaction(() => {
 		const updatedAt = new Date().toISOString();
 		const newRevision = current.revision + 1;
 		const result = db.drizzle.update(entities).set({
@@ -597,7 +597,7 @@ export function moveEntity(
 	const updatedAt = new Date().toISOString();
 	const newRevision = entity.revision + 1;
 
-	db.transaction(() => {
+	db.drizzle.transaction(() => {
 		for (const relation of currentParentRelations) {
 			run(db, sql`DELETE FROM relations
 				WHERE tenant_id = ${db.tenantId}
@@ -682,7 +682,7 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 	const entity = getEntityOrThrow(executor, input.entityId);
 	const previousParentId = getStructuralParentRelations(db, entity.id)[0]?.fromId ?? null;
 
-	return db.transaction(() => {
+	return db.drizzle.transaction(() => {
 		const dependentHandoffRows = all<EntityRow>(db, sql`SELECT entities.* FROM entities
 			JOIN relations ON relations.tenant_id = entities.tenant_id AND relations.from_id = entities.id
 			WHERE entities.tenant_id = ${db.tenantId}

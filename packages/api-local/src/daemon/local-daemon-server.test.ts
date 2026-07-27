@@ -81,6 +81,75 @@ describe("local daemon JSON-RPC tracer bullet (ISS186)", () => {
 		expect((await clientA.listEntities("initiative")).map((entity) => entity.title)).toEqual(["Initiative A"]);
 		expect((await clientB.listEntities("initiative")).map((entity) => entity.title)).toEqual(["Initiative B"]);
 	});
+
+	it("registers an unseen repository-style project identity on first request", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "daemon-tenant";
+		const seeded = await openSqliteStore(dbPath, { tenant: tenantId });
+		await seeded.store.createEntity({ kind: "project", title: "Existing Project" });
+		await seeded.store.close();
+
+		const address = handle.server.address() as AddressInfo;
+		const options = { baseUrl: `http://127.0.0.1:${address.port}`, tenantId, buildHash: readBuildContentHash(), dbPath };
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const client = new HttpStore({ ...options, bearerToken, projectIdentity: "brand-new-repo" });
+
+		// The fresh-workspace case: before ISS auto-registration this request
+		// failed to open a store at all, which the gate surfaced as an opaque
+		// HTTP 500 rather than anything the caller could act on.
+		expect(await client.listEntities("initiative")).toEqual([]);
+		await client.createEntity({ kind: "initiative", title: "First initiative" });
+
+		expect((await client.listEntities("project")).map((entity) => entity.title)).toEqual(["brand-new-repo"]);
+		expect((await client.listEntities("initiative")).map((entity) => entity.title)).toEqual(["First initiative"]);
+
+		// A second workspace registers its own project rather than joining the first.
+		const otherClient = new HttpStore({ ...options, bearerToken, projectIdentity: "other-repo" });
+		expect(await otherClient.listEntities("initiative")).toEqual([]);
+		expect((await otherClient.listEntities("project")).map((entity) => entity.title)).toEqual(["other-repo"]);
+	});
+
+	it("rejects an unresolvable stable-id project identity instead of registering it", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "daemon-tenant";
+		const address = handle.server.address() as AddressInfo;
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const client = new HttpStore({
+			baseUrl: `http://127.0.0.1:${address.port}`,
+			bearerToken,
+			tenantId,
+			projectIdentity: "3f1a2b4c-5d6e-4f70-8192-a3b4c5d6e7f8",
+			buildHash: readBuildContentHash(),
+			dbPath
+		});
+
+		await expect(client.listEntities("initiative")).rejects.toThrow(/Cannot resolve project identity/);
+	});
+
+	it("retries store initialization after a transient failure", async () => {
+		await handle.close();
+		let attempts = 0;
+		handle = createLocalDaemonServer({
+			authProvider,
+			dbPath: path.join(tempDir, "test.db"),
+			port: 0,
+			openStore: async (...args) => {
+				attempts++;
+				if (attempts === 1) throw new Error("transient initialization failure");
+				return openSqliteStore(...args);
+			}
+		});
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+
+		const address = handle.server.address() as AddressInfo;
+		const dbPath = path.join(tempDir, "test.db");
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: "daemon-tenant" });
+		const client = new HttpStore({ baseUrl: `http://127.0.0.1:${address.port}`, bearerToken, tenantId: "daemon-tenant", buildHash: readBuildContentHash(), dbPath });
+
+		await expect(client.listEntities("initiative")).rejects.toThrow(/transient initialization failure/);
+		await expect(client.listEntities("initiative")).resolves.toEqual([]);
+		expect(attempts).toBe(2);
+	});
 });
 
 describe("local daemon state file lifecycle (ISS189)", () => {

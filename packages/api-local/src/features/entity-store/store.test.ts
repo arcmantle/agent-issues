@@ -1,24 +1,25 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { deriveMigratedEntityIdentity } from "@agent-issues/core";
 import { ensureDatabase } from "../../db/database.js";
-import type { SqliteExecutor } from "../../db/sqlite-executor.js";
+import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
 import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
 
 const CANONICAL_ID_SUFFIX = "_[0-7][0-9A-HJKMNP-TV-Z]{25}";
 const DEFAULT_PROJECT_STABLE_ID = deriveMigratedEntityIdentity("project", "PROJ0").stableId;
 const DEFAULT_EPIC_STABLE_ID = deriveMigratedEntityIdentity("epic", "EPIC0").stableId;
 
-function statusOf(db: SqliteExecutor, entityId: string): string {
+function statusOf(db: SqliteInternalConnection, entityId: string): string {
 	return getEntityDetails(db, entityId).entity.status;
 }
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<SqliteExecutor> {
+async function openTestDatabase(): Promise<SqliteInternalConnection> {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-store-"));
 	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
 	return executor;
@@ -185,7 +186,7 @@ describe("handoff graph entities", () => {
 });
 
 describe("derived user story status", () => {
-	function seedStoryWithIssues(db: SqliteExecutor, issueStatuses: string[]) {
+		function seedStoryWithIssues(db: SqliteInternalConnection, issueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
@@ -327,7 +328,7 @@ describe("derived initiative status", () => {
 });
 
 describe("derived PRD status cascade", () => {
-	function seedPrdWithStory(db: SqliteExecutor, fixingIssueStatuses: string[]) {
+		function seedPrdWithStory(db: SqliteInternalConnection, fixingIssueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const prd = createEntity(db, { kind: "prd", parentId: initiative.id, title: "Browse records" });
 		const story = createEntity(db, { kind: "userStory", parentId: prd.id, title: "See a record" });
@@ -389,7 +390,7 @@ describe("derived PRD status cascade", () => {
 });
 
 describe("derived ADR status", () => {
-	function seedAdrConstrainingIssues(db: SqliteExecutor, issueStatuses: string[]) {
+		function seedAdrConstrainingIssues(db: SqliteInternalConnection, issueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const adr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Use SQLite" });
 		const issues = issueStatuses.map((status, index) => {
@@ -479,7 +480,7 @@ describe("derived ADR status", () => {
 });
 
 describe("derived issue status from sub-issues", () => {
-	function seedIssueWithSubIssues(db: SqliteExecutor, subIssueStatuses: string[]) {
+		function seedIssueWithSubIssues(db: SqliteInternalConnection, subIssueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", status: "active" });
 		const parentIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ship the parent workflow" });
 		const subIssues = subIssueStatuses.map((status, index) => {
@@ -766,11 +767,11 @@ describe("canonical revision history", () => {
 		const issue = createEntity(db, { kind: "issue", title: "Fix bug" });
 
 		setEntityBody(db, { entityId: issue.id, body: "Repro steps here.", author: "kris", expectedRevision: issue.revision, expectedContentHash: issue.contentHash });
-		const delta = db.db.prepare(`
+		const delta = db.drizzle.get(sql`
 			SELECT revision, author, patch_format, length(reverse_patch) AS patch_bytes, source_hash, target_hash
 			FROM revision_entries
-			WHERE tenant_id = ? AND project_id = ? AND record_kind = 'entity' AND record_key = ? AND revision = 2
-		`).get(db.tenantId, db.currentProjectId, `${Buffer.byteLength(issue.id, "utf8")}:${issue.id}`) as { revision: number; author: string; patch_format: number; patch_bytes: number; source_hash: Buffer; target_hash: Buffer };
+			WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} AND record_kind = 'entity' AND record_key = ${`${Buffer.byteLength(issue.id, "utf8")}:${issue.id}`} AND revision = 2
+		`) as { revision: number; author: string; patch_format: number; patch_bytes: number; source_hash: Buffer; target_hash: Buffer };
 		expect(delta).toEqual(expect.objectContaining({
 			revision: 2,
 			author: "kris",
@@ -812,7 +813,9 @@ describe("canonical revision history", () => {
 
 		restoreEntityRevision(db, { entityId: version.id, revision: 1, expectedRevision: moved.entity.revision, expectedContentHash: moved.entity.contentHash });
 
-		const row = db.db.prepare("SELECT project_id FROM entities WHERE tenant_id = ? AND id = ?").get(db.tenantId, version.id) as { project_id: string };
+		const row = db.drizzle.get<{ project_id: string }>(
+			sql`SELECT project_id FROM entities WHERE tenant_id = ${db.tenantId} AND id = ${version.id}`
+		) as { project_id: string };
 		expect(row.project_id).toBe(projectA.id);
 	});
 });

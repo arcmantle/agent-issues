@@ -9,6 +9,8 @@ import { DaemonTokenAuthProvider } from "../auth/daemon-token-auth-provider.js";
 import { clearDaemonState, saveDaemonState, type DaemonStateStoreOptions } from "./daemon-state.js";
 import { openSqliteStore } from "../sqlite-store.js";
 
+type OpenDaemonStore = typeof openSqliteStore;
+
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 function resolveIdleTimeoutMs(idleTimeoutMs?: number): number {
@@ -49,6 +51,8 @@ export interface LocalDaemonServerOptions extends DaemonStateStoreOptions {
 	 * needing two real builds.
 	 */
 	buildHash?: string;
+	/** Injectable store opener for daemon initialization recovery tests. */
+	openStore?: OpenDaemonStore;
 }
 
 export interface LocalDaemonServerHandle {
@@ -86,6 +90,7 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 	const idleTimeoutMs = resolveIdleTimeoutMs(options.idleTimeoutMs);
 	const buildHash = options.buildHash ?? readBuildContentHash();
 	const dbPath = resolveDatabasePath(options.dbPath);
+	const openStore = options.openStore ?? openSqliteStore;
 
 	// A caller-supplied `authProvider` (tests) skips minting/persisting a token entirely.
 	const mintedToken = options.authProvider ? undefined : mintDaemonToken();
@@ -98,7 +103,12 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 		const storeKey = `${tenantId}:${projectIdentity ?? currentWorkingDirectory}`;
 		let store = storesByWorkspace.get(storeKey);
 		if (!store) {
-			store = openSqliteStore(dbPath, { currentWorkingDirectory, projectIdentity, tenant: tenantId }).then((opened) => opened.store);
+			store = openStore(dbPath, { currentWorkingDirectory, projectIdentity, tenant: tenantId })
+				.then((opened) => opened.store)
+				.catch((error: unknown) => {
+					if (storesByWorkspace.get(storeKey) === store) storesByWorkspace.delete(storeKey);
+					throw error;
+				});
 			storesByWorkspace.set(storeKey, store);
 		}
 		return store;
