@@ -36,11 +36,6 @@ export type AgentIssuesContext = BaseContext & {
 	credentialStoreOptions?: SavedLoginStoreOptions;
 };
 
-export type BodyInputOptions = {
-	body?: string;
-	bodyFile?: string;
-};
-
 export type EntityView = "compact" | "full";
 
 export const CONTEXT_SUBCOMMANDS = new Set(["list", "show", "search", "conflicts", "set", "define", "forget"]);
@@ -76,15 +71,10 @@ export abstract class MutableTenantCommand extends TenantCommand {
 }
 
 export abstract class BodyTenantCommand extends TenantCommand {
-	public body = Option.String("--body");
 	public bodyFile = Option.String("--body-file");
 
-	protected requireBody(message: string): string {
-		return requireBodyOption({ body: this.body, bodyFile: this.bodyFile }, message);
-	}
-
 	protected resolveBody(): string | undefined {
-		return resolveBodyOption({ body: this.body, bodyFile: this.bodyFile });
+		return resolveMarkdownFileOption(this.bodyFile, "--body-file");
 	}
 }
 
@@ -219,36 +209,26 @@ export function requireOption(value: string | undefined, message: string): strin
 	return value;
 }
 
-export function requireBodyOption(options: BodyInputOptions, message: string): string {
-	const body = resolveBodyOption(options);
-	if (body === undefined) {
-		throw new Error(message);
-	}
-
-	return body;
-}
-
-export function resolveBodyOption(options: BodyInputOptions): string | undefined {
-	if (options.body !== undefined && options.bodyFile !== undefined) {
-		throw new Error("Use either --body or --body-file, not both.");
-	}
-
-	if (options.body !== undefined) {
-		return options.body;
-	}
-
-	if (options.bodyFile === undefined) {
+/**
+ * Reads a large-markdown option's value from a file (or from stdin when the
+ * value is `-`). Every command that accepts a large authored-markdown field
+ * (entity, context summary, term definition) uses the same `--body-file`
+ * flag - never an inline flag value - since inline multiline markdown breaks
+ * shell quoting and lands in shell history and process listings.
+ */
+export function resolveMarkdownFileOption(filePath: string | undefined, flagName: string): string | undefined {
+	if (filePath === undefined) {
 		return undefined;
 	}
 
-	if (options.bodyFile === "-") {
+	if (filePath === "-") {
 		return readFileSync(0, "utf8");
 	}
 
 	try {
-		return readFileSync(options.bodyFile, "utf8");
+		return readFileSync(filePath, "utf8");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Could not read --body-file ${options.bodyFile}: ${message}`);
+		throw new Error(`Could not read ${flagName} ${filePath}: ${message}`);
 	}
 }

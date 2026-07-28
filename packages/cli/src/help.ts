@@ -128,8 +128,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues context show <entityOrInitiativeId>",
 			"agent-issues context search <query> [--view <all|global|initiatives>]",
 			"agent-issues context conflicts [<query>] [--view <all|initiatives>]",
-			"agent-issues context set [--scope <entityOrInitiativeId|default>] --title <title> --summary <summary> [--view <compact|full>]",
-			"agent-issues context define <term> [--scope <entityOrInitiativeId|default>] --definition <definition> [--avoid <comma-separated terms>] [--view <compact|full>]",
+			"agent-issues context set [--scope <entityOrInitiativeId|default>] --title <title> --body-file <path|-> [--view <compact|full>]",
+			"agent-issues context define <term> [--scope <entityOrInitiativeId|default>] --body-file <path|-> [--avoid <comma-separated terms>] [--view <compact|full>]",
 			"agent-issues context forget <term> [--scope <entityOrInitiativeId|default>] [--view <compact|full>]"
 		],
 		positionals: [
@@ -153,12 +153,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 				description: "Context title for `context set`."
 			},
 			{
-				name: "--summary <summary>",
-				description: "Context summary for `context set`."
-			},
-			{
-				name: "--definition <definition>",
-				description: "Canonical term definition for `context define`."
+				name: "--body-file <path|->",
+				description: "Read the authored markdown body from a file, or from stdin when the value is `-`: the context summary for `context set`, or the canonical term definition for `context define`."
 			},
 			{
 				name: "--query <text>",
@@ -187,8 +183,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues context search review --view initiatives --json",
 			"agent-issues context search review --view initiatives --terms-only --json",
 			"agent-issues context conflicts --json",
-			'agent-issues context set --scope INIT1 --title "Payments Context" --summary "Glossary for the payments initiative."',
-			'agent-issues context define "Order" --scope INIT1 --definition "A customer request that the system accepts and tracks to fulfillment." --avoid "purchase, transaction" --json',
+			'agent-issues context set --scope INIT1 --title "Payments Context" --body-file /tmp/summary.md',
+			'agent-issues context define "Order" --scope INIT1 --body-file /tmp/order-definition.md --avoid "purchase, transaction" --json',
 			'agent-issues context forget "Legacy order" --scope INIT1 --json'
 		],
 		notes: [
@@ -199,7 +195,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"Use `context search <query> --terms-only --json` when you only need matching definitions and do not want the surrounding project directory summary.",
 			"Use `context conflicts` to list duplicate labels across scopes so agents can resolve terminology collisions early.",
 			"Initiative-scoped context is the primary model: resolve the context from the active initiative or any entity inside it.",
-			"Read the context before using project-specific vocabulary, and update it immediately when a term is resolved."
+			"Read the context before using project-specific vocabulary, and update it immediately when a term is resolved.",
+			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
 		],
 		output: {
 			human: [
@@ -430,7 +427,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "create",
 		summary: "Create an entity, optionally under a structural parent.",
-		usage: ["agent-issues create <kind> --title <title> [--parent <id>] [--status <status>] [--body <markdown> | --body-file <path|->] [--view <compact|full>]"],
+		usage: ["agent-issues create <kind> --title <title> [--parent <id>] [--status <status>] [--body-file <path|->] [--view <compact|full>]"],
 		positionals: [
 			{
 				name: "kind",
@@ -459,10 +456,6 @@ const COMMAND_SPECS: CommandSpec[] = [
 				allowedValues: STATUS_VALUES
 			},
 			{
-				name: "--body <markdown>",
-				description: "Authored markdown body for the record."
-			},
-			{
 				name: "--body-file <path|->",
 				description: "Read the authored markdown body from a file, or from stdin when the value is `-`."
 			},
@@ -482,7 +475,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"If no status is supplied, the CLI uses the first status in the workflow for that kind.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems.",
 			"Use `--link` to create graph relations atomically with the entity.",
-			"Create a handoff with `--title`, `--body` or `--body-file`, and `--link handsOff <focusId>`."
+			"Create a handoff with `--title`, `--body-file`, and `--link handsOff <focusId>`."
 		],
 		output: {
 			human: ["<id> <kind> <status> <title>"],
@@ -686,16 +679,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "edit",
 		summary: "Update an entity title and/or authored markdown body.",
-		usage: ["agent-issues edit <id> [--title <title>] [--body <markdown> | --body-file <path|->] [--view <compact|full>]"],
+		usage: ["agent-issues edit <id> [--title <title>] [--body-file <path|->] [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
 		options: [
 			{
 				name: "--title <title>",
 				description: "Replacement entity title."
-			},
-			{
-				name: "--body <markdown>",
-				description: "Replacement authored markdown body for the record."
 			},
 			{
 				name: "--body-file <path|->",
@@ -704,12 +693,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			ENTITY_VIEW_OPTION
 		],
 		examples: [
-			'agent-issues edit ISS1 --body "# Plan\\n\\nDetails here."',
 			'agent-issues edit ISS1 --body-file /tmp/iss1.md',
 			'agent-issues edit HO1 --title "Resume export work" --body-file -'
 		],
 		notes: [
-			"Supply at least one of `--title`, `--body`, or `--body-file`; supplied fields replace their previously stored values.",
+			"Supply at least one of `--title` or `--body-file`; supplied fields replace their previously stored values.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
 		],
 		output: {
@@ -828,11 +816,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"Compact JSON is the default and returns { items, total }; total is the filtered count before --limit is applied.",
 			"Use --view full when complete entity records or authored content are required.",
 			"Use --status, --parent, and --limit to select records before serialization.",
-			"Accepted status values depend on the entity kind; use agent-issues schema --json to inspect each kind's workflow."
+			"Accepted status values depend on the entity kind; use agent-issues schema --json to inspect each kind's workflow.",
+			"For kind=issue, compact JSON also returns openBlockers: an entityId -> open (not-done) blocking issue ids map, so a candidate's blocked status is visible without a separate relations call per issue."
 		],
 		output: {
-			human: ["One line per entity: <id> <status> <title>"],
-			json: ["Full: Array<EntityRecord>", "Compact: { items: CompactEntity[], total: number }"]
+			human: ["One line per entity: <id> <status> <title>", "Issue lines append (blocked by <id>, ...) when openBlockers is non-empty."],
+			json: ["Full: Array<EntityRecord>", "Compact: { items: CompactEntity[], total: number, openBlockers?: Record<string, string[]> }"]
 		}
 	},
 	{
@@ -1172,7 +1161,7 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			"Use `agent-issues context show <entityOrInitiativeId> --json` to read the initiative-scoped glossary for active work.",
 			"Use `agent-issues context search <query> --view initiatives --json` to find initiative-local terminology without reading the full project directory.",
 			"Use `agent-issues context conflicts --json` to detect duplicate labels across scopes before you rely on a term.",
-			"Use `agent-issues context define <term> --scope <entityOrInitiativeId> --definition <text> [--avoid <comma-separated>] --json` to update the scoped glossary when a term is resolved.",
+			"Use `agent-issues context define <term> --scope <entityOrInitiativeId> --body-file <path|-> [--avoid <comma-separated>] --json` to update the scoped glossary when a term is resolved.",
 			"Use `agent-issues help <command> --json` for command-specific guidance.",
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
 			"Use `agent-issues serve-site --json` to start a local live browser view with snapshot and event endpoints.",
@@ -1250,8 +1239,8 @@ export function getSchemaPayload(): SchemaPayload {
 			readCommand: "agent-issues context show [<entityOrInitiativeId>|default] --json",
 			searchCommand: "agent-issues context search <query> [--view <all|global|initiatives>] --json",
 			conflictsCommand: "agent-issues context conflicts [<query>] [--view <all|initiatives>] --json",
-			initializeCommand: "agent-issues context set --scope <entityOrInitiativeId|default> --title <title> --summary <summary> --json",
-			defineCommand: "agent-issues context define <term> --scope <entityOrInitiativeId|default> --definition <definition> [--avoid <comma-separated terms>] --json",
+			initializeCommand: "agent-issues context set --scope <entityOrInitiativeId|default> --title <title> --body-file <path|-> --json",
+			defineCommand: "agent-issues context define <term> --scope <entityOrInitiativeId|default> --body-file <path|-> [--avoid <comma-separated terms>] --json",
 			forgetCommand: "agent-issues context forget <term> --scope <entityOrInitiativeId|default> --json",
 			termFields: ["term", "definition", "avoid", "createdAt", "updatedAt"]
 		}

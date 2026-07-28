@@ -44,7 +44,7 @@ describe("skill installer", () => {
 
 			expect(composer).toContain("`ai-domain-modeling` skill");
 		}
-		for (const callerName of ["ai-start-work", "ai-tdd"]) {
+			for (const callerName of ["ai-implement", "ai-prepare", "ai-start-work", "ai-tdd"]) {
 			const caller = readFileSync(path.join(targetDir, callerName, "SKILL.md"), "utf8");
 
 			expect(caller).toContain("`ai-next-work` skill");
@@ -122,7 +122,7 @@ describe("skill installer", () => {
 		expect(operatingContract).toContain("agent-issues create handoff");
 		expect(operatingContract).not.toContain("agent-issues handoff");
 
-		for (const skillName of ["ai-agent-issues", "ai-grill-with-docs", "ai-handoff", "ai-start-work", "ai-tdd", "ai-to-issues"]) {
+			for (const skillName of ["ai-agent-issues", "ai-grill-with-docs", "ai-handoff", "ai-implement", "ai-prepare", "ai-start-work", "ai-tdd", "ai-to-issues"]) {
 			const installedSkill = readFileSync(path.join(targetDir, skillName, "SKILL.md"), "utf8");
 
 			expect(installedSkill).not.toContain("agent-issues handoff");

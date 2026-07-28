@@ -30,6 +30,16 @@ export type QueryEntitiesInput = {
 export type QueryEntitiesResult = {
 	entities: EntityRecord[];
 	total: number;
+	/**
+	 * Only populated when `kind` is `"issue"`: maps each returned issue's
+	 * canonical reference to the references of its open (not-`done`)
+	 * `blocks` sources, so a caller ranking workable candidates can read
+	 * blocked-status straight off the list instead of issuing one
+	 * `queryEntityRelations` call per candidate. Keyed and valued by
+	 * reference, not internal id, so a caller never has to resolve a raw id
+	 * back to something it can pass to another command.
+	 */
+	openBlockers?: Record<string, string[]>;
 };
 
 export type RelationDirection = "incoming" | "outgoing" | "both";

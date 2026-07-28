@@ -15,13 +15,13 @@ Use `agent-issues context list --json` only when you need the raw list of stored
 Set up or update the shared context with:
 
 ```bash
-agent-issues context set --scope INIT1 --title "Payments Context" --summary "Glossary of initiative-specific terms for Payments." --json
+agent-issues context set --scope INIT1 --title "Payments Context" --body-file /tmp/payments-summary.md --json
 ```
 
 Add or update a term with:
 
 ```bash
-agent-issues context define "Order" --scope INIT1 --definition "A customer request accepted and tracked by the system." --avoid "purchase, transaction" --json
+agent-issues context define "Order" --scope INIT1 --body-file /tmp/order-definition.md --avoid "purchase, transaction" --json
 ```
 
 ## Structure

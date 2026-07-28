@@ -806,6 +806,54 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
+		it("reports open blockers inline on issue queries, keyed by reference so a caller can rank workable candidates from one list call", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Workable ranking" });
+				const doneBlocker = await store.createEntity({ kind: "issue", title: "Done blocker", parentId: initiative.id, status: "done" });
+				const openBlocker = await store.createEntity({ kind: "issue", title: "Open blocker", parentId: initiative.id });
+				const secondOpenBlocker = await store.createEntity({ kind: "issue", title: "Second open blocker", parentId: initiative.id });
+				const blocked = await store.createEntity({ kind: "issue", title: "Blocked issue", parentId: initiative.id });
+				const unblocked = await store.createEntity({ kind: "issue", title: "Unblocked issue", parentId: initiative.id });
+				await store.linkEntities({ fromId: doneBlocker.id, toId: blocked.id, relationType: "blocks" });
+				await store.linkEntities({ fromId: openBlocker.id, toId: blocked.id, relationType: "blocks" });
+				await store.linkEntities({ fromId: secondOpenBlocker.id, toId: blocked.id, relationType: "blocks" });
+
+				const queried = await store.queryEntities({ kind: "issue", parentId: initiative.id });
+
+				expect(queried.openBlockers?.[blocked.reference]?.sort()).toEqual([openBlocker.reference, secondOpenBlocker.reference].sort());
+				expect(queried.openBlockers?.[unblocked.reference]).toEqual([]);
+				expect(queried.openBlockers?.[openBlocker.reference]).toEqual([]);
+				expect(queried.openBlockers?.[doneBlocker.reference]).toEqual([]);
+				expect(Object.keys(queried.openBlockers ?? {})).not.toContain(blocked.id);
+
+				const nonIssueQuery = await store.queryEntities({ kind: "initiative" });
+				expect(nonIssueQuery.openBlockers).toBeUndefined();
+
+				// A blocker outside the returned/scoped set must still be found:
+				// its open/done status is looked up independently of which
+				// issues `--parent`/`--limit` actually returned.
+				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative" });
+				const outsideScopeBlocker = await store.createEntity({ kind: "issue", title: "Outside-scope blocker", parentId: otherInitiative.id });
+				const blockedByOutsider = await store.createEntity({ kind: "issue", title: "Blocked by outsider", parentId: initiative.id });
+				await store.linkEntities({ fromId: outsideScopeBlocker.id, toId: blockedByOutsider.id, relationType: "blocks" });
+
+				const scoped = await store.queryEntities({ kind: "issue", parentId: initiative.id });
+				expect(scoped.entities.map((entity) => entity.id)).not.toContain(outsideScopeBlocker.id);
+				expect(scoped.openBlockers?.[blockedByOutsider.reference]).toEqual([outsideScopeBlocker.reference]);
+
+				const emptyMatch = await store.queryEntities({ kind: "issue", parentId: initiative.id, statuses: ["in-progress"] });
+				expect(emptyMatch.entities).toEqual([]);
+				expect(emptyMatch.openBlockers).toEqual({});
+
+				const missingParent = await store.queryEntities({ kind: "issue", parentId: "missing-parent-id" });
+				expect(missingParent).toEqual({ entities: [], total: 0, openBlockers: {} });
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("lists every relation key and idempotently applies a batch (ISS267/ADR55)", async () => {
 			const store = await openStore();
 

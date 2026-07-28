@@ -42,6 +42,8 @@ An issue is not always a flat leaf. An issue can `decompose` into sub-issues.
 
 Use `agent-issues list <kind> --json` to find records. Add `--status`, `--parent`, or `--limit` to narrow the result. Use `agent-issues relations <id> --json` to inspect edges. Add `--direction` or `--type` to select the edges you need. Use `agent-issues show <id> --view full --json` when you need the authored content or the complete record. Use `bundle` only for a planned initiative-wide read.
 
+For an entity's complete working context, call `agent-issues relations <id> --view full --json` once with no `--direction`/`--type` filters: it already returns the entity's own full body plus the full body of every directly related entity, both directions, all types, in that one call. Add `--direction`/`--type` only to narrow what comes back for a smaller read, not to gather different edges across several separate calls. For `list issue --json`, the compact result also includes `openBlockers`: an entityId -> open (not-`done`) blocking issue ids map, so a candidate's blocked status is visible on the list itself without one `relations` call per candidate.
+
 ## Initiative reads
 
 For real work, start with compact discovery and edge inspection. Use authored or initiative-wide content only when the task needs it:
@@ -85,11 +87,17 @@ When you must choose the next packaged skill, pick it clearly:
 4. `ai-to-prd` to capture the plan as a PRD and user stories.
 5. `ai-to-issues` to break the plan into issues you can execute.
 6. `ai-handoff` to record where the work stands for the next session.
-7. `ai-start-work` to pick the next workable issue and prepare to start it.
-8. `ai-tdd` to build one issue through a red-green-refactor loop.
-9. `ai-migrate-docs` to import existing documentation into the tracker.
+7. `ai-prepare` to resolve an initiative, issue, user story, or handoff and load its context, then stop for a conversation fork before the build starts.
+8. `ai-start-work` as the single-session alternative: it also selects the next workable issue, but it drives straight into a build skill without forking.
+9. `ai-tdd` to build one issue through a red-green-refactor loop, either started fresh after an `ai-prepare` fork or handed off directly by `ai-start-work`.
+10. `ai-implement` as the alternative to `ai-tdd` for the same fork point or hand-off: thin, independently-verified vertical slices for changes that do not fit a red-green-refactor loop (broad refactors, config/infrastructure changes, multi-file migrations).
+11. `ai-migrate-docs` to import existing documentation into the tracker.
 
 If you are unsure where the work sits in the workflow, inspect compact entity and relation results first. Use `bundle` only if you must see the whole initiative to choose the workflow.
+
+## Prepare-then-fork
+
+Prefer `ai-prepare` over `ai-start-work` for real build sessions. Do not plan and build in the same conversation. `ai-prepare` gathers context and reports a briefing, then the conversation forks before `ai-tdd` or `ai-implement` starts the build in a fresh conversation with a small context. This keeps a long build loop from growing the cost of a session that also carries the earlier planning and discovery. Use `ai-start-work` only when the user explicitly wants one continuous session.
 
 To save a handoff, create it as a normal graph entity: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>`. Use `agent-issues edit <handoffId> --title "<title>" --body-file -` to fix its title or body.
 

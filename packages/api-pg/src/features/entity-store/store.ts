@@ -50,6 +50,7 @@ import {
 	type MoveResult,
 	type ProjectDiscovery,
 	type ProjectSnapshot,
+	type QueryEntitiesResult,
 	type RelationRecord,
 	type RelationType,
 	type StatusUpdateResult,
@@ -1005,7 +1006,7 @@ export async function listEntities(executor: TenantExecutor, kind: string): Prom
 export async function queryEntities(
 	executor: TenantExecutor,
 	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
-): Promise<{ entities: EntityRecord[]; total: number }> {
+): Promise<QueryEntitiesResult> {
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
 	}
@@ -1014,7 +1015,7 @@ export async function queryEntities(
 	if (input.parentId) {
 		const parent = await resolveEntity(executor, input.parentId);
 		if (!parent) {
-			return { entities: [], total: 0 };
+			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
 		parentId = parent.id;
 	}
@@ -1049,18 +1050,71 @@ export async function queryEntities(
 	const total = selectedIds.length;
 	const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
 	if (limitedIds.length === 0) {
-		return { entities: [], total };
+		return { entities: [], total, openBlockers: input.kind === "issue" ? {} : undefined };
 	}
 	const selectedRows = await executor.select().from(entities).where(and(
 		eq(entities.tenantId, executor.tenantId),
 		inArray(entities.id, limitedIds)
 	));
 	const selectedById = new Map(selectedRows.map((row) => [row.id, applyDerivedStatus(mapDrizzleEntityRow(row), statusMap)]));
+	const resultEntities = limitedIds.map((entityId) => selectedById.get(entityId)!);
 
 	return {
-		entities: limitedIds.map((entityId) => selectedById.get(entityId)!),
-		total
+		entities: resultEntities,
+		total,
+		openBlockers: input.kind === "issue" ? await getOpenBlockers(executor, resultEntities) : undefined
 	};
+}
+
+/**
+ * Maps each of `issues`' canonical references to the references of its open
+ * (not-`done`) `blocks` sources, so `queryEntities` can report blocked-status
+ * inline instead of making a caller issue one `queryEntityRelations` call
+ * per candidate. Keyed and valued by reference, not internal id, so callers
+ * never have to resolve a raw id back to something they can pass to another
+ * command.
+ */
+async function getOpenBlockers(executor: TenantExecutor, issues: EntityRecord[]): Promise<Record<string, string[]>> {
+	const openBlockers: Record<string, string[]> = {};
+	const referenceById = new Map(issues.map((entity) => [entity.id, entity.reference]));
+	for (const entity of issues) {
+		openBlockers[entity.reference] = [];
+	}
+	if (issues.length === 0) {
+		return openBlockers;
+	}
+
+	const issueIds = issues.map((entity) => entity.id);
+	const blockRows = (await executor.execute(sql`
+		SELECT from_id, to_id FROM relations
+		WHERE tenant_id = ${executor.tenantId} AND type = 'blocks' AND to_id IN ${issueIds}
+	`)).rows as Array<{ from_id: string; to_id: string }>;
+	if (blockRows.length === 0) {
+		return openBlockers;
+	}
+
+	const sourceIds = Array.from(new Set(blockRows.map((row) => row.from_id)));
+	const statusMap = await getDerivedStatusMap(executor, sourceIds);
+	const missingReferenceIds = sourceIds.filter((id) => !referenceById.has(id));
+	if (missingReferenceIds.length > 0) {
+		const sourceReferenceRows = (await executor.execute(sql`
+			SELECT id, reference FROM entities
+			WHERE tenant_id = ${executor.tenantId} AND id IN ${missingReferenceIds}
+		`)).rows as Array<{ id: string; reference: string }>;
+		for (const row of sourceReferenceRows) {
+			referenceById.set(row.id, row.reference);
+		}
+	}
+
+	for (const row of blockRows) {
+		const sourceStatus = statusMap.get(row.from_id);
+		if (sourceStatus && sourceStatus !== "done") {
+			const targetReference = referenceById.get(row.to_id)!;
+			openBlockers[targetReference]!.push(referenceById.get(row.from_id)!);
+		}
+	}
+
+	return openBlockers;
 }
 
 export async function listEntityHistory(executor: TenantExecutor, entityId: string): Promise<HistoryEntryRecord[]> {

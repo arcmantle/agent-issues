@@ -6,39 +6,49 @@ import type { SavedLoginView } from "../auth-session.js";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
 
-export function renderEntityList(kind: string, entities: Array<{ id: string; status: string; title: string }>): string {
+export function renderEntityList(
+	kind: string,
+	entities: Array<{ id: string; reference: string; status: string; title: string }>,
+	openBlockers?: Record<string, string[]>
+): string {
 	if (entities.length === 0) {
 		return `No ${kind} entities found.`;
 	}
 
-	return entities.map((entity) => `${entity.id} ${entity.status} ${entity.title}`).join("\n");
+	return entities
+		.map((entity) => {
+			const blockers = openBlockers?.[entity.reference];
+			const blockedSuffix = blockers?.length ? ` (blocked by ${blockers.join(", ")})` : "";
+			return `${entity.reference} ${entity.status} ${entity.title}${blockedSuffix}`;
+		})
+		.join("\n");
 }
 
 export function renderOptionalEntityList(
 	label: string,
-	entities: Array<{ id: string; kind: string; status: string; title: string }>
+	entities: Array<{ id: string; reference: string; kind: string; status: string; title: string }>
 ): string {
 	if (entities.length === 0) {
 		return `No ${label} entities found.`;
 	}
 
-	return entities.map((entity) => `${entity.id} ${entity.kind} ${entity.status} ${entity.title}`).join("\n");
+	return entities.map((entity) => `${entity.reference} ${entity.kind} ${entity.status} ${entity.title}`).join("\n");
 }
 
 export function renderEntityDetails(details: {
-	entity: { id: string; kind: string; status: string; title: string };
-	incoming: Array<{ relationType: string; entity: { id: string; kind: string; status: string } }>;
-	outgoing: Array<{ relationType: string; entity: { id: string; kind: string; status: string } }>;
+	entity: { id: string; reference: string; kind: string; status: string; title: string };
+	incoming: Array<{ relationType: string; entity: { id: string; reference: string; kind: string; status: string } }>;
+	outgoing: Array<{ relationType: string; entity: { id: string; reference: string; kind: string; status: string } }>;
 }): string {
 	const incoming = details.incoming.length
-		? details.incoming.map((link) => `${link.entity.id} ${link.entity.kind} --${link.relationType}--> ${details.entity.id}`).join("\n")
+		? details.incoming.map((link) => `${link.entity.reference} ${link.entity.kind} --${link.relationType}--> ${details.entity.reference}`).join("\n")
 		: "none";
 	const outgoing = details.outgoing.length
-		? details.outgoing.map((link) => `${details.entity.id} --${link.relationType}--> ${link.entity.id} ${link.entity.kind}`).join("\n")
+		? details.outgoing.map((link) => `${details.entity.reference} --${link.relationType}--> ${link.entity.reference} ${link.entity.kind}`).join("\n")
 		: "none";
 
 	return [
-		`${details.entity.id} ${details.entity.kind} ${details.entity.status} ${details.entity.title}`,
+		`${details.entity.reference} ${details.entity.kind} ${details.entity.status} ${details.entity.title}`,
 		"Incoming:",
 		incoming,
 		"Outgoing:",
@@ -47,26 +57,26 @@ export function renderEntityDetails(details: {
 }
 
 export function renderInitiativeBundle(bundle: {
-	initiative: { id: string; status: string; title: string };
-	prds: Array<{ id: string; status: string }>;
-	userStories: Array<{ id: string; status: string }>;
-	adrs: Array<{ id: string; status: string }>;
-	issues: Array<{ id: string; status: string }>;
-	fixLinks: Array<{ issue: { id: string }; userStory: { id: string } }>;
-	subIssueLinks: Array<{ parent: { id: string }; issue: { id: string } }>;
-	blockerLinks: Array<{ source: { id: string }; target: { id: string } }>;
-	constrainsLinks: Array<{ adr: { id: string }; issue: { id: string } }>;
+	initiative: { id: string; reference: string; status: string; title: string };
+	prds: Array<{ id: string; reference: string; status: string }>;
+	userStories: Array<{ id: string; reference: string; status: string }>;
+	adrs: Array<{ id: string; reference: string; status: string }>;
+	issues: Array<{ id: string; reference: string; status: string }>;
+	fixLinks: Array<{ issue: { id: string; reference: string }; userStory: { id: string; reference: string } }>;
+	subIssueLinks: Array<{ parent: { id: string; reference: string }; issue: { id: string; reference: string } }>;
+	blockerLinks: Array<{ source: { id: string; reference: string }; target: { id: string; reference: string } }>;
+	constrainsLinks: Array<{ adr: { id: string; reference: string }; issue: { id: string; reference: string } }>;
 }): string {
 	return [
-		`${bundle.initiative.id} ${bundle.initiative.status} ${bundle.initiative.title}`,
+		`${bundle.initiative.reference} ${bundle.initiative.status} ${bundle.initiative.title}`,
 		`PRDs: ${renderCompactList(bundle.prds)}`,
 		`User Stories: ${renderCompactList(bundle.userStories)}`,
 		`ADRs: ${renderCompactList(bundle.adrs)}`,
 		`Issues: ${renderCompactList(bundle.issues)}`,
-		`Fixes: ${bundle.fixLinks.length ? bundle.fixLinks.map((link) => `${link.issue.id} -> ${link.userStory.id}`).join(", ") : "none"}`,
-		`Sub-issues: ${bundle.subIssueLinks.length ? bundle.subIssueLinks.map((link) => `${link.parent.id} -> ${link.issue.id}`).join(", ") : "none"}`,
-		`Blockers: ${bundle.blockerLinks.length ? bundle.blockerLinks.map((link) => `${link.source.id} -> ${link.target.id}`).join(", ") : "none"}`,
-		`Constrains: ${bundle.constrainsLinks.length ? bundle.constrainsLinks.map((link) => `${link.adr.id} -> ${link.issue.id}`).join(", ") : "none"}`
+		`Fixes: ${bundle.fixLinks.length ? bundle.fixLinks.map((link) => `${link.issue.reference} -> ${link.userStory.reference}`).join(", ") : "none"}`,
+		`Sub-issues: ${bundle.subIssueLinks.length ? bundle.subIssueLinks.map((link) => `${link.parent.reference} -> ${link.issue.reference}`).join(", ") : "none"}`,
+		`Blockers: ${bundle.blockerLinks.length ? bundle.blockerLinks.map((link) => `${link.source.reference} -> ${link.target.reference}`).join(", ") : "none"}`,
+		`Constrains: ${bundle.constrainsLinks.length ? bundle.constrainsLinks.map((link) => `${link.adr.reference} -> ${link.issue.reference}`).join(", ") : "none"}`
 	].join("\n");
 }
 
@@ -274,12 +284,12 @@ export function renderBackfillBodies(result: {
 	return lines.join("\n");
 }
 
-function renderCompactList(entities: Array<{ id: string; status: string }>): string {
+function renderCompactList(entities: Array<{ reference: string; status: string }>): string {
 	if (entities.length === 0) {
 		return "none";
 	}
 
-	return entities.map((entity) => `${entity.id}:${entity.status}`).join(", ");
+	return entities.map((entity) => `${entity.reference}:${entity.status}`).join(", ");
 }
 
 function renderEntityLine(entity: { id: string; kind: string; status: string; title: string }): string {

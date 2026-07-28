@@ -19,6 +19,7 @@ import type {
 
 export type CompactEntity = {
 	id: string;
+	reference: string;
 	kind: EntityKind;
 	status: string;
 	title: string;
@@ -38,6 +39,8 @@ export type CompactEntityDetails = {
 export type CompactEntityList = {
 	items: CompactEntity[];
 	total: number;
+	/** Only present for issue lists; see `QueryEntitiesResult.openBlockers`. */
+	openBlockers?: Record<string, string[]>;
 };
 
 export type CompactInitiativeBundle = {
@@ -69,6 +72,7 @@ export type CompactEditAcknowledgement = {
 export function toCompactEntity(entity: EntityRecord): CompactEntity {
 	return {
 		id: entity.id,
+		reference: entity.reference,
 		kind: entity.kind,
 		status: entity.status,
 		title: entity.title
@@ -203,10 +207,11 @@ export function toCompactEntityDetails(details: EntityDetails): CompactEntityDet
 	};
 }
 
-export function toCompactEntityList(entities: EntityRecord[], total = entities.length): CompactEntityList {
+export function toCompactEntityList(entities: EntityRecord[], total = entities.length, openBlockers?: Record<string, string[]>): CompactEntityList {
 	return {
 		items: entities.map(toCompactEntity),
-		total
+		total,
+		...(openBlockers ? { openBlockers } : {})
 	};
 }
 

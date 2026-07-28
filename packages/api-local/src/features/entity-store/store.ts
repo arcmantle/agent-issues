@@ -49,6 +49,7 @@ import {
 	type MoveResult,
 	type ProjectDiscovery,
 	type ProjectSnapshot,
+	type QueryEntitiesResult,
 	type RelationRecord,
 	type RelationType,
 	type StatusUpdateResult,
@@ -858,7 +859,7 @@ export function listEntities(executor: SqliteExecutor, kind: string): EntityReco
 export function queryEntities(
 	executor: SqliteExecutor,
 	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
-): { entities: EntityRecord[]; total: number } {
+): QueryEntitiesResult {
 	let selected = listEntities(executor, input.kind);
 	if (input.statuses?.length) {
 		const statuses = new Set(input.statuses);
@@ -867,7 +868,7 @@ export function queryEntities(
 	if (input.parentId) {
 		const parent = resolveSqliteEntity(executor, input.parentId);
 		if (!parent) {
-			return { entities: [], total: 0 };
+			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
 		const childIds = new Set(listAllRelations(executor)
 			.filter((relation) => relation.fromId === parent.id && isStructuralRelationType(relation.type))
@@ -875,10 +876,58 @@ export function queryEntities(
 		selected = selected.filter((entity) => childIds.has(entity.id));
 	}
 
+	const limited = input.limit === undefined ? selected : selected.slice(0, input.limit);
+
 	return {
-		entities: input.limit === undefined ? selected : selected.slice(0, input.limit),
-		total: selected.length
+		entities: limited,
+		total: selected.length,
+		openBlockers: input.kind === "issue" ? getOpenBlockers(executor, limited) : undefined
 	};
+}
+
+/**
+ * Maps each of `issues`' canonical references to the references of its open
+ * (not-`done`) `blocks` sources, so `queryEntities` can report blocked-status
+ * inline instead of making a caller issue one `queryEntityRelations` call
+ * per candidate. Keyed and valued by reference, not internal id, so callers
+ * never have to resolve a raw id back to something they can pass to another
+ * command.
+ */
+function getOpenBlockers(executor: SqliteExecutor, issues: EntityRecord[]): Record<string, string[]> {
+	const issueIds = new Set(issues.map((entity) => entity.id));
+	const referenceById = new Map(issues.map((entity) => [entity.id, entity.reference]));
+	const openBlockers: Record<string, string[]> = {};
+	for (const entity of issues) {
+		openBlockers[entity.reference] = [];
+	}
+	if (issueIds.size === 0) {
+		return openBlockers;
+	}
+
+	const statusMap = getDerivedStatusMap(executor);
+	const blockingSourceIds = new Set<string>();
+	const blockRelations = listAllRelations(executor).filter((relation) => relation.type === "blocks" && issueIds.has(relation.toId));
+	for (const relation of blockRelations) {
+		const sourceStatus = statusMap.get(relation.fromId);
+		if (sourceStatus && sourceStatus !== "done") {
+			blockingSourceIds.add(relation.fromId);
+		}
+	}
+	for (const id of blockingSourceIds) {
+		if (!referenceById.has(id)) {
+			referenceById.set(id, resolveSqliteEntity(executor, id)?.reference ?? id);
+		}
+	}
+
+	for (const relation of blockRelations) {
+		const sourceStatus = statusMap.get(relation.fromId);
+		if (sourceStatus && sourceStatus !== "done") {
+			const targetReference = referenceById.get(relation.toId)!;
+			openBlockers[targetReference]!.push(referenceById.get(relation.fromId)!);
+		}
+	}
+
+	return openBlockers;
 }
 
 // Materializes the full revision history for `entityId` from the

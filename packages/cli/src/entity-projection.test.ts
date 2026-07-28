@@ -23,6 +23,7 @@ describe("compact CLI entity projections", () => {
 
 		expect(compact).toEqual({
 			id: "ISS_01",
+			reference: "ISS1",
 			kind: "issue",
 			status: "in-progress",
 			title: "Define compact projections"
@@ -58,6 +59,7 @@ describe("compact CLI entity projections", () => {
 		expect(compact).toEqual({
 			entity: {
 				id: "ISS_01",
+				reference: "ISS1",
 				kind: "issue",
 				status: "in-progress",
 				title: "Define compact projections"
@@ -66,6 +68,7 @@ describe("compact CLI entity projections", () => {
 				type: "blocks",
 				entity: {
 					id: "ISS_02",
+					reference: "ISS1",
 					kind: "issue",
 					status: "in-progress",
 					title: "Incoming issue"
@@ -75,6 +78,7 @@ describe("compact CLI entity projections", () => {
 				type: "fixes",
 				entity: {
 					id: "US_01",
+					reference: "ISS1",
 					kind: "userStory",
 					status: "ready",
 					title: "Outgoing story"
@@ -102,12 +106,14 @@ describe("compact CLI entity projections", () => {
 			items: [
 				{
 					id: "ISS_01",
+					reference: "ISS1",
 					kind: "issue",
 					status: "in-progress",
 					title: "Define compact projections"
 				},
 				{
 					id: "ISS_02",
+					reference: "ISS1",
 					kind: "issue",
 					status: "in-progress",
 					title: "Use compact projections"
@@ -144,7 +150,7 @@ describe("compact CLI entity projections", () => {
 		};
 
 		const compact = toCompactInitiativeBundle(bundle);
-		const summary = (record: EntityRecord) => ({ id: record.id, kind: record.kind, status: record.status, title: record.title });
+		const summary = (record: EntityRecord) => ({ id: record.id, reference: record.reference, kind: record.kind, status: record.status, title: record.title });
 
 		expect(compact).toEqual({
 			initiative: summary(initiative),

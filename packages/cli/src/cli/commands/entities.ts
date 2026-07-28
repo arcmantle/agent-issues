@@ -74,10 +74,10 @@ export class EditCommand extends BodyTenantCommand {
 	public async execute(): Promise<number> {
 		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
-			const entityId = requirePositional(this.positionals, 0, "edit <id> (--title <text> | --body <markdown> | --body-file <path|->)");
+			const entityId = requirePositional(this.positionals, 0, "edit <id> (--title <text> | --body-file <path|->)");
 			const body = this.resolveBody();
 			if (this.title === undefined && body === undefined) {
-				throw new Error("--title or --body is required for edit.");
+				throw new Error("--title or --body-file is required for edit.");
 			}
 			const { entity: current } = await store.getEntityDetails(entityId);
 			const entity = await store.updateEntity({ body, entityId, title: this.title, expectedRevision: current.revision, expectedContentHash: current.contentHash });
@@ -409,7 +409,10 @@ export class ListCommand extends PositionalsTenantCommand {
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const result = await store.queryEntities({ kind, statuses, parentId: this.parent, limit });
 
-			this.print(this.asJson && view === "compact" ? toCompactEntityList(result.entities, result.total) : result.entities, renderEntityList(kind, result.entities));
+			this.print(
+				this.asJson && view === "compact" ? toCompactEntityList(result.entities, result.total, result.openBlockers) : result.entities,
+				renderEntityList(kind, result.entities, result.openBlockers)
+			);
 			return 0;
 		});
 	}

@@ -51,8 +51,8 @@ Context is a first-class database-backed concept.
 - Read only the shared project glossary with `agent-issues context show default --json`.
 - List available contexts with `agent-issues context list --json`.
 - Read initiative-scoped context with `agent-issues context show <entityOrInitiativeId> --json`.
-- Initialize or update context metadata with `agent-issues context set --scope <entityOrInitiativeId|default> --title ... --summary ... --json`.
-- Add or update a canonical term with `agent-issues context define <term> --scope <entityOrInitiativeId|default> --definition ... [--avoid ...] --json`.
+- Initialize or update context metadata with `agent-issues context set --scope <entityOrInitiativeId|default> --title ... --body-file <path|-> --json`.
+- Add or update a canonical term with `agent-issues context define <term> --scope <entityOrInitiativeId|default> --body-file <path|-> [--avoid ...] --json`.
 - Remove a stale term with `agent-issues context forget <term> --scope <entityOrInitiativeId|default> --json`.
 
 The project-wide context directory combines the shared glossary with initiative-scoped discovery, while preserving source scope so initiative-local terms do not silently become project-canonical. Initiative-scoped context is still the database equivalent of `CONTEXT.md` files that would live inside initiative folders. Agents should read the context for the active initiative before using project-specific terms and should update it immediately when a term is resolved.
@@ -69,8 +69,8 @@ agent-issues context list --json
 agent-issues context show default --json
 agent-issues context show --view global --query Administration --json
 agent-issues context show INIT1 --json
-agent-issues context set --scope INIT1 --title "Payments Context" --summary "Glossary for the payments initiative."
-agent-issues context define "Order" --scope INIT1 --definition "A customer request accepted and tracked by the system." --avoid "purchase, transaction"
+agent-issues context set --scope INIT1 --title "Payments Context" --body-file /tmp/payments-summary.md
+agent-issues context define "Order" --scope INIT1 --body-file /tmp/order-definition.md --avoid "purchase, transaction"
 agent-issues help create --json
 agent-issues schema --json
 agent-issues capabilities --json
@@ -194,7 +194,9 @@ agent-issues auth logout work
 	- `ai-agent-issues`
 	- `ai-grill-with-docs`
 	- `ai-handoff`
+	- `ai-implement`
 	- `ai-migrate-docs`
+	- `ai-prepare`
 	- `ai-start-work`
 	- `ai-tdd`
 	- `ai-to-issues`
