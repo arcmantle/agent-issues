@@ -11,6 +11,8 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 Build in thin vertical slices: implement one piece, verify it, then expand. Each increment leaves the system in a working, verified state. Never implement an entire issue in one uninterrupted pass.
 
+You write and verify every slice yourself, in this conversation. Never start a subagent to implement a slice, even to save time or context. The only subagent this skill starts is the read-only review in step 4, after the last slice's verification passes.
+
 If a slice turns out to have a natural test seam, write the test for that slice. Verification and tests can work together in this skill.
 
 ## Workflow
@@ -77,6 +79,7 @@ Stop and reconsider the current slice if any of these show up:
 - The build or tests are broken between slices.
 - An abstraction built before a third use case actually demands it.
 - Editing files outside the issue's scope because you happened to be nearby.
+- Starting a subagent to implement or fix a slice instead of doing it yourself.
 
 ## Checklist per slice
 
