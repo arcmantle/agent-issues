@@ -744,7 +744,6 @@ async function getFixingIssueStatuses(executor: TenantExecutor, storyId: string)
 			AND relations.to_id = ${storyId}
 			AND entities.kind = 'issue'
 	`);
-
 	return (result.rows as Array<{ status: string }>).map((row) => row.status);
 }
 
@@ -763,27 +762,13 @@ async function getCreatedStoryStatuses(executor: TenantExecutor, prdId: string):
 	return (result.rows as Array<{ id: string }>).map((row) => statusMap.get(row.id) ?? "");
 }
 
-async function getConstrainedIssueStatuses(executor: TenantExecutor, adrId: string): Promise<string[]> {
-	const result = await executor.execute(sql`
-		SELECT entities.status
-		FROM relations
-		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${executor.tenantId}
-			AND relations.type = 'constrains'
-			AND relations.from_id = ${adrId}
-			AND entities.kind = 'issue'
-	`);
-
-	return (result.rows as Array<{ status: string }>).map((row) => row.status);
-}
-
-async function isEntitySuperseded(
+async function getSupersedingEntityId(
 	executor: TenantExecutor,
 	entityId: string,
 	kind: "prd" | "userStory" | "adr"
-): Promise<boolean> {
+): Promise<string | undefined> {
 	const result = await executor.execute(sql`
-		SELECT 1
+		SELECT entities.id
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId}
@@ -793,7 +778,7 @@ async function isEntitySuperseded(
 		LIMIT 1
 	`);
 
-	return (result.rowCount ?? 0) > 0;
+	return (result.rows[0] as { id: string } | undefined)?.id;
 }
 
 async function getInitiativeChildStatuses(
@@ -1124,7 +1109,7 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 	}
 
 	const headRevision = row.revision ?? 1;
-	const currentParentIds = (await getStructuralParentRelations(executor, entityId)).map((relation) => relation.fromId);
+	const currentParentIds = (await getStructuralParentRelations(executor, row.id)).map((relation) => relation.fromId);
 
 	const deltaRows = await executor
 		.select()
@@ -1133,7 +1118,7 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 			and(
 				eq(revisionEntries.tenantId, executor.tenantId),
 				eq(revisionEntries.recordKind, "entity"),
-				eq(revisionEntries.recordKey, encodeEntityRecordKey(entityId))
+				eq(revisionEntries.recordKey, encodeEntityRecordKey(row.id))
 			)
 		)
 		.orderBy(desc(revisionEntries.revision));
@@ -1147,7 +1132,7 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 		status: row.status,
 		tombstone: row.tombstone
 	};
-	const currentParentId = resolveRevisionHeadParentId(entityId, headState, currentParentIds, newestPatch?.sourceHash);
+	const currentParentId = resolveRevisionHeadParentId(row.id, headState, currentParentIds, newestPatch?.sourceHash);
 
 	let state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } = {
 		...headState,
@@ -1159,7 +1144,7 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 	for (let revision = headRevision; revision >= 1; revision--) {
 		const patch = patchByRevision.get(revision);
 		if (!patch) {
-			throw new EntityRevisionError(entityId, "broken-chain", `Missing revision_entries row for entity ${entityId} at revision ${revision}`, headRevision);
+			throw new EntityRevisionError(row.id, "broken-chain", `Missing revision_entries row for entity ${row.id} at revision ${revision}`, headRevision);
 		}
 		entries.push({
 			id: patch.id,
@@ -1259,6 +1244,10 @@ export async function linkEntities(
 		throw new Error(`Linking ${from.id} -> ${to.id} as ${input.relationType} would create a cycle.`);
 	}
 
+	if (input.relationType === "supersedes" && to.kind === "adr" && to.status === "archived") {
+		await updateEntityStatus(executor, { entityId: to.id, status: "current" });
+	}
+
 	const createdAt = new Date().toISOString();
 	const relation: RelationRecord = { fromId: from.id, toId: to.id, type: input.relationType as RelationType, createdAt };
 	const { inserted } = await insertRelation(executor, relation);
@@ -1314,11 +1303,11 @@ export async function updateEntityStatus(
 		throw new Error(`${entity.id} status is derived (superseded); link a replacement record with supersedes instead.`);
 	}
 
-	if (
-		(entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") &&
-		(await isEntitySuperseded(executor, entity.id, entity.kind))
-	) {
-		throw new Error(`${entity.id} status is derived (superseded) because another ${entity.kind} supersedes it.`);
+	if (entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") {
+		const supersedingEntityId = await getSupersedingEntityId(executor, entity.id, entity.kind);
+		if (supersedingEntityId !== undefined) {
+			throw new Error(`${entity.id} status is derived (superseded) because ${supersedingEntityId} supersedes it.`);
+		}
 	}
 
 	if (entity.kind === "userStory") {
@@ -1332,12 +1321,6 @@ export async function updateEntityStatus(
 		const createdStoryStatuses = await getCreatedStoryStatuses(executor, entity.id);
 		if (createdStoryStatuses.length > 0) {
 			throw new Error(`${entity.id} status is derived from its user stories; update the underlying issues instead of setting it directly.`);
-		}
-	}
-
-	if (entity.kind === "adr") {
-		if ((await getConstrainedIssueStatuses(executor, entity.id)).length > 0) {
-			throw new Error(`${entity.id} status is derived from the issues it constrains; update those issues instead of setting it directly.`);
 		}
 	}
 

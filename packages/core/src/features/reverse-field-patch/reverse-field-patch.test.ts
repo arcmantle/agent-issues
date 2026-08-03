@@ -54,8 +54,8 @@ describe("reverse field patch codec", () => {
 	});
 
 	it("applies entity text, scalar, nullable, and tombstone field patches", () => {
-		const predecessor = { title: "Original", body: "Large body", bodySource: "authored", status: "todo", parentId: null, tombstone: false };
-		const successor = { title: "Revised", body: "Large body!", bodySource: "generated", status: "done", parentId: "INIT2", tombstone: true };
+		const predecessor = { title: "Original", body: "Large body", bodySource: "authored", status: "todo", parentId: null as string | null, tombstone: false };
+		const successor = { title: "Revised", body: "Large body!", bodySource: "generated", status: "done", parentId: "INIT2" as string | null, tombstone: true };
 
 		const transition = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
 
@@ -66,7 +66,7 @@ describe("reverse field patch codec", () => {
 	});
 
 	it("rejects duplicate field ids", () => {
-		const predecessor = { title: "Title", body: "Body", bodySource: "authored", status: "todo", parentId: null, tombstone: false };
+		const predecessor = { title: "Title", body: "Body", bodySource: "authored", status: "todo", parentId: null as string | null, tombstone: false };
 		const successor = { ...predecessor, parentId: "INIT2" };
 		const transition = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
 		transition.reversePatch = Uint8Array.from([...transition.reversePatch, ...transition.reversePatch]);

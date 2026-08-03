@@ -389,7 +389,7 @@ describe("derived PRD status cascade", () => {
 	});
 });
 
-describe("derived ADR status", () => {
+describe("ADR status", () => {
 		function seedAdrConstrainingIssues(db: SqliteInternalConnection, issueStatuses: string[]) {
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
 		const adr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Use SQLite" });
@@ -404,60 +404,53 @@ describe("derived ADR status", () => {
 		return { initiative, adr, issues };
 	}
 
-	it("derives accepted when a constrained issue is in progress", async () => {
+	it("creates an ADR with current status", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const adr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Use SQLite" });
+
+		expect(statusOf(db, adr.id)).toBe("current");
+	});
+
+	it("keeps current when a constrained issue is in progress", async () => {
 		const db = await openTestDatabase();
 		const { adr } = seedAdrConstrainingIssues(db, ["in-progress"]);
 
-		expect(statusOf(db, adr.id)).toBe("accepted");
+		expect(statusOf(db, adr.id)).toBe("current");
 	});
 
-	it("derives accepted when a constrained issue is done", async () => {
+	it("keeps current when a constrained issue is done", async () => {
 		const db = await openTestDatabase();
 		const { adr } = seedAdrConstrainingIssues(db, ["done"]);
 
-		expect(statusOf(db, adr.id)).toBe("accepted");
+		expect(statusOf(db, adr.id)).toBe("current");
 	});
 
-	it("keeps the stored status while constrained issues exist but none have started", async () => {
+	it("accepts setting current on an ADR that constrains issues", async () => {
 		const db = await openTestDatabase();
 		const { adr } = seedAdrConstrainingIssues(db, ["todo"]);
 
-		expect(statusOf(db, adr.id)).toBe("proposed");
-	});
-
-	it("keeps the stored status when the ADR constrains no issues", async () => {
-		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const adr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Standalone", status: "accepted" });
-
-		expect(statusOf(db, adr.id)).toBe("accepted");
+		expect(() => updateEntityStatus(db, { entityId: adr.id, status: "current" })).not.toThrow();
 	});
 
 	it("derives superseded when another ADR supersedes it", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const oldAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Old decision", status: "accepted" });
+		const oldAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Old decision" });
 		const newAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "New decision" });
 		linkEntities(db, { fromId: newAdr.id, toId: oldAdr.id, relationType: "supersedes" });
 
 		expect(statusOf(db, oldAdr.id)).toBe("superseded");
 	});
 
-	it("rejects manually setting the status of an ADR that constrains issues", async () => {
-		const db = await openTestDatabase();
-		const { adr } = seedAdrConstrainingIssues(db, ["todo"]);
-
-		expect(() => updateEntityStatus(db, { entityId: adr.id, status: "accepted" })).toThrow(/derived/i);
-	});
-
 	it("rejects manually setting the status of an ADR that has been superseded", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const oldAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Old decision", status: "accepted" });
+		const oldAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "Old decision" });
 		const newAdr = createEntity(db, { kind: "adr", parentId: initiative.id, title: "New decision" });
 		linkEntities(db, { fromId: newAdr.id, toId: oldAdr.id, relationType: "supersedes" });
 
-		expect(() => updateEntityStatus(db, { entityId: oldAdr.id, status: "proposed" })).toThrow(/superseded/i);
+		expect(() => updateEntityStatus(db, { entityId: oldAdr.id, status: "current" })).toThrow(/superseded/i);
 	});
 
 	it("derives PRD and user-story supersession from replacement relations", async () => {

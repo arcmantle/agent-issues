@@ -23,8 +23,8 @@ describe("api migrations chain", () => {
 		await adminPool.end();
 	});
 
-	it("registers only the final baseline in the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline"]);
+	it("registers the Postgres production migration plan", () => {
+		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -258,7 +258,7 @@ describe("api migrations chain", () => {
 		}
 	});
 
-	it("creates an empty schema with only final tables and one final-baseline checkpoint", async () => {
+	it("creates an empty schema with final tables and the complete migration ledger", async () => {
 		const schemaName = `final_baseline_${randomUUID().replace(/-/g, "_")}`;
 		await adminPool.query(`CREATE SCHEMA ${schemaName}`);
 		const schemaPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
@@ -279,7 +279,8 @@ describe("api migrations chain", () => {
 				{ table_name: "schema_migrations" }
 			]);
 			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows).toEqual([
-				{ id: "final-baseline" }
+				{ id: "final-baseline" },
+				{ id: "adr-status-to-current" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -1143,7 +1144,10 @@ describe("api migrations chain", () => {
 			}
 
 			const { rows: appliedRows } = await schemaPool.query(`SELECT id FROM schema_migrations ORDER BY applied_at`);
-			expect(appliedRows).toEqual([{ id: "final-baseline" }]);
+			expect(appliedRows).toEqual([
+				{ id: "final-baseline" },
+				{ id: "adr-status-to-current" }
+			]);
 
 			const { rows: identityColumns } = await schemaPool.query(
 				`SELECT table_name, column_name, data_type FROM information_schema.columns

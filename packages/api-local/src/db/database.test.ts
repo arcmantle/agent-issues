@@ -150,7 +150,7 @@ describe("tenant resolution", () => {
 		expect(listBackupFiles(dbPath)).toEqual([]);
 	});
 
-	it("creates an empty database with only final tables and one final-baseline checkpoint", async () => {
+	it("creates an empty database with final tables and the complete migration ledger", async () => {
 		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-final-baseline-"));
 		tempDirs.push(tempDir);
 		const dbPath = path.join(tempDir, "test.db");
@@ -170,7 +170,8 @@ describe("tenant resolution", () => {
 				{ name: "schema_migrations" }
 			]);
 			expect(rawDb(created.db).prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
-				{ id: "final-baseline" }
+				{ id: "final-baseline" },
+				{ id: "adr-status-to-current" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"

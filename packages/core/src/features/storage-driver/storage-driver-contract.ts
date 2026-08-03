@@ -91,6 +91,92 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 		});
 	});
 
+		describe(`storage-driver seam: ADR lifecycle (${label})`, () => {
+			it("keeps ADR status independent from issue progress", async () => {
+				const store = await openStore();
+
+				try {
+					const initiative = await store.createEntity({ kind: "initiative", title: "ADR lifecycle" });
+					const adr = await store.createEntity({ kind: "adr", title: "Use SQLite", parentId: initiative.id });
+					const issue = await store.createEntity({ kind: "issue", title: "Implement it", parentId: initiative.id });
+
+					expect(adr.status).toBe("current");
+					await store.linkEntities({ fromId: adr.id, toId: issue.id, relationType: "constrains" });
+					await store.updateEntityStatus({ entityId: issue.id, status: "in-progress" });
+					expect((await store.getEntityDetails(adr.id)).entity.status).toBe("current");
+					await store.updateEntityStatus({ entityId: issue.id, status: "done" });
+					expect((await store.getEntityDetails(adr.id)).entity.status).toBe("current");
+					await expect(store.updateEntityStatus({ entityId: adr.id, status: "current" })).resolves.toBeDefined();
+
+					const replacement = await store.createEntity({ kind: "adr", title: "Use Postgres", parentId: initiative.id });
+					await store.linkEntities({ fromId: replacement.id, toId: adr.id, relationType: "supersedes" });
+					expect((await store.getEntityDetails(adr.id)).entity.status).toBe("superseded");
+					await expect(store.updateEntityStatus({ entityId: adr.id, status: "current" })).rejects.toThrow(/superseded/i);
+				} finally {
+					await store.close();
+				}
+			});
+
+			it("archives an ADR and restores it to current", async () => {
+				const store = await openStore();
+
+				try {
+					const adr = await store.createEntity({ kind: "adr", title: "Archive this decision" });
+
+					const archived = await store.archiveEntity({ entityId: adr.id });
+					expect(archived.entity.status).toBe("archived");
+
+					const restored = await store.updateEntityStatus({ entityId: adr.id, status: "current" });
+					expect(restored.entity.status).toBe("current");
+				} finally {
+					await store.close();
+				}
+			});
+
+			it("clears an archived ADR before linking a superseding ADR", async () => {
+				const store = await openStore();
+
+				try {
+					const oldAdr = await store.createEntity({ kind: "adr", title: "Old decision" });
+					const replacement = await store.createEntity({ kind: "adr", title: "Replacement decision" });
+					await store.archiveEntity({ entityId: oldAdr.id });
+
+					await expect(store.linkEntities({ fromId: replacement.id, toId: oldAdr.id, relationType: "supersedes" })).resolves.toMatchObject({
+						created: true,
+						relation: { fromId: replacement.id, toId: oldAdr.id, type: "supersedes" }
+					});
+					expect((await store.getEntityDetails(oldAdr.id)).entity.status).toBe("superseded");
+
+					await store.unlinkEntities({ fromId: replacement.id, toId: oldAdr.id, relationType: "supersedes" });
+					expect((await store.getEntityDetails(oldAdr.id)).entity.status).toBe("current");
+
+					const history = await store.listEntityHistory(oldAdr.id);
+					expect(history.map((entry) => ({ version: entry.version, status: entry.status }))).toEqual([
+						{ version: 1, status: "current" },
+						{ version: 2, status: "archived" },
+						{ version: 3, status: "current" }
+					]);
+				} finally {
+					await store.close();
+				}
+			});
+
+			it("refuses to archive a superseded ADR and names the replacement", async () => {
+				const store = await openStore();
+
+				try {
+					const initiative = await store.createEntity({ kind: "initiative", title: "ADR lifecycle" });
+					const oldAdr = await store.createEntity({ kind: "adr", title: "Old decision", parentId: initiative.id });
+					const replacement = await store.createEntity({ kind: "adr", title: "Replacement decision", parentId: initiative.id });
+					await store.linkEntities({ fromId: replacement.id, toId: oldAdr.id, relationType: "supersedes" });
+
+					await expect(store.archiveEntity({ entityId: oldAdr.id })).rejects.toThrow(new RegExp(replacement.id));
+				} finally {
+					await store.close();
+				}
+			});
+		});
+
 	describe(`storage-driver seam: Stable identity and Canonical reference (${label})`, () => {
 		it("creates and resolves an entity by UUID or Canonical reference", async () => {
 			const store = await openStore();
@@ -517,6 +603,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(bundle.subIssueLinks).toEqual([{ parent: expect.objectContaining({ id: issue.id }), issue: expect.objectContaining({ id: subIssue.id }) }]);
 				expect(bundle.blockerLinks).toEqual([{ source: expect.objectContaining({ id: blocker.id }), target: expect.objectContaining({ id: issue.id }) }]);
 				expect(bundle.constrainsLinks).toEqual([{ adr: expect.objectContaining({ id: adr.id }), issue: expect.objectContaining({ id: issue.id }) }]);
+
+				const bundleByReference = await store.getInitiativeBundle(initiative.reference);
+				expect(bundleByReference).toEqual(bundle);
 			} finally {
 				await store.close();
 			}
@@ -1403,6 +1492,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			});
 
 			const history = await store.listEntityHistory(issue.id);
+			expect(await store.listEntityHistory(issue.reference)).toEqual(history);
 
 			expect(history).toHaveLength(6);
 

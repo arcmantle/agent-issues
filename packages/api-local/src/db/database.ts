@@ -28,7 +28,7 @@ import { createSqliteUpgradeBackup, runMigrations } from "./migration-runner.js"
 import { createSqliteExecutor, type SqliteExecutor, type SqliteInternalConnection } from "./sqlite-executor.js";
 import { openSqliteConnection } from "./sqlite-connection.js";
 import { inspectSqliteSourceProfile } from "./source-profile.js";
-import { finalBaselineMigration } from "../migrations/final-baseline.js";
+import { migrations } from "../migrations/index.js";
 import { insertLegacySqliteV7Rows, transformLegacySqliteV7 } from "../migrations/legacy-v7-direct.js";
 import { buildLegacySqliteV7Rows } from "../migrations/legacy-v7-semantic.js";
 
@@ -58,7 +58,7 @@ export type DatabaseLocationOptions = {
 
 const LEGACY_TENANTS_DIRECTORY = "tenants";
 
-const EXPECTED_FINAL_LEDGER_IDS = [finalBaselineMigration.id];
+const EXPECTED_FINAL_LEDGER_IDS = migrations.map(({ id }) => id);
 
 export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocationOptions): string {
 	if (inputPath) {
@@ -83,10 +83,13 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 		db.drizzle.run(sql.raw("PRAGMA journal_mode = WAL"));
 		db.drizzle.run(sql.raw("PRAGMA foreign_keys = ON"));
 		if (sourceProfile.profile === "empty") {
-			await runMigrations(db, [finalBaselineMigration]);
+			await runMigrations(db, migrations);
 		} else if (sourceProfile.profile === "legacy-sqlite-v7") {
 			prepareUpgradeBackup();
 			await transformLegacySqliteV7(db);
+		} else if (sourceProfile.profile === "current-final"
+			&& !sourceProfile.evidence.ledgerIds.includes("legacy-v7-direct")) {
+			await runMigrations(db, migrations);
 		}
 		if (!inputPath) {
 			importLegacyTenantDataIfNeeded(db, options);

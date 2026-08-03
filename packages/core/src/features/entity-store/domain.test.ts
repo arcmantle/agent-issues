@@ -12,10 +12,10 @@ describe("superseded planning records", () => {
 
 	it("derives superseded only from an incoming supersedes relation", () => {
 		const entities = [
-			{ id: "PRD1", kind: "prd" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, createdAt: "", updatedAt: "" },
-			{ id: "PRD2", kind: "prd" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, createdAt: "", updatedAt: "" },
-			{ id: "US1", kind: "userStory" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, createdAt: "", updatedAt: "" },
-			{ id: "US2", kind: "userStory" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, createdAt: "", updatedAt: "" }
+			{ id: "PRD1", reference: "PRD1", kind: "prd" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
+			{ id: "PRD2", reference: "PRD2", kind: "prd" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
+			{ id: "US1", reference: "US1", kind: "userStory" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
+			{ id: "US2", reference: "US2", kind: "userStory" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" }
 		];
 		const relations = [
 			{ fromId: "PRD2", toId: "PRD1", type: "supersedes" as const, createdAt: "" },

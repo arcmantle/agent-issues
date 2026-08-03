@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { EntityRevisionError, type EntityRevisionPatch } from "./domain.js";
+import { EntityRevisionError, type BodySource, type EntityRevisionPatch } from "./domain.js";
 import { applyReversePatch, materializeFromPatches } from "./materialize-revision.js";
 import { createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
 
+type EntityRevisionState = {
+	title: string;
+	body: string;
+	bodySource: BodySource;
+	status: string;
+	parentId: string | null;
+	tombstone: boolean;
+};
+
 describe("materializeFromPatches", () => {
 	it("materializes a generic reverse-field transition", () => {
-		const predecessor = { title: "Initial", body: "Body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false };
-		const successor = { title: "Current", body: "Body!", bodySource: "generated" as const, status: "done", parentId: "INIT2", tombstone: true };
+		const predecessor: EntityRevisionState = { title: "Initial", body: "Body", bodySource: "authored", status: "todo", parentId: null, tombstone: false };
+		const successor: EntityRevisionState = { title: "Current", body: "Body!", bodySource: "generated", status: "done", parentId: "INIT2", tombstone: true };
 		const patch = {
 			revision: 2,
 			author: "alice",
@@ -19,9 +28,9 @@ describe("materializeFromPatches", () => {
 	});
 
 	it("applies content and lifecycle patches newest-first with target revision metadata", () => {
-		const first = { title: "First", body: "First body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false };
-		const second = { title: "Second", body: "Second body", bodySource: "generated" as const, status: "in-progress", parentId: "INIT1", tombstone: false };
-		const third = { title: "Third", body: "Third body", bodySource: "authored" as const, status: "done", parentId: "INIT2", tombstone: false };
+		const first: EntityRevisionState = { title: "First", body: "First body", bodySource: "authored", status: "todo", parentId: null, tombstone: false };
+		const second: EntityRevisionState = { title: "Second", body: "Second body", bodySource: "generated", status: "in-progress", parentId: "INIT1", tombstone: false };
+		const third: EntityRevisionState = { title: "Third", body: "Third body", bodySource: "authored", status: "done", parentId: "INIT2", tombstone: false };
 		const patches: EntityRevisionPatch[] = [
 			{
 				revision: 3,

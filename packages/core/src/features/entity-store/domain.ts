@@ -12,7 +12,7 @@ export const STATUS_FLOW = {
 	initiative: ["draft", "active", "paused", "done"],
 	prd: ["draft", "in-progress", "approved", "superseded"],
 	userStory: ["draft", "ready", "in-progress", "done", "superseded"],
-	adr: ["proposed", "accepted", "superseded"],
+	adr: ["current", "superseded", "archived"],
 	issue: ["todo", "in-progress", "blocked", "done"],
 	handoff: ["active", "done"]
 } as const;
@@ -272,7 +272,7 @@ export function getArchiveStatus(kind: EntityKind): EntityStatus {
 		case "userStory":
 			return "done";
 		case "adr":
-			return "superseded";
+			return "archived";
 		case "issue":
 			return "done";
 		case "handoff":
@@ -349,22 +349,6 @@ export function derivePrdStatus(storedStatus: string, createdStoryStatuses: stri
 	return storedStatus;
 }
 
-export function deriveAdrStatus(storedStatus: string, constrainedIssueStatuses: string[], isSuperseded: boolean): string {
-	if (isSuperseded) {
-		return "superseded";
-	}
-
-	if (constrainedIssueStatuses.length === 0) {
-		return storedStatus;
-	}
-
-	if (constrainedIssueStatuses.some((status) => status === "in-progress" || status === "blocked" || status === "done")) {
-		return "accepted";
-	}
-
-	return storedStatus;
-}
-
 export function deriveIssueStatus(storedStatus: string, subIssueStatuses: string[]): string {
 	if (subIssueStatuses.length === 0) {
 		return storedStatus;
@@ -387,7 +371,6 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 	const createdStoriesByPrd = new Map<string, string[]>();
 	const trackedIssuesByInitiative = new Map<string, string[]>();
 	const ownedPrdsByInitiative = new Map<string, string[]>();
-	const constrainedIssuesByAdr = new Map<string, string[]>();
 	const supersededRecordIds = new Set<string>();
 
 	const pushTo = (map: Map<string, string[]>, key: string, value: string) => {
@@ -414,8 +397,6 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 			pushTo(trackedIssuesByInitiative, relation.fromId, relation.toId);
 		} else if (relation.type === "owns" && kindById.get(relation.toId) === "prd") {
 			pushTo(ownedPrdsByInitiative, relation.fromId, relation.toId);
-		} else if (relation.type === "constrains" && kindById.get(relation.fromId) === "adr" && kindById.get(relation.toId) === "issue") {
-			pushTo(constrainedIssuesByAdr, relation.fromId, relation.toId);
 		} else if (
 			relation.type === "supersedes" &&
 			kindById.get(relation.fromId) === kindById.get(relation.toId) &&
@@ -451,12 +432,6 @@ export function deriveEntityStatuses(entities: EntityRecord[], relations: Relati
 				entity.status,
 				statusesOf(trackedIssuesByInitiative.get(entity.id)),
 				statusesOf(ownedPrdsByInitiative.get(entity.id))
-			);
-		} else if (entity.kind === "adr") {
-			derivedStatus = deriveAdrStatus(
-				entity.status,
-				statusesOf(constrainedIssuesByAdr.get(entity.id)),
-				supersededRecordIds.has(entity.id)
 			);
 		}
 

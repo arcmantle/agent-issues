@@ -68,7 +68,9 @@ export function inspectSqliteSourceProfile(database: SqliteInternalConnection, e
 	if (LEGACY_V7_SCHEMA_SIGNATURES.has(schemaSignature) && ledgerMetadata === undefined) {
 		return { evidence, profile: "legacy-sqlite-v7", supported: true };
 	}
-	if (schemaSignature === CURRENT_FINAL_SCHEMA_SIGNATURE && ledgerIds.join("\0") === expectedLedgerIds.join("\0")) {
+	if (schemaSignature === CURRENT_FINAL_SCHEMA_SIGNATURE
+		&& ledgerIds.length > 0
+		&& ledgerIds.every((id, index) => id === expectedLedgerIds[index])) {
 		return { evidence, profile: "current-final", supported: true };
 	}
 	if (finalSchemaSignature === DIRECT_FINAL_SCHEMA_SIGNATURE

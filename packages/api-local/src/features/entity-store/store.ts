@@ -198,6 +198,13 @@ export function linkEntities(
 	executor: SqliteExecutor,
 	input: { fromId: string; toId: string; relationType: string }
 ): LinkResult {
+	return executor.drizzle.transaction(() => linkEntitiesInTransaction(executor, input));
+}
+
+function linkEntitiesInTransaction(
+	executor: SqliteExecutor,
+	input: { fromId: string; toId: string; relationType: string }
+): LinkResult {
 	if (input.fromId === input.toId) {
 		throw new Error("Cannot create a relation from an entity to itself.");
 	}
@@ -214,6 +221,10 @@ export function linkEntities(
 		hasTypedPath(executor, to.id, from.id, input.relationType)
 	) {
 		throw new Error(`Linking ${from.id} -> ${to.id} as ${input.relationType} would create a cycle.`);
+	}
+
+	if (input.relationType === "supersedes" && to.kind === "adr" && to.status === "archived") {
+		updateEntityStatus(executor, { entityId: to.id, status: "current" });
 	}
 
 	const createdAt = new Date().toISOString();
@@ -249,11 +260,11 @@ export function updateEntityStatus(
 		throw new Error(`${entity.id} status is derived (superseded); link a replacement record with supersedes instead.`);
 	}
 
-	if (
-		(entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") &&
-		isEntitySuperseded(executor, entity.id, entity.kind)
-	) {
-		throw new Error(`${entity.id} status is derived (superseded) because another ${entity.kind} supersedes it.`);
+	if (entity.kind === "prd" || entity.kind === "userStory" || entity.kind === "adr") {
+		const supersedingEntityId = getSupersedingEntityId(executor, entity.id, entity.kind);
+		if (supersedingEntityId !== undefined) {
+			throw new Error(`${entity.id} status is derived (superseded) because ${supersedingEntityId} supersedes it.`);
+		}
 	}
 
 	if (entity.kind === "userStory") {
@@ -272,12 +283,6 @@ export function updateEntityStatus(
 				`${entity.id} status is derived from its user stories; update the underlying issues instead of setting it directly.`
 			);
 		}
-	}
-
-	if (entity.kind === "adr" && getConstrainedIssueStatuses(executor, entity.id).length > 0) {
-		throw new Error(
-			`${entity.id} status is derived from the issues it constrains; update those issues instead of setting it directly.`
-		);
 	}
 
 	if (entity.kind === "initiative") {
@@ -786,7 +791,7 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 	}
 
 	const entityRows = all<EntityRow>(executor, sql`WITH RECURSIVE reachable(id) AS (
-		SELECT ${initiativeId}
+		SELECT ${initiative.id}
 		UNION
 		SELECT relations.to_id
 		FROM relations
@@ -936,13 +941,17 @@ function getOpenBlockers(executor: SqliteExecutor, issues: EntityRecord[]): Reco
 // the DB) return their complete chain.  Returns [] only when the entity
 // does not exist at all.
 export function listEntityHistory(executor: SqliteExecutor, entityId: string): HistoryEntryRecord[] {
-	const row = first<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${entityId}`);
+	const row = first<EntityRow>(
+		executor,
+		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND (id = ${entityId} OR reference = ${entityId})`
+	);
 	if (!row) {
 		return [];
 	}
 
+	const resolvedId = row.id;
 	const headRevision = row.revision ?? 1;
-	const currentParentId = getStructuralParentRelations(executor, entityId)[0]?.fromId ?? null;
+	const currentParentId = getStructuralParentRelations(executor, resolvedId)[0]?.fromId ?? null;
 
 	type DeltaRow = {
 		id: string;
@@ -961,7 +970,7 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 			FROM revision_entries
 			WHERE tenant_id = ${executor.tenantId}
 				AND record_kind = 'entity'
-				AND record_key = ${encodeEntityRecordKey(entityId)}
+				AND record_key = ${encodeEntityRecordKey(resolvedId)}
 			ORDER BY revision DESC`
 	);
 
@@ -981,11 +990,11 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 	for (let revision = headRevision; revision >= 1; revision--) {
 		const patch = patchByRevision.get(revision);
 		if (!patch) {
-			throw new EntityRevisionError(entityId, "broken-chain", `Missing revision_entries row for entity ${entityId} at revision ${revision}`, headRevision);
+			throw new EntityRevisionError(resolvedId, "broken-chain", `Missing revision_entries row for entity ${resolvedId} at revision ${revision}`, headRevision);
 		}
 		entries.push({
 			id: patch.id,
-			entityId,
+			entityId: resolvedId,
 			version: revision,
 			author: patch.author,
 			title: state.title,
@@ -1393,20 +1402,8 @@ function getCreatedStoryStatuses(executor: SqliteExecutor, prdId: string): strin
 	return rows.map((row) => statusMap.get(row.id) ?? "");
 }
 
-function getConstrainedIssueStatuses(executor: SqliteExecutor, adrId: string): string[] {
-	const rows = all<{ status: string }>(executor, sql`SELECT entities.status
-		FROM relations
-		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
-		WHERE relations.tenant_id = ${executor.tenantId}
-			AND relations.type = 'constrains'
-			AND relations.from_id = ${adrId}
-			AND entities.kind = 'issue'`);
-
-	return rows.map((row) => row.status);
-}
-
-function isEntitySuperseded(executor: SqliteExecutor, entityId: string, kind: "prd" | "userStory" | "adr"): boolean {
-	const row = first(executor, sql`SELECT 1
+function getSupersedingEntityId(executor: SqliteExecutor, entityId: string, kind: "prd" | "userStory" | "adr"): string | undefined {
+	const row = first<{ id: string }>(executor, sql`SELECT entities.id
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId}
@@ -1415,7 +1412,7 @@ function isEntitySuperseded(executor: SqliteExecutor, entityId: string, kind: "p
 			AND entities.kind = ${kind}
 		LIMIT 1`);
 
-	return row !== undefined;
+	return row?.id;
 }
 
 function getInitiativeChildStatuses(

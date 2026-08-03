@@ -277,7 +277,10 @@ export async function inspectPgSourceProfile(client: Pick<PoolClient, "query">, 
 	if (schemaSignature === LEGACY_V7_SCHEMA_SIGNATURE && !hasLedger) {
 		return { evidence, profile: "legacy-postgres-v7", supported: true };
 	}
-	if (schemaSignature === CURRENT_FINAL_SCHEMA_SIGNATURE && ledgerIds.length === 1 && expectedLedgerIds.includes(ledgerIds[0]!)) {
+	if (schemaSignature === CURRENT_FINAL_SCHEMA_SIGNATURE
+		&& ((ledgerIds.length > 0
+			&& ledgerIds.every((id, index) => id === expectedLedgerIds[index]))
+			|| (ledgerIds.length === 1 && ledgerIds[0] === "legacy-v7-direct"))) {
 		return { evidence, profile: "current-final", supported: true };
 	}
 	return unsupported(evidence, applicationObjects);

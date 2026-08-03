@@ -109,8 +109,8 @@ afterEach(() => {
 });
 
 describe("golden-fixture migration wall", () => {
-	it("registers only the final baseline in the SQLite production migration plan", () => {
-		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline"]);
+	it("registers the SQLite production migration plan", () => {
+		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current"]);
 	});
 
 	it("implements the SQLite legacy route without clone or historical migration replay", () => {
@@ -465,7 +465,7 @@ function freshDatabasePath(): string {
 }
 
 describe("fresh install schema parity", () => {
-	it("records only the final baseline checkpoint", async () => {
+	it("records the complete migration ledger", async () => {
 		const dbPath = freshDatabasePath();
 		const { db } = await ensureDatabase(dbPath, { tenant: "fresh" });
 		db.close();
@@ -473,7 +473,10 @@ describe("fresh install schema parity", () => {
 		const db2 = new Database(dbPath, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
-			expect(applied).toEqual([{ id: "final-baseline" }]);
+			expect(applied).toEqual([
+				{ id: "adr-status-to-current" },
+				{ id: "final-baseline" }
+			]);
 		} finally {
 			db2.close();
 		}

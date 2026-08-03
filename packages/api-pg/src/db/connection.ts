@@ -1,5 +1,5 @@
 import { formatUnsupportedSourceProfile } from "@agent-issues/core";
-import { finalBaselineMigration } from "../migrations/final-baseline.js";
+import { migrations } from "../migrations/index.js";
 import { transformLegacyPostgresV7 } from "../migrations/legacy-v7-direct.js";
 import { schema } from "../schema.js";
 import { runMigrationsWithClient } from "./migration-runner.js";
@@ -56,14 +56,17 @@ export async function migratePgDatabase(pool: Pool): Promise<void> {
 	try {
 		await client.query("BEGIN");
 		await client.query("SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))");
-		const sourceProfile = await inspectPgSourceProfile(client, [finalBaselineMigration.id, "legacy-v7-direct"]);
+				const sourceProfile = await inspectPgSourceProfile(client, [...migrations.map(({ id }) => id), "legacy-v7-direct"]);
 		if (!sourceProfile.supported) {
 			throw new Error(formatUnsupportedSourceProfile(sourceProfile));
 		}
 		if (sourceProfile.profile === "empty") {
-			await runMigrationsWithClient(client, [finalBaselineMigration], { transactionIsManagedByCaller: true });
+			await runMigrationsWithClient(client, migrations, { transactionIsManagedByCaller: true });
 		} else if (sourceProfile.profile === "legacy-postgres-v7") {
 			await transformLegacyPostgresV7(client);
+		} else if (sourceProfile.profile === "current-final"
+			&& !sourceProfile.evidence.ledgerIds.includes("legacy-v7-direct")) {
+			await runMigrationsWithClient(client, migrations, { transactionIsManagedByCaller: true });
 		}
 		await client.query("COMMIT");
 	} catch (error) {
