@@ -10,7 +10,8 @@ All bundled `ai-*` skills follow this contract. They also follow the shared [lan
 - Before you plan, implement, migrate, or hand off work, find the active tracked scope.
 - Do not leave a new workstream, ADR, or implementation follow-up untracked. Create the missing record when its parent is clear. If not, ask one routing question.
 - For new feature planning, create a new initiative by default. Reuse an existing initiative only when the user asks for that directly.
-- Change status on issues only. Derive user story, PRD, and ADR status from their linked issues.
+- Change status on issues only. Derive user story and PRD status from their linked issues. An ADR is `current` unless it is `superseded` or `archived`.
+- Treat each entity's complete `reference` field as its public tracker identity. Copy it exactly as returned by the CLI whenever you report or pass an entity to another command. Never abbreviate or truncate it, and never replace it with the internal `id`.
 
 ## Current contracts replace obsolete tests
 

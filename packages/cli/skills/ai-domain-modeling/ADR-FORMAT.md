@@ -18,7 +18,7 @@ This is enough. The value is in the record: a decision was made, and why.
 
 Add these sections only when they add real value:
 
-- `Status` frontmatter (`proposed | accepted | deprecated | superseded by ADR-NNNN`)
+- `Status` frontmatter (`current | superseded | archived`)
 - `Considered Options`
 - `Consequences`
 

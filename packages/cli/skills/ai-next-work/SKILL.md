@@ -17,7 +17,7 @@ Accept the active initiative, or an issue whose initiative you can resolve from 
 
 ## Selection
 
-1. List unfinished issues with `agent-issues list issue --status todo,in-progress,blocked --parent <initiativeId> --json`. Each item carries its `reference`, the value to use everywhere else, never the internal `id`. Its compact JSON also includes `openBlockers`: a reference -> open, not-`done`, blocking issue references map, computed for every issue in the response.
+1. List unfinished issues with `agent-issues list issue --status todo,in-progress,blocked --parent <initiativeId> --json`. Each item carries its `reference`, which is the key used by `openBlockers`. Its compact JSON also includes `openBlockers`: a reference -> open, not-`done`, blocking issue references map, computed for every issue in the response.
 2. A candidate is **workable** when `openBlockers[reference]` is empty. Read this straight off the step-1 response. Do not call `relations` per candidate to determine blocked status.
 3. To find how many open targets a candidate unblocks, invert the `openBlockers` map from step 1: count how many other listed issues have the candidate's reference in their `openBlockers` array. This needs no additional call. This count is scoped to the current initiative and the `--status` filter from step 1. A candidate that blocks an issue in a different initiative, or one outside that status filter, is not counted. That scope matches what this skill ranks, which is work within one initiative. It is intentional, not a gap to work around.
 4. Rank workable leaf issues above parent issues. Use `agent-issues relations <id> --direction outgoing --type decomposes --json` only for a candidate you cannot otherwise classify. Most issues are leaves. This call is rarely needed for every candidate.
@@ -30,7 +30,7 @@ Use the refreshed graph each time. Do not rely on state you captured before the 
 
 Return the selected issue's:
 
-- Reference and title. Report the `reference` field, for example `ISS53`, never the internal `id`.
+- Reference and title.
 - parent or leaf classification
 - user stories it `fixes`
 - open blockers
