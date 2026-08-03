@@ -489,7 +489,10 @@ const COMMAND_SPECS: CommandSpec[] = [
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
 		options: [ENTITY_VIEW_OPTION],
 		examples: ["agent-issues archive ISS1"],
-		notes: ["Archive status depends on entity kind and is exposed by `agent-issues schema --json`."],
+		notes: [
+			"Archive status depends on entity kind and is exposed by `agent-issues schema --json`.",
+			"For an ADR, archive is refused while a supersedes edge points at it."
+		],
 		output: {
 			human: ["Archived <id> from <previousStatus> to <status>"],
 			json: ["entity", "previousStatus"]
@@ -668,6 +671,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: ["agent-issues status ISS1 in-progress", "agent-issues status US1 done"],
 		notes: [
 			"Each entity kind only accepts its own status flow.",
+			"An ADR is current unless it is superseded or archived.",
 			"Issues cannot move to in-progress or done while blocked by a non-done issue.",
 			"Parent issues also cannot move to in-progress or done while any sub-issue remains open."
 		],

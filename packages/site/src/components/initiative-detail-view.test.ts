@@ -245,7 +245,7 @@ describe("initiative detail overview tab", () => {
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
 		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render nodes" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Graph PRD" });
-		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "proposed", title: "SVG graph layout" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "SVG graph layout" });
 		const bundle = makeBundle(initiative, {
 			fixLinks: [{ issue, userStory: story }],
 			issues: [issue],

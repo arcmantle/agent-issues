@@ -164,7 +164,7 @@ describe("cascade view columns", () => {
 
 	it("opens a constrained issue when its reference is clicked inside an ADR column", async () => {
 		const initiative = makeEntity({ id: "INIT3", kind: "initiative", status: "active", title: "Design documents" });
-		const adr = makeEntity({ id: "ADR3", kind: "adr", status: "accepted", title: "Dedicated design table" });
+		const adr = makeEntity({ id: "ADR3", kind: "adr", status: "current", title: "Dedicated design table" });
 		const story = makeEntity({ id: "US15", kind: "userStory", status: "ready", title: "Author design documents" });
 		const issue = makeEntity({ id: "ISS12", kind: "issue", status: "todo", title: "Primary design tracer bullet" });
 		const snapshot = makeSnapshot({

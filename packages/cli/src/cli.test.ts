@@ -45,7 +45,7 @@ function createCapture() {
 // Opens a real SSE connection and resolves once a `snapshot-changed` event
 // arrives (mirrors `cloud-site-server.test.ts`'s helper of the same name).
 function waitForSnapshotChangedEvent(url: string): { event: Promise<unknown>; stop: () => void } {
-	let resolveEvent: (value: unknown) => void;
+	let resolveEvent!: (value: unknown) => void;
 	const promise = new Promise<unknown>((resolve) => {
 		resolveEvent = resolve;
 	});
@@ -224,6 +224,24 @@ describe("cli", () => {
 			}
 		]);
 		expect(logout.output.json).toEqual(["command", "name"]);
+	});
+
+	it("documents the ADR lifecycle in status and archive help", async () => {
+		const readHelp = async (command: string) => {
+			const stdout = createCapture();
+			const exitCode = await runCli(["help", command, "--json"], {
+				stderr: createCapture().stream,
+				stdout: stdout.stream
+			});
+			expect(exitCode).toBe(0);
+			return JSON.parse(stdout.read()).command;
+		};
+
+		const status = await readHelp("status");
+		const archive = await readHelp("archive");
+
+		expect(status.notes.join(" ")).toContain("ADR is current unless it is superseded or archived");
+		expect(archive.notes.join(" ")).toContain("For an ADR, archive is refused while a supersedes edge points at it");
 	});
 
 	it("routes '--help' appended to a multi-word command through the help renderer", async () => {

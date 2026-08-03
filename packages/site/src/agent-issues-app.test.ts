@@ -440,8 +440,8 @@ describe("three-pane console shell", () => {
 	it("lists architecture decisions in the master list when the ADRs section is active", async () => {
 		const snapshot = makeSnapshot({
 			projectAdrs: [
-				makeEntity({ id: "ADR1", kind: "adr", status: "accepted", title: "Use cytoscape" }),
-				makeEntity({ id: "ADR2", kind: "adr", status: "proposed", title: "Adopt signals" })
+				makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "Use cytoscape" }),
+				makeEntity({ id: "ADR2", kind: "adr", status: "current", title: "Adopt signals" })
 			]
 		});
 		const store = makeStore(makeConfig(), snapshot);
@@ -459,7 +459,7 @@ describe("three-pane console shell", () => {
 
 	it("labels a project-scoped ADR as a project-level decision in the ADRs section", async () => {
 		const snapshot = makeSnapshot({
-			projectAdrs: [makeEntity({ id: "ADR1", kind: "adr", status: "accepted", title: "Use deterministic SVG" })]
+			projectAdrs: [makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "Use deterministic SVG" })]
 		});
 		const store = makeStore(makeConfig(), snapshot);
 		const app = await mountApp(store);
@@ -476,7 +476,7 @@ describe("three-pane console shell", () => {
 		const snapshot = makeSnapshot({
 			initiatives: [
 				makeBundle(makeEntity({ id: "INIT1", title: "Console Viewer" }), {
-					adrs: [makeEntity({ id: "ADR2", kind: "adr", status: "accepted", title: "Render graphs by hand" })]
+					adrs: [makeEntity({ id: "ADR2", kind: "adr", status: "current", title: "Render graphs by hand" })]
 				})
 			]
 		});

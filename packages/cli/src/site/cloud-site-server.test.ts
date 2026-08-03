@@ -85,7 +85,7 @@ function startFakeCloudGate(handleMethod: (method: string, params: unknown) => u
 }
 
 function waitForSnapshotChangedEvent(url: string): { event: Promise<unknown>; stop: () => void } {
-	let resolveEvent: (value: unknown) => void;
+	let resolveEvent!: (value: unknown) => void;
 	const promise = new Promise<unknown>((resolve) => {
 		resolveEvent = resolve;
 	});

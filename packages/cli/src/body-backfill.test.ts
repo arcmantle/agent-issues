@@ -4,11 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { backfillBodies } from "./body-backfill.js";
-import { createEntity, ensureDatabase, getDatabaseSnapshot, linkEntities, SqliteStore, type SqliteExecutor } from "@agent-issues/api-local";
+import { createEntity, ensureDatabase, getDatabaseSnapshot, linkEntities, SqliteStore } from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
 
-async function openTestDatabase(): Promise<SqliteExecutor> {
+async function openTestDatabase() {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-backfill-"));
 	const { executor } = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
 	return executor;

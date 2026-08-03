@@ -78,6 +78,15 @@ afterEach(() => {
 });
 
 describe("initiative relationship graph model", () => {
+	it("uses in-force and archived tones for ADR lifecycle states", () => {
+		const store = new AgentIssuesStore();
+
+		expect(store.statusTone("current")).toBe("success");
+		expect(store.badgeTone("current")).toBe("success");
+		expect(store.statusTone("archived")).toBe("neutral");
+		expect(store.badgeTone("archived")).toBe("neutral");
+	});
+
 	it("lays the initiative, its PRDs/ADRs, stories, and issues into ordered columns", () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });

@@ -1207,11 +1207,11 @@ export class AgentIssuesStore {
 			return "warn";
 		}
 
-		if (status === "archived" || status === "cancelled") {
+		if (status === "cancelled") {
 			return "danger";
 		}
 
-		if (status === "done" || status === "complete" || status === "closed") {
+		if (status === "archived" || status === "done" || status === "complete" || status === "closed") {
 			return "neutral";
 		}
 
@@ -1223,7 +1223,7 @@ export class AgentIssuesStore {
 			return "done";
 		}
 
-		if (status === "blocked" || status === "cancelled" || status === "archived") {
+		if (status === "blocked" || status === "cancelled") {
 			return "danger";
 		}
 
@@ -1231,11 +1231,11 @@ export class AgentIssuesStore {
 			return "info";
 		}
 
-		if (status === "proposed" || status === "paused") {
+		if (status === "paused") {
 			return "warn";
 		}
 
-		if (status === "active" || status === "accepted" || status === "approved") {
+		if (status === "active" || status === "current" || status === "approved") {
 			return "success";
 		}
 

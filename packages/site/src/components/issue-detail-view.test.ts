@@ -107,7 +107,7 @@ describe("entity detail pane", () => {
 
 	it("uses the real status vocabulary for the title badge across record kinds", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const adr = makeEntity({ id: "ADR4", kind: "adr", status: "accepted", title: "Adopt signals" });
+		const adr = makeEntity({ id: "ADR4", kind: "adr", status: "current", title: "Adopt signals" });
 		const snapshot = makeSnapshot({
 			entities: [initiative, adr],
 			initiatives: [makeBundle(initiative, { adrs: [adr] })]
@@ -117,7 +117,7 @@ describe("entity detail pane", () => {
 		const view = await mountDetail(store);
 
 		const badge = view.shadowRoot?.querySelector(".ai-d-title .badge");
-		expect(badge?.textContent?.trim()).toBe("accepted");
+		expect(badge?.textContent?.trim()).toBe("current");
 		expect(badge?.classList.contains("success")).toBe(true);
 	});
 

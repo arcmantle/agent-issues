@@ -143,7 +143,28 @@ describe("skill installer", () => {
 		expect(installedGuidance).toContain("agent-issues relations <id> --json");
 		expect(installedGuidance).toContain("agent-issues show <id> --view full --json");
 		expect(installedGuidance).not.toContain("compatibility default");
-		expect(installedGuidance).toContain("reserve `bundle` for intentional initiative-wide reads");
-		expect(installedGuidance).toContain("Routine `jq` projection indicates a missing CLI capability");
+		expect(installedGuidance).toContain("Use `bundle` only for a planned initiative-wide read");
+		expect(installedGuidance).toContain("Routine `jq` filtering shows a missing CLI feature");
+	});
+
+	it("installs the ADR lifecycle guidance without issue-derived status", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+
+		const operatingContract = readFileSync(path.join(targetDir, "agent-issues-operating-contract.md"), "utf8");
+		const adrFormat = readFileSync(path.join(targetDir, "ai-domain-modeling", "ADR-FORMAT.md"), "utf8");
+		expect(operatingContract).toContain("Derive user story and PRD status from their linked issues");
+		expect(operatingContract).toContain("An ADR is `current` unless it is `superseded` or `archived`");
+		expect(operatingContract).not.toContain("Derive user story, PRD, and ADR status from their linked issues");
+		expect(adrFormat).toContain("current | superseded | archived");
+		expect(adrFormat).not.toContain("proposed | accepted");
+
+		for (const { installedName: skillName } of listSkills({ targetDir }).skills) {
+			const installedSkill = readFileSync(path.join(targetDir, skillName, "SKILL.md"), "utf8");
+
+			expect(installedSkill).not.toContain("Derive user story, PRD, and ADR status from their linked issues");
+			expect(installedSkill).not.toContain("derive ADR status from issue progress");
+		}
 	});
 });
