@@ -277,6 +277,23 @@ describe("context and glossary", () => {
 		expect(result.terms[0]?.sources).toHaveLength(3);
 	});
 
+	it("excludes deleted initiative contexts from conflicts-only queries", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const deletedInitiative = await store.createEntity({ kind: "initiative", title: "Deprecated payments" });
+
+		await store.defineContextTerm({
+			term: "Order",
+			definition: "Deprecated payment order.",
+			scopeRef: deletedInitiative.id
+		});
+		await store.deleteEntity({ entityId: deletedInitiative.id });
+
+		const result = await store.queryContextDirectory({ conflictsOnly: true });
+
+		expect(result.terms).toEqual([]);
+		expect(result.duplicateTerms).toEqual([]);
+	});
+
 	it("exposes real context data in the database snapshot", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const initiative = await store.createEntity({ kind: "initiative", title: "Payments" });

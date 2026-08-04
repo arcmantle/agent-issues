@@ -387,7 +387,7 @@ async function queryListContexts(executor: TenantExecutor, projectIdentity: stri
 	const initiativeRows = await executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative")))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative"), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
 
 	for (const initiativeRow of initiativeRows) {
@@ -420,7 +420,7 @@ async function buildContextDirectory(executor: TenantExecutor, projectIdentity: 
 	const initiativeRows = await executor
 		.select({ id: entities.id })
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative")))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative"), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
 	const initiatives = await Promise.all(initiativeRows.map((row) => queryContextDetails(executor, projectIdentity, row.id)));
 

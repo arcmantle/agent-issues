@@ -43,11 +43,11 @@ function hashToHex(hash: Uint8Array): string {
         return Buffer.from(hash).toString("hex");
 }
 
-async function parentIdFor(
+async function parentIdsFor(
         conn: Parameters<Migration["up"]>[0],
         tenantId: string,
         entityId: string
-): Promise<string | null> {
+): Promise<string[]> {
         const relations = await conn.all<RelationRow>(sql`
                 SELECT from_id, type, created_at
                 FROM relations
@@ -55,8 +55,29 @@ async function parentIdFor(
         `);
         return relations
                 .filter(({ type }) => STRUCTURAL_RELATION_TYPES.includes(type as typeof STRUCTURAL_RELATION_TYPES[number]))
-                .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.from_id.localeCompare(right.from_id))[0]
-                ?.from_id ?? null;
+                .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.from_id.localeCompare(right.from_id))
+                .map(({ from_id }) => from_id);
+}
+
+function resolveParentId(entity: EntityRow, parentIds: string[], sourceHash: string | undefined): string | null {
+        if (!sourceHash) {
+                return parentIds[0] ?? null;
+        }
+
+        const state = {
+                title: entity.title,
+                body: entity.body,
+                bodySource: entity.body_source,
+                status: entity.status,
+                tombstone: entity.tombstone !== 0
+        };
+        const matches = [...new Set<string | null>([null, ...parentIds])].filter((parentId) =>
+                createReverseFieldPatch({ ...state, parentId }, { ...state, parentId }, ENTITY_REVERSE_PATCH_REGISTRY).sourceHash === sourceHash
+        );
+        if (matches.length === 1) {
+                return matches[0]!;
+        }
+        throw new Error(`Cannot uniquely resolve revision head parent for entity ${entity.id}`);
 }
 
 async function rewriteEntityHistory(
@@ -71,12 +92,13 @@ async function rewriteEntityHistory(
                         AND record_key = ${`${Buffer.byteLength(entity.id, "utf8")}:${entity.id}`}
                 ORDER BY revision DESC
         `);
+        const firstEntry = entries[0];
         let successor = {
                 title: entity.title,
                 body: entity.body,
                 bodySource: entity.body_source,
                 status: entity.status,
-                parentId: await parentIdFor(conn, entity.tenant_id, entity.id),
+                parentId: resolveParentId(entity, await parentIdsFor(conn, entity.tenant_id, entity.id), firstEntry ? hashToHex(firstEntry.source_hash) : undefined),
                 tombstone: entity.tombstone !== 0
         };
 

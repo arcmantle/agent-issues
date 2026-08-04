@@ -337,15 +337,17 @@ async function resolveEntity(executor: TenantExecutor, entityId: string, include
 }
 
 async function getStructuralParentRelations(executor: TenantExecutor, entityId: string): Promise<RelationRecord[]> {
-	const rows = await executor
-		.select()
-		.from(relations)
-		.where(and(eq(relations.tenantId, executor.tenantId), eq(relations.toId, entityId)))
-		.orderBy(asc(relations.createdAt), asc(relations.fromId), asc(relations.type));
+	const result = await executor.execute(sql`
+		SELECT relations.* FROM relations
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entityId} AND source.tombstone = false
+		ORDER BY relations.created_at, relations.from_id, relations.type
+	`);
+	const rows = result.rows as RelationRow[];
 
 	return rows
 		.filter((row) => isStructuralRelationType(row.type))
-		.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }));
+		.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
 }
 
 // Walks structural-only parent relations up to the root, mirroring core's
@@ -494,8 +496,12 @@ async function getAllRelations(executor: TenantExecutor): Promise<RelationRecord
 	const projectId = executor.currentProjectId;
 	const result = await executor.execute(sql`
 		SELECT relations.* FROM relations
-		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${executor.tenantId} AND entities.project_id = ${projectId}
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND source.project_id = ${projectId}
+			AND source.tombstone = false
+			AND target.tombstone = false
 		ORDER BY relations.from_id, relations.to_id, relations.type
 	`);
 	return (result.rows as RelationRow[]).map((row) => ({
@@ -513,8 +519,16 @@ async function getTenantEntities(executor: TenantExecutor): Promise<EntityRecord
 }
 
 async function getTenantRelations(executor: TenantExecutor): Promise<RelationRecord[]> {
-	const rows = await executor.select().from(relations).where(eq(relations.tenantId, executor.tenantId));
-	return rows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }));
+	const result = await executor.execute(sql`
+		SELECT relations.* FROM relations
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND source.tombstone = false
+			AND target.tombstone = false
+		ORDER BY relations.from_id, relations.to_id, relations.type
+	`);
+	return (result.rows as RelationRow[]).map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
 }
 
 async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[]): Promise<Map<string, string>> {
@@ -709,6 +723,7 @@ async function getActiveBlockingIssues(executor: TenantExecutor, entityId: strin
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'blocks'
 			AND relations.to_id = ${entityId}
+			AND entities.tombstone = false
 			AND entities.status != 'done'
 		ORDER BY entities.id
 	`);
@@ -725,6 +740,7 @@ async function getOpenSubIssues(executor: TenantExecutor, issueId: string): Prom
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${issueId}
 			AND relations.type = 'decomposes'
+			AND entities.tombstone = false
 		ORDER BY entities.id
 	`);
 
@@ -743,6 +759,7 @@ async function getFixingIssueStatuses(executor: TenantExecutor, storyId: string)
 			AND relations.type = 'fixes'
 			AND relations.to_id = ${storyId}
 			AND entities.kind = 'issue'
+			AND entities.tombstone = false
 	`);
 	return (result.rows as Array<{ status: string }>).map((row) => row.status);
 }
@@ -757,6 +774,7 @@ async function getCreatedStoryStatuses(executor: TenantExecutor, prdId: string):
 			AND relations.type = 'creates'
 			AND relations.from_id = ${prdId}
 			AND entities.kind = 'userStory'
+			AND entities.tombstone = false
 	`);
 
 	return (result.rows as Array<{ id: string }>).map((row) => statusMap.get(row.id) ?? "");
@@ -775,6 +793,7 @@ async function getSupersedingEntityId(
 			AND relations.type = 'supersedes'
 			AND relations.to_id = ${entityId}
 			AND entities.kind = ${kind}
+			AND entities.tombstone = false
 		LIMIT 1
 	`);
 
@@ -906,6 +925,7 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
+			AND entities.tombstone = false
 		ORDER BY entities.id
 	`);
 	const outgoingResult = await executor.execute(sql`
@@ -913,6 +933,7 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
+			AND entities.tombstone = false
 		ORDER BY entities.id
 	`);
 
@@ -1197,7 +1218,12 @@ function resolveRevisionHeadParentId(
 // includes structural rows: the canonical parent is already present and is a
 // no-op, while additional structural-type annotations must still transfer.
 export async function listAllRelations(executor: TenantExecutor): Promise<RelationRecord[]> {
-	const result = await executor.execute(sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
+	const result = await executor.execute(sql`
+		SELECT relations.* FROM relations
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId} AND source.tombstone = false AND target.tombstone = false
+	`);
 	return (result.rows as RelationRow[]).map((row) => ({
 		fromId: row.from_id,
 		toId: row.to_id,
@@ -1450,7 +1476,6 @@ export async function materializeEntityRevision(
 	}
 
 	const entity = mapDrizzleEntityRow(row);
-	const parentId = (await getStructuralParentRelations(executor, entity.id))[0]?.fromId ?? null;
 	const deltaRows = await executor
 		.select()
 		.from(revisionEntries)
@@ -1466,6 +1491,19 @@ export async function materializeEntityRevision(
 		targetHash: decodeRevisionPatchHash(delta.targetHash),
 		...(delta.restoredFromRevision !== null && { restoredFromRevision: delta.restoredFromRevision })
 	}));
+	const headRevision = entity.revision ?? 1;
+	const parentId = resolveRevisionHeadParentId(
+		entity.id,
+		{
+			title: entity.title,
+			body: entity.body,
+			bodySource: entity.bodySource,
+			status: entity.status,
+			tombstone: row.tombstone
+		},
+		(await getStructuralParentRelations(executor, entity.id)).map((relation) => relation.fromId),
+		deltaRows.find((delta) => delta.revision === headRevision)?.sourceHash
+	);
 
 	return materializeFromPatches(
 		entity.id,
@@ -1476,7 +1514,7 @@ export async function materializeEntityRevision(
 			bodySource: entity.bodySource,
 			status: entity.status,
 			parentId,
-			revision: entity.revision,
+			revision: headRevision,
 			createdAt: entity.createdAt,
 			tombstone: row.tombstone
 		},
@@ -1739,7 +1777,7 @@ export async function listProjectAdrs(executor: TenantExecutor, projectId?: stri
 	const rows = await executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "adr"), eq(entities.projectId, projectId)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "adr"), eq(entities.projectId, projectId), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
 	return rows.map(mapDrizzleEntityRow).filter((entity) => !childIds.has(entity.id));
 }
@@ -1768,7 +1806,12 @@ export async function getInitiativeBundle(
 				relations.from_id = reachable.id
 				OR (relations.type = 'handsOff' AND relations.to_id = reachable.id)
 			)
-			WHERE relations.tenant_id = ${executor.tenantId}
+			JOIN entities AS next_entity ON next_entity.tenant_id = relations.tenant_id
+				AND next_entity.id = CASE
+					WHEN relations.from_id = reachable.id THEN relations.to_id
+					ELSE relations.from_id
+				END
+			WHERE relations.tenant_id = ${executor.tenantId} AND next_entity.tombstone = false
 		)
 		SELECT id FROM reachable
 	`);
@@ -1777,7 +1820,7 @@ export async function getInitiativeBundle(
 
 	const entityResult = await executor.execute(sql`
 		SELECT * FROM entities
-		WHERE tenant_id = ${executor.tenantId} AND id = ANY(ARRAY[${sql.join([...selectedIds], sql`, `)}]::uuid[])
+		WHERE tenant_id = ${executor.tenantId} AND tombstone = false AND id = ANY(ARRAY[${sql.join([...selectedIds], sql`, `)}]::uuid[])
 		ORDER BY id
 	`);
 	const relationResult = await executor.execute(sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
@@ -1785,8 +1828,9 @@ export async function getInitiativeBundle(
 	const relationRows = relationResult.rows as RelationRow[];
 
 	const entities = entityRows.map(mapEntityRow);
+	const selectedEntityIds = new Set(entities.map((entity) => entity.id));
 	const selectedRelations = relationRows.filter(
-		(relation) => selectedIds.has(relation.from_id) && selectedIds.has(relation.to_id)
+		(relation) => selectedEntityIds.has(relation.from_id) && selectedEntityIds.has(relation.to_id)
 	);
 	const derivedStatusMap = statusMap ?? (await getDerivedStatusMap(executor));
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, derivedStatusMap));

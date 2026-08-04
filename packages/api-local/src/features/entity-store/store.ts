@@ -450,18 +450,6 @@ export function materializeEntityRevision(
 		);
 	}
 
-	const head = {
-		id: row.id,
-		title: row.title,
-		body: row.body,
-		bodySource: (isBodySource(row.bodySource ?? "") ? row.bodySource : "authored") as BodySource,
-		status: row.status,
-		parentId: getStructuralParentRelations(executor, row.id)[0]?.fromId ?? null,
-		revision: row.revision ?? 1,
-		createdAt: row.createdAt,
-		tombstone: row.tombstone
-	};
-
 	const deltaRows = all<DeltaRow>(
 		executor,
 		sql`SELECT revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at
@@ -482,6 +470,28 @@ export function materializeEntityRevision(
 		targetHash: decodeRevisionPatchHash(d.target_hash),
 		...(d.restored_from_revision !== null && { restoredFromRevision: d.restored_from_revision })
 	}));
+	const headRevision = row.revision ?? 1;
+	const state = {
+		title: row.title,
+		body: row.body,
+		bodySource: (isBodySource(row.bodySource ?? "") ? row.bodySource : "authored") as BodySource,
+		status: row.status,
+		tombstone: row.tombstone
+	};
+	const newestPatch = patches.find((patch) => patch.revision === headRevision);
+	const head = {
+		id: row.id,
+		...state,
+		parentId: resolveRevisionHeadParentId(
+			row.id,
+			state,
+			getStructuralParentRelations(executor, row.id).map((relation) => relation.fromId),
+			newestPatch?.sourceHash
+		),
+		revision: headRevision,
+		createdAt: row.createdAt,
+		tombstone: row.tombstone
+	};
 
 	const result = materializeFromPatches(input.entityId, head, patches, input.revision);
 	recordHistoryMaterialization(executor, "entity", result.headRevision, result.targetRevision);
@@ -745,12 +755,14 @@ export function getEntityDetails(executor: SqliteExecutor, entityId: string): En
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.to_id = ${entity.id}
+			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
 	const outgoingRows = all<EntityRow & { type: string }>(executor, sql`SELECT relations.type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${entity.id}
+			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
 
 	const statusMap = getDerivedStatusMap(executor);
@@ -796,17 +808,19 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 		SELECT relations.to_id
 		FROM relations
 		JOIN reachable ON relations.from_id = reachable.id
-		WHERE relations.tenant_id = ${executor.tenantId}
+		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId} AND target.tombstone = FALSE
 		UNION
 		SELECT relations.from_id
 		FROM relations
 		JOIN reachable ON relations.to_id = reachable.id
-		WHERE relations.tenant_id = ${executor.tenantId} AND relations.type = 'handsOff'
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		WHERE relations.tenant_id = ${executor.tenantId} AND relations.type = 'handsOff' AND source.tombstone = FALSE
 	)
 	SELECT entities.*
 	FROM entities
 	JOIN reachable ON entities.id = reachable.id
-	WHERE entities.tenant_id = ${executor.tenantId}
+	WHERE entities.tenant_id = ${executor.tenantId} AND entities.tombstone = FALSE
 	ORDER BY entities.id`);
 	const relationRows = all<RelationRow>(executor, sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
 
@@ -951,8 +965,6 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 
 	const resolvedId = row.id;
 	const headRevision = row.revision ?? 1;
-	const currentParentId = getStructuralParentRelations(executor, resolvedId)[0]?.fromId ?? null;
-
 	type DeltaRow = {
 		id: string;
 		revision: number;
@@ -975,6 +987,20 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 	);
 
 	const patchByRevision = new Map(deltaRows.map((d) => [d.revision, d]));
+	const currentParentIds = getStructuralParentRelations(executor, resolvedId).map((relation) => relation.fromId);
+	const newestPatch = patchByRevision.get(headRevision);
+	const currentParentId = resolveRevisionHeadParentId(
+		resolvedId,
+		{
+			title: row.title,
+			body: row.body,
+			bodySource: isBodySource(row.body_source ?? "") ? (row.body_source as BodySource) : "authored",
+			status: row.status,
+			tombstone: row.tombstone !== 0
+		},
+		currentParentIds,
+		newestPatch ? decodeRevisionPatchHash(newestPatch.source_hash) : undefined
+	);
 
 	let state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } = {
 		title: row.title,
@@ -1024,7 +1050,11 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 // includes structural rows: the canonical parent is already present and is a
 // no-op, while additional structural-type annotations must still transfer.
 export function listAllRelations(executor: SqliteExecutor): RelationRecord[] {
-	const rows = all<RelationRow>(executor, sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId}`);
+	const rows = all<RelationRow>(executor, sql`SELECT relations.*
+		FROM relations
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId} AND source.tombstone = FALSE AND target.tombstone = FALSE`);
 
 	return rows.map((row) => ({
 		fromId: row.from_id,
@@ -1228,7 +1258,11 @@ function getRelationOrThrow(
 function getStructuralParentRelations(executor: SqliteExecutor, entityId: string): RelationRecord[] {
 	const rows = all<RelationRow>(
 		executor,
-		sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId} AND to_id = ${entityId} ORDER BY created_at, from_id, type`
+		sql`SELECT relations.*
+			FROM relations
+			JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+			WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entityId} AND source.tombstone = FALSE
+			ORDER BY relations.created_at, relations.from_id, relations.type`
 	);
 
 	return rows
@@ -1239,6 +1273,25 @@ function getStructuralParentRelations(executor: SqliteExecutor, entityId: string
 			type: row.type as RelationType,
 			createdAt: row.created_at
 		}));
+}
+
+function resolveRevisionHeadParentId(
+	entityId: string,
+	state: { title: string; body: string; bodySource: BodySource; status: string; tombstone: boolean | null },
+	parentIds: string[],
+	sourceHash: string | undefined
+): string | null {
+	if (!sourceHash) {
+		return parentIds[0] ?? null;
+	}
+
+	const matches = [...new Set<string | null>([null, ...parentIds])].filter((parentId) =>
+		createReverseFieldPatch({ ...state, parentId }, { ...state, parentId }, ENTITY_REVERSE_PATCH_REGISTRY).sourceHash === sourceHash
+	);
+	if (matches.length !== 1) {
+		throw new EntityRevisionError(entityId, "broken-chain", `Cannot uniquely resolve revision head parent for entity ${entityId}`);
+	}
+	return matches[0]!;
 }
 
 function getStructuralPath(executor: SqliteExecutor, entityId: string): Array<{ relationType: RelationType; entity: EntityRecord }> {
@@ -1330,7 +1383,12 @@ function getTenantEntities(executor: SqliteExecutor): EntityRecord[] {
 function getTenantRelations(executor: SqliteExecutor): RelationRecord[] {
 	const rows = all<RelationRow>(
 		executor,
-		sql`SELECT * FROM relations WHERE tenant_id = ${executor.tenantId} ORDER BY from_id, to_id, type`
+		sql`SELECT relations.*
+			FROM relations
+			JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+			JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+			WHERE relations.tenant_id = ${executor.tenantId} AND source.tombstone = FALSE AND target.tombstone = FALSE
+			ORDER BY relations.from_id, relations.to_id, relations.type`
 	);
 	return rows.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
 }
@@ -1384,7 +1442,8 @@ function getFixingIssueStatuses(executor: SqliteExecutor, storyId: string): stri
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'fixes'
 			AND relations.to_id = ${storyId}
-			AND entities.kind = 'issue'`);
+			AND entities.kind = 'issue'
+			AND entities.tombstone = FALSE`);
 
 	return rows.map((row) => row.status);
 }
@@ -1397,7 +1456,8 @@ function getCreatedStoryStatuses(executor: SqliteExecutor, prdId: string): strin
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'creates'
 			AND relations.from_id = ${prdId}
-			AND entities.kind = 'userStory'`);
+			AND entities.kind = 'userStory'
+			AND entities.tombstone = FALSE`);
 
 	return rows.map((row) => statusMap.get(row.id) ?? "");
 }
@@ -1410,6 +1470,7 @@ function getSupersedingEntityId(executor: SqliteExecutor, entityId: string, kind
 			AND relations.type = 'supersedes'
 			AND relations.to_id = ${entityId}
 			AND entities.kind = ${kind}
+			AND entities.tombstone = FALSE
 		LIMIT 1`);
 
 	return row?.id;
@@ -1440,8 +1501,12 @@ function getInitiativeChildStatuses(
 function getAllRelations(executor: SqliteExecutor): RelationRecord[] {
 	const rows = all<RelationRow>(executor, sql`SELECT relations.*
 		FROM relations
-		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
-		WHERE relations.tenant_id = ${executor.tenantId} AND entities.project_id = ${executor.currentProjectId}
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND source.project_id = ${executor.currentProjectId}
+			AND source.tombstone = FALSE
+			AND target.tombstone = FALSE
 		ORDER BY relations.from_id, relations.to_id, relations.type`);
 	return rows.map((row) => ({
 		fromId: row.from_id,
@@ -1507,6 +1572,7 @@ function getActiveBlockingIssues(executor: SqliteExecutor, entityId: string): En
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.type = 'blocks'
 			AND relations.to_id = ${entityId}
+			AND entities.tombstone = FALSE
 			AND entities.status != 'done'
 		ORDER BY entities.id`);
 
@@ -1521,6 +1587,7 @@ function getOpenSubIssues(executor: SqliteExecutor, issueId: string): EntityReco
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${issueId}
 			AND relations.type = 'decomposes'
+			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
 
 	return rows

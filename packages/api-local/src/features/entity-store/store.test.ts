@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { deriveMigratedEntityIdentity } from "@agent-issues/core";
 import { ensureDatabase } from "../../db/database.js";
 import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
-import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
+import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listAllRelations, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
 
 const CANONICAL_ID_SUFFIX = "_[0-7][0-9A-HJKMNP-TV-Z]{25}";
 const DEFAULT_PROJECT_STABLE_ID = deriveMigratedEntityIdentity("project", "PROJ0").stableId;
@@ -63,6 +63,22 @@ describe("project-scoped ADRs", () => {
 	});
 });
 
+describe("tombstoned entity reads", () => {
+	it("excludes tombstoned related entities from details and initiative bundles", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Live initiative" });
+		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Deleted issue" });
+		const subIssue = createEntity(db, { kind: "issue", parentId: issue.id, title: "Hidden descendant" });
+
+		db.drizzle.run(sql`UPDATE entities SET tombstone = TRUE WHERE tenant_id = ${db.tenantId} AND id = ${issue.id}`);
+
+		expect(getEntityDetails(db, initiative.id).outgoing).toEqual([]);
+		expect(getInitiativeBundle(db, initiative.id).entities.map((entity) => entity.id)).not.toContain(issue.id);
+		expect(getInitiativeBundle(db, initiative.id).entities.map((entity) => entity.id)).not.toContain(subIssue.id);
+		expect(listAllRelations(db)).not.toContainEqual(expect.objectContaining({ fromId: initiative.id, toId: issue.id }));
+	});
+});
+
 describe("project scoping (ISS166)", () => {
 	it("scopes list and snapshot to the workspace's resolved project", async () => {
 		const db = await openTestDatabase();
@@ -103,6 +119,31 @@ describe("project scoping (ISS166)", () => {
 });
 
 describe("record bodies", () => {
+	it("keeps one edited entity's history valid when relation replay changes parent ordering", async () => {
+		const db = await openTestDatabase();
+		const canonicalParent = createEntity(db, { kind: "initiative", title: "Canonical parent" });
+		const annotationParent = createEntity(db, { kind: "initiative", title: "Structural annotation" });
+		const issue = createEntity(db, { kind: "issue", parentId: canonicalParent.id, title: "Editable issue" });
+
+		const edited = setEntityBody(db, {
+			entityId: issue.id,
+			body: "Edited once.",
+			expectedRevision: issue.revision,
+			expectedContentHash: issue.contentHash
+		});
+		db.drizzle.run(sql`INSERT INTO relations (tenant_id, from_id, to_id, type, created_at)
+			VALUES (${db.tenantId}, ${annotationParent.id}, ${issue.id}, 'tracks', '1900-01-01T00:00:00.000Z')`);
+
+		expect(listEntityHistory(db, issue.id)).toEqual([
+			expect.objectContaining({ version: 1, parentId: canonicalParent.id }),
+			expect.objectContaining({ version: edited.revision, parentId: canonicalParent.id, body: "Edited once." })
+		]);
+		expect(materializeEntityRevision(db, { entityId: issue.id, revision: 1 })).toMatchObject({
+			parentId: canonicalParent.id,
+			body: ""
+		});
+	});
+
 	it("persists and returns the authored body when creating an entity", async () => {
 		const db = await openTestDatabase();
 		const issue = createEntity(db, {
@@ -531,6 +572,15 @@ describe("derived issue status from sub-issues", () => {
 
 		expect(() => updateEntityStatus(db, { entityId: parentIssue.id, status: "in-progress" })).toThrow(/sub-issues remain open/i);
 		expect(() => updateEntityStatus(db, { entityId: parentIssue.id, status: "done" })).toThrow(/sub-issues remain open/i);
+	});
+
+	it("does not treat a tombstoned sub-issue as open", async () => {
+		const db = await openTestDatabase();
+		const { parentIssue, subIssues } = seedIssueWithSubIssues(db, ["todo"]);
+
+		db.drizzle.run(sql`UPDATE entities SET tombstone = TRUE WHERE tenant_id = ${db.tenantId} AND id = ${subIssues[0]!.id}`);
+
+		expect(updateEntityStatus(db, { entityId: parentIssue.id, status: "in-progress" }).entity.status).toBe("in-progress");
 	});
 
 	it("includes nested sub-issues in the initiative bundle", async () => {

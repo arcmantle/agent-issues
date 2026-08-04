@@ -30,6 +30,27 @@ afterEach(() => {
 });
 
 describe("ADR status migration", () => {
+        it("resolves a late structural parent from the stored head hash", async () => {
+                const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-adr-parent-"));
+                temporaryDirectories.push(directory);
+                const dbPath = path.join(directory, "test.db");
+                const { executor } = await ensureDatabase(dbPath, { tenant: "migration-test" });
+                executor.drizzle.run(sql`DELETE FROM schema_migrations WHERE id = ${adrStatusMigration.id}`);
+
+                const parent = createEntity(executor, { kind: "initiative", title: "Parent" });
+                const adr = createEntity(executor, { kind: "adr", title: "Decision" });
+                linkEntities(executor, { fromId: parent.id, toId: adr.id, relationType: "records" });
+
+                await runMigrations(executor, [adrStatusMigration]);
+
+                expect(getEntityDetails(executor, adr.id).entity.id).toBe(adr.id);
+                expect(materializeEntityRevision(executor, { entityId: adr.id, revision: 1 })).toMatchObject({
+                        status: "current"
+                });
+
+                executor.close();
+        });
+
         it("rewrites stored and historical ADR statuses while preserving derived superseded status", async () => {
                 const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-adr-status-"));
                 temporaryDirectories.push(directory);

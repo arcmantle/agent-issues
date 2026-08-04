@@ -9,7 +9,7 @@ import { encodeContextRecordKey, encodeContextTermRecordKey, formatTenantDisplay
 import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, materializeContextRevision, materializeContextTermRevision, queryContextDirectory, upsertContext } from "./context-store.js";
 import { ensureDatabase, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
 import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
-import { createEntity } from "../entity-store/store.js";
+import { createEntity, deleteEntity } from "../entity-store/store.js";
 
 let tempDir: string | null = null;
 
@@ -291,6 +291,23 @@ describe("context directory", () => {
 		expect(result.terms.map((term) => term.term)).toEqual(["Order"]);
 		expect(result.duplicateTerms).toEqual(["Order"]);
 		expect(result.terms[0]?.sources).toHaveLength(3);
+	});
+
+	it("excludes deleted initiative contexts from conflicts-only queries", async () => {
+		const db = await openTestDatabase();
+		const deletedInitiative = createEntity(db, { kind: "initiative", title: "Deprecated payments" });
+
+		defineContextTerm(db, {
+			term: "Order",
+			definition: "Deprecated payment order.",
+			scopeRef: deletedInitiative.id
+		});
+		deleteEntity(db, { entityId: deletedInitiative.id });
+
+		const result = queryContextDirectory(db, { conflictsOnly: true });
+
+		expect(result.terms).toEqual([]);
+		expect(result.duplicateTerms).toEqual([]);
 	});
 
 	it("avoids substring-only false positives during search", async () => {

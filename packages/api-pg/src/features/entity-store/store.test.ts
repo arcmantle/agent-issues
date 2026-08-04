@@ -152,6 +152,9 @@ describe("PgStore entity lifecycle", () => {
 		await expect(store.listEntityHistory(version.id)).resolves.toEqual([
 			expect.objectContaining({ version: 1, parentId: canonicalParent.id })
 		]);
+		await expect(store.materializeEntityRevision({ entityId: version.id, revision: 1 })).resolves.toMatchObject({
+			parentId: canonicalParent.id
+		});
 	});
 
 	it("keeps tenants isolated even for a query the app layer forgets to filter by tenant_id", async () => {
@@ -345,6 +348,25 @@ describe("PgStore entity lifecycle", () => {
 		await expect(store.updateEntityStatus({ entityId: issue.id, status: "in-progress" })).rejects.toThrow("blocked by");
 	});
 
+	it("does not treat a tombstoned blocker as active", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const initiative = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
+		const issue = await store.createEntity({ kind: "issue", title: "Blocked", parentId: initiative.id });
+		const blocker = await store.createEntity({ kind: "issue", title: "Deleted blocker", parentId: initiative.id });
+		await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
+
+		await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client
+				.update(entities)
+				.set({ tombstone: true })
+				.where(and(eq(entities.tenantId, store.tenantId), eq(entities.id, blocker.id)))
+		);
+
+		await expect(store.updateEntityStatus({ entityId: issue.id, status: "in-progress" })).resolves.toMatchObject({
+			entity: { status: "in-progress" }
+		});
+	});
+
 	it("moves an entity to a new structural parent and rejects a cycle", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const initiativeA = await store.createEntity({ kind: "initiative", title: "A" });
@@ -421,6 +443,45 @@ describe("PgStore entity lifecycle", () => {
 		const projectAdrs = await store.listProjectAdrs();
 		expect(projectAdrs.map((entity) => entity.id)).toContain(projectAdr.id);
 		expect(projectAdrs.map((entity) => entity.id)).not.toContain(initiativeAdr.id);
+	});
+
+	it("excludes deleted ADRs from project reads", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const project = await store.createEntity({ kind: "project", title: "Project with deleted ADR" });
+		const adr = await store.createEntity({ kind: "adr", title: "Deleted ADR" });
+		await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client
+				.update(entities)
+				.set({ projectId: project.id })
+				.where(and(eq(entities.tenantId, store.tenantId), eq(entities.id, adr.id)))
+		);
+
+		await store.deleteEntity({ entityId: adr.id });
+
+		const snapshot = await store.getDatabaseSnapshot({ projectId: project.id });
+		expect(snapshot).toEqual(expect.objectContaining({ kind: "available" }));
+		if (snapshot.kind === "available") {
+			expect(snapshot.snapshot.projectAdrs.map((entity) => entity.id)).not.toContain(adr.id);
+		}
+	});
+
+	it("excludes tombstoned related entities from details and initiative bundles", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const initiative = await store.createEntity({ kind: "initiative", title: "Live initiative" });
+		const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Deleted issue" });
+		const subIssue = await store.createEntity({ kind: "issue", parentId: issue.id, title: "Hidden descendant" });
+
+		await withTenantTransaction(appPool, store.tenantId, (client) =>
+			client
+				.update(entities)
+				.set({ tombstone: true })
+				.where(and(eq(entities.tenantId, store.tenantId), eq(entities.id, issue.id)))
+		);
+
+		expect((await store.getEntityDetails(initiative.id)).outgoing).toEqual([]);
+		expect((await store.getInitiativeBundle(initiative.id)).entities.map((entity) => entity.id)).not.toContain(issue.id);
+		expect((await store.getInitiativeBundle(initiative.id)).entities.map((entity) => entity.id)).not.toContain(subIssue.id);
+		expect(await store.listAllRelations()).not.toContainEqual(expect.objectContaining({ fromId: initiative.id, toId: issue.id }));
 	});
 
 	it("keeps project-level ADRs within the explicitly selected project snapshot", async () => {

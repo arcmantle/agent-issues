@@ -155,7 +155,7 @@ export function listContexts(executor: SqliteExecutor): ContextListResult {
 	];
 
 	const initiativeRows = executor.drizzle.all(
-		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND kind = 'initiative' ORDER BY id`
+		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND kind = 'initiative' AND tombstone = FALSE ORDER BY id`
 	) as EntityRow[];
 
 	for (const initiativeRow of initiativeRows) {
@@ -193,7 +193,7 @@ export function getContextDetails(executor: SqliteExecutor, input?: { scopeRef?:
 export function getContextDirectory(executor: SqliteExecutor): ContextDirectory {
 	const shared = getContextDetails(executor);
 	const initiativeRows = executor.drizzle.all(
-		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND kind = 'initiative' ORDER BY id`
+		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND kind = 'initiative' AND tombstone = FALSE ORDER BY id`
 	) as EntityRow[];
 	const initiatives = initiativeRows.map((row) => getContextDetails(executor, { scopeRef: row.id }));
 
