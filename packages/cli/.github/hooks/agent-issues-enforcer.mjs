@@ -84,6 +84,10 @@ function isEditTool(toolName) {
 	return /edit|write|apply[_-]?patch|create[_-]?file|replace/i.test(toolName ?? '');
 }
 
+function isMemoryTool(toolName) {
+	return /(^|[_-])memory([_-]|$)|session[_-]?store/i.test(toolName ?? '');
+}
+
 function collectStrings(value, output = []) {
 	if (typeof value === 'string') {
 		output.push(value);
@@ -213,13 +217,25 @@ async function main() {
 		return;
 	}
 
+	const toolName = payload.tool_name ?? '';
+	if (isMemoryTool(toolName)) {
+		process.stdout.write(
+			JSON.stringify(
+				deny(
+					'Agent Issues does not permit memory access.',
+					'Use the active issue record and its context as the source of truth.'
+				)
+			)
+		);
+		return;
+	}
+
 	const state = readState(sessionId);
 	if (!state?.issueId || state.contextLoaded) {
 		process.stdout.write(JSON.stringify({ continue: true }));
 		return;
 	}
 
-	const toolName = payload.tool_name ?? '';
 	if (!isExecuteTool(toolName) && !isEditTool(toolName)) {
 		process.stdout.write(JSON.stringify({ continue: true }));
 		return;
