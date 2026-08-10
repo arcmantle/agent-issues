@@ -91,7 +91,7 @@ describe("transformLegacySqliteV7", () => {
 		buildLegacySqliteV7RowsMock.mockReset();
 		finalBaselineUpMock.mockReset();
 		createSqliteMigrationConnMock.mockReset();
-		createSqliteMigrationConnMock.mockReturnValue({ dialect: "sqlite", run: vi.fn(), all: vi.fn() });
+		createSqliteMigrationConnMock.mockReturnValue({ dialect: "sqlite", run: vi.fn(), all: vi.fn().mockResolvedValue([]) });
 		finalBaselineUpMock.mockResolvedValue(undefined);
 		buildLegacySqliteV7RowsMock.mockReturnValue({
 			counters: [],

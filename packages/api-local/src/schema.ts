@@ -11,12 +11,30 @@ export const counters = sqliteTable(
 	(table) => [primaryKey({ columns: [table.tenantId, table.kind] })]
 );
 
+export const users = sqliteTable(
+	"users",
+	{
+		tenantId: text("tenant_id").notNull(),
+		id: text("id").notNull(),
+		authenticationSubject: text("authentication_subject").notNull(),
+		displayName: text("display_name"),
+		createdAt: text("created_at").notNull(),
+		updatedAt: text("updated_at").notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.tenantId, table.id] }),
+		uniqueIndex("users_tenant_authentication_subject_idx").on(table.tenantId, table.authenticationSubject)
+	]
+);
+
 export const entities = sqliteTable(
 	"entities",
 	{
 		tenantId: text("tenant_id").notNull(),
 		id: text("id").notNull(),
 		reference: text("reference").notNull(),
+		createdBy: text("created_by"),
+		updatedBy: text("updated_by"),
 		kind: text("kind").notNull(),
 		title: text("title").notNull(),
 		status: text("status").notNull(),
@@ -42,6 +60,7 @@ export const relations = sqliteTable(
 		fromId: text("from_id").notNull(),
 		toId: text("to_id").notNull(),
 		type: text("type").notNull(),
+		createdBy: text("created_by"),
 		createdAt: text("created_at").notNull()
 	},
 	(table) => [
@@ -65,6 +84,8 @@ export const contexts = sqliteTable(
 		id: text("id").notNull(),
 		reference: text("reference").notNull(),
 		key: text("key").notNull(),
+		createdBy: text("created_by"),
+		updatedBy: text("updated_by"),
 		scopeEntityId: text("scope_entity_id"),
 		title: text("title").notNull(),
 		summary: text("summary").notNull(),
@@ -93,6 +114,8 @@ export const contextTerms = sqliteTable(
 		tenantId: text("tenant_id").notNull(),
 		id: text("id").notNull(),
 		contextKey: text("context_key").notNull(),
+		createdBy: text("created_by"),
+		updatedBy: text("updated_by"),
 		term: text("term").notNull(),
 		definition: text("definition").notNull(),
 		avoidTerms: text("avoid_terms").notNull(),
@@ -143,6 +166,7 @@ export const revisionEntries = sqliteTable(
 
 export const schema = {
 	counters,
+	users,
 	entities,
 	relations,
 	contexts,
@@ -155,4 +179,5 @@ export type RelationRow = typeof relations.$inferSelect;
 export type ContextRow = typeof contexts.$inferSelect;
 export type ContextTermRow = typeof contextTerms.$inferSelect;
 export type CounterRow = typeof counters.$inferSelect;
+export type UserRow = typeof users.$inferSelect;
 export type RevisionEntryRow = typeof revisionEntries.$inferSelect;

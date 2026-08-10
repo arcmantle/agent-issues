@@ -4,6 +4,7 @@ import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { runMigrations } from "../db/migration-runner.js";
 import { PgStore } from "../pg-store.js";
 import { deriveMigratedContextIdentity, deriveMigratedContextTermId, deriveMigratedEntityIdentity, MIGRATION_BENCHMARK } from "@agent-issues/core";
 import { migrations as productionMigrations } from "./index.js";
@@ -24,7 +25,7 @@ describe("api migrations chain", () => {
 	});
 
 	it("registers the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current"]);
+		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -274,13 +275,45 @@ describe("api migrations chain", () => {
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
 				{ table_name: "entities" },
+				{ table_name: "issue_comment_references" },
+				{ table_name: "issue_comments" },
 				{ table_name: "relations" },
 				{ table_name: "revision_entries" },
-				{ table_name: "schema_migrations" }
+				{ table_name: "schema_migrations" },
+				{ table_name: "users" }
 			]);
 			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows).toEqual([
 				{ id: "final-baseline" },
-				{ id: "adr-status-to-current" }
+				{ id: "adr-status-to-current" },
+				{ id: "user-directory" },
+				{ id: "record-provenance" },
+				{ id: "context-term-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "issue-comments" }
+			]);
+		} finally {
+			await schemaPool.end();
+			await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
+		}
+	});
+
+	it("upgrades the previous approved schema with the user-directory migration", async () => {
+		const schemaName = `user_directory_upgrade_${randomUUID().replace(/-/g, "_")}`;
+		await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+		const schemaPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
+
+		try {
+			await runMigrations(schemaPool, productionMigrations.slice(0, 2));
+			await migratePgDatabase(schemaPool);
+
+			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows).toEqual([
+				{ id: "final-baseline" },
+				{ id: "adr-status-to-current" },
+				{ id: "user-directory" },
+				{ id: "record-provenance" },
+				{ id: "context-term-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "issue-comments" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -329,9 +362,12 @@ describe("api migrations chain", () => {
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
 				{ table_name: "entities" },
+				{ table_name: "issue_comment_references" },
+				{ table_name: "issue_comments" },
 				{ table_name: "relations" },
 				{ table_name: "revision_entries" },
-				{ table_name: "schema_migrations" }
+				{ table_name: "schema_migrations" },
+				{ table_name: "users" }
 			]);
 			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows).toEqual([
 				{ id: "legacy-v7-direct" }
@@ -394,9 +430,9 @@ describe("api migrations chain", () => {
 			expect((await schemaPool.query(
 				`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
 				 WHERE relnamespace = $1::regnamespace AND relname = ANY($2) ORDER BY relname`,
-				[schemaName, ["context_terms", "contexts", "counters", "entities", "relations", "revision_entries"]]
+				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries"]]
 			)).rows).toEqual([
-				"context_terms", "contexts", "counters", "entities", "relations", "revision_entries"
+				"context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries"
 			].map((relname) => ({ relforcerowsecurity: true, relname, relrowsecurity: true })));
 		} finally {
 			await schemaPool.end();
@@ -1071,7 +1107,7 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(tableRows.map((row) => row.table_name)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "relations", "revision_entries", "schema_migrations"].sort()
+				["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries", "schema_migrations", "users"].sort()
 			);
 
 			const { rows: indexRows } = await schemaPool.query(
@@ -1085,9 +1121,13 @@ describe("api migrations chain", () => {
 				"contexts_tenant_reference_idx",
 				"contexts_tenant_scope_entity_id_idx",
 				"entities_tenant_reference_idx",
+				"issue_comment_references_tenant_issue_idx",
+				"issue_comments_tenant_id_reference_key",
+				"issue_comments_tenant_issue_idx",
 				"relations_tenant_to_id_idx",
 				"revision_entries_chain_idx",
-				"revision_entries_project_idx"
+				"revision_entries_project_idx",
+				"users_tenant_authentication_subject_idx"
 			]);
 
 			const { rows: policyRows } = await schemaPool.query(
@@ -1096,14 +1136,14 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(policyRows.map((row) => row.tablename)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "relations", "revision_entries"].sort()
+				["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries", "users"].sort()
 			);
 			expect(policyRows.every((row) => row.qual === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			expect(policyRows.every((row) => row.with_check === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			const { rows: securityRows } = await schemaPool.query(
 				`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
 				 WHERE relnamespace = $1::regnamespace AND relname = ANY($2) ORDER BY relname`,
-				[schemaName, ["context_terms", "contexts", "counters", "entities", "relations", "revision_entries"]]
+				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries", "users"]]
 			);
 			expect(securityRows).toEqual(securityRows.map((row) => ({ ...row, relforcerowsecurity: true, relrowsecurity: true })));
 
@@ -1122,7 +1162,7 @@ describe("api migrations chain", () => {
 			);
 			expect(constraintRows).toEqual([
 				{ definition: "CHECK ((patch_format > 0))", name: "revision_entries_patch_format_positive" },
-				{ definition: "CHECK ((record_kind = ANY (ARRAY['entity'::text, 'context'::text, 'context-term'::text])))", name: "revision_entries_record_kind" },
+				{ definition: "CHECK ((record_kind = ANY (ARRAY['entity'::text, 'context'::text, 'context-term'::text, 'issue-comment'::text])))", name: "revision_entries_record_kind" },
 				{ definition: "CHECK ((revision > 0))", name: "revision_entries_revision_positive" },
 				{ definition: "CHECK ((octet_length(source_hash) = 32))", name: "revision_entries_source_hash_length" },
 				{ definition: "CHECK ((octet_length(target_hash) = 32))", name: "revision_entries_target_hash_length" }
@@ -1146,7 +1186,12 @@ describe("api migrations chain", () => {
 			const { rows: appliedRows } = await schemaPool.query(`SELECT id FROM schema_migrations ORDER BY applied_at`);
 			expect(appliedRows).toEqual([
 				{ id: "final-baseline" },
-				{ id: "adr-status-to-current" }
+				{ id: "adr-status-to-current" },
+				{ id: "user-directory" },
+				{ id: "record-provenance" },
+				{ id: "context-term-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "issue-comments" }
 			]);
 
 			const { rows: identityColumns } = await schemaPool.query(

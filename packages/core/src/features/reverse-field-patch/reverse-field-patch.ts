@@ -45,6 +45,12 @@ export const CONTEXT_TERM_REVERSE_PATCH_REGISTRY = [
 	{ id: 4, key: "term", kind: "text" }
 ] as const satisfies ReversePatchRegistry;
 
+export const ISSUE_COMMENT_REVERSE_PATCH_REGISTRY = [
+	{ id: 1, key: "body", kind: "text" },
+	{ id: 2, key: "referencedIssueIds", kind: "value" },
+	{ id: 3, key: "tombstone", kind: "value" }
+] as const satisfies ReversePatchRegistry;
+
 export function computeCanonicalStateHash(state: object, registry: ReversePatchRegistry): string {
 	const values = registry.map((field) => [field.id, Reflect.get(state, field.key)]);
 	return createHash("sha256").update(JSON.stringify(values)).digest("hex");

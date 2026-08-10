@@ -25,6 +25,10 @@ function resolveOsUsername(): string {
 	}
 }
 
+export function resolveLocalUsername(): string {
+	return resolveOsUsername();
+}
+
 /**
  * The shared, well-known local tenant (ISS63, correcting ADR7/ISS34's
  * incomplete migration of ADR7's decision). Every workspace on this machine
@@ -42,6 +46,6 @@ function resolveOsUsername(): string {
  * static migration array itself).
  */
 export function resolveWellKnownLocalTenantId(): string {
-	const sanitizedUsername = sanitizePathSegment(resolveOsUsername()) || "user";
+	const sanitizedUsername = sanitizePathSegment(resolveLocalUsername()) || "user";
 	return `local-${sanitizedUsername}`;
 }

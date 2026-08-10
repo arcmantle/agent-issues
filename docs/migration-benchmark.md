@@ -14,10 +14,10 @@ The SQLite legacy backup test also requires the copied file to have exactly the 
 
 | Postgres route | Statements |
 | --- | ---: |
-| Postgres legacy v7, 1 fixture copy | 106 |
-| Postgres legacy v7, 2 fixture copies | 106 |
+| Postgres legacy v7, 1 fixture copy | 146 |
+| Postgres legacy v7, 2 fixture copies | 146 |
 
-Before contraction, production replayed 26 sequential migration modules. No trustworthy statement-level baseline was recorded before that implementation was replaced, so this document does not invent one. The current value of 106 is observed by wrapping the migration pool's checked-out client and counting every `client.query()` invocation from classification through commit. The same instrumented route observes 106 statements when fixture entities and revisions double, demonstrating the intended reduction from row-scaled query sequences to a fixed set-based route.
+Before contraction, production replayed 26 sequential migration modules. No trustworthy statement-level baseline was recorded before that implementation was replaced, so this document does not invent one. The current value of 146 is observed by wrapping the migration pool's checked-out client and counting every `client.query()` invocation from classification through commit. The same instrumented route observes 146 statements when fixture entities and revisions double, demonstrating the intended reduction from row-scaled query sequences to a fixed set-based route.
 
 ## Behavioral parity
 

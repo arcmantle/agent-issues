@@ -44,4 +44,12 @@ describe("Canonical reference", () => {
 		expect(decodeCanonicalReference("CTX_00000000000000000000000001")).toEqual({ kind: "context", stableId });
 		expect(decodeCanonicalReference("TERM_00000000000000000000000001")).toEqual({ kind: "contextTerm", stableId });
 	});
+
+	it("encodes and decodes issue comment references", () => {
+		const stableId = "00000000-0000-4000-8000-000000000001";
+		const reference = encodeCanonicalReference("issueComment", stableId);
+
+		expect(reference).toBe("COM_00000000008008000000000001");
+		expect(decodeCanonicalReference(reference)).toEqual({ kind: "issueComment", stableId });
+	});
 });

@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SynchronizeConflictError } from "../synchronize/canonical-chain.js";
+import { IssueCommentConflictError } from "./issue-comment-store.js";
 import { DaemonDbPathMismatchError, DaemonHandshakeMismatchError, DaemonVersionMismatchError, HttpStore } from "./http-store.js";
 
 describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
@@ -21,13 +22,42 @@ describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
 			);
 		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
 
-		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [] })).rejects.toMatchObject({
+		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [], issueComments: [], users: [] })).rejects.toMatchObject({
 			name: "SynchronizeConflictError",
 			recordKind: "context-term",
 			recordId: "project:tenant",
 			currentRevision: 3,
 			currentContentHash: "current-hash"
 		} satisfies Partial<SynchronizeConflictError>);
+	});
+
+	it("recreates a typed issue-comment conflict with current record metadata", async () => {
+		const fetchImpl: typeof fetch = async () =>
+			new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: "1",
+					error: {
+						code: -32603,
+						message: "Stale edit for issue comment comment-id: current revision is 3.",
+						data: { commentId: "comment-id", currentRevision: 3, currentContentHash: "current-hash" }
+					}
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } }
+			);
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.updateIssueComment({
+			commentId: "comment-id",
+			body: "Updated comment.",
+			expectedRevision: 1,
+			expectedContentHash: "stale-hash"
+		})).rejects.toMatchObject({
+			name: "IssueCommentConflictError",
+			commentId: "comment-id",
+			currentRevision: 3,
+			currentContentHash: "current-hash"
+		} satisfies Partial<IssueCommentConflictError>);
 	});
 });
 

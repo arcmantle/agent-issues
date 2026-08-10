@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { deriveMigratedEntityIdentity } from "@agent-issues/core";
 import { ensureDatabase } from "../../db/database.js";
 import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
+import { createIssueComment } from "../issue-comment/store.js";
 import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listAllRelations, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
 
 const CANONICAL_ID_SUFFIX = "_[0-7][0-9A-HJKMNP-TV-Z]{25}";
@@ -60,6 +61,26 @@ describe("project-scoped ADRs", () => {
 		const snapshot = getDatabaseSnapshot(db);
 
 		expect(snapshot.projectAdrs.map((entity) => entity.id)).not.toContain(recordedAdr.id);
+	});
+});
+
+describe("database snapshot issue conversations", () => {
+	it("includes an issue's newest comment page", async () => {
+		const db = await openTestDatabase();
+		const issue = createEntity(db, { kind: "issue", title: "Discuss snapshot data" });
+		const comment = createIssueComment(db, { issueId: issue.id, body: "Show this comment in the site." }, "test-user");
+
+		const snapshot = getDatabaseSnapshot(db);
+
+		expect(snapshot).toMatchObject({
+			issueComments: {
+				[issue.id]: {
+					comments: [expect.objectContaining({ id: comment.id, body: "Show this comment in the site." })],
+					nextBefore: null,
+					total: 1
+				}
+			}
+		});
 	});
 });
 
@@ -817,7 +838,7 @@ describe("canonical revision history", () => {
 		`) as { revision: number; author: string; patch_format: number; patch_bytes: number; source_hash: Buffer; target_hash: Buffer };
 		expect(delta).toEqual(expect.objectContaining({
 			revision: 2,
-			author: "kris",
+			author: "system",
 			patch_format: 1,
 			patch_bytes: expect.any(Number),
 			source_hash: expect.any(Buffer),

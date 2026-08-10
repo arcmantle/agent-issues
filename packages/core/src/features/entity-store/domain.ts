@@ -95,6 +95,8 @@ export type StructuralRelationType = (typeof STRUCTURAL_RELATION_TYPES)[number];
 export type EntityRecord = {
 	id: string;
 	reference: string;
+	createdBy: string;
+	updatedBy: string;
 	kind: EntityKind;
 	title: string;
 	status: string;
@@ -199,6 +201,7 @@ export type RelationRecord = {
 	fromId: string;
 	toId: string;
 	type: RelationType;
+	createdBy: string;
 	createdAt: string;
 };
 
@@ -569,7 +572,7 @@ export function assignEntitiesToProjects(
 ): Map<string, string> {
 	const structuralRelations = relations
 		.filter((relation) => isStructuralRelationType(relation.type))
-		.map((relation) => ({ ...relation, type: relation.type as StructuralRelationType, createdAt: "" }));
+		.map((relation) => ({ ...relation, type: relation.type as StructuralRelationType, createdBy: RESERVED_SYSTEM_AUTHOR, createdAt: "" }));
 	const projectIds = entities.filter((entity) => entity.kind === "project").map((entity) => entity.id);
 	const assignment = new Map<string, string>();
 

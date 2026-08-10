@@ -28,11 +28,16 @@ import type { PoolClient } from "pg";
 
 import { createPgMigrationConn } from "../db/migration-runner.js";
 import { finalBaselineMigration } from "./final-baseline.js";
+import { userDirectoryMigration } from "./user-directory.js";
+import { recordProvenanceMigration } from "./record-provenance.js";
+import { contextTermProvenanceMigration } from "./context-term-provenance.js";
+import { relationProvenanceMigration } from "./relation-provenance.js";
+import { issueCommentsMigration } from "./issue-comments.js";
 
 export const LEGACY_V7_DIRECT_CHECKPOINT = "legacy-v7-direct";
 
 const LEGACY_TABLES = ["metadata", "counters", "entities", "relations", "contexts", "context_terms", "history_entries"] as const;
-const TENANT_TABLES = ["counters", "entities", "relations", "contexts", "context_terms", "revision_entries"] as const;
+const TENANT_TABLES = ["counters", "users", "entities", "relations", "contexts", "context_terms", "revision_entries", "issue_comments", "issue_comment_references"] as const;
 
 type LegacyEntity = {
 	tenant_id: string;
@@ -178,11 +183,16 @@ export async function transformLegacyPostgresV7(client: PoolClient): Promise<voi
 
 	await stageLegacyTables(client);
 	await finalBaselineMigration.up(createPgMigrationConn(client));
+	await userDirectoryMigration.up(createPgMigrationConn(client));
+	await issueCommentsMigration.up(createPgMigrationConn(client));
 	for (const table of TENANT_TABLES) {
 		await client.query(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
 	}
 	await createIdentityMap(client, identities);
 	await copyHeads(client, entities, contexts, terms, revisionRows);
+	await recordProvenanceMigration.up(createPgMigrationConn(client));
+	await contextTermProvenanceMigration.up(createPgMigrationConn(client));
+	await relationProvenanceMigration.up(createPgMigrationConn(client));
 	await validateTransformation(client, entities, history, contexts, terms);
 	await dropLegacyTables(client);
 	await client.query(`CREATE TABLE schema_migrations (

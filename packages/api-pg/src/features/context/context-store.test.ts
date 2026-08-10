@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Pool } from "pg";
-import { encodeContextRecordKey, encodeContextTermRecordKey } from "@agent-issues/core";
+import { deriveUserIdentity, encodeContextRecordKey, encodeContextTermRecordKey, SYSTEM_AUTHENTICATION_SUBJECT } from "@agent-issues/core";
 
 import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
@@ -16,6 +16,7 @@ const ADMIN_CONNECTION_STRING =
 // RLS unconditionally - see docker/postgres-init/01-app-role.sql).
 const APP_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_APP_URL ?? "postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues";
+const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
 
 describe("context and glossary", () => {
 	let adminPool: Pool;
@@ -97,11 +98,11 @@ describe("context and glossary", () => {
 				.orderBy(revisionEntries.revision)
 		});
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "alice", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer), createdAt: expect.any(String) }),
-			expect.objectContaining({ revision: 2, author: "bob", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer), createdAt: expect.any(String) })
+			expect.objectContaining({ revision: 1, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer), createdAt: expect.any(String) }),
+			expect.objectContaining({ revision: 2, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer), createdAt: expect.any(String) })
 		]);
 		expect(deltas[0]?.reversePatch.byteLength).toBe(0);
-		await expect(store.materializeContextRevision({ revision: 1 })).resolves.toMatchObject({ title: "Initial", summary: "First", author: "alice" });
+		await expect(store.materializeContextRevision({ revision: 1 })).resolves.toMatchObject({ title: "Initial", summary: "First", author: SYSTEM_USER_ID });
 	});
 
 	it("defines a context term, auto-creating the context, and reports created vs. updated", async () => {
@@ -140,10 +141,10 @@ describe("context and glossary", () => {
 				.orderBy(revisionEntries.revision)
 		});
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "system", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
-			expect.objectContaining({ revision: 2, author: "bob", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
+			expect.objectContaining({ revision: 1, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 2, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
 		]);
-		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "storage-driver seam", revision: 1 })).resolves.toMatchObject({ definition: created.term.definition, tombstone: false, author: "system" });
+		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "storage-driver seam", revision: 1 })).resolves.toMatchObject({ definition: created.term.definition, tombstone: false, author: SYSTEM_USER_ID });
 	});
 
 	it("rejects an empty term or definition", async () => {
@@ -187,7 +188,7 @@ describe("context and glossary", () => {
 		});
 		expect(deltas).toEqual([
 			expect.objectContaining({ revision: 1, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
-			expect.objectContaining({ revision: 2, author: "alice", patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
+			expect.objectContaining({ revision: 2, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
 		]);
 		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "Settlement", revision: 1 })).resolves.toMatchObject({ definition: "Captured funds.", tombstone: false });
 	});

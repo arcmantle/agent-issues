@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { computeContextTermContentHash } from "../context/context-types.js";
+import { computeIssueCommentContentHash } from "../issue-comment/issue-comment-types.js";
 import { computeEntityContentHash } from "../entity-store/domain.js";
 import { encodeCanonicalReference } from "../entity-store/canonical-reference.js";
-import { CONTEXT_TERM_REVERSE_PATCH_REGISTRY, createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
-import { mergeCanonicalChainBundles, SynchronizeConflictError, type CanonicalChainBundle, type CanonicalContextChain, type CanonicalContextTermChain, type CanonicalEntityChain } from "./canonical-chain.js";
+import { deriveUserIdentity } from "../user-directory/user-directory.js";
+import { CONTEXT_TERM_REVERSE_PATCH_REGISTRY, createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
+import { mergeCanonicalChainBundles, SynchronizeConflictError, type CanonicalChainBundle, type CanonicalContextChain, type CanonicalContextTermChain, type CanonicalEntityChain, type CanonicalIssueCommentChain } from "./canonical-chain.js";
 
-const emptyBundle = (): CanonicalChainBundle => ({ entities: [], contexts: [], contextTerms: [] });
+const emptyBundle = (): CanonicalChainBundle => ({ entities: [], contexts: [], contextTerms: [], issueComments: [], users: [] });
 const ENTITY_STABLE_ID = "00000000-0000-4000-8000-000000000001";
 const ENTITY_REFERENCE = encodeCanonicalReference("issue", ENTITY_STABLE_ID);
+const ISSUE_COMMENT_STABLE_ID = "00000000-0000-4000-8000-000000000002";
 
 function entityChain(title: string, revision: number, predecessorTitles: string[] = []): CanonicalEntityChain {
 	const titles = [...predecessorTitles, title];
@@ -27,6 +30,8 @@ function entityChain(title: string, revision: number, predecessorTitles: string[
 		head: {
 			id: ENTITY_STABLE_ID,
 			reference: ENTITY_REFERENCE,
+			createdBy: "user",
+			updatedBy: "user",
 			kind: "issue",
 			title,
 			body: "body",
@@ -50,6 +55,8 @@ function contextTermChain(term: string, revision: number, predecessorTerm?: stri
 		head: {
 			id: stableId,
 			reference: encodeCanonicalReference("contextTerm", stableId),
+			createdBy: "user",
+			updatedBy: "user",
 			contextKey: "default",
 			...state(term),
 			revision,
@@ -72,6 +79,8 @@ function contextChain(key: string, stableId = "00000000-0000-4000-8000-000000000
 		head: {
 			id: stableId,
 			reference: encodeCanonicalReference("context", stableId),
+			createdBy: "user",
+			updatedBy: "user",
 			key,
 			scopeEntityId: null,
 			title: "Context",
@@ -85,7 +94,43 @@ function contextChain(key: string, stableId = "00000000-0000-4000-8000-000000000
 	};
 }
 
+function issueCommentChain(body: string, referencedIssueIds: string[], revision: number, predecessor?: { body: string; referencedIssueIds: string[]; tombstone: boolean }): CanonicalIssueCommentChain {
+	const state = { body, referencedIssueIds, tombstone: false };
+	return {
+		head: {
+			id: ISSUE_COMMENT_STABLE_ID,
+			reference: encodeCanonicalReference("issueComment", ISSUE_COMMENT_STABLE_ID),
+			issueId: ENTITY_STABLE_ID,
+			createdBy: "user",
+			updatedBy: "user",
+			...state,
+			revision,
+			contentHash: computeIssueCommentContentHash(body, referencedIssueIds, false),
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: `2026-01-0${revision}T00:00:00.000Z`
+		},
+		deltas: predecessor === undefined ? [] : [{
+			id: `issue-comment-delta-${revision}`,
+			revision,
+			author: "user",
+			createdAt: `2026-01-0${revision}T00:00:00.000Z`,
+			...createReverseFieldPatch(state, predecessor, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY)
+		}]
+	};
+}
+
 describe("mergeCanonicalChainBundles", () => {
+	it("merges user directories by newest non-empty display name", () => {
+		const identity = deriveUserIdentity("entra:alice");
+		const original = { ...identity, displayName: "Alice", updatedAt: "2026-08-07T10:00:00.000Z" };
+		const renamed = { ...identity, displayName: "Alicia", updatedAt: "2026-08-07T11:00:00.000Z" };
+
+		expect(mergeCanonicalChainBundles(
+			{ ...emptyBundle(), users: [original] },
+			{ ...emptyBundle(), users: [renamed] }
+		).users).toEqual([renamed]);
+	});
+
 	it("merges a renamed context term as one stable-ID chain", () => {
 		const original = contextTermChain("Order", 1);
 		const renamed = contextTermChain("Purchase", 2, "Order");
@@ -94,6 +139,17 @@ describe("mergeCanonicalChainBundles", () => {
 			{ ...emptyBundle(), contextTerms: [original] },
 			{ ...emptyBundle(), contextTerms: [renamed] }
 		).contextTerms).toEqual([renamed]);
+	});
+
+	it("merges a comment body and referenced issue IDs as one compatible extension", () => {
+		const issue = entityChain("Issue", 1);
+		const original = issueCommentChain("Initial", [], 1);
+		const updated = issueCommentChain("Updated", [ENTITY_STABLE_ID], 2, { body: "Initial", referencedIssueIds: [], tombstone: false });
+
+		expect(mergeCanonicalChainBundles(
+			{ ...emptyBundle(), entities: [issue], issueComments: [original] },
+			{ ...emptyBundle(), entities: [issue], issueComments: [updated] }
+		).issueComments).toEqual([updated]);
 	});
 
 	it("keeps identical heads as a no-op", () => {

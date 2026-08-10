@@ -4,7 +4,8 @@ import {
 	decodeRevisionPatchRecordKey,
 	encodeContextRecordKey,
 	encodeContextTermRecordKey,
-	encodeEntityRecordKey
+	encodeEntityRecordKey,
+	encodeIssueCommentRecordKey
 } from "../../index.js";
 
 describe("revision patch record-key codec", () => {
@@ -14,11 +15,15 @@ describe("revision patch record-key codec", () => {
 		expect(decodeRevisionPatchRecordKey("context-term", encodeContextTermRecordKey("term:018f"))).toEqual({
 			contextTermId: "term:018f"
 		});
+		expect(decodeRevisionPatchRecordKey("issue-comment", encodeIssueCommentRecordKey("COM:1"))).toEqual({
+			issueCommentId: "COM:1"
+		});
 	});
 
 	it("uses UTF-8 byte lengths rather than JavaScript character counts", () => {
 		expect(encodeContextRecordKey("café")).toBe("5:café");
 		expect(encodeContextTermRecordKey("🚀")).toBe("4:🚀");
+		expect(encodeIssueCommentRecordKey("COM:1")).toBe("5:COM:1");
 	});
 
 	it("rejects malformed, truncated, trailing, and kind-mismatched keys", () => {

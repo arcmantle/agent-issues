@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { decodeCanonicalReference, deriveMigratedEntityIdentity } from "../entity-store/canonical-reference.js";
 import { computeEntityContentHash, DEFAULT_EPIC_ID, EntityConflictError, EntityRevisionError } from "../entity-store/domain.js";
 import { computeContextTermContentHash, ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
+import { IssueCommentConflictError } from "./issue-comment-store.js";
 import type { StorageDriver } from "./storage-driver.js";
 
 export type StorageDriverContractOptions = {
@@ -38,6 +39,148 @@ export type StorageDriverContractOptions = {
  */
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore, openStoreForProject } = options;
+
+	describe(`storage-driver seam: user directory (${label})`, () => {
+		it("upserts one deterministic user and keeps a non-empty display name", async () => {
+			const store = await openStore();
+
+			try {
+				const first = await store.upsertUser({ authenticationSubject: "entra:alice", displayName: "Alice" });
+				const second = await store.upsertUser({ authenticationSubject: "entra:alice", displayName: "" });
+
+				expect(second).toEqual(first);
+				expect(await store.listUsers()).toEqual([first]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("attributes a new entity to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const actor = { userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" };
+				const entity = await store.withAuthenticatedIdentity(actor).createEntity({ kind: "initiative", title: "Attributed initiative" });
+				const user = await store.listUsers();
+
+				expect(entity).toMatchObject({ createdBy: user[0]?.id, updatedBy: user[0]?.id });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("preserves the creator and attributes later changes to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const alice = store.withAuthenticatedIdentity({ userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" });
+				const created = await alice.createEntity({ kind: "initiative", title: "Original title" });
+				const bob = store.withAuthenticatedIdentity({ userId: "entra:bob", tenantId: store.tenantId, displayName: "Bob" });
+				const updated = await bob.updateEntity({
+					entityId: created.id,
+					title: "Updated title",
+					expectedRevision: created.revision,
+					expectedContentHash: created.contentHash
+				});
+				const users = await store.listUsers();
+				const aliceId = users.find((user) => user.authenticationSubject === "entra:alice")?.id;
+				const bobId = users.find((user) => user.authenticationSubject === "entra:bob")?.id;
+
+				expect(updated).toMatchObject({ createdBy: aliceId, updatedBy: bobId });
+				expect((await store.listEntityHistory(created.id))[1]).toMatchObject({ author: bobId });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("attributes a new context to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const actor = { userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" };
+				const details = await store.withAuthenticatedIdentity(actor).upsertContext({ title: "Attributed context", summary: "Shared terms" });
+				const actorId = (await store.listUsers()).find((user) => user.authenticationSubject === actor.userId)?.id;
+
+				expect(details.context).toMatchObject({ createdBy: actorId, updatedBy: actorId });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("preserves the context creator and attributes later changes to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const alice = store.withAuthenticatedIdentity({ userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" });
+				const created = await alice.upsertContext({ title: "Original context", summary: "Original summary" });
+				const bob = store.withAuthenticatedIdentity({ userId: "entra:bob", tenantId: store.tenantId, displayName: "Bob" });
+				const updated = await bob.upsertContext({
+					title: "Updated context",
+					summary: "Updated summary",
+					expectedRevision: created.context.revision,
+					expectedContentHash: created.context.contentHash
+				});
+				const users = await store.listUsers();
+				const aliceId = users.find((user) => user.authenticationSubject === "entra:alice")?.id;
+				const bobId = users.find((user) => user.authenticationSubject === "entra:bob")?.id;
+
+				expect(updated.context).toMatchObject({ createdBy: aliceId, updatedBy: bobId });
+				expect(await store.materializeContextRevision({ revision: 2 })).toMatchObject({ author: bobId });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("attributes an entity status change to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const alice = store.withAuthenticatedIdentity({ userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" });
+				const created = await alice.createEntity({ kind: "issue", title: "Status attribution" });
+				const bob = store.withAuthenticatedIdentity({ userId: "entra:bob", tenantId: store.tenantId, displayName: "Bob" });
+				const updated = await bob.updateEntityStatus({ entityId: created.id, status: "in-progress" });
+				const users = await store.listUsers();
+				const aliceId = users.find((user) => user.authenticationSubject === "entra:alice")?.id;
+				const bobId = users.find((user) => user.authenticationSubject === "entra:bob")?.id;
+
+				expect(updated.entity).toMatchObject({ createdBy: aliceId, updatedBy: bobId });
+				expect((await store.listEntityHistory(created.id))[1]).toMatchObject({ author: bobId });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("attributes a new context term to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const actor = { userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" };
+				const result = await store.withAuthenticatedIdentity(actor).defineContextTerm({ term: "Provenance", definition: "Records a trusted actor." });
+				const actorId = (await store.listUsers()).find((user) => user.authenticationSubject === actor.userId)?.id;
+
+				expect(result.term).toMatchObject({ createdBy: actorId, updatedBy: actorId });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("attributes a new relation to the authenticated user", async () => {
+			const store = await openStore();
+
+			try {
+				const actor = { userId: "entra:alice", tenantId: store.tenantId, displayName: "Alice" };
+				const actorStore = store.withAuthenticatedIdentity(actor);
+				const initiative = await actorStore.createEntity({ kind: "initiative", title: "Relation owner" });
+				const issue = await actorStore.createEntity({ kind: "issue", title: "Related issue" });
+				const linked = await actorStore.linkEntities({ fromId: initiative.id, toId: issue.id, relationType: "tracks" });
+				const actorId = (await store.listUsers()).find((user) => user.authenticationSubject === actor.userId)?.id;
+
+				expect(linked.relation).toMatchObject({ createdBy: actorId });
+			} finally {
+				await store.close();
+			}
+		});
+	});
 
 	describe(`storage-driver seam: project identity (${label})`, () => {
 		it("registers an unseen identity as its own project and keeps each identity's work separate", async () => {
@@ -667,7 +810,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
 				await expect(target.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toMatchObject({ definition: "Initial.", headRevision: 2 });
-				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] });
+				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], usersCreated: [], usersUpdated: [] });
 				const afterImport = await target.createEntity({ kind: "issue", title: "After import" });
 				expect(afterImport.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 				expect(afterImport.reference).toMatch(/^ISS_[0-9A-HJKMNP-TV-Z]{26}$/);
@@ -960,7 +1103,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const reapplied = await store.applyRelations(relations);
 				expect(reapplied.inserted).toBe(0);
 
-				const foreignRelation = { fromId: blocked.id, toId: blocker.id, type: "blocks" as const, createdAt: new Date().toISOString() };
+				const foreignRelation = { fromId: blocked.id, toId: blocker.id, type: "blocks" as const, createdBy: "system", createdAt: new Date().toISOString() };
 				const appliedForeign = await store.applyRelations([foreignRelation, ...relations]);
 				expect(appliedForeign.inserted).toBe(1);
 
@@ -1289,9 +1432,13 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			const revision1 = await store.createEntity({ kind: "issue", title: "First title", body: "First body." });
 			const revision2 = await store.updateEntity({ entityId: revision1.id, title: "Second title", body: "Second body.", expectedRevision: revision1.revision, expectedContentHash: revision1.contentHash });
 			const revision3 = await store.updateEntity({ entityId: revision1.id, title: "Third title", body: "Third body.", expectedRevision: revision2.revision, expectedContentHash: revision2.contentHash });
+			const users = await store.listUsers();
+			const defaultUserId = users.find((user) => user.authenticationSubject.startsWith("local:"))?.id
+				?? users.find((user) => user.authenticationSubject === "agent-issues:system")?.id
+				?? users[0]?.id;
 
 			const restored = await store.restoreEntityRevision({ entityId: revision1.id, revision: 1, author: "restorer", expectedRevision: revision3.revision, expectedContentHash: revision3.contentHash });
-			expect(restored).toEqual(expect.objectContaining({ entityId: revision1.id, targetRevision: 4, headRevision: 4, title: "First title", body: "First body.", author: "restorer", restoredFromRevision: 1 }));
+			expect(restored).toEqual(expect.objectContaining({ entityId: revision1.id, targetRevision: 4, headRevision: 4, title: "First title", body: "First body.", author: defaultUserId, restoredFromRevision: 1 }));
 			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 3 })).resolves.toEqual(expect.objectContaining({ title: "Third title", body: "Third body.", restoredFromRevision: null }));
 			await expect(store.materializeEntityRevision({ entityId: revision1.id, revision: 1 })).resolves.toEqual(expect.objectContaining({ title: "First title", body: "First body.", restoredFromRevision: null }));
 
@@ -1492,6 +1639,10 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			});
 
 			const history = await store.listEntityHistory(issue.id);
+			const users = await store.listUsers();
+			const defaultUserId = users.find((user) => user.authenticationSubject.startsWith("local:"))?.id
+				?? users.find((user) => user.authenticationSubject === "agent-issues:system")?.id
+				?? users[0]?.id;
 			expect(await store.listEntityHistory(issue.reference)).toEqual(history);
 
 			expect(history).toHaveLength(6);
@@ -1514,7 +1665,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				bodySource: "authored",
 				status: "todo",
 				parentId: null,
-				author: "alice"
+				author: defaultUserId
 			});
 			expect(history[2]).toMatchObject({
 				entityId: issue.id,
@@ -1523,20 +1674,21 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				body: "Revised body.",
 				status: "in-progress",
 				parentId: null,
-				author: "bob"
+				author: defaultUserId
 			});
 			expect(history[3]).toMatchObject({
 				entityId: issue.id,
 				version: 4,
 				status: "in-progress",
 				parentId: parent.id,
-				author: "charlie"
+				author: defaultUserId
 			});
 			expect(history[4]).toMatchObject({
 				entityId: issue.id,
 				version: 5,
 				status: "in-progress",
-				parentId: null
+				parentId: null,
+				author: defaultUserId
 			});
 			expect(history[5]).toMatchObject({
 				entityId: issue.id,
@@ -1545,7 +1697,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				body: "Initial body.",
 				status: "todo",
 				parentId: null,
-				author: "dave"
+				author: defaultUserId
 			});
 
 			// IDs are real UUIDs from revision_entries — not fabricated ephemeral strings
@@ -1708,11 +1860,15 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 
 			try {
 				const revision1 = await store.upsertContext({ title: "First", summary: "First summary.", author: "alice" });
+				const users = await store.listUsers();
+				const defaultUserId = users.find((user) => user.authenticationSubject.startsWith("local:"))?.id
+					?? users.find((user) => user.authenticationSubject === "agent-issues:system")?.id
+					?? users[0]?.id;
 				const revision2 = await store.upsertContext({ title: "Second", summary: "Second summary.", author: "bob", expectedRevision: revision1.context.revision, expectedContentHash: revision1.context.contentHash });
 				await store.upsertContext({ title: "Third", summary: "Third summary.", author: "carol", expectedRevision: revision2.context.revision, expectedContentHash: revision2.context.contentHash });
 
-				await expect(store.materializeContextRevision({ revision: 2 })).resolves.toEqual(expect.objectContaining({ contextKey: revision1.context.key, targetRevision: 2, headRevision: 3, title: "Second", summary: "Second summary.", author: "bob" }));
-				await expect(store.materializeContextRevision({ revision: 1 })).resolves.toEqual(expect.objectContaining({ targetRevision: 1, headRevision: 3, title: "First", summary: "First summary.", author: "alice" }));
+				await expect(store.materializeContextRevision({ revision: 2 })).resolves.toEqual(expect.objectContaining({ contextKey: revision1.context.key, targetRevision: 2, headRevision: 3, title: "Second", summary: "Second summary.", author: defaultUserId }));
+				await expect(store.materializeContextRevision({ revision: 1 })).resolves.toEqual(expect.objectContaining({ targetRevision: 1, headRevision: 3, title: "First", summary: "First summary.", author: defaultUserId }));
 				await expect(store.getContextDetails()).resolves.toEqual(expect.objectContaining({ context: expect.objectContaining({ revision: 3, title: "Third" }) }));
 			} finally {
 				await store.close();
@@ -1724,13 +1880,17 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 
 			try {
 				const revision1 = await store.defineContextTerm({ term: "Order", definition: "First definition.", author: "alice" });
+				const users = await store.listUsers();
+				const defaultUserId = users.find((user) => user.authenticationSubject.startsWith("local:"))?.id
+					?? users.find((user) => user.authenticationSubject === "agent-issues:system")?.id
+					?? users[0]?.id;
 				const revision2 = await store.defineContextTerm({ term: "Order", definition: "Second definition.", avoid: ["purchase"], author: "bob", expectedRevision: revision1.term.revision, expectedContentHash: revision1.term.contentHash });
 				await store.forgetContextTerm({ term: "Order", author: "carol", expectedRevision: revision2.term.revision, expectedContentHash: revision2.term.contentHash });
 
 				await expect(store.getContextDetails()).resolves.toEqual(expect.objectContaining({ terms: [] }));
-				await expect(store.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toEqual(expect.objectContaining({ targetRevision: 1, headRevision: 3, definition: "First definition.", avoid: [], tombstone: false, author: "alice" }));
-				await expect(store.materializeContextTermRevision({ term: "Order", revision: 2 })).resolves.toEqual(expect.objectContaining({ targetRevision: 2, headRevision: 3, definition: "Second definition.", avoid: ["purchase"], tombstone: false, author: "bob" }));
-				await expect(store.materializeContextTermRevision({ term: "Order", revision: 3 })).resolves.toEqual(expect.objectContaining({ targetRevision: 3, headRevision: 3, tombstone: true, author: "carol" }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toEqual(expect.objectContaining({ targetRevision: 1, headRevision: 3, definition: "First definition.", avoid: [], tombstone: false, author: defaultUserId }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 2 })).resolves.toEqual(expect.objectContaining({ targetRevision: 2, headRevision: 3, definition: "Second definition.", avoid: ["purchase"], tombstone: false, author: defaultUserId }));
+				await expect(store.materializeContextTermRevision({ term: "Order", revision: 3 })).resolves.toEqual(expect.objectContaining({ targetRevision: 3, headRevision: 3, tombstone: true, author: defaultUserId }));
 			} finally {
 				await store.close();
 			}
@@ -1743,9 +1903,13 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				const revision1 = await store.upsertContext({ title: "First", summary: "First summary.", author: "alice" });
 				const revision2 = await store.upsertContext({ title: "Second", summary: "Second summary.", author: "bob", expectedRevision: revision1.context.revision, expectedContentHash: revision1.context.contentHash });
 				const revision3 = await store.upsertContext({ title: "Third", summary: "Third summary.", author: "carol", expectedRevision: revision2.context.revision, expectedContentHash: revision2.context.contentHash });
+				const users = await store.listUsers();
+				const defaultUserId = users.find((user) => user.authenticationSubject.startsWith("local:"))?.id
+					?? users.find((user) => user.authenticationSubject === "agent-issues:system")?.id
+					?? users[0]?.id;
 
 				const restored = await store.restoreContextRevision({ revision: 1, author: "restorer", expectedRevision: revision3.context.revision, expectedContentHash: revision3.context.contentHash });
-				expect(restored).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, title: "First", summary: "First summary.", author: "restorer", restoredFromRevision: 1 }));
+				expect(restored).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, title: "First", summary: "First summary.", author: defaultUserId, restoredFromRevision: 1 }));
 				await expect(store.materializeContextRevision({ revision: 3 })).resolves.toEqual(expect.objectContaining({ title: "Third", restoredFromRevision: null }));
 				await expect(store.restoreContextRevision({ revision: 2, expectedRevision: 3, expectedContentHash: revision3.context.contentHash })).rejects.toMatchObject({ name: "ContextConflictError", currentRevision: 4 });
 			} finally {
@@ -1760,9 +1924,13 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				const revision1 = await store.defineContextTerm({ term: "Order", definition: "First definition.", author: "alice" });
 				const revision2 = await store.defineContextTerm({ term: "Order", definition: "Second definition.", avoid: ["purchase"], author: "bob", expectedRevision: revision1.term.revision, expectedContentHash: revision1.term.contentHash });
 				const removed = await store.forgetContextTerm({ term: "Order", author: "carol", expectedRevision: revision2.term.revision, expectedContentHash: revision2.term.contentHash });
+				const users = await store.listUsers();
+				const defaultUserId = users.find((user) => user.authenticationSubject.startsWith("local:"))?.id
+					?? users.find((user) => user.authenticationSubject === "agent-issues:system")?.id
+					?? users[0]?.id;
 
 				const restored = await store.restoreContextTermRevision({ term: "Order", revision: 1, author: "restorer", expectedRevision: removed.currentRevision!, expectedContentHash: removed.currentContentHash! });
-				expect(restored).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, definition: "First definition.", avoid: [], tombstone: false, author: "restorer", restoredFromRevision: 1 }));
+				expect(restored).toEqual(expect.objectContaining({ targetRevision: 4, headRevision: 4, definition: "First definition.", avoid: [], tombstone: false, author: defaultUserId, restoredFromRevision: 1 }));
 				await expect(store.getContextDetails()).resolves.toEqual(expect.objectContaining({ terms: [expect.objectContaining({ term: "Order", revision: 4 })] }));
 				await expect(store.materializeContextTermRevision({ term: "Order", revision: 3 })).resolves.toEqual(expect.objectContaining({ tombstone: true, restoredFromRevision: null }));
 				await expect(store.restoreContextTermRevision({ term: "Order", revision: 2, expectedRevision: 3, expectedContentHash: removed.currentContentHash! })).rejects.toMatchObject({ name: "ContextTermConflictError", currentRevision: 4 });
@@ -1779,6 +1947,162 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				await store.upsertContext({ title: "Only", summary: "Only revision." });
 				await expect(store.materializeContextRevision({ revision: 2 })).rejects.toMatchObject({ name: "ContextRevisionError", reason: "revision-out-of-range", headRevision: 1 });
 				await expect(store.materializeContextTermRevision({ term: "Missing", revision: 1 })).rejects.toMatchObject({ name: "ContextRevisionError", reason: "term-not-found" });
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: issue comments (${label})`, () => {
+		it("creates a comment on an issue and returns it from the conversation", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "First comment." });
+
+				expect(await store.listIssueComments({ issueId: issue.id })).toEqual(
+					expect.objectContaining({
+						comments: [expect.objectContaining({ id: comment.id, issueId: issue.id, body: "First comment." })],
+						total: 1,
+						nextBefore: null
+					})
+				);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("edits a comment and atomically replaces its referenced issues", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+				const firstReference = await store.createEntity({ kind: "issue", title: "First reference" });
+				const secondReference = await store.createEntity({ kind: "issue", title: "Second reference" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "Initial comment.", referencedIssueIds: [firstReference.id] });
+				const updated = await store.updateIssueComment({
+					commentId: comment.reference,
+					body: "Updated comment.",
+					referencedIssueIds: [secondReference.id],
+					expectedRevision: comment.revision,
+					expectedContentHash: comment.contentHash
+				});
+
+				expect(updated).toMatchObject({
+					id: comment.id,
+					body: "Updated comment.",
+					referencedIssueIds: [secondReference.id],
+					revision: 2
+				});
+				expect((await store.listIssueComments({ issueId: issue.id })).comments).toEqual([
+					expect.objectContaining({ id: comment.id, referencedIssueIds: [secondReference.id] })
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("tombstones a deleted comment and retains its conversation placeholder", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "Disposable comment." });
+				const deleted = await store.deleteIssueComment({
+					commentId: comment.id,
+					expectedRevision: comment.revision,
+					expectedContentHash: comment.contentHash
+				});
+
+				expect(deleted).toMatchObject({ id: comment.id, tombstone: true, revision: 2 });
+				expect(deleted.body).toBeUndefined();
+				const [placeholder] = (await store.listIssueComments({ issueId: issue.id })).comments;
+				expect(placeholder).toMatchObject({ id: comment.id, tombstone: true });
+				expect(placeholder).not.toHaveProperty("body");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns immutable prior comment text from comment history", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "Initial comment." });
+				await store.updateIssueComment({ commentId: comment.id, body: "Updated comment.", expectedRevision: comment.revision, expectedContentHash: comment.contentHash });
+
+				expect(await store.listIssueCommentHistory({ commentId: comment.reference })).toEqual([
+					expect.objectContaining({ targetRevision: 1, headRevision: 2, body: "Initial comment." }),
+					expect.objectContaining({ targetRevision: 2, headRevision: 2, body: "Updated comment." })
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("includes the newest comment page in an issue detail read", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "Visible in issue detail." });
+
+				expect((await store.getEntityDetails(issue.reference)).comments).toEqual(
+					expect.objectContaining({
+						comments: [expect.objectContaining({ id: comment.id, body: "Visible in issue detail." })],
+						total: 1,
+						nextBefore: null
+					})
+				);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns a bounded newest comment page with an older-page cursor", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Long conversation" });
+				for (let index = 0; index < 51; index++) {
+					await store.createIssueComment({ issueId: issue.id, body: `Comment ${index}.` });
+				}
+
+				const page = await store.listIssueComments({ issueId: issue.id });
+				const detail = await store.getEntityDetails(issue.id);
+				expect(page).toMatchObject({ total: 51, comments: expect.any(Array) });
+				expect(page.comments).toHaveLength(50);
+				expect(page.nextBefore).toEqual(expect.any(String));
+				expect(detail.comments).toEqual(expect.objectContaining({ total: 51, comments: expect.any(Array), nextBefore: page.nextBefore }));
+				expect(detail.comments?.comments).toHaveLength(50);
+
+				const olderPage = await store.listIssueComments({ issueId: issue.id, before: page.nextBefore! });
+				expect(olderPage).toMatchObject({ total: 51, nextBefore: null });
+				expect(olderPage.comments).toHaveLength(1);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("rejects a stale comment edit without overwriting the current comment", async () => {
+			const store = await openStore();
+
+			try {
+				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "Initial comment." });
+				const updated = await store.updateIssueComment({ commentId: comment.id, body: "Current comment.", expectedRevision: comment.revision, expectedContentHash: comment.contentHash });
+
+				await expect(store.updateIssueComment({
+					commentId: comment.id,
+					body: "Stale comment.",
+					expectedRevision: comment.revision,
+					expectedContentHash: comment.contentHash
+				})).rejects.toThrow(IssueCommentConflictError);
+				expect((await store.listIssueComments({ issueId: issue.id })).comments).toEqual([
+					expect.objectContaining({ id: comment.id, body: "Current comment.", revision: updated.revision })
+				]);
 			} finally {
 				await store.close();
 			}

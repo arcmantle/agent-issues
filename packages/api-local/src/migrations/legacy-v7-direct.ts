@@ -11,6 +11,12 @@ import { sql } from "drizzle-orm";
 import { createSqliteMigrationConn } from "../db/migration-runner.js";
 import type { SqliteInternalConnection } from "../db/sqlite-executor.js";
 import { finalBaselineMigration } from "./final-baseline.js";
+import { userDirectoryMigration } from "./user-directory.js";
+import { recordProvenanceMigration } from "./record-provenance.js";
+import { contextTermProvenanceMigration } from "./context-term-provenance.js";
+import { relationProvenanceMigration } from "./relation-provenance.js";
+import { issueCommentsMigration } from "./issue-comments.js";
+import { adrStatusMigration } from "./adr-status-migration.js";
 import { buildLegacySqliteV7Rows, type LegacySqliteV7RevisionValidation, type LegacySqliteV7Rows } from "./legacy-v7-semantic.js";
 
 export const LEGACY_V7_DIRECT_CHECKPOINT = "legacy-v7-direct";
@@ -23,15 +29,30 @@ export async function transformLegacySqliteV7(database: SqliteInternalConnection
 		const rows = buildLegacySqliteV7Rows(database, "", revisionValidation);
 		stageLegacySourceTables(database);
 		await finalBaselineMigration.up(createSqliteMigrationConn(database));
+		await userDirectoryMigration.up(createSqliteMigrationConn(database));
+		await issueCommentsMigration.up(createSqliteMigrationConn(database));
 		insertLegacySqliteV7Rows(database, rows);
+		await recordProvenanceMigration.up(createSqliteMigrationConn(database));
+		await contextTermProvenanceMigration.up(createSqliteMigrationConn(database));
+		await relationProvenanceMigration.up(createSqliteMigrationConn(database));
+		validateAndContractLegacySqliteV7(database, rows, revisionValidation);
+		await adrStatusMigration.up(createSqliteMigrationConn(database));
 		database.drizzle.run(sql.raw(`CREATE TABLE schema_migrations (
 			id TEXT PRIMARY KEY,
 			applied_at TEXT NOT NULL
 		)`));
-		database.drizzle.run(
-			sql`INSERT INTO schema_migrations (id, applied_at) VALUES (${LEGACY_V7_DIRECT_CHECKPOINT}, ${new Date().toISOString()})`
-		);
-		validateAndContractLegacySqliteV7(database, rows, revisionValidation);
+		for (const id of [
+			LEGACY_V7_DIRECT_CHECKPOINT,
+			finalBaselineMigration.id,
+			adrStatusMigration.id,
+			userDirectoryMigration.id,
+			recordProvenanceMigration.id,
+			contextTermProvenanceMigration.id,
+			relationProvenanceMigration.id,
+			issueCommentsMigration.id
+		]) {
+			database.drizzle.run(sql`INSERT INTO schema_migrations (id, applied_at) VALUES (${id}, ${new Date().toISOString()})`);
+		}
 		database.drizzle.run(sql.raw("COMMIT"));
 	} catch (error) {
 		database.drizzle.run(sql.raw("ROLLBACK"));
@@ -78,7 +99,10 @@ export function validateAndContractLegacySqliteV7(
 	revisionValidation: LegacySqliteV7RevisionValidation[]
 ): void {
 	for (const [table, tableRows] of Object.entries(rows)) {
-		const actualRows = database.drizzle.all(sql`SELECT * FROM ${sql.identifier(table)} ORDER BY rowid`);
+		const columns = Object.keys(tableRows[0] ?? {});
+		const actualRows = database.drizzle.all(sql`SELECT * FROM ${sql.identifier(table)} ORDER BY rowid`).map((row) =>
+			Object.fromEntries(columns.map((column) => [column, (row as Record<string, unknown>)[column]]))
+		);
 		if (!isDeepStrictEqual(actualRows, tableRows)) {
 			throw new Error(`Legacy v7 direct migration validation failed for ${table}: final rows differ from the semantic transformation.`);
 		}

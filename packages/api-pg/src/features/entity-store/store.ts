@@ -3,6 +3,7 @@ import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revis
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import {
 	applyReversePatch,
+	type CanonicalIssueCommentChain,
 	collectReachableIds,
 	computeEntityContentHash,
 	createReverseFieldPatch,
@@ -15,6 +16,7 @@ import {
 	DEFAULT_PROJECT_TITLE,
 	assignEntitiesToProjects,
 	deriveEntityStatuses,
+	deriveUserIdentity,
 	ENTITY_REVERSE_PATCH_REGISTRY,
 	ENTITY_KINDS,
 	generateCanonicalIdentity,
@@ -31,6 +33,7 @@ import {
 	isValidStatus,
 	materializeFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
+	SYSTEM_AUTHENTICATION_SUBJECT,
 	sanitizePathSegment,
 	STRUCTURAL_RELATION_TYPES,
 	wouldOrphanSubtree as wouldOrphanSubtreeInGraph,
@@ -45,6 +48,7 @@ import {
 	type EntityStore,
 	type HistoryEntryRecord,
 	type InitiativeBundle,
+	type IssueCommentPage,
 	type LinkResult,
 	type MaterializedEntityRevision,
 	type MoveResult,
@@ -60,10 +64,15 @@ import type { TenantExecutor } from "../../db/connection.js";
 import { counters, entities, relations, revisionEntries } from "../../schema.js";
 
 import { queryContextDetails, queryProjectContextDetails } from "../context/context-store.js";
+import { exportCanonicalChains } from "../synchronize/canonical-chain-store.js";
+
+const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
 
 export type EntityRow = {
 	id: string;
 	reference: string;
+	created_by?: string | null;
+	updated_by?: string | null;
 	kind: string;
 	title: string;
 	status: string;
@@ -81,6 +90,7 @@ export type RelationRow = {
 	from_id: string;
 	to_id: string;
 	type: string;
+	created_by?: string | null;
 	created_at: string;
 };
 
@@ -281,6 +291,8 @@ export function mapEntityRow(row: EntityRow): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
+		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind,
 		title: row.title,
 		status: row.status,
@@ -297,6 +309,8 @@ function mapDrizzleEntityRow(row: typeof entities.$inferSelect): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		createdBy: row.createdBy ?? RESERVED_SYSTEM_AUTHOR,
+		updatedBy: row.updatedBy ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind as EntityKind,
 		title: row.title,
 		status: row.status,
@@ -347,7 +361,7 @@ async function getStructuralParentRelations(executor: TenantExecutor, entityId: 
 
 	return rows
 		.filter((row) => isStructuralRelationType(row.type))
-		.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
+		.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdBy: row.created_by ?? SYSTEM_USER_ID, createdAt: row.created_at }));
 }
 
 // Walks structural-only parent relations up to the root, mirroring core's
@@ -508,6 +522,7 @@ async function getAllRelations(executor: TenantExecutor): Promise<RelationRecord
 		fromId: row.from_id,
 		toId: row.to_id,
 		type: row.type as RelationType,
+		createdBy: row.created_by ?? SYSTEM_USER_ID,
 		createdAt: row.created_at
 	}));
 }
@@ -528,7 +543,7 @@ async function getTenantRelations(executor: TenantExecutor): Promise<RelationRec
 			AND target.tombstone = false
 		ORDER BY relations.from_id, relations.to_id, relations.type
 	`);
-	return (result.rows as RelationRow[]).map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
+	return (result.rows as RelationRow[]).map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdBy: row.created_by ?? SYSTEM_USER_ID, createdAt: row.created_at }));
 }
 
 async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[]): Promise<Map<string, string>> {
@@ -565,6 +580,8 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 	const statusEntities = (result.rows as Array<{ id: string; kind: string; status: string }>).map((row) => ({
 		id: row.id,
 		reference: "",
+		createdBy: RESERVED_SYSTEM_AUTHOR,
+		updatedBy: RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind as EntityKind,
 		title: "",
 		status: row.status,
@@ -587,7 +604,7 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 			))
 		: undefined;
 	const statusRelations = relationRows
-		? relationRows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt }))
+		? relationRows.map((row) => ({ fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdBy: row.createdBy ?? SYSTEM_USER_ID, createdAt: row.createdAt }))
 		: await getAllRelations(executor);
 	const entities = deriveEntityStatuses(statusEntities, statusRelations);
 	return new Map(entities.map((entity) => [entity.id, entity.status]));
@@ -618,13 +635,13 @@ async function getRelationOrThrow(
 		throw new Error(`Relation not found: ${input.fromId} -> ${input.toId} as ${input.relationType}`);
 	}
 
-	return { fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdAt: row.createdAt };
+	return { fromId: row.fromId, toId: row.toId, type: row.type as RelationType, createdBy: row.createdBy ?? SYSTEM_USER_ID, createdAt: row.createdAt };
 }
 
 async function insertRelation(executor: TenantExecutor, relation: RelationRecord): Promise<{ inserted: boolean }> {
 	const inserted = await executor
 		.insert(relations)
-		.values({ tenantId: executor.tenantId, fromId: relation.fromId, toId: relation.toId, type: relation.type, createdAt: relation.createdAt })
+		.values({ tenantId: executor.tenantId, fromId: relation.fromId, toId: relation.toId, type: relation.type, createdBy: relation.createdBy ?? SYSTEM_USER_ID, createdAt: relation.createdAt })
 		.onConflictDoNothing()
 		.returning({ fromId: relations.fromId });
 
@@ -669,7 +686,7 @@ async function reconcileStructuralParent(
 		throw new Error(`Cannot resolve ${entityId} under ${parent.kind} via synchronize: no allowed relation from ${parent.kind} to ${kind}.`);
 	}
 
-	await insertRelation(executor, { fromId: parent.id, toId: entityId, type: relationType, createdAt: new Date().toISOString() });
+	await insertRelation(executor, { fromId: parent.id, toId: entityId, type: relationType, createdBy: SYSTEM_USER_ID, createdAt: new Date().toISOString() });
 }
 
 async function hasTypedPath(executor: TenantExecutor, startId: string, targetId: string, relationType: string): Promise<boolean> {
@@ -835,7 +852,8 @@ export async function createEntity(
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	},
-	projectIdentity?: string
+	projectIdentity?: string,
+	actorId: string = SYSTEM_USER_ID
 ): Promise<EntityRecord> {
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
@@ -886,6 +904,8 @@ export async function createEntity(
 		tenantId: executor.tenantId,
 		id,
 		reference: identity.reference,
+		createdBy: actorId,
+		updatedBy: actorId,
 		kind,
 		title,
 		status,
@@ -912,7 +932,7 @@ export async function createEntity(
 	// Write the baseline revision-1 entry: a no-op patch (predecessor ==
 	// successor) so listEntityHistory always has a real revision_entries row
 	// for every revision in the chain, including the initial one.
-	await appendDeltaEntry(executor, id, 1, title, body, bodySource, input.author, now);
+	await appendDeltaEntry(executor, id, 1, title, body, bodySource, actorId, now);
 
 	return getEntityOrThrow(executor, id);
 }
@@ -1228,6 +1248,7 @@ export async function listAllRelations(executor: TenantExecutor): Promise<Relati
 		fromId: row.from_id,
 		toId: row.to_id,
 		type: row.type as RelationType,
+		createdBy: row.created_by ?? SYSTEM_USER_ID,
 		createdAt: row.created_at
 	}));
 }
@@ -1240,7 +1261,8 @@ export async function applyRelations(executor: TenantExecutor, relations: Relati
 	for (const relation of relations) {
 		const from = await getEntityOrThrow(executor, relation.fromId);
 		const to = await getEntityOrThrow(executor, relation.toId);
-		const { inserted: wasInserted } = await insertRelation(executor, { ...relation, fromId: from.id, toId: to.id });
+		const createdBy = relation.createdBy === RESERVED_SYSTEM_AUTHOR ? SYSTEM_USER_ID : relation.createdBy ?? SYSTEM_USER_ID;
+		const { inserted: wasInserted } = await insertRelation(executor, { ...relation, fromId: from.id, toId: to.id, createdBy });
 		if (wasInserted) {
 			inserted += 1;
 		}
@@ -1250,7 +1272,8 @@ export async function applyRelations(executor: TenantExecutor, relations: Relati
 
 export async function linkEntities(
 	executor: TenantExecutor,
-	input: { fromId: string; toId: string; relationType: string }
+	input: { fromId: string; toId: string; relationType: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<LinkResult> {
 	if (input.fromId === input.toId) {
 		throw new Error("Cannot create a relation from an entity to itself.");
@@ -1275,7 +1298,7 @@ export async function linkEntities(
 	}
 
 	const createdAt = new Date().toISOString();
-	const relation: RelationRecord = { fromId: from.id, toId: to.id, type: input.relationType as RelationType, createdAt };
+	const relation: RelationRecord = { fromId: from.id, toId: to.id, type: input.relationType as RelationType, createdBy: actorId, createdAt };
 	const { inserted } = await insertRelation(executor, relation);
 
 	return { relation, created: inserted };
@@ -1317,7 +1340,8 @@ export async function unlinkEntities(
 
 export async function updateEntityStatus(
 	executor: TenantExecutor,
-	input: { entityId: string; status: string; author?: string }
+	input: { entityId: string; status: string; author?: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<StatusUpdateResult> {
 	const entity = await getEntityOrThrow(executor, input.entityId);
 
@@ -1384,14 +1408,14 @@ export async function updateEntityStatus(
 
 	const updated = await executor
 		.update(entities)
-		.set({ status: input.status, revision: newRevision, updatedAt })
+		.set({ status: input.status, revision: newRevision, updatedBy: actorId, updatedAt })
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.returning({ id: entities.id });
 	if (updated.length === 0) {
 		const current = await getEntityOrThrow(executor, entity.id);
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
-	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 		priorStatus: entity.status
 	});
 
@@ -1400,7 +1424,8 @@ export async function updateEntityStatus(
 
 export async function setEntityBody(
 	executor: TenantExecutor,
-	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<EntityRecord> {
 	const current = await getEntityOrThrow(executor, input.entityId);
 
@@ -1415,7 +1440,7 @@ export async function setEntityBody(
 
 	const [guard] = await executor
 		.update(entities)
-		.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
+		.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
@@ -1424,13 +1449,14 @@ export async function setEntityBody(
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
 	return getEntityOrThrow(executor, current.id);
 }
 
 export async function updateEntity(
 	executor: TenantExecutor,
-	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string
 ): Promise<EntityRecord> {
 	const current = await getEntityOrThrow(executor, input.entityId);
 	if (input.title === undefined && input.body === undefined) {
@@ -1453,7 +1479,7 @@ export async function updateEntity(
 
 	const [guard] = await executor
 		.update(entities)
-		.set({ title, body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
+		.set({ title, body, bodySource, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
@@ -1462,7 +1488,7 @@ export async function updateEntity(
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
 	return getEntityOrThrow(executor, current.id);
 }
 
@@ -1525,7 +1551,8 @@ export async function materializeEntityRevision(
 
 export async function restoreEntityRevision(
 	executor: TenantExecutor,
-	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<MaterializedEntityRevision> {
 	const row = await resolveEntity(executor, input.entityId, true);
 	if (!row) {
@@ -1560,6 +1587,7 @@ export async function restoreEntityRevision(
 		revision: newRevision,
 		contentHash: computeEntityContentHash(source.title, source.body),
 		tombstone: source.tombstone === true,
+		updatedBy: actorId,
 		updatedAt
 	}).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash))).returning({ id: entities.id });
 	if (!guard) {
@@ -1572,11 +1600,11 @@ export async function restoreEntityRevision(
 		await executor.delete(relations).where(and(eq(relations.tenantId, executor.tenantId), eq(relations.fromId, relation.fromId), eq(relations.toId, relation.toId), eq(relations.type, relation.type)));
 	}
 	if (restoredParent && restoredRelationType) {
-		await insertRelation(executor, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdAt: updatedAt });
+		await insertRelation(executor, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdBy: actorId, createdAt: updatedAt });
 	}
 	await refreshProjectAssignments(executor);
 
-	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt, {
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt, {
 		priorStatus: current.status,
 		priorParentId: currentParentId,
 		priorTombstone: row.tombstone,
@@ -1585,14 +1613,15 @@ export async function restoreEntityRevision(
 	return materializeEntityRevision(executor, { entityId: current.id, revision: newRevision });
 }
 
-export async function archiveEntity(executor: TenantExecutor, input: { entityId: string }): Promise<StatusUpdateResult> {
+export async function archiveEntity(executor: TenantExecutor, input: { entityId: string }, actorId: string = SYSTEM_USER_ID): Promise<StatusUpdateResult> {
 	const entity = await getEntityOrThrow(executor, input.entityId);
-	return updateEntityStatus(executor, { entityId: input.entityId, status: getArchiveStatus(entity.kind) });
+	return updateEntityStatus(executor, { entityId: input.entityId, status: getArchiveStatus(entity.kind) }, actorId);
 }
 
 export async function moveEntity(
 	executor: TenantExecutor,
-	input: { entityId: string; newParentId: string; author?: string }
+	input: { entityId: string; newParentId: string; author?: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<MoveResult> {
 	if (input.entityId === input.newParentId) {
 		throw new Error("Cannot move an entity under itself.");
@@ -1636,12 +1665,12 @@ export async function moveEntity(
 			);
 	}
 
-	await insertRelation(executor, { fromId: newParent.id, toId: entity.id, type: relationType, createdAt: updatedAt });
+	await insertRelation(executor, { fromId: newParent.id, toId: entity.id, type: relationType, createdBy: actorId, createdAt: updatedAt });
 	await refreshProjectAssignments(executor);
 
 	const updated = await executor
 		.update(entities)
-		.set({ revision: newRevision, updatedAt })
+		.set({ revision: newRevision, updatedBy: actorId, updatedAt })
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.returning({ id: entities.id });
 	if (updated.length === 0) {
@@ -1649,7 +1678,7 @@ export async function moveEntity(
 		throw new EntityConflictError(entity.id, current.revision, current.contentHash);
 	}
 
-	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 		priorParentId: previousParentId
 	});
 
@@ -1661,7 +1690,7 @@ export async function moveEntity(
 	};
 }
 
-export async function deleteEntity(executor: TenantExecutor, input: { entityId: string }): Promise<DeleteResult> {
+export async function deleteEntity(executor: TenantExecutor, input: { entityId: string }, actorId: string = SYSTEM_USER_ID): Promise<DeleteResult> {
 	const entity = await getEntityOrThrow(executor, input.entityId);
 	const previousParentId = (await getStructuralParentRelations(executor, entity.id))[0]?.fromId ?? null;
 	const dependentHandoffRows = await executor
@@ -1686,9 +1715,9 @@ export async function deleteEntity(executor: TenantExecutor, input: { entityId: 
 			.where(and(eq(relations.tenantId, executor.tenantId), or(eq(relations.fromId, handoff.id), eq(relations.toId, handoff.id))));
 		await executor
 			.update(entities)
-			.set({ tombstone: true, revision: handoffRevision, updatedAt: handoffUpdatedAt })
+			.set({ tombstone: true, revision: handoffRevision, updatedBy: actorId, updatedAt: handoffUpdatedAt })
 			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, handoff.id), eq(entities.tombstone, false)));
-		await appendDeltaEntry(executor, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, undefined, handoffUpdatedAt, {
+		await appendDeltaEntry(executor, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, actorId, handoffUpdatedAt, {
 			priorTombstone: false
 		});
 	}
@@ -1708,7 +1737,7 @@ export async function deleteEntity(executor: TenantExecutor, input: { entityId: 
 		.where(and(eq(relations.tenantId, executor.tenantId), or(eq(relations.fromId, entity.id), eq(relations.toId, entity.id))));
 	const removed = await executor
 		.update(entities)
-		.set({ tombstone: true, revision: newRevision, updatedAt })
+		.set({ tombstone: true, revision: newRevision, updatedBy: actorId, updatedAt })
 		.where(
 			and(
 				eq(entities.tenantId, executor.tenantId),
@@ -1722,7 +1751,7 @@ export async function deleteEntity(executor: TenantExecutor, input: { entityId: 
 		const current = await getEntityOrThrow(executor, entity.id);
 		throw new EntityConflictError(entity.id, current.revision, current.contentHash);
 	}
-	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
+	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 		priorParentId: previousParentId,
 		priorTombstone: false
 	});
@@ -1894,6 +1923,8 @@ export async function getDatabaseSnapshot(
 
 	return {
 		generatedAt: new Date().toISOString(),
+		users: await getTenantUserDirectory(executor),
+		issueComments: await getIssueCommentPages(executor, entities),
 		entities,
 		relations,
 		orphans,
@@ -1919,6 +1950,8 @@ async function getProjectSnapshot(executor: TenantExecutor, project: EntityRecor
 
 	return {
 		generatedAt: new Date().toISOString(),
+		users: await getTenantUserDirectory(executor),
+		issueComments: await getIssueCommentPages(executor, entities),
 		entities,
 		relations,
 		orphans: [],
@@ -1932,6 +1965,55 @@ async function getProjectSnapshot(executor: TenantExecutor, project: EntityRecor
 			shared: await queryProjectContextDetails(executor, project),
 			initiatives: await Promise.all(initiatives.map((entity) => queryProjectContextDetails(executor, project, entity.id)))
 		}
+	};
+}
+
+async function getTenantUserDirectory(executor: TenantExecutor) {
+	const result = await executor.execute(sql`SELECT id, authentication_subject, display_name, updated_at FROM users WHERE tenant_id = ${executor.tenantId} ORDER BY id`);
+	return (result.rows as Array<{ id: string; authentication_subject: string; display_name: string | null; updated_at: string }>).map((row) => ({
+		id: row.id,
+		authenticationSubject: row.authentication_subject,
+		displayName: row.display_name,
+		updatedAt: row.updated_at
+	}));
+}
+
+async function getIssueCommentPages(executor: TenantExecutor, entities: EntityRecord[]): Promise<Record<string, IssueCommentPage>> {
+	const chains = (await exportCanonicalChains(executor)).issueComments;
+	return Object.fromEntries(
+		entities
+			.filter((entity) => entity.kind === "issue")
+			.map((issue) => [issue.id, getIssueCommentPage(chains, issue.id)])
+	);
+}
+
+function getIssueCommentPage(chains: CanonicalIssueCommentChain[], issueId: string): IssueCommentPage {
+	const comments = chains
+		.filter((chain) => chain.head.issueId === issueId)
+		.map((chain) => ({
+			id: chain.head.id,
+			reference: chain.head.reference,
+			issueId: chain.head.issueId,
+			createdBy: chain.head.createdBy,
+			updatedBy: chain.head.updatedBy,
+			...(!chain.head.tombstone && { body: chain.head.body }),
+			referencedIssueIds: chain.head.referencedIssueIds,
+			tombstone: chain.head.tombstone,
+			revision: chain.head.revision,
+			contentHash: chain.head.contentHash,
+			createdAt: chain.head.createdAt,
+			updatedAt: chain.head.updatedAt
+		}))
+		.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.reference.localeCompare(right.reference));
+	const page = comments.slice(-50);
+	const oldest = page[0];
+
+	return {
+		comments: page,
+		total: comments.length,
+		nextBefore: comments.length > page.length && oldest
+			? Buffer.from(JSON.stringify({ createdAt: oldest.createdAt, reference: oldest.reference })).toString("base64url")
+			: null
 	};
 }
 
@@ -2119,8 +2201,8 @@ export class PgEntityStore implements EntityStore {
 		body?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
-	}): Promise<EntityRecord> {
-		return createEntity(this.executor, input, this.projectIdentity);
+	}, actorId?: string): Promise<EntityRecord> {
+		return createEntity(this.executor, input, this.projectIdentity, actorId);
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
@@ -2159,40 +2241,40 @@ export class PgEntityStore implements EntityStore {
 		return listProjectAdrs(this.executor);
 	}
 
-	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
-		return updateEntityStatus(this.executor, input);
+	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }, actorId?: string): Promise<StatusUpdateResult> {
+		return updateEntityStatus(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return updateEntity(this.executor, input);
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<EntityRecord> {
+		return updateEntity(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return setEntityBody(this.executor, input);
+	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<EntityRecord> {
+		return setEntityBody(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
 	public async materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision> {
 		return materializeEntityRevision(this.executor, input);
 	}
 
-	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedEntityRevision> {
-		return restoreEntityRevision(this.executor, input);
+	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<MaterializedEntityRevision> {
+		return restoreEntityRevision(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
-		return archiveEntity(this.executor, input);
+	public async archiveEntity(input: { entityId: string }, actorId?: string): Promise<StatusUpdateResult> {
+		return archiveEntity(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async deleteEntity(input: { entityId: string }): Promise<DeleteResult> {
-		return deleteEntity(this.executor, input);
+	public async deleteEntity(input: { entityId: string }, actorId?: string): Promise<DeleteResult> {
+		return deleteEntity(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult> {
-		return moveEntity(this.executor, input);
+	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }, actorId?: string): Promise<MoveResult> {
+		return moveEntity(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
-		return linkEntities(this.executor, input);
+	public async linkEntities(input: { fromId: string; toId: string; relationType: string }, actorId?: string): Promise<LinkResult> {
+		return linkEntities(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult> {

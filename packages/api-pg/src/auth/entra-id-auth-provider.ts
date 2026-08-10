@@ -50,6 +50,7 @@ export class EntraIdAuthProvider implements AuthProvider {
 
 		const userId = typeof payload.oid === "string" ? payload.oid : undefined;
 		const tenantId = typeof payload.tid === "string" ? payload.tid : undefined;
+		const displayName = typeof payload.name === "string" ? payload.name : undefined;
 
 		if (!userId || !tenantId) {
 			throw new Error("Entra ID token is missing required oid/tid claims.");
@@ -59,6 +60,6 @@ export class EntraIdAuthProvider implements AuthProvider {
 			throw new Error(`Entra ID token tenant mismatch: expected ${this.tenantId}, got ${tenantId}.`);
 		}
 
-		return { userId, tenantId };
+		return { userId, tenantId, ...(displayName !== undefined && { displayName }) };
 	}
 }

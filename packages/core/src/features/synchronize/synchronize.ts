@@ -16,6 +16,12 @@ export type SynchronizeSummary = {
 	contextsAppliedToCloud: number;
 	contextTermsAppliedToLocal: number;
 	contextTermsAppliedToCloud: number;
+	issueCommentsCreatedLocal: string[];
+	issueCommentsUpdatedLocal: string[];
+	issueCommentsCreatedCloud: string[];
+	issueCommentsUpdatedCloud: string[];
+	usersAppliedToLocal: number;
+	usersAppliedToCloud: number;
 };
 
 function unionRelations(left: RelationRecord[], right: RelationRecord[]): RelationRecord[] {
@@ -83,6 +89,12 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 		contextsAppliedToLocal: localImport.contextsCreated.length + localImport.contextsAdvanced.length,
 		contextsAppliedToCloud: cloudImport.contextsCreated.length + cloudImport.contextsAdvanced.length,
 		contextTermsAppliedToLocal: localImport.contextTermsCreated.length + localImport.contextTermsAdvanced.length,
-		contextTermsAppliedToCloud: cloudImport.contextTermsCreated.length + cloudImport.contextTermsAdvanced.length
+		contextTermsAppliedToCloud: cloudImport.contextTermsCreated.length + cloudImport.contextTermsAdvanced.length,
+		issueCommentsCreatedLocal: localImport.issueCommentsCreated,
+		issueCommentsUpdatedLocal: localImport.issueCommentsAdvanced,
+		issueCommentsCreatedCloud: cloudImport.issueCommentsCreated,
+		issueCommentsUpdatedCloud: cloudImport.issueCommentsAdvanced,
+		usersAppliedToLocal: localImport.usersCreated.length + localImport.usersUpdated.length,
+		usersAppliedToCloud: cloudImport.usersCreated.length + cloudImport.usersUpdated.length
 	};
 }

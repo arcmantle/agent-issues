@@ -1,11 +1,12 @@
-export const REVISION_PATCH_RECORD_KINDS = ["entity", "context", "context-term"] as const;
+export const REVISION_PATCH_RECORD_KINDS = ["entity", "context", "context-term", "issue-comment"] as const;
 
 export type RevisionPatchRecordKind = (typeof REVISION_PATCH_RECORD_KINDS)[number];
 
 export type DecodedRevisionPatchRecordKey =
 	| { entityId: string }
 	| { contextKey: string }
-	| { contextTermId: string };
+	| { contextTermId: string }
+	| { issueCommentId: string };
 
 type DecodedPart = {
 	value: string;
@@ -53,6 +54,10 @@ export function encodeContextTermRecordKey(contextTermId: string): string {
 	return encodePart(contextTermId);
 }
 
+export function encodeIssueCommentRecordKey(issueCommentId: string): string {
+	return encodePart(issueCommentId);
+}
+
 export function decodeRevisionPatchRecordKey(
 	recordKind: RevisionPatchRecordKind,
 	recordKey: string
@@ -65,7 +70,10 @@ export function decodeRevisionPatchRecordKey(
 	if (recordKind === "entity") {
 		return { entityId: first.value };
 	}
-	return recordKind === "context"
-		? { contextKey: first.value }
-		: { contextTermId: first.value };
+	if (recordKind === "context") {
+		return { contextKey: first.value };
+	}
+	return recordKind === "context-term"
+		? { contextTermId: first.value }
+		: { issueCommentId: first.value };
 }

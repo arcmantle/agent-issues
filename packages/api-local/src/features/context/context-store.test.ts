@@ -81,10 +81,10 @@ describe("context directory", () => {
 			WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} AND record_kind = 'context' AND record_key = ${encodeContextRecordKey(storedContext.id)}
 			ORDER BY revision`);
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "alice", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) }),
-			expect.objectContaining({ revision: 2, author: "bob", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) })
+			expect.objectContaining({ revision: 1, author: "system", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) }),
+			expect.objectContaining({ revision: 2, author: "system", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer), created_at: expect.any(String) })
 		]);
-		expect(materializeContextRevision(db, { revision: 1 })).toMatchObject({ title: "Initial", summary: "First", author: "alice" });
+		expect(materializeContextRevision(db, { revision: 1 })).toMatchObject({ title: "Initial", summary: "First", author: "system" });
 	});
 
 	it("stores one linear context-term reverse-delta chain through removal", async () => {
@@ -115,12 +115,12 @@ describe("context directory", () => {
 			WHERE tenant_id = ${db.tenantId} AND project_id = ${db.currentProjectId} AND record_kind = 'context-term' AND record_key = ${encodeContextTermRecordKey(storedTerm.id)}
 			ORDER BY revision`);
 		expect(deltas).toEqual([
-			expect.objectContaining({ revision: 1, author: "alice", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
-			expect.objectContaining({ revision: 2, author: "bob", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
-			expect.objectContaining({ revision: 3, author: "carol", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) })
+			expect.objectContaining({ revision: 1, author: "system", patch_format: 1, patch_bytes: 0, source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 2, author: "system", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) }),
+			expect.objectContaining({ revision: 3, author: "system", patch_format: 1, patch_bytes: expect.any(Number), source_hash: expect.any(Buffer), target_hash: expect.any(Buffer) })
 		]);
-		expect(materializeContextTermRevision(db, { term: "Order", revision: 1 })).toMatchObject({ definition: "Initial.", avoid: ["request"], tombstone: false, author: "alice" });
-		expect(materializeContextTermRevision(db, { term: "Order", revision: 2 })).toMatchObject({ definition: "Updated.", avoid: ["draft"], tombstone: false, author: "bob" });
+		expect(materializeContextTermRevision(db, { term: "Order", revision: 1 })).toMatchObject({ definition: "Initial.", avoid: ["request"], tombstone: false, author: "system" });
+		expect(materializeContextTermRevision(db, { term: "Order", revision: 2 })).toMatchObject({ definition: "Updated.", avoid: ["draft"], tombstone: false, author: "system" });
 		expect(getContextDetails(db).terms).toEqual([]);
 	});
 

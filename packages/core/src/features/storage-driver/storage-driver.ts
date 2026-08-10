@@ -1,8 +1,11 @@
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../entity-store/tenant-types.js";
+import type { AuthIdentity } from "../../auth/auth-provider.js";
 import type { ContextStore } from "./context-store.js";
 import type { EntityStore } from "./entity-store.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
+import type { IssueCommentStore } from "./issue-comment-store.js";
 import type { SynchronizeStore } from "./synchronize-store.js";
+import type { UserDirectoryStore } from "./user-directory-store.js";
 
 /**
  * The engine-agnostic boundary the domain layer talks to (ADR11, ADR13):
@@ -17,8 +20,9 @@ import type { SynchronizeStore } from "./synchronize-store.js";
  * `SynchronizeStore` and the fourth feature, history diagnostics (which has
  * no public seam of its own - see `HistoryDiagnosticsStore`'s doc comment).
  */
-export interface StorageDriver extends EntityStore, ContextStore, SynchronizeStore {
+export interface StorageDriver extends EntityStore, ContextStore, IssueCommentStore, SynchronizeStore, UserDirectoryStore {
 	readonly tenantId: string;
+	withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver;
 	getHistoryDiagnostics(): Promise<HistoryDiagnostics>;
 
 	// Tenant administration

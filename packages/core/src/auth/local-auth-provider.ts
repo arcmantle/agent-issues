@@ -30,7 +30,7 @@ export class LocalAuthProvider implements AuthProvider {
 	}
 
 	public async issueToken(identity: AuthIdentity, expiresInSeconds = 3600): Promise<string> {
-		return new SignJWT({ userId: identity.userId, tenantId: identity.tenantId })
+		return new SignJWT({ userId: identity.userId, tenantId: identity.tenantId, displayName: identity.displayName })
 			.setProtectedHeader({ alg: "HS256" })
 			.setIssuer(ISSUER)
 			.setIssuedAt()
@@ -45,11 +45,12 @@ export class LocalAuthProvider implements AuthProvider {
 
 		const userId = typeof payload.userId === "string" ? payload.userId : undefined;
 		const tenantId = typeof payload.tenantId === "string" ? payload.tenantId : undefined;
+		const displayName = typeof payload.displayName === "string" ? payload.displayName : undefined;
 
 		if (!userId || !tenantId) {
 			throw new Error("Local auth token is missing required userId/tenantId claims.");
 		}
 
-		return { userId, tenantId };
+		return { userId, tenantId, ...(displayName !== undefined && { displayName }) };
 	}
 }

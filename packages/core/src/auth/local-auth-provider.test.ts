@@ -16,6 +16,14 @@ describe("LocalAuthProvider", () => {
 		expect(identity).toEqual({ userId: "user-1", tenantId: "local-dev" });
 	});
 
+	it("preserves an optional display name in a locally-signed credential", async () => {
+		const provider = new LocalAuthProvider({ secret: SECRET });
+
+		const token = await provider.issueToken({ userId: "user-1", tenantId: "local-dev", displayName: "Ada Lovelace" });
+
+		await expect(provider.validateToken(token)).resolves.toEqual({ userId: "user-1", tenantId: "local-dev", displayName: "Ada Lovelace" });
+	});
+
 	it("accepts a bare token with no 'Bearer ' prefix", async () => {
 		const provider = new LocalAuthProvider({ secret: SECRET });
 

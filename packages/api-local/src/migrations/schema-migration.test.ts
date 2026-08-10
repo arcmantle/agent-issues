@@ -110,7 +110,7 @@ afterEach(() => {
 
 describe("golden-fixture migration wall", () => {
 	it("registers the SQLite production migration plan", () => {
-		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current"]);
+		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments"]);
 	});
 
 	it("implements the SQLite legacy route without clone or historical migration replay", () => {
@@ -141,8 +141,11 @@ describe("golden-fixture migration wall", () => {
 		const migrated = new Database(staged, { readonly: true, fileMustExist: true });
 		try {
 			expect(migrated.prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
-				{ id: "legacy-v7-direct" }
+				{ id: "legacy-v7-direct" },
+				...migrations.map(({ id }) => ({ id }))
 			]);
+			expect(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()).toEqual({ name: "users" });
+			expect(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'issue_comments'").get()).toEqual({ name: "issue_comments" });
 			expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
 				'entity_delta_entries',
 				'context_delta_entries',
@@ -173,7 +176,10 @@ describe("golden-fixture migration wall", () => {
 		try {
 			expect(inspected.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all()).toEqual(schemaBefore);
 			expect(inspected.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name LIKE 'legacy_v7_%'").get()).toEqual({ count: 7 });
-			expect(inspected.prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([{ id: "legacy-v7-direct" }]);
+			expect(inspected.prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
+				{ id: "legacy-v7-direct" },
+				...migrations.map(({ id }) => ({ id }))
+			]);
 		} finally {
 			inspected.close();
 		}
@@ -257,7 +263,10 @@ describe("golden-fixture migration wall", () => {
 		try {
 			for (const row of before.entities as Array<{ tenant_id: string; id: string; kind: Parameters<typeof deriveMigratedEntityIdentity>[0]; title: string; status: string }>) {
 				const identity = deriveMigratedEntityIdentity(row.kind, row.id);
-				expect(migratedRecords.prepare(`SELECT id, reference, title, status FROM entities WHERE tenant_id = ? AND id = ?`).get(row.tenant_id, identity.stableId)).toEqual({ id: identity.stableId, reference: identity.reference, title: row.title, status: row.status });
+				const status = row.kind === "adr" && ["proposed", "accepted", "superseded"].includes(row.status)
+					? "current"
+					: row.status;
+				expect(migratedRecords.prepare(`SELECT id, reference, title, status FROM entities WHERE tenant_id = ? AND id = ?`).get(row.tenant_id, identity.stableId)).toEqual({ id: identity.stableId, reference: identity.reference, title: row.title, status });
 			}
 		} finally {
 			migratedRecords.close();
@@ -356,7 +365,7 @@ describe("golden-fixture migration wall", () => {
 		}
 	});
 
-	it("records the legacy v7 transformation as one direct checkpoint", async () => {
+	it("records the legacy v7 transformation and materialized migrations", async () => {
 		const staged = stageFixture();
 
 		const { db } = await ensureDatabase(staged, { tenant: "fixture" });
@@ -375,7 +384,10 @@ describe("golden-fixture migration wall", () => {
 		const db2 = new Database(staged, { readonly: true, fileMustExist: true });
 		try {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
-			expect(applied).toEqual([{ id: "legacy-v7-direct" }]);
+			expect(applied).toEqual([
+				{ id: "legacy-v7-direct" },
+				...migrations.map(({ id }) => ({ id }))
+			].sort((left, right) => left.id.localeCompare(right.id)));
 		} finally {
 			db2.close();
 		}
@@ -475,7 +487,12 @@ describe("fresh install schema parity", () => {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
 			expect(applied).toEqual([
 				{ id: "adr-status-to-current" },
-				{ id: "final-baseline" }
+				{ id: "context-term-provenance" },
+				{ id: "final-baseline" },
+				{ id: "issue-comments" },
+				{ id: "record-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "user-directory" }
 			]);
 		} finally {
 			db2.close();

@@ -89,6 +89,22 @@ describe("JSON-RPC gate", () => {
 		expect(details.entity.title).toBe("Ship the gate");
 	});
 
+	it("creates the trusted authenticated user when a request writes", async () => {
+		const tenantId = createTestTenantId();
+		const token = await authProvider.issueToken({ userId: "entra:ada", tenantId, displayName: "Ada Lovelace" });
+
+		const response = await request(server)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Ship authenticated mutations" } });
+
+		expect(response.status).toBe(200);
+		expect(response.body.error).toBeUndefined();
+		expect(await new PgStore(appPool, tenantId).listUsers()).toMatchObject([
+			{ authenticationSubject: "entra:ada", displayName: "Ada Lovelace" }
+		]);
+	});
+
 	it("never lets a caller-supplied tenantId override the auth-seam-resolved one", async () => {
 		const realTenantId = createTestTenantId();
 		const spoofedTenantId = createTestTenantId();

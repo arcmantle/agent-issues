@@ -1,6 +1,7 @@
 export type AuthIdentity = {
 	userId: string;
 	tenantId: string;
+	displayName?: string;
 };
 
 /**

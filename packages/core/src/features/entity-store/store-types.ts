@@ -1,5 +1,7 @@
 import type { EntityRecord, RelationRecord, RelationType } from "./domain.js";
 import type { ContextDetails } from "../context/context-types.js";
+import type { IssueCommentPage } from "../storage-driver/issue-comment-store.js";
+import type { UserDirectoryRecord } from "../user-directory/user-directory.js";
 
 /**
  * The entity/handoff-store result contract (ADR13's dialect-agnostic
@@ -18,6 +20,7 @@ export type EntityDetails = {
 	entity: EntityRecord;
 	incoming: Array<{ relationType: RelationType; entity: EntityRecord }>;
 	outgoing: Array<{ relationType: RelationType; entity: EntityRecord }>;
+	comments?: IssueCommentPage;
 };
 
 export type QueryEntitiesInput = {
@@ -81,6 +84,8 @@ export type ProjectRollup = {
 
 export type DatabaseSnapshot = {
 	generatedAt: string;
+	users: UserDirectoryRecord[];
+	issueComments: Record<string, IssueCommentPage>;
 	entities: EntityRecord[];
 	relations: RelationRecord[];
 	orphans: EntityRecord[];

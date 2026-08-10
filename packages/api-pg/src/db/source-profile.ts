@@ -3,7 +3,15 @@ import type { PoolClient } from "pg";
 
 import type { SourceProfileResult } from "@agent-issues/core";
 
-const CURRENT_FINAL_SCHEMA_SIGNATURE = "7338aea98e85ac93de5fcfc938d424ba8aa7a75727be17e9bfc39a57c425cde8";
+const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
+	// Approved baseline, user-directory, and provenance schema states.
+	"7338aea98e85ac93de5fcfc938d424ba8aa7a75727be17e9bfc39a57c425cde8",
+	"7183b76f12b7bcc7034e61a270a69ed7d86888b80799aa201234aeac21801d20",
+	"82a0f44eb2dd317d2e736e74c1843e4181589c91e1da7bcdf6481841daaf9363",
+	"b5bb9bb161f3232d502a3d9c37d99170a25e4b864a185ff440938ebe74fdb8f4",
+	"e57e950cb17f96e5236069ac076664395049b81363c2906ff3580af074d6bbb5",
+	"867e63130040b24b7c2d8beaa0e3253f5a435f1291078e7ac4f978bf7708d10f"
+]);
 const LEGACY_V7_SCHEMA_SIGNATURE = "a56ad7487ddca6b9095b9af7e197da17507f541bd714b627e70cedca54e5f2da";
 
 type CatalogColumn = {
@@ -277,7 +285,7 @@ export async function inspectPgSourceProfile(client: Pick<PoolClient, "query">, 
 	if (schemaSignature === LEGACY_V7_SCHEMA_SIGNATURE && !hasLedger) {
 		return { evidence, profile: "legacy-postgres-v7", supported: true };
 	}
-	if (schemaSignature === CURRENT_FINAL_SCHEMA_SIGNATURE
+	if (CURRENT_FINAL_SCHEMA_SIGNATURES.has(schemaSignature)
 		&& ((ledgerIds.length > 0
 			&& ledgerIds.every((id, index) => id === expectedLedgerIds[index]))
 			|| (ledgerIds.length === 1 && ledgerIds[0] === "legacy-v7-direct"))) {

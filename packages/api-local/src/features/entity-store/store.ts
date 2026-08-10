@@ -6,6 +6,7 @@ import { and, eq, sql, type SQL } from "drizzle-orm";
 import { getSqliteEntityOrThrow, resolveSqliteEntity, type SqliteExecutor } from "../../db/sqlite-executor.js";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 import { recordHistoryMaterialization } from "../history-diagnostics.js";
+import { listIssueComments } from "../issue-comment/store.js";
 import { entities } from "../../schema.js";
 import { getContextDetails, type ContextDetails } from "../context/context-store.js";
 import {
@@ -71,6 +72,8 @@ export {
 type EntityRow = {
 	id: string;
 	reference: string;
+	created_by?: string | null;
+	updated_by?: string | null;
 	kind: string;
 	title: string;
 	status: string;
@@ -90,6 +93,7 @@ type RelationRow = {
 	from_id: string;
 	to_id: string;
 	type: string;
+	created_by?: string | null;
 	created_at: string;
 };
 
@@ -115,7 +119,8 @@ export function createEntity(
 		body?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
-	}
+	},
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): EntityRecord {
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
@@ -158,6 +163,8 @@ export function createEntity(
 		const values = tenantParams(executor, {
 			id,
 			reference: identity.reference,
+			createdBy: actorId,
+			updatedBy: actorId,
 			kind,
 			title,
 			status,
@@ -176,6 +183,7 @@ export function createEntity(
 				fromId: parent.id,
 				toId: id,
 				type: relationType,
+				createdBy: actorId,
 				createdAt: now
 			});
 		}
@@ -187,7 +195,7 @@ export function createEntity(
 		// Write the baseline revision-1 entry: a no-op patch (predecessor ==
 		// successor) so listEntityHistory always has a real revision_entries row
 		// for every revision in the chain, including the initial one.
-		appendDeltaEntry(executor, id, 1, title, body, bodySource, input.author, now);
+		appendDeltaEntry(executor, id, 1, title, body, bodySource, actorId, now);
 
 		const entity = getEntityOrThrow(executor, id);
 		return entity;
@@ -196,14 +204,16 @@ export function createEntity(
 
 export function linkEntities(
 	executor: SqliteExecutor,
-	input: { fromId: string; toId: string; relationType: string }
+	input: { fromId: string; toId: string; relationType: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): LinkResult {
-	return executor.drizzle.transaction(() => linkEntitiesInTransaction(executor, input));
+	return executor.drizzle.transaction(() => linkEntitiesInTransaction(executor, input, actorId));
 }
 
 function linkEntitiesInTransaction(
 	executor: SqliteExecutor,
-	input: { fromId: string; toId: string; relationType: string }
+	input: { fromId: string; toId: string; relationType: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): LinkResult {
 	if (input.fromId === input.toId) {
 		throw new Error("Cannot create a relation from an entity to itself.");
@@ -232,6 +242,7 @@ function linkEntitiesInTransaction(
 		fromId: from.id,
 		toId: to.id,
 		type: input.relationType,
+		createdBy: actorId,
 		createdAt
 	});
 
@@ -240,6 +251,7 @@ function linkEntitiesInTransaction(
 			fromId: from.id,
 			toId: to.id,
 			type: input.relationType,
+			createdBy: actorId,
 			createdAt
 		},
 		created: result.changes > 0
@@ -248,7 +260,8 @@ function linkEntitiesInTransaction(
 
 export function updateEntityStatus(
 	executor: SqliteExecutor,
-	input: { entityId: string; status: string; author?: string }
+	input: { entityId: string; status: string; author?: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): StatusUpdateResult {
 	const entity = getEntityOrThrow(executor, input.entityId);
 
@@ -320,7 +333,7 @@ export function updateEntityStatus(
 	const newRevision = entity.revision + 1;
 	const result = executor.drizzle
 		.update(entities)
-		.set({ status: input.status, revision: newRevision, updatedAt })
+		.set({ status: input.status, revision: newRevision, updatedBy: actorId, updatedAt })
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.revision, entity.revision)))
 		.run();
 
@@ -329,7 +342,7 @@ export function updateEntityStatus(
 		throw new EntityConflictError(input.entityId, current.revision, current.contentHash);
 	}
 
-	appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+	appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 		priorStatus: entity.status
 	});
 
@@ -341,7 +354,8 @@ export function updateEntityStatus(
 
 export function setEntityBody(
 	executor: SqliteExecutor,
-	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): EntityRecord {
 	return executor.drizzle.transaction(() => {
 		const current = getEntityOrThrow(executor, input.entityId);
@@ -357,7 +371,7 @@ export function setEntityBody(
 
 		const result = executor.drizzle
 			.update(entities)
-			.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedAt })
+			.set({ body: input.body, bodySource, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
 			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 			.run();
 
@@ -366,14 +380,15 @@ export function setEntityBody(
 			throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 		}
 
-		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
 		return getEntityOrThrow(executor, current.id);
 	});
 }
 
 export function updateEntity(
 	executor: SqliteExecutor,
-	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): EntityRecord {
 	if (input.title === undefined && input.body === undefined) {
 		throw new Error("Entity edit requires --title, --body, or both.");
@@ -398,7 +413,7 @@ export function updateEntity(
 
 		const result = executor.drizzle
 			.update(entities)
-			.set({ body, bodySource, title, revision: newRevision, contentHash: newContentHash, updatedAt })
+			.set({ body, bodySource, title, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
 			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 			.run();
 
@@ -407,17 +422,17 @@ export function updateEntity(
 			throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 		}
 
-		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt);
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
 		return getEntityOrThrow(executor, current.id);
 	});
 }
 
-export function archiveEntity(executor: SqliteExecutor, input: { entityId: string }): StatusUpdateResult {
+export function archiveEntity(executor: SqliteExecutor, input: { entityId: string }, actorId: string = RESERVED_SYSTEM_AUTHOR): StatusUpdateResult {
 	const entity = getEntityOrThrow(executor, input.entityId);
 	return updateEntityStatus(executor, {
 		entityId: input.entityId,
 		status: getArchiveStatus(entity.kind)
-	});
+	}, actorId);
 }
 
 /**
@@ -500,7 +515,8 @@ export function materializeEntityRevision(
 
 export function restoreEntityRevision(
 	executor: SqliteExecutor,
-	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): MaterializedEntityRevision {
 	const row = resolveSqliteEntity(executor, input.entityId, true);
 	if (!row) {
@@ -536,6 +552,7 @@ export function restoreEntityRevision(
 			revision: newRevision,
 			contentHash: computeEntityContentHash(source.title, source.body),
 			tombstone: source.tombstone === true,
+			updatedBy: actorId,
 			updatedAt
 		}).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash))).run();
 		if (result.changes === 0) {
@@ -548,7 +565,7 @@ export function restoreEntityRevision(
 			run(executor, sql`DELETE FROM relations WHERE tenant_id = ${executor.tenantId} AND from_id = ${relation.fromId} AND to_id = ${relation.toId} AND type = ${relation.type}`);
 		}
 		if (restoredParent && restoredRelationType) {
-			insertRelation(executor, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdAt: updatedAt });
+			insertRelation(executor, { fromId: restoredParent.id, toId: current.id, type: restoredRelationType, createdBy: actorId, createdAt: updatedAt });
 		}
 		const projectId = restoredParent ? getEntityProjectId(executor, restoredParent.id) ?? executor.currentProjectId : executor.currentProjectId;
 		run(executor, sql`WITH RECURSIVE subtree(id) AS (
@@ -563,7 +580,7 @@ export function restoreEntityRevision(
 		SET project_id = ${projectId}
 		WHERE tenant_id = ${executor.tenantId} AND id IN (SELECT id FROM subtree)`);
 
-		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, input.author, updatedAt, {
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt, {
 			priorStatus: current.status,
 			priorParentId: currentParentId,
 			priorTombstone: row.tombstone,
@@ -575,7 +592,8 @@ export function restoreEntityRevision(
 
 export function moveEntity(
 	executor: SqliteExecutor,
-	input: { entityId: string; newParentId: string; author?: string }
+	input: { entityId: string; newParentId: string; author?: string },
+	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): MoveResult {
 	if (input.entityId === input.newParentId) {
 		throw new Error("Cannot move an entity under itself.");
@@ -624,6 +642,7 @@ export function moveEntity(
 			fromId: newParent.id,
 			toId: entity.id,
 			type: relationType,
+			createdBy: actorId,
 			createdAt: updatedAt
 		});
 
@@ -644,11 +663,11 @@ export function moveEntity(
 		WHERE tenant_id = ${executor.tenantId} AND id IN (SELECT id FROM subtree)`);
 
 		run(executor, sql`UPDATE entities
-			SET revision = ${newRevision}, updated_at = ${updatedAt}
+			SET revision = ${newRevision}, updated_by = ${actorId}, updated_at = ${updatedAt}
 			WHERE tenant_id = ${executor.tenantId}
 				AND id = ${entity.id}`);
 
-		appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, input.author, updatedAt, {
+		appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 			priorParentId: previousParentId
 		});
 	});
@@ -691,7 +710,7 @@ export function unlinkEntities(
 	};
 }
 
-export function deleteEntity(executor: SqliteExecutor, input: { entityId: string }): DeleteResult {
+export function deleteEntity(executor: SqliteExecutor, input: { entityId: string }, actorId: string = RESERVED_SYSTEM_AUTHOR): DeleteResult {
 	const entity = getEntityOrThrow(executor, input.entityId);
 	const previousParentId = getStructuralParentRelations(executor, entity.id)[0]?.fromId ?? null;
 
@@ -710,10 +729,10 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 			run(executor, sql`DELETE FROM relations WHERE tenant_id = ${executor.tenantId} AND (from_id = ${handoff.id} OR to_id = ${handoff.id})`);
 			executor.drizzle
 				.update(entities)
-				.set({ tombstone: true, revision: handoffRevision, updatedAt: handoffUpdatedAt })
+				.set({ tombstone: true, revision: handoffRevision, updatedBy: actorId, updatedAt: handoffUpdatedAt })
 				.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, handoff.id), eq(entities.tombstone, false)))
 				.run();
-			appendDeltaEntry(executor, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, undefined, handoffUpdatedAt, {
+			appendDeltaEntry(executor, handoff.id, handoffRevision, handoff.title, handoff.body, handoff.bodySource, actorId, handoffUpdatedAt, {
 				priorTombstone: false
 			});
 		}
@@ -733,10 +752,10 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 					AND (from_id = ${entity.id} OR to_id = ${entity.id})`);
 			const result = executor.drizzle
 				.update(entities)
-				.set({ tombstone: true, revision: newRevision, updatedAt })
+				.set({ tombstone: true, revision: newRevision, updatedBy: actorId, updatedAt })
 				.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entity.id), eq(entities.tombstone, false)))
 				.run();
-			appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, undefined, updatedAt, {
+			appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 				priorParentId: previousParentId,
 				priorTombstone: false
 			});
@@ -1060,6 +1079,7 @@ export function listAllRelations(executor: SqliteExecutor): RelationRecord[] {
 		fromId: row.from_id,
 		toId: row.to_id,
 		type: row.type as RelationType,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		createdAt: row.created_at
 	}));
 }
@@ -1163,6 +1183,12 @@ function getCurrentProjectSnapshot(executor: SqliteExecutor): DatabaseSnapshot {
 
 	return {
 		generatedAt: new Date().toISOString(),
+		users: getTenantUserDirectory(executor),
+		issueComments: Object.fromEntries(
+			entities
+				.filter((entity) => entity.kind === "issue")
+				.map((entity) => [entity.id, listIssueComments(executor, { issueId: entity.id })])
+		),
 		entities,
 		relations,
 		orphans: listOrphans(executor),
@@ -1173,6 +1199,18 @@ function getCurrentProjectSnapshot(executor: SqliteExecutor): DatabaseSnapshot {
 			initiatives: initiatives.map((entity) => getContextDetails(executor, { scopeRef: entity.id }))
 		}
 	};
+}
+
+function getTenantUserDirectory(executor: SqliteExecutor) {
+	return all<{ id: string; authentication_subject: string; display_name: string | null; updated_at: string }>(
+		executor,
+		sql`SELECT id, authentication_subject, display_name, updated_at FROM users WHERE tenant_id = ${executor.tenantId} ORDER BY id`
+	).map((row) => ({
+		id: row.id,
+		authenticationSubject: row.authentication_subject,
+		displayName: row.display_name,
+		updatedAt: row.updated_at
+	}));
 }
 
 export function getProjectDiscovery(executor: SqliteExecutor, input?: { projectId?: string }): ProjectDiscovery {
@@ -1219,6 +1257,8 @@ function mapDrizzleEntityRow(row: DrizzleEntityRow): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		createdBy: row.createdBy ?? RESERVED_SYSTEM_AUTHOR,
+		updatedBy: row.updatedBy ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind as EntityKind,
 		title: row.title,
 		status: row.status,
@@ -1251,6 +1291,7 @@ function getRelationOrThrow(
 		fromId: row.from_id,
 		toId: row.to_id,
 		type: row.type as RelationType,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		createdAt: row.created_at
 	};
 }
@@ -1271,6 +1312,7 @@ function getStructuralParentRelations(executor: SqliteExecutor, entityId: string
 			fromId: row.from_id,
 			toId: row.to_id,
 			type: row.type as RelationType,
+			createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 			createdAt: row.created_at
 		}));
 }
@@ -1325,8 +1367,9 @@ function getStructuralPath(executor: SqliteExecutor, entityId: string): Array<{ 
 }
 
 function insertRelation(executor: SqliteExecutor, relation: RelationRecord) {
-	return run(executor, sql`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_at)
-		VALUES (${executor.tenantId}, ${relation.fromId}, ${relation.toId}, ${relation.type}, ${relation.createdAt})`);
+	const createdBy = relation.createdBy ?? RESERVED_SYSTEM_AUTHOR;
+	return run(executor, sql`INSERT OR IGNORE INTO relations (tenant_id, from_id, to_id, type, created_by, created_at)
+		VALUES (${executor.tenantId}, ${relation.fromId}, ${relation.toId}, ${relation.type}, ${createdBy}, ${relation.createdAt})`);
 }
 
 // Appends an entity reverse-patch entry to `revision_entries` for one atomic
@@ -1390,7 +1433,7 @@ function getTenantRelations(executor: SqliteExecutor): RelationRecord[] {
 			WHERE relations.tenant_id = ${executor.tenantId} AND source.tombstone = FALSE AND target.tombstone = FALSE
 			ORDER BY relations.from_id, relations.to_id, relations.type`
 	);
-	return rows.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdAt: row.created_at }));
+	return rows.map((row) => ({ fromId: row.from_id, toId: row.to_id, type: row.type as RelationType, createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR, createdAt: row.created_at }));
 }
 
 /** The `project_id` an entity is stamped with, or null if it predates the ISS166 backfill. */
@@ -1512,6 +1555,7 @@ function getAllRelations(executor: SqliteExecutor): RelationRecord[] {
 		fromId: row.from_id,
 		toId: row.to_id,
 		type: row.type as RelationType,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		createdAt: row.created_at
 	}));
 }
@@ -1525,6 +1569,7 @@ function hasTypedPath(executor: SqliteExecutor, startId: string, targetId: strin
 		fromId: row.from_id,
 		toId: row.to_id,
 		type: row.type as RelationType,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		createdAt: row.created_at
 	}));
 
@@ -1606,6 +1651,8 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
+		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind,
 		title: row.title,
 		status: row.status,

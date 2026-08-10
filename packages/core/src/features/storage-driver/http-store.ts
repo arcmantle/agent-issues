@@ -16,7 +16,9 @@ import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../e
 import type { BodySource, EntityRecord, HistoryEntryRecord, MaterializedEntityRevision, RelationRecord } from "../entity-store/domain.js";
 import { EntityConflictError, EntityRevisionError, type EntityRevisionErrorReason } from "../entity-store/domain.js";
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
+import { IssueCommentConflictError } from "./issue-comment-store.js";
 import type { StorageDriver } from "./storage-driver.js";
+import type { AuthIdentity } from "../../auth/auth-provider.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
 import {
 	decodeCanonicalChainBundle,
@@ -44,6 +46,12 @@ export type HttpStoreOptions = {
 	baseUrl: string;
 	/** Bearer token attached to every request. `HttpStore` neither resolves nor refreshes it - the caller (backend selection/CLI seam) owns that. */
 	bearerToken: string;
+	/**
+	 * Resolves a server-issued bearer token for an alternate trusted identity.
+	 * Without it, `HttpStore` cannot safely impersonate another user because
+	 * the gate must derive identity only from the bearer credential.
+	 */
+	identityBearerToken?: (identity: AuthIdentity) => string | undefined;
 	tenantId: string;
 	/**
 	 * This process's own build-content-hash (ADR45, ISS188), sent as a
@@ -85,6 +93,7 @@ const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 
 type JsonRpcSuccessResponse = { jsonrpc: "2.0"; id: string; result: unknown };
 type JsonRpcErrorData = { entityId: string; currentRevision: number; currentContentHash: string };
+type JsonRpcIssueCommentConflictData = { commentId: string; currentRevision: number; currentContentHash: string };
 type JsonRpcContextConflictData = { contextKey: string; currentRevision: number; currentContentHash: string };
 type JsonRpcContextTermConflictData = JsonRpcContextConflictData & { term: string };
 type JsonRpcRevisionErrorData = { entityId: string; reason: EntityRevisionErrorReason; headRevision?: number };
@@ -158,7 +167,7 @@ function isEntityConflictData(data: unknown): data is JsonRpcErrorData {
 }
 
 function isSynchronizeConflictData(data: unknown): data is JsonRpcSynchronizeConflictData {
-	const validRecordKinds: SynchronizeRecordKind[] = ["entity", "context", "context-term"];
+	const validRecordKinds: SynchronizeRecordKind[] = ["entity", "context", "context-term", "issue-comment"];
 	return (
 		typeof data === "object" &&
 		data !== null &&
@@ -166,6 +175,16 @@ function isSynchronizeConflictData(data: unknown): data is JsonRpcSynchronizeCon
 		typeof (data as JsonRpcSynchronizeConflictData).recordId === "string" &&
 		typeof (data as JsonRpcSynchronizeConflictData).currentRevision === "number" &&
 		typeof (data as JsonRpcSynchronizeConflictData).currentContentHash === "string"
+	);
+}
+
+function isIssueCommentConflictData(data: unknown): data is JsonRpcIssueCommentConflictData {
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as JsonRpcIssueCommentConflictData).commentId === "string" &&
+		typeof (data as JsonRpcIssueCommentConflictData).currentRevision === "number" &&
+		typeof (data as JsonRpcIssueCommentConflictData).currentContentHash === "string"
 	);
 }
 
@@ -227,12 +246,29 @@ export class HttpStore implements StorageDriver {
 		return this.options.tenantId;
 	}
 
+	public withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver {
+		const bearerToken = this.options.identityBearerToken?.(identity);
+		if (!bearerToken) {
+			throw new Error("HttpStore requires a trusted bearer-token resolver to switch authenticated identity.");
+		}
+
+		return new HttpStore({ ...this.options, bearerToken });
+	}
+
 	public async exportCanonicalChains(): Promise<CanonicalChainBundle> {
 		return decodeCanonicalChainBundle(await this.call("exportCanonicalChains"));
 	}
 
 	public importCanonicalChains(bundle: CanonicalChainBundle): Promise<CanonicalChainImportResult> {
 		return this.call("importCanonicalChains", { bundle: encodeCanonicalChainBundle(bundle) });
+	}
+
+	public upsertUser(input: Parameters<StorageDriver["upsertUser"]>[0]): ReturnType<StorageDriver["upsertUser"]> {
+		return this.call("upsertUser", input);
+	}
+
+	public listUsers(): ReturnType<StorageDriver["listUsers"]> {
+		return this.call("listUsers");
 	}
 
 	public getHistoryDiagnostics(): Promise<HistoryDiagnostics> {
@@ -288,6 +324,9 @@ export class HttpStore implements StorageDriver {
 			if (isEntityConflictData(data)) {
 				throw new EntityConflictError(data.entityId, data.currentRevision, data.currentContentHash);
 			}
+			if (isIssueCommentConflictData(data)) {
+				throw new IssueCommentConflictError(data.commentId, data.currentRevision, data.currentContentHash);
+			}
 			if (isEntityRevisionErrorData(data)) {
 				throw new EntityRevisionError(data.entityId, data.reason, message, data.headRevision);
 			}
@@ -317,6 +356,26 @@ export class HttpStore implements StorageDriver {
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord> {
 		return this.call("createEntity", input);
+	}
+
+	public createIssueComment(input: Parameters<StorageDriver["createIssueComment"]>[0]): ReturnType<StorageDriver["createIssueComment"]> {
+		return this.call("createIssueComment", input);
+	}
+
+	public updateIssueComment(input: Parameters<StorageDriver["updateIssueComment"]>[0]): ReturnType<StorageDriver["updateIssueComment"]> {
+		return this.call("updateIssueComment", input);
+	}
+
+	public deleteIssueComment(input: Parameters<StorageDriver["deleteIssueComment"]>[0]): ReturnType<StorageDriver["deleteIssueComment"]> {
+		return this.call("deleteIssueComment", input);
+	}
+
+	public listIssueComments(input: Parameters<StorageDriver["listIssueComments"]>[0]): ReturnType<StorageDriver["listIssueComments"]> {
+		return this.call("listIssueComments", input);
+	}
+
+	public listIssueCommentHistory(input: Parameters<StorageDriver["listIssueCommentHistory"]>[0]): ReturnType<StorageDriver["listIssueCommentHistory"]> {
+		return this.call("listIssueCommentHistory", input);
 	}
 
 	public getEntityDetails(entityId: string): Promise<EntityDetails> {

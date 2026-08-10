@@ -50,7 +50,14 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 	async function openHttpTestStore(): Promise<StorageDriver> {
 		const tenantId = createTestTenantId();
 		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId });
-		return new HttpStore({ baseUrl: handle.url, bearerToken, tenantId });
+		const aliceToken = await authProvider.issueToken({ userId: "entra:alice", tenantId, displayName: "Alice" });
+		const bobToken = await authProvider.issueToken({ userId: "entra:bob", tenantId, displayName: "Bob" });
+		return new HttpStore({
+			baseUrl: handle.url,
+			bearerToken,
+			tenantId,
+			identityBearerToken: (identity) => ({ "entra:alice": aliceToken, "entra:bob": bobToken }[identity.userId])
+		});
 	}
 
 	// Every identity-scoped store shares one tenant, so the contract can assert
@@ -60,7 +67,15 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 	async function openHttpTestStoreForProject(projectIdentity: string): Promise<StorageDriver> {
 		contractTenantId ??= createTestTenantId();
 		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: contractTenantId });
-		return new HttpStore({ baseUrl: handle.url, bearerToken, tenantId: contractTenantId, projectIdentity });
+		const aliceToken = await authProvider.issueToken({ userId: "entra:alice", tenantId: contractTenantId, displayName: "Alice" });
+		const bobToken = await authProvider.issueToken({ userId: "entra:bob", tenantId: contractTenantId, displayName: "Bob" });
+		return new HttpStore({
+			baseUrl: handle.url,
+			bearerToken,
+			tenantId: contractTenantId,
+			projectIdentity,
+			identityBearerToken: (identity) => ({ "entra:alice": aliceToken, "entra:bob": bobToken }[identity.userId])
+		});
 	}
 
 	beforeEach(() => {

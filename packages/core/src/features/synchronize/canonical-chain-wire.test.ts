@@ -13,7 +13,8 @@ describe("canonical chain wire encoding", () => {
 		const bundle = {
 			entities: [{ head: { id: stableId, reference: encodeCanonicalReference("issue", stableId), kind: "issue", parentId: null }, deltas: [{ reversePatch: Uint8Array.from([0, 127, 128, 255]), sourceHash: "01".repeat(32), targetHash: "fe".repeat(32) }] }],
 			contexts: [],
-			contextTerms: []
+			contextTerms: [],
+			users: []
 		} as unknown as CanonicalChainBundle;
 
 		const encoded = encodeCanonicalChainBundle(bundle);
@@ -33,7 +34,8 @@ describe("canonical chain wire encoding", () => {
 		const bundle = {
 			entities: [{ head: { id: "00000000-0000-4000-8000-000000000002", reference: encodeCanonicalReference("issue", stableId), kind: "issue", parentId: null }, deltas: [] }],
 			contexts: [],
-			contextTerms: []
+			contextTerms: [],
+			users: []
 		} as unknown as Parameters<typeof decodeCanonicalChainBundle>[0];
 
 		expect(() => decodeCanonicalChainBundle(bundle)).toThrow(/does not match issue Stable identity/);

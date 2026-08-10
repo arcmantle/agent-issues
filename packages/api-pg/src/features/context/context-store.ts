@@ -1,6 +1,7 @@
 import {
 	computeContextContentHash,
 	computeContextTermContentHash,
+	deriveUserIdentity,
 	deriveMigratedEntityIdentity,
 	CONTEXT_REVERSE_PATCH_REGISTRY,
 	CONTEXT_TERM_REVERSE_PATCH_REGISTRY,
@@ -21,6 +22,7 @@ import {
 	materializeContextFromPatches,
 	materializeContextTermFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
+	SYSTEM_AUTHENTICATION_SUBJECT,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextListResult,
@@ -50,9 +52,13 @@ import {
 	type EntityRow
 } from "../entity-store/store.js";
 
+const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
+
 export type ContextRow = {
 	id: string;
 	reference: string;
+	created_by?: string | null;
+	updated_by?: string | null;
 	key: string;
 	scope_entity_id: string | null;
 	title: string;
@@ -65,6 +71,8 @@ export type ContextRow = {
 
 export type ContextTermRow = {
 	id: string;
+	created_by?: string | null;
+	updated_by?: string | null;
 	term: string;
 	definition: string;
 	avoid_terms: string;
@@ -149,6 +157,8 @@ function createContextRecord(scope: ResolvedContextScope): ContextRecord {
 	return {
 		id: null,
 		reference: null,
+		createdBy: null,
+		updatedBy: null,
 		key: scope.key,
 		scopeKind: scope.scopeKind,
 		scopeEntityId: scope.scopeEntityId,
@@ -167,6 +177,8 @@ function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRec
 	return {
 		id: row.id,
 		reference: row.reference,
+		createdBy: row.created_by ?? null,
+		updatedBy: row.updated_by ?? null,
 		key: row.key,
 		scopeKind: scope.scopeKind,
 		scopeEntityId: row.scope_entity_id,
@@ -185,6 +197,8 @@ function mapContextTermRow(row: ContextTermRow): ContextTermRecord {
 	return {
 		id: row.id,
 		reference: encodeCanonicalReference("contextTerm", row.id),
+		createdBy: row.created_by ?? SYSTEM_USER_ID,
+		updatedBy: row.updated_by ?? SYSTEM_USER_ID,
 		term: row.term,
 		definition: row.definition,
 		avoid: parseAvoidTerms(row.avoid_terms),
@@ -306,6 +320,8 @@ async function fetchContextRow(executor: TenantExecutor, key: string): Promise<C
 	return row && {
 		id: row.id,
 		reference: row.reference,
+		created_by: row.createdBy,
+		updated_by: row.updatedBy,
 		key: row.key,
 		scope_entity_id: row.scopeEntityId,
 		title: row.title,
@@ -325,6 +341,8 @@ async function fetchContextTermRows(executor: TenantExecutor, key: string): Prom
 		.orderBy(sql`lower(${contextTerms.term})`, asc(contextTerms.term));
 	return rows.map((row) => ({
 		id: row.id,
+		created_by: row.createdBy,
+		updated_by: row.updatedBy,
 		term: row.term,
 		definition: row.definition,
 		avoid_terms: row.avoidTerms,
@@ -394,6 +412,8 @@ async function queryListContexts(executor: TenantExecutor, projectIdentity: stri
 		const initiative = {
 			id: initiativeRow.id,
 			reference: initiativeRow.reference,
+			createdBy: initiativeRow.createdBy ?? RESERVED_SYSTEM_AUTHOR,
+			updatedBy: initiativeRow.updatedBy ?? RESERVED_SYSTEM_AUTHOR,
 			kind: "initiative" as const,
 			title: initiativeRow.title,
 			status: initiativeRow.status,
@@ -430,7 +450,8 @@ async function buildContextDirectory(executor: TenantExecutor, projectIdentity: 
 async function ensureContextExists(
 	executor: TenantExecutor,
 	projectIdentity: string | undefined,
-	scopeRef?: string
+	scopeRef?: string,
+	actorId: string = SYSTEM_USER_ID
 ): Promise<ResolvedContextScope> {
 	const scope = await resolveContextScope(executor, projectIdentity, scopeRef);
 	const existing = await fetchContextRow(executor, scope.key);
@@ -446,6 +467,8 @@ async function ensureContextExists(
 		id: identity.stableId,
 		reference: identity.reference,
 		key: scope.key,
+		createdBy: actorId,
+		updatedBy: actorId,
 		scopeEntityId: scope.scopeEntityId,
 		title: scope.defaultTitle,
 		summary: scope.defaultSummary,
@@ -454,7 +477,7 @@ async function ensureContextExists(
 		createdAt: now,
 		updatedAt: now
 	});
-	await appendContextDeltaEntry(executor, scope.key, 1, scope.defaultTitle, scope.defaultSummary, undefined, now);
+	await appendContextDeltaEntry(executor, scope.key, 1, scope.defaultTitle, scope.defaultSummary, actorId, now);
 
 	return scope;
 }
@@ -469,6 +492,8 @@ async function getContextTermRecord(executor: TenantExecutor, contextKey: string
 		? {
 			...mapContextTermRow({
 			id: row.id,
+			created_by: row.createdBy,
+			updated_by: row.updatedBy,
 			term: row.term,
 			definition: row.definition,
 			avoid_terms: row.avoidTerms,
@@ -521,6 +546,7 @@ export async function upsertContext(
 	executor: TenantExecutor,
 	projectIdentity: string | undefined,
 	input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }
+	, actorId: string
 ): Promise<ContextDetails> {
 	const title = input.title.trim();
 	const summary = input.summary.trim();
@@ -554,6 +580,7 @@ export async function upsertContext(
 			UPDATE contexts
 			SET title = ${title}, summary = ${summary},
 			    revision = ${newRevision}, content_hash = ${newContentHash},
+			    updated_by = ${actorId}::uuid,
 			    updated_at = ${now}
 			WHERE tenant_id = ${executor.tenantId}
 			  AND key = ${scope.key}
@@ -569,7 +596,7 @@ export async function upsertContext(
 			throw new ContextConflictError(scope.key, fresh.revision, fresh.content_hash);
 		}
 
-		await appendContextDeltaEntry(executor, scope.key, newRevision, existing.title, existing.summary, input.author, now);
+		await appendContextDeltaEntry(executor, scope.key, newRevision, existing.title, existing.summary, actorId, now);
 	} else {
 		const identity = generateContextIdentity();
 		await executor.insert(contexts).values({
@@ -577,6 +604,8 @@ export async function upsertContext(
 			id: identity.stableId,
 			reference: identity.reference,
 			key: scope.key,
+			createdBy: actorId,
+			updatedBy: actorId,
 			scopeEntityId: scope.scopeEntityId,
 			title,
 			summary,
@@ -585,7 +614,7 @@ export async function upsertContext(
 			createdAt: now,
 			updatedAt: now
 		});
-		await appendContextDeltaEntry(executor, scope.key, 1, title, summary, input.author, now);
+		await appendContextDeltaEntry(executor, scope.key, 1, title, summary, actorId, now);
 	}
 
 	return queryContextDetails(executor, projectIdentity, input.scopeRef);
@@ -628,7 +657,8 @@ async function appendContextDeltaEntry(
 export async function defineContextTerm(
 	executor: TenantExecutor,
 	projectIdentity: string | undefined,
-	input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }
+	input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<DefineContextTermResult> {
 	const term = input.term.trim();
 	const definition = input.definition.trim();
@@ -641,7 +671,7 @@ export async function defineContextTerm(
 		throw new Error("Context term definition must not be empty.");
 	}
 
-	const scope = await ensureContextExists(executor, projectIdentity, input.scopeRef);
+	const scope = await ensureContextExists(executor, projectIdentity, input.scopeRef, actorId);
 	const normalizedAvoid = normalizeAvoidTerms(input.avoid ?? [], term);
 	const existing = await getContextTermRecord(executor, scope.key, term);
 	const now = new Date().toISOString();
@@ -650,19 +680,21 @@ export async function defineContextTerm(
 	if (existing) {
 		assertContextTermHead(scope.key, term, existing, input.expectedRevision, input.expectedContentHash);
 		const revision = existing.revision + 1;
-		const result = await executor.execute(sql`UPDATE context_terms SET definition = ${definition}, avoid_terms = ${JSON.stringify(normalizedAvoid)}, revision = ${revision}, content_hash = ${contentHash}, tombstone = FALSE, updated_at = ${now}
+		const result = await executor.execute(sql`UPDATE context_terms SET definition = ${definition}, avoid_terms = ${JSON.stringify(normalizedAvoid)}, revision = ${revision}, content_hash = ${contentHash}, tombstone = FALSE, updated_by = ${actorId}::uuid, updated_at = ${now}
 			WHERE tenant_id = ${executor.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
 		if ((result.rowCount ?? 0) === 0) {
 			const fresh = await getContextTermRecord(executor, scope.key, term);
 			throw new ContextTermConflictError(scope.key, term, fresh!.revision, fresh!.contentHash);
 		}
-		await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, input.author, now);
+		await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, actorId, now);
 	} else {
 		const id = generateContextTermId();
 		await executor.insert(contextTerms).values({
 			tenantId: executor.tenantId,
 			id,
 			contextKey: scope.key,
+			createdBy: actorId,
+			updatedBy: actorId,
 			term,
 			definition,
 			avoidTerms: JSON.stringify(normalizedAvoid),
@@ -672,7 +704,7 @@ export async function defineContextTerm(
 			createdAt: now,
 			updatedAt: now
 		});
-		await appendContextTermDeltaEntry(executor, scope.key, term, 1, { id, reference: encodeCanonicalReference("contextTerm", id), term, definition, avoid: normalizedAvoid, revision: 1, contentHash, createdAt: now, updatedAt: now, tombstone: false }, input.author, now);
+		await appendContextTermDeltaEntry(executor, scope.key, term, 1, { id, reference: encodeCanonicalReference("contextTerm", id), createdBy: actorId, updatedBy: actorId, term, definition, avoid: normalizedAvoid, revision: 1, contentHash, createdAt: now, updatedAt: now, tombstone: false }, actorId, now);
 	}
 
 	const storedTerm = await getContextTermRecord(executor, scope.key, term);
@@ -691,7 +723,8 @@ export async function defineContextTerm(
 export async function forgetContextTerm(
 	executor: TenantExecutor,
 	projectIdentity: string | undefined,
-	input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }
+	input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<ForgetContextTermResult> {
 	const term = input.term.trim();
 	if (term.length === 0) {
@@ -710,13 +743,13 @@ export async function forgetContextTerm(
 	const revision = existing.revision + 1;
 	const contentHash = computeContextTermContentHash(existing.term, existing.definition, existing.avoid, true);
 	const now = new Date().toISOString();
-	const result = await executor.execute(sql`UPDATE context_terms SET revision = ${revision}, content_hash = ${contentHash}, tombstone = TRUE, updated_at = ${now}
+	const result = await executor.execute(sql`UPDATE context_terms SET revision = ${revision}, content_hash = ${contentHash}, tombstone = TRUE, updated_by = ${actorId}::uuid, updated_at = ${now}
 		WHERE tenant_id = ${executor.tenantId} AND context_key = ${scope.key} AND term = ${term} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash}`);
 	if ((result.rowCount ?? 0) === 0) {
 		const fresh = await getContextTermRecord(executor, scope.key, term);
 		throw new ContextTermConflictError(scope.key, term, fresh!.revision, fresh!.contentHash);
 	}
-	await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, input.author, now);
+	await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, actorId, now);
 
 	return {
 		context: (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context,
@@ -750,7 +783,8 @@ export async function materializeContextRevision(
 export async function restoreContextRevision(
 	executor: TenantExecutor,
 	projectIdentity: string | undefined,
-	input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<MaterializedContextRevision> {
 	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
 	const current = (await queryContextDetails(executor, projectIdentity, input.scopeRef)).context;
@@ -769,6 +803,7 @@ export async function restoreContextRevision(
 		summary: source.summary,
 		revision,
 		contentHash,
+		updatedBy: actorId,
 		updatedAt
 	}).where(and(eq(contexts.tenantId, executor.tenantId), eq(contexts.key, scope.key), eq(contexts.revision, input.expectedRevision), eq(contexts.contentHash, input.expectedContentHash))).returning({ key: contexts.key });
 	if (!updated) {
@@ -778,7 +813,7 @@ export async function restoreContextRevision(
 		}
 		throw new ContextConflictError(scope.key, fresh.revision, fresh.content_hash);
 	}
-	await appendContextDeltaEntry(executor, scope.key, revision, current.title, current.summary, input.author, updatedAt, input.revision);
+	await appendContextDeltaEntry(executor, scope.key, revision, current.title, current.summary, actorId, updatedAt, input.revision);
 	return materializeContextRevision(executor, projectIdentity, { scopeRef: input.scopeRef, revision });
 }
 
@@ -805,7 +840,8 @@ export async function materializeContextTermRevision(
 export async function restoreContextTermRevision(
 	executor: TenantExecutor,
 	projectIdentity: string | undefined,
-	input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }
+	input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string },
+	actorId: string = SYSTEM_USER_ID
 ): Promise<MaterializedContextTermRevision> {
 	const scope = await resolveContextScope(executor, projectIdentity, input.scopeRef);
 	const term = input.term.trim();
@@ -824,6 +860,7 @@ export async function restoreContextTermRevision(
 		revision,
 		contentHash,
 		tombstone: source.tombstone,
+		updatedBy: actorId,
 		updatedAt
 	}).where(and(eq(contextTerms.tenantId, executor.tenantId), eq(contextTerms.contextKey, scope.key), eq(contextTerms.term, term), eq(contextTerms.revision, input.expectedRevision), eq(contextTerms.contentHash, input.expectedContentHash))).returning({ term: contextTerms.term });
 	if (!updated) {
@@ -833,7 +870,7 @@ export async function restoreContextTermRevision(
 		}
 		throw new ContextTermConflictError(scope.key, term, fresh.revision, fresh.contentHash);
 	}
-	await appendContextTermDeltaEntry(executor, scope.key, term, revision, current, input.author, updatedAt, input.revision);
+	await appendContextTermDeltaEntry(executor, scope.key, term, revision, current, actorId, updatedAt, input.revision);
 	return materializeContextTermRevision(executor, projectIdentity, { scopeRef: input.scopeRef, term, revision });
 }
 
@@ -899,16 +936,16 @@ export class PgContextStore implements ContextStore {
 		return queryContextDirectory(this.executor, this.projectIdentity, input);
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
-		return upsertContext(this.executor, this.projectIdentity, input);
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): Promise<ContextDetails> {
+		return upsertContext(this.executor, this.projectIdentity, input, actorId ?? RESERVED_SYSTEM_AUTHOR);
 	}
 
-	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<DefineContextTermResult> {
-		return defineContextTerm(this.executor, this.projectIdentity, input);
+	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): Promise<DefineContextTermResult> {
+		return defineContextTerm(this.executor, this.projectIdentity, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {
-		return forgetContextTerm(this.executor, this.projectIdentity, input);
+	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): Promise<ForgetContextTermResult> {
+		return forgetContextTerm(this.executor, this.projectIdentity, input, actorId ?? SYSTEM_USER_ID);
 	}
 
 	public async materializeContextRevision(input: { scopeRef?: string; revision: number }): Promise<MaterializedContextRevision> {
@@ -919,11 +956,11 @@ export class PgContextStore implements ContextStore {
 		return materializeContextTermRevision(this.executor, this.projectIdentity, input);
 	}
 
-	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextRevision> {
-		return restoreContextRevision(this.executor, this.projectIdentity, input);
+	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<MaterializedContextRevision> {
+		return restoreContextRevision(this.executor, this.projectIdentity, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<MaterializedContextTermRevision> {
-		return restoreContextTermRevision(this.executor, this.projectIdentity, input);
+	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<MaterializedContextTermRevision> {
+		return restoreContextTermRevision(this.executor, this.projectIdentity, input, actorId ?? SYSTEM_USER_ID);
 	}
 }

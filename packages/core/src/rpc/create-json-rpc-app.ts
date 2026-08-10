@@ -3,6 +3,7 @@ import express, { type Express, type Request } from "express";
 import type { AuthIdentity, AuthProvider } from "../auth/auth-provider.js";
 import { EntityConflictError, EntityRevisionError } from "../features/entity-store/domain.js";
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../features/context/context-types.js";
+import { IssueCommentConflictError } from "../features/storage-driver/issue-comment-store.js";
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
 import { SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
 import { ChangeEventBroadcaster } from "./change-events.js";
@@ -204,7 +205,7 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			// failure, a locked db file). Left outside, the rejection escapes to
 			// express' default handler and the caller only ever sees an opaque
 			// HTTP 500 instead of the actual message.
-			const store = await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER));
+			const store = (await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER))).withAuthenticatedIdentity(identity);
 			const result = await handler(store, rpcRequest.params);
 			const successResponse: JsonRpcSuccessResponse = { jsonrpc: "2.0", id: rpcRequest.id, result };
 			response.status(200).json(successResponse);
@@ -218,6 +219,8 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 				? { entityId: error.entityId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
 				: error instanceof EntityRevisionError
 					? { entityId: error.entityId, reason: error.reason, ...(error.headRevision !== undefined && { headRevision: error.headRevision }) }
+					: error instanceof IssueCommentConflictError
+						? { commentId: error.commentId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
 					: error instanceof ContextRevisionError
 						? { contextKey: error.contextKey, reason: error.reason, ...(error.term !== undefined && { term: error.term }), ...(error.headRevision !== undefined && { headRevision: error.headRevision }) }
 					: error instanceof ContextConflictError

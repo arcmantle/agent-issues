@@ -58,6 +58,71 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 		}
 	});
 
+	it("creates the trusted authenticated user when a request writes", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const stores: StorageDriver[] = [];
+		const app = createJsonRpcApp({
+			authProvider: {
+				async validateToken() {
+					return { userId: "entra:ada", tenantId: "sqlite-tenant", displayName: "Ada Lovelace" };
+				}
+			},
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const response = await request(app)
+			.post("/rpc")
+			.set("authorization", "Bearer trusted-token")
+			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Ship authenticated mutations" } });
+
+		expect(response.status).toBe(200);
+		expect(response.body.error).toBeUndefined();
+		expect(response.body.result).toMatchObject({ title: "Ship authenticated mutations" });
+		expect(await stores[0].listUsers()).toMatchObject([
+			{ authenticationSubject: "entra:ada", displayName: "Ada Lovelace" }
+		]);
+
+		for (const store of stores) {
+			await store.close();
+		}
+	});
+
+	it("creates the trusted authenticated user when a context write occurs", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const stores: StorageDriver[] = [];
+		const app = createJsonRpcApp({
+			authProvider: {
+				async validateToken() {
+					return { userId: "entra:grace", tenantId: "sqlite-tenant", displayName: "Grace Hopper" };
+				}
+			},
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const response = await request(app)
+			.post("/rpc")
+			.set("authorization", "Bearer trusted-token")
+			.send({ jsonrpc: "2.0", id: 1, method: "upsertContext", params: { title: "Project context", summary: "Trusted context write." } });
+
+		expect(response.status).toBe(200);
+		expect(response.body.error).toBeUndefined();
+		expect(await stores[0].listUsers()).toMatchObject([
+			{ authenticationSubject: "entra:grace", displayName: "Grace Hopper" }
+		]);
+
+		for (const store of stores) {
+			await store.close();
+		}
+	});
+
 	it("forwards the client's project identity and workspace root headers to createStore (ISS183, ISS166)", async () => {
 		const dbPath = path.join(tempDir, "test.db");
 		const tenantId = "sqlite-tenant";

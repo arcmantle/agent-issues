@@ -19,7 +19,10 @@ import {
 	resolveWellKnownLocalTenantId
 } from "./database.js";
 import type { SqliteInternalConnection } from "./sqlite-executor.js";
+import { createSqliteExecutor } from "./sqlite-executor.js";
 import { createEntity, getEntityDetails, listEntities, queryEntityRelations } from "../features/entity-store/store.js";
+import { runMigrations } from "./migration-runner.js";
+import { migrations } from "../migrations/index.js";
 
 const inspectionHandles = new Map<string, Database.Database>();
 
@@ -165,13 +168,21 @@ describe("tenant resolution", () => {
 				{ name: "contexts" },
 				{ name: "counters" },
 				{ name: "entities" },
+				{ name: "issue_comment_references" },
+				{ name: "issue_comments" },
 				{ name: "relations" },
 				{ name: "revision_entries" },
-				{ name: "schema_migrations" }
+				{ name: "schema_migrations" },
+				{ name: "users" }
 			]);
 			expect(rawDb(created.db).prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
 				{ id: "final-baseline" },
-				{ id: "adr-status-to-current" }
+				{ id: "adr-status-to-current" },
+				{ id: "user-directory" },
+				{ id: "record-provenance" },
+				{ id: "context-term-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "issue-comments" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -182,9 +193,12 @@ describe("tenant resolution", () => {
 				{ name: "contexts_tenant_reference_idx" },
 				{ name: "contexts_tenant_scope_entity_id_idx" },
 				{ name: "entities_tenant_reference_idx" },
+				{ name: "issue_comment_references_tenant_issue_idx" },
+				{ name: "issue_comments_tenant_issue_idx" },
 				{ name: "relations_tenant_to_id_idx" },
 				{ name: "revision_entries_chain_idx" },
-				{ name: "revision_entries_project_idx" }
+				{ name: "revision_entries_project_idx" },
+				{ name: "users_tenant_authentication_subject_idx" }
 			]);
 			expect(rawDb(created.db).prepare("PRAGMA table_info('revision_entries')").all()).toEqual(
 				expect.arrayContaining([
@@ -200,7 +214,7 @@ describe("tenant resolution", () => {
 			id TEXT PRIMARY KEY NOT NULL,
 			tenant_id TEXT NOT NULL,
 			project_id TEXT NOT NULL,
-			record_kind TEXT NOT NULL CHECK (record_kind IN ('entity', 'context', 'context-term')),
+			record_kind TEXT NOT NULL CHECK (record_kind IN ('entity', 'context', 'context-term', 'issue-comment')),
 			record_key TEXT NOT NULL,
 			revision INTEGER NOT NULL CHECK (revision > 0),
 			author TEXT NOT NULL,
@@ -239,6 +253,30 @@ describe("tenant resolution", () => {
 			created.db.close();
 		}
 		expect(listBackupFiles(dbPath)).toEqual([]);
+	});
+
+	it("upgrades the previous approved schema with the user-directory migration", async () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-user-directory-upgrade-"));
+		tempDirs.push(tempDir);
+		const dbPath = path.join(tempDir, "test.db");
+		const previous = createSqliteExecutor(dbPath);
+		await runMigrations(previous, migrations.slice(0, 2));
+		previous.close();
+
+		const upgraded = await ensureDatabase(dbPath, { tenant: "test" });
+		try {
+			expect(rawDb(upgraded.db).prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
+				{ id: "final-baseline" },
+				{ id: "adr-status-to-current" },
+				{ id: "user-directory" },
+				{ id: "record-provenance" },
+				{ id: "context-term-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "issue-comments" }
+			]);
+		} finally {
+			upgraded.db.close();
+		}
 	});
 
 	it("accepts a clean current-final database without schema or ledger mutation", async () => {

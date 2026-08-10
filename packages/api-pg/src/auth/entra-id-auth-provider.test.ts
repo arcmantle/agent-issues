@@ -22,17 +22,18 @@ async function generateTestKeys(): Promise<TestKeys> {
 
 async function signTestToken(
 	privateKey: CryptoKey,
-	claims: { oid?: string; tid?: string; iss?: string; aud?: string; expiresInSeconds?: number }
+	claims: { oid?: string; tid?: string; name?: string; iss?: string; aud?: string; expiresInSeconds?: number }
 ): Promise<string> {
 	const {
 		oid = "user-object-id",
 		tid = TENANT_ID,
+		name,
 		iss = ISSUER,
 		aud = CLIENT_ID,
 		expiresInSeconds = 3600
 	} = claims;
 
-	return new SignJWT({ oid, tid })
+	return new SignJWT({ oid, tid, name })
 		.setProtectedHeader({ alg: "RS256", kid: "test-key" })
 		.setIssuer(iss)
 		.setAudience(aud)
@@ -55,6 +56,13 @@ describe("EntraIdAuthProvider", () => {
 		const identity = await provider.validateToken(`Bearer ${token}`);
 
 		expect(identity).toEqual({ userId: "user-abc", tenantId: TENANT_ID });
+	});
+
+	it("returns the trusted Entra name claim as the display name", async () => {
+		const provider = new EntraIdAuthProvider({ tenantId: TENANT_ID, clientId: CLIENT_ID, jwks: keys.jwks });
+		const token = await signTestToken(keys.privateKey, { oid: "user-abc", tid: TENANT_ID, name: "Ada Lovelace" });
+
+		await expect(provider.validateToken(token)).resolves.toEqual({ userId: "user-abc", tenantId: TENANT_ID, displayName: "Ada Lovelace" });
 	});
 
 	it("accepts a bare token with no 'Bearer ' prefix", async () => {

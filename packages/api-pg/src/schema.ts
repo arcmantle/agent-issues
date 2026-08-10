@@ -22,12 +22,30 @@ export const counters = pgTable(
 	(table) => [primaryKey({ columns: [table.tenantId, table.kind] })]
 );
 
+export const users = pgTable(
+	"users",
+	{
+		tenantId: text("tenant_id").notNull(),
+		id: uuid("id").notNull(),
+		authenticationSubject: text("authentication_subject").notNull(),
+		displayName: text("display_name"),
+		createdAt: text("created_at").notNull(),
+		updatedAt: text("updated_at").notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.tenantId, table.id] }),
+		uniqueIndex("users_tenant_authentication_subject_idx").on(table.tenantId, table.authenticationSubject)
+	]
+);
+
 export const entities = pgTable(
 	"entities",
 	{
 		tenantId: text("tenant_id").notNull(),
 		id: uuid("id").notNull(),
 		reference: text("reference").notNull(),
+		createdBy: uuid("created_by"),
+		updatedBy: uuid("updated_by"),
 		kind: text("kind").notNull(),
 		title: text("title").notNull(),
 		status: text("status").notNull(),
@@ -53,6 +71,7 @@ export const relations = pgTable(
 		fromId: uuid("from_id").notNull(),
 		toId: uuid("to_id").notNull(),
 		type: text("type").notNull(),
+		createdBy: uuid("created_by"),
 		createdAt: text("created_at").notNull()
 	},
 	(table) => [
@@ -76,6 +95,8 @@ export const contexts = pgTable(
 		id: uuid("id").notNull(),
 		reference: text("reference").notNull(),
 		key: text("key").notNull(),
+		createdBy: uuid("created_by"),
+		updatedBy: uuid("updated_by"),
 		scopeEntityId: uuid("scope_entity_id"),
 		title: text("title").notNull(),
 		summary: text("summary").notNull(),
@@ -104,6 +125,8 @@ export const contextTerms = pgTable(
 		tenantId: text("tenant_id").notNull(),
 		id: uuid("id").notNull(),
 		contextKey: text("context_key").notNull(),
+		createdBy: uuid("created_by"),
+		updatedBy: uuid("updated_by"),
 		term: text("term").notNull(),
 		definition: text("definition").notNull(),
 		avoidTerms: text("avoid_terms").notNull(),
@@ -121,6 +144,55 @@ export const contextTerms = pgTable(
 		}).onDelete("cascade"),
 		index("context_terms_tenant_context_key_idx").on(table.tenantId, table.contextKey),
 		uniqueIndex("context_terms_tenant_id_idx").on(table.tenantId, table.id)
+	]
+);
+
+export const issueComments = pgTable(
+	"issue_comments",
+	{
+		tenantId: text("tenant_id").notNull(),
+		id: uuid("id").notNull(),
+		reference: text("reference").notNull(),
+		issueId: uuid("issue_id").notNull(),
+		createdBy: uuid("created_by").notNull(),
+		updatedBy: uuid("updated_by").notNull(),
+		body: text("body").notNull(),
+		revision: integer("revision").notNull().default(1),
+		contentHash: text("content_hash").notNull().default(""),
+		tombstone: boolean("tombstone").notNull().default(false),
+		createdAt: text("created_at").notNull(),
+		updatedAt: text("updated_at").notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.tenantId, table.id] }),
+		uniqueIndex("issue_comments_tenant_reference_idx").on(table.tenantId, table.reference),
+		foreignKey({
+			columns: [table.tenantId, table.issueId],
+			foreignColumns: [entities.tenantId, entities.id]
+		}).onDelete("cascade"),
+		index("issue_comments_tenant_issue_idx").on(table.tenantId, table.issueId, table.createdAt, table.reference)
+	]
+);
+
+export const issueCommentReferences = pgTable(
+	"issue_comment_references",
+	{
+		tenantId: text("tenant_id").notNull(),
+		commentId: uuid("comment_id").notNull(),
+		issueId: uuid("issue_id").notNull(),
+		position: integer("position").notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.tenantId, table.commentId, table.issueId] }),
+		foreignKey({
+			columns: [table.tenantId, table.commentId],
+			foreignColumns: [issueComments.tenantId, issueComments.id]
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.tenantId, table.issueId],
+			foreignColumns: [entities.tenantId, entities.id]
+		}).onDelete("cascade"),
+		index("issue_comment_references_tenant_issue_idx").on(table.tenantId, table.issueId, table.position)
 	]
 );
 
@@ -152,10 +224,13 @@ export const revisionEntries = pgTable(
 
 export const schema = {
 	counters,
+	users,
 	entities,
 	relations,
 	contexts,
 	contextTerms,
+	issueComments,
+	issueCommentReferences,
 	revisionEntries
 };
 
@@ -163,5 +238,8 @@ export type EntityRow = typeof entities.$inferSelect;
 export type RelationRow = typeof relations.$inferSelect;
 export type ContextRow = typeof contexts.$inferSelect;
 export type ContextTermRow = typeof contextTerms.$inferSelect;
+export type IssueCommentRow = typeof issueComments.$inferSelect;
+export type IssueCommentReferenceRow = typeof issueCommentReferences.$inferSelect;
 export type CounterRow = typeof counters.$inferSelect;
+export type UserRow = typeof users.$inferSelect;
 export type RevisionEntryRow = typeof revisionEntries.$inferSelect;

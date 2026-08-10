@@ -8,8 +8,8 @@ const ENCODED_UUID_LENGTH = 26;
 const REFERENCE_SEPARATOR = "_";
 const MIGRATED_ENTITY_ID_NAMESPACE = "agent-issues/entity-stable-id/v1";
 const MIGRATED_CONTEXT_ID_NAMESPACE = "agent-issues/context-stable-id/v1";
-const CANONICAL_REFERENCE_PREFIX = { ...ID_PREFIX, context: "CTX", contextTerm: "TERM" } as const;
-const CANONICAL_REFERENCE_KINDS = [...ENTITY_KINDS, "context", "contextTerm"] as const;
+const CANONICAL_REFERENCE_PREFIX = { ...ID_PREFIX, context: "CTX", contextTerm: "TERM", issueComment: "COM" } as const;
+const CANONICAL_REFERENCE_KINDS = [...ENTITY_KINDS, "context", "contextTerm", "issueComment"] as const;
 
 export type CanonicalReferenceKind = (typeof CANONICAL_REFERENCE_KINDS)[number];
 

@@ -1,11 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openSqliteStore } from "./sqlite-store.js";
 import type { SqliteStore } from "./sqlite-store.js";
-import { synchronizeStores, SynchronizeConflictError } from "@agent-issues/core";
+import { createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, synchronizeStores, SynchronizeConflictError } from "@agent-issues/core";
 
 // Two independent SQLite stores exercise the same StorageDriver orchestration
 // used for local/cloud synchronization without requiring an HTTP round trip.
@@ -51,8 +52,100 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 			contextsAppliedToLocal: 0,
 			contextsAppliedToCloud: 0,
 			contextTermsAppliedToLocal: 0,
-			contextTermsAppliedToCloud: 0
+			contextTermsAppliedToCloud: 0,
+			issueCommentsCreatedLocal: [],
+			issueCommentsUpdatedLocal: [],
+			issueCommentsCreatedCloud: [],
+			issueCommentsUpdatedCloud: [],
+			usersAppliedToLocal: 0,
+			usersAppliedToCloud: 0
 		});
+	});
+
+	it("synchronizes tenant user records", async () => {
+		const user = await local.upsertUser({ authenticationSubject: "entra:alice", displayName: "Alice" });
+
+		const summary = await synchronizeStores(local, cloud);
+
+		expect(await cloud.listUsers()).toEqual([user]);
+		expect(summary.usersAppliedToCloud).toBe(1);
+	});
+
+	it("preserves authenticated entity provenance and revision actors", async () => {
+		const actor = { userId: "entra:alice", tenantId: local.tenantId, displayName: "Alice" };
+		const created = await local.withAuthenticatedIdentity(actor).createEntity({ kind: "issue", title: "Attributed issue" });
+
+		await synchronizeStores(local, cloud);
+
+		const user = (await cloud.listUsers()).find((candidate) => candidate.authenticationSubject === actor.userId);
+		expect(await cloud.getEntityDetails(created.id)).toMatchObject({ entity: { createdBy: user?.id, updatedBy: user?.id } });
+		expect((await cloud.listEntityHistory(created.id))[0]).toMatchObject({ author: user?.id });
+	});
+
+	it("synchronizes a comment and rebuilds its indexed issue references", async () => {
+		const issue = await local.createEntity({ kind: "issue", title: "Commented issue" });
+		const referencedIssue = await local.createEntity({ kind: "issue", title: "Referenced issue" });
+		const id = randomUUID();
+		const reference = encodeCanonicalReference("issueComment", id);
+		const now = "2026-08-08T00:00:00.000Z";
+		const body = "Needs a follow-up.";
+		const referencedIssueIds = [referencedIssue.id];
+		const comment = {
+			head: {
+				id,
+				reference,
+				issueId: issue.id,
+				createdBy: issue.createdBy,
+				updatedBy: issue.updatedBy,
+				body,
+				referencedIssueIds,
+				tombstone: false,
+				revision: 1,
+				contentHash: createHash("sha256").update(JSON.stringify({ body, referencedIssueIds, tombstone: false })).digest("hex"),
+				createdAt: now,
+				updatedAt: now
+			},
+			deltas: []
+		};
+		const localBundle = await local.exportCanonicalChains();
+		await local.importCanonicalChains({ ...localBundle, issueComments: [comment] });
+
+		const summary = await synchronizeStores(local, cloud);
+
+		const cloudComment = (await cloud.exportCanonicalChains()).issueComments.find((chain) => chain.head.id === id);
+		expect(cloudComment?.head).toMatchObject({ reference, issueId: issue.id, referencedIssueIds: [referencedIssue.id] });
+		expect(summary).toMatchObject({ issueCommentsCreatedCloud: [id] });
+
+		const updatedReferencedIssueIds: string[] = [];
+		const updatedAt = "2026-08-08T01:00:00.000Z";
+		const updatedComment = {
+			head: {
+				...comment.head,
+				referencedIssueIds: updatedReferencedIssueIds,
+				revision: 2,
+				contentHash: createHash("sha256").update(JSON.stringify({ body, referencedIssueIds: updatedReferencedIssueIds, tombstone: false })).digest("hex"),
+				updatedAt
+			},
+			deltas: [{
+				id: randomUUID(),
+				revision: 2,
+				author: comment.head.updatedBy,
+				createdAt: updatedAt,
+				...createReverseFieldPatch(
+					{ body, referencedIssueIds: updatedReferencedIssueIds, tombstone: false },
+					{ body, referencedIssueIds, tombstone: false },
+					ISSUE_COMMENT_REVERSE_PATCH_REGISTRY
+				)
+			}]
+		};
+		const updatedBundle = await local.exportCanonicalChains();
+		await local.importCanonicalChains({ ...updatedBundle, issueComments: [updatedComment] });
+		expect((await local.exportCanonicalChains()).issueComments.find((chain) => chain.head.id === id)?.deltas).toHaveLength(1);
+
+		const updateSummary = await synchronizeStores(local, cloud);
+
+		expect((await cloud.exportCanonicalChains()).issueComments.find((chain) => chain.head.id === id)?.head.referencedIssueIds).toEqual([]);
+		expect(updateSummary).toMatchObject({ issueCommentsUpdatedCloud: [id] });
 	});
 
 	it("imports a strict canonical extension with every reverse delta intact", async () => {
@@ -68,7 +161,7 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		expect((await cloud.exportCanonicalChains()).entities.find((chain) => chain.head.id === created.id)?.deltas).toEqual(localChain?.deltas);
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
-		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [] });
+		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], usersCreated: [], usersUpdated: [] });
 	});
 
 	it("rejects a divergent batch before mutating an earlier compatible record", async () => {

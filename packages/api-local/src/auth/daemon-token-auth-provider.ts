@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 
-import type { AuthIdentity, AuthProvider } from "@agent-issues/core";
+import { resolveLocalUsername, type AuthIdentity, type AuthProvider } from "@agent-issues/core";
 
 export type DaemonTokenAuthProviderOptions = {
 	/** The current daemon instance's own minted token (ISS184), compared against every request's bearer token. */
@@ -41,6 +41,7 @@ export class DaemonTokenAuthProvider implements AuthProvider {
 			throw new Error("Invalid daemon token.");
 		}
 
-		return { userId: "local", tenantId: this.tenantId };
+		const username = resolveLocalUsername();
+		return { userId: `local:${username}`, tenantId: this.tenantId, displayName: username };
 	}
 }

@@ -16,8 +16,15 @@ export type RpcMethodHandler = (store: StorageDriver, params: unknown) => Promis
 export const rpcMethods: Record<string, RpcMethodHandler> = {
 	exportCanonicalChains: async (store) => encodeCanonicalChainBundle(await store.exportCanonicalChains()),
 	importCanonicalChains: async (store, params) => store.importCanonicalChains(decodeCanonicalChainBundle((params as { bundle: CanonicalChainWireBundle }).bundle)),
+	upsertUser: async (store, params) => store.upsertUser(params as Parameters<StorageDriver["upsertUser"]>[0]),
+	listUsers: async (store) => store.listUsers(),
 	getHistoryDiagnostics: async (store) => store.getHistoryDiagnostics(),
 	createEntity: async (store, params) => store.createEntity(params as Parameters<StorageDriver["createEntity"]>[0]),
+	createIssueComment: async (store, params) => store.createIssueComment(params as Parameters<StorageDriver["createIssueComment"]>[0]),
+	updateIssueComment: async (store, params) => store.updateIssueComment(params as Parameters<StorageDriver["updateIssueComment"]>[0]),
+	deleteIssueComment: async (store, params) => store.deleteIssueComment(params as Parameters<StorageDriver["deleteIssueComment"]>[0]),
+	listIssueComments: async (store, params) => store.listIssueComments(params as Parameters<StorageDriver["listIssueComments"]>[0]),
+	listIssueCommentHistory: async (store, params) => store.listIssueCommentHistory(params as Parameters<StorageDriver["listIssueCommentHistory"]>[0]),
 
 	// Entity lifecycle (ISS50). Methods whose `StorageDriver` signature takes
 	// a bare string/no argument are wrapped in a named-field params object for
@@ -78,7 +85,11 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
  */
 export const writeMethods = new Set<string>([
 	"importCanonicalChains",
+	"upsertUser",
 	"createEntity",
+	"createIssueComment",
+	"updateIssueComment",
+	"deleteIssueComment",
 	"updateEntityStatus",
 	"updateEntity",
 	"setEntityBody",

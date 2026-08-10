@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import type { StorageDriver } from "@agent-issues/core";
+import { createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, type StorageDriver } from "@agent-issues/core";
 import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
-import { afterAll, beforeAll, beforeEach } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "./db/connection.js";
@@ -77,4 +77,81 @@ runStorageDriverContractSuite({
 	label: "PgStore (Postgres)",
 	openStore: openPgTestStore,
 	openStoreForProject: openPgTestStoreForProject
+});
+
+it("imports and exports a canonical issue comment with its ordered references", async () => {
+	const store = await openPgTestStore();
+	try {
+		const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
+		const referencedIssue = await store.createEntity({ kind: "issue", title: "Referenced issue" });
+		const id = randomUUID();
+		const reference = encodeCanonicalReference("issueComment", id);
+		const body = "Needs a follow-up.";
+		const referencedIssueIds = [referencedIssue.id];
+		const now = "2026-08-08T00:00:00.000Z";
+		const bundle = await store.exportCanonicalChains();
+		await store.importCanonicalChains({
+			...bundle,
+			issueComments: [{
+				head: {
+					id,
+					reference,
+					issueId: issue.id,
+					createdBy: issue.createdBy,
+					updatedBy: issue.updatedBy,
+					body,
+					referencedIssueIds,
+					tombstone: false,
+					revision: 1,
+					contentHash: createHash("sha256").update(JSON.stringify({ body, referencedIssueIds, tombstone: false })).digest("hex"),
+					createdAt: now,
+					updatedAt: now
+				},
+				deltas: []
+			}]
+		});
+
+		expect((await store.exportCanonicalChains()).issueComments).toEqual(expect.arrayContaining([
+			expect.objectContaining({ head: expect.objectContaining({ id, reference, issueId: issue.id, referencedIssueIds }) })
+		]));
+
+		const updatedReferencedIssueIds: string[] = [];
+		const updatedAt = "2026-08-08T01:00:00.000Z";
+		const updatedComment = {
+			head: {
+				id,
+				reference,
+				issueId: issue.id,
+				createdBy: issue.createdBy,
+				updatedBy: issue.updatedBy,
+				body,
+				referencedIssueIds: updatedReferencedIssueIds,
+				tombstone: false,
+				revision: 2,
+				contentHash: createHash("sha256").update(JSON.stringify({ body, referencedIssueIds: updatedReferencedIssueIds, tombstone: false })).digest("hex"),
+				createdAt: now,
+				updatedAt
+			},
+			deltas: [{
+				id: randomUUID(),
+				revision: 2,
+				author: issue.updatedBy,
+				createdAt: updatedAt,
+				...createReverseFieldPatch(
+					{ body, referencedIssueIds: updatedReferencedIssueIds, tombstone: false },
+					{ body, referencedIssueIds, tombstone: false },
+					ISSUE_COMMENT_REVERSE_PATCH_REGISTRY
+				)
+			}]
+		};
+		const updatedBundle = await store.exportCanonicalChains();
+		await store.importCanonicalChains({ ...updatedBundle, issueComments: [updatedComment] });
+
+		expect((await store.exportCanonicalChains()).issueComments.find((chain) => chain.head.id === id)).toMatchObject({
+			head: { referencedIssueIds: [] },
+			deltas: [expect.objectContaining({ revision: 2 })]
+		});
+	} finally {
+		await store.close();
+	}
 });

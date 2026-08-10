@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { and } from "drizzle-orm";
 import type { Pool } from "pg";
-import { decodeCanonicalReference, encodeEntityRecordKey } from "@agent-issues/core";
+import { decodeCanonicalReference, deriveUserIdentity, encodeEntityRecordKey, SYSTEM_AUTHENTICATION_SUBJECT } from "@agent-issues/core";
 
 import { createPgPool, migratePgDatabase, withTenantTransaction } from "../../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../../db/test-tenant-cleanup.js";
@@ -17,6 +17,7 @@ const ADMIN_CONNECTION_STRING =
 // RLS unconditionally - see docker/postgres-init/01-app-role.sql).
 const APP_CONNECTION_STRING =
 	process.env.AGENT_ISSUES_TEST_PG_APP_URL ?? "postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues";
+const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
 
 describe("PgStore entity lifecycle", () => {
 	let adminPool: Pool;
@@ -66,10 +67,28 @@ describe("PgStore entity lifecycle", () => {
 		expect(history).toHaveLength(1);
 		expect(history[0]).toMatchObject({
 			version: 1,
-			author: "system",
+			author: SYSTEM_USER_ID,
 			title: "Ship the Postgres gate",
 			status: "draft",
 			parentId: details.incoming[0]?.entity.id
+		});
+	});
+
+	it("includes an issue's newest comment page in the database snapshot", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const issue = await store.createEntity({ kind: "issue", title: "Discuss snapshot data" });
+		const comment = await store.createIssueComment({ issueId: issue.id, body: "Show this comment in the site." });
+
+		const snapshot = await store.getDatabaseSnapshot();
+
+		expect(snapshot).toMatchObject({
+			issueComments: {
+				[issue.id]: {
+					comments: [expect.objectContaining({ id: comment.id, body: "Show this comment in the site." })],
+					nextBefore: null,
+					total: 1
+				}
+			}
 		});
 	});
 
@@ -120,7 +139,7 @@ describe("PgStore entity lifecycle", () => {
 		expect(await reopened.getEntityDetails(initiative.id)).toBeDefined();
 	});
 
-	it("lists entities of a kind and records an explicit author on the history entry", async () => {
+	it("lists entities of a kind and records the trusted system actor on the history entry", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 
 		await store.createEntity({ kind: "initiative", title: "First", author: "alice" });
@@ -130,7 +149,7 @@ describe("PgStore entity lifecycle", () => {
 		expect(initiatives.map((entity) => entity.title)).toEqual(expect.arrayContaining(["First", "Second"]));
 
 		const history = await store.listEntityHistory(initiatives.find((entity) => entity.title === "First")!.id);
-		expect(history[0]?.author).toBe("alice");
+		expect(history[0]?.author).toBe(SYSTEM_USER_ID);
 	});
 
 	it("resolves the revision parent by source hash when relation replay changes timestamp order", async () => {
