@@ -63,7 +63,6 @@ describe("project-scoped ADRs", () => {
 		expect(snapshot.projectAdrs.map((entity) => entity.id)).not.toContain(recordedAdr.id);
 	});
 });
-
 describe("database snapshot issue conversations", () => {
 	it("includes an issue's newest comment page", async () => {
 		const db = await openTestDatabase();
@@ -883,5 +882,3 @@ describe("canonical revision history", () => {
 		expect(row.project_id).toBe(projectA.id);
 	});
 });
-
-

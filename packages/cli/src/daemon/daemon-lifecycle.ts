@@ -215,4 +215,3 @@ export async function callDaemonWithVersionHandshakeRetry<T>(
 		return sendRequest(retried.port);
 	}
 }
-

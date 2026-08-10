@@ -41,7 +41,6 @@ describe("daemon liveness probe (ISS189)", () => {
 		await expect(isDaemonReachable(1)).resolves.toBe(false);
 	});
 });
-
 describe("daemon spawn-race lock (ISS189)", () => {
 	let homeDirectory: string;
 
@@ -85,7 +84,6 @@ describe("daemon spawn-race lock (ISS189)", () => {
 		expect(tryAcquireDaemonSpawnLock({ homeDirectory, dbPath: "/tmp/repo-a.db" })).toBe(false);
 	});
 });
-
 describe("ensureDaemonRunning (ISS189)", () => {
 	let homeDirectory: string;
 	let server: Server | undefined;
@@ -318,4 +316,3 @@ describe("callDaemonWithVersionHandshakeRetry (ISS188, ADR45)", () => {
 		expect(sendRequest).toHaveBeenCalledOnce();
 	});
 });
-

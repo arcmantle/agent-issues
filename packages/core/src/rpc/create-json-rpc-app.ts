@@ -239,4 +239,3 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 
 	return app;
 }
-
