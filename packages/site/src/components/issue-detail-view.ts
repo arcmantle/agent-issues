@@ -6,7 +6,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { when } from "lit/directives/when.js";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import type { Entity } from "../models.js";
+import type { Entity, IssueComment } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
@@ -115,7 +115,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 					<button
 						class="branch-toggle"
 						data-id=${node.issue.id}
-						aria-expanded=${String(!isCollapsed)}
+						aria-expanded=${String(!isCollapsed) as "true" | "false"}
 						@click=${this.onToggleIssueBranch}
 					>
 						${isCollapsed ? "+" : "-"}
@@ -155,6 +155,33 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
+	protected displayUser(userId: string): string {
+		const user = this.store?.snapshot.get()?.users.find((candidate) => candidate.id === userId);
+		return user?.displayName ?? user?.authenticationSubject ?? userId;
+	}
+
+	protected renderIssueComment(comment: IssueComment): TemplateResult {
+		return html`
+		<article class="ai-comment">
+			<div class="ai-comment-reference">${comment.reference}</div>
+			${when(
+				comment.tombstone,
+				() => html`<div class="ai-comment-deleted">Deleted ${comment.updatedAt}</div>`,
+				() => html`<div class="ai-comment-body">${comment.body ?? ""}</div>`
+			)}
+			<div class="ai-comment-provenance">
+				Created by ${this.displayUser(comment.createdBy)}
+				Updated by ${this.displayUser(comment.updatedBy)}
+			</div>
+			${when(
+				comment.referencedIssueIds.length > 0,
+				() => html`<div class="ai-comment-references">References: ${comment.referencedIssueIds.join(", ")}</div>`,
+				() => nothing
+			)}
+		</article>
+		`;
+	}
+
 	render() {
 		const store = this.store;
 		if (!store) {
@@ -190,6 +217,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		const body = (entity.body ?? "").trim();
 		const bodySource = entity.bodySource ?? "authored";
 		const hasIssueStructure = entity.kind === "issue" && (parentIssue !== null || subIssueTree.length > 0);
+		const comments = entity.kind === "issue" ? store.snapshot.get()?.issueComments[entity.id]?.comments ?? [] : [];
 
 		return html`
 		<div class="detail-inner">
@@ -231,6 +259,16 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 					${unsafeHTML(renderAuthoredBody(body))}
 				</section>
 				`
+			)}
+			${when(
+				comments.length > 0,
+				() => html`
+				<section class="ai-sec ai-conversation">
+					<h2>Conversation</h2>
+					${repeat(comments, (comment) => comment.id, (comment) => this.renderIssueComment(comment))}
+				</section>
+				`,
+				() => nothing
 			)}
 			${when(
 				hasIssueStructure,
@@ -392,6 +430,38 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		.ai-sec h2 {
 			margin: 0 0 10px;
 			font-size: 15px;
+		}
+		.ai-conversation {
+			display: grid;
+			gap: 12px;
+		}
+		.ai-comment {
+			padding: 12px;
+			border: 1px solid var(--border-muted);
+			border-radius: 6px;
+		}
+		.ai-comment-reference,
+		.ai-comment-references,
+		.ai-comment-provenance,
+		.ai-comment-deleted {
+			color: var(--muted);
+			font-size: 12px;
+		}
+		.ai-comment-reference,
+		.ai-comment-references {
+			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		}
+		.ai-comment-deleted {
+			margin: 8px 0;
+			font-style: italic;
+		}
+		.ai-comment-provenance {
+			display: grid;
+			gap: 2px;
+		}
+		.ai-comment-body {
+			margin: 8px 0;
+			white-space: pre-wrap;
 		}
 		.ai-body {
 			max-width: 75ch;

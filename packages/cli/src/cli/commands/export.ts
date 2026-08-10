@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { Option } from "clipanion";
+import type { IssueCommentRecord } from "@agent-issues/core";
 
 import { writeInitiativeDirectoryExport, writeProjectDirectoryExport } from "../../export-files.js";
 import { renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "../../export-markdown.js";
@@ -22,7 +23,8 @@ export class ExportCommand extends MutableTenantCommand {
 			const snapshot = await store.getDatabaseSnapshot();
 
 			if (target === "project") {
-				const markdown = renderProjectMarkdownExport({ snapshot });
+				const commentsByIssueId = await collectIssueComments(store, snapshot.entities);
+				const markdown = renderProjectMarkdownExport({ snapshot, commentsByIssueId });
 
 				if (this.singleFile) {
 					return this.emitSingleFileExport({
@@ -38,6 +40,7 @@ export class ExportCommand extends MutableTenantCommand {
 				}
 
 				const result = writeProjectDirectoryExport({
+					commentsByIssueId,
 					snapshot,
 					outputPath: this.resolveOutputPath(target),
 					force: this.force
@@ -51,9 +54,10 @@ export class ExportCommand extends MutableTenantCommand {
 			}
 
 			const bundle = await store.getInitiativeBundle(target);
+			const commentsByIssueId = await collectIssueComments(store, bundle.issues);
 			const relations = snapshot.relations;
 			const context = await store.getContextDetails({ scopeRef: target });
-			const markdown = renderInitiativeMarkdownExport({ bundle, context, relations });
+			const markdown = renderInitiativeMarkdownExport({ bundle, commentsByIssueId, context, relations, users: snapshot.users });
 
 			if (this.singleFile) {
 				return this.emitSingleFileExport({
@@ -70,9 +74,11 @@ export class ExportCommand extends MutableTenantCommand {
 
 			const result = writeInitiativeDirectoryExport({
 				bundle,
+				commentsByIssueId,
 				context,
 				outputPath: this.resolveOutputPath(target),
 				relations,
+				users: snapshot.users,
 				force: this.force
 			});
 
@@ -108,6 +114,15 @@ export class ExportCommand extends MutableTenantCommand {
 	protected resolveOutputPath(target: string): string {
 		return path.resolve(this.context.cwd, this.output ?? path.join("agent-issues-export", target));
 	}
+}
+
+async function collectIssueComments(
+	store: { listIssueComments(input: { issueId: string; all?: boolean }): Promise<{ comments: IssueCommentRecord[] }> },
+	entities: Array<{ id: string; kind: string }>
+): Promise<Record<string, IssueCommentRecord[]>> {
+	const issues = entities.filter((entity) => entity.kind === "issue");
+	const pages = await Promise.all(issues.map(async (issue) => [issue.id, (await store.listIssueComments({ issueId: issue.id, all: true })).comments] as const));
+	return Object.fromEntries(pages);
 }
 
 function renderDirectorySummary(result: { scope: "initiative" | "project"; outputPath: string; files: string[] }): string {

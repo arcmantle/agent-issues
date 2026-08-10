@@ -53,9 +53,11 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 		entities: [],
 		generatedAt: "2026-01-01T00:00:00.000Z",
 		initiatives: [],
+		issueComments: overrides.issueComments ?? {},
 		orphans: [],
 		projectAdrs: [],
 		relations: [],
+		users: overrides.users ?? [],
 		...overrides
 	};
 }
@@ -75,6 +77,14 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+});
+
+describe("short entity references", () => {
+	it("separates the kind prefix from the display code", () => {
+		const store = new AgentIssuesStore();
+
+		expect(store.shortRef({ id: "issue-identifier", kind: "issue" })).toMatch(/^ISS_[0-9A-HJKMNP-TV-Z]{6}$/);
+	});
 });
 
 describe("initiative relationship graph model", () => {

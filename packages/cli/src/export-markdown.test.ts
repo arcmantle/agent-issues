@@ -8,6 +8,7 @@ import {
 	getDatabaseSnapshot,
 	getInitiativeBundle,
 	linkEntities,
+	SqliteStore,
 	upsertContext
 } from "@agent-issues/api-local";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -61,6 +62,48 @@ describe("markdown export", () => {
 		expect(markdown).toContain(`from: \"${handoff.id}\"`);
 		expect(markdown).toContain(`to: \"${issue.id}\"`);
 		expect(markdown).toContain("Continue from the failing test.");
+	});
+
+	it("renders a full issue conversation with creator resolution and deleted placeholders", async () => {
+		const db = await openTestDatabase();
+		const store = new SqliteStore(db);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Conversation export" });
+		const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Export comments" });
+		const activeComment = await store.createIssueComment({
+			issueId: issue.id,
+			body: "This comment remains visible.",
+			referencedIssueIds: [issue.id]
+		});
+		const deletedComment = await store.createIssueComment({
+			issueId: issue.id,
+			body: "This comment is deleted."
+		});
+		await store.deleteIssueComment({
+			commentId: deletedComment.reference,
+			expectedRevision: deletedComment.revision,
+			expectedContentHash: deletedComment.contentHash
+		});
+
+		const bundle = await store.getInitiativeBundle(initiative.id);
+		const snapshot = await store.getDatabaseSnapshot();
+		const context = snapshot.contexts.initiatives.find((details) => details.context.scopeEntityId === initiative.id)!;
+		const markdown = renderInitiativeMarkdownExport({
+			bundle,
+			commentsByIssueId: {
+				[issue.id]: (await store.listIssueComments({ issueId: issue.id, all: true })).comments
+			},
+			context,
+			relations: snapshot.relations,
+			users: snapshot.users
+		});
+
+		expect(markdown).toContain("#### Conversation");
+		expect(markdown).toContain(activeComment.reference);
+		expect(markdown).toContain("This comment remains visible.");
+		expect(markdown).toContain(`References: ${issue.id}`);
+		expect(markdown).toContain(`Created by: ${snapshot.users.find((user) => user.id === activeComment.createdBy)?.displayName}`);
+		expect(markdown).toContain(deletedComment.reference);
+		expect(markdown).toContain("Deleted comment");
 	});
 
 	it("renders project export with project frontmatter and nested initiative exports", async () => {

@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { ContextDetails, DatabaseSnapshot, InitiativeBundle } from "@agent-issues/api-local";
-import type { EntityRecord, RelationRecord } from "@agent-issues/core";
-import { renderFrontmatter, renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "./export-markdown.js";
+import type { EntityRecord, IssueCommentRecord, RelationRecord, UserDirectoryRecord } from "@agent-issues/core";
+import { renderFrontmatter, renderInitiativeMarkdownExport, renderIssueConversationMarkdown, renderProjectMarkdownExport } from "./export-markdown.js";
 
 export type DirectoryExportResult = {
 	mode: "directory";
@@ -14,9 +14,11 @@ export type DirectoryExportResult = {
 
 export function writeInitiativeDirectoryExport(input: {
 	bundle: InitiativeBundle;
+	commentsByIssueId?: Record<string, IssueCommentRecord[]>;
 	context: ContextDetails;
 	outputPath: string;
 	relations: RelationRecord[];
+	users?: UserDirectoryRecord[];
 	force?: boolean;
 }): DirectoryExportResult {
 	prepareOutputDirectory(input.outputPath, input.force ?? false);
@@ -33,8 +35,10 @@ export function writeInitiativeDirectoryExport(input: {
 		renderInitiativeMarkdownExport(
 			{
 				bundle: input.bundle,
+				commentsByIssueId: input.commentsByIssueId,
 				context: input.context,
-				relations: input.relations
+				relations: input.relations,
+				users: input.users
 			},
 			{ includeFrontmatter: true, headingLevel: 1 }
 		),
@@ -44,7 +48,7 @@ export function writeInitiativeDirectoryExport(input: {
 	writeEntityGroup(input.outputPath, "prds", input.bundle.prds, scopedRelations, files);
 	writeEntityGroup(input.outputPath, "user-stories", input.bundle.userStories, scopedRelations, files);
 	writeEntityGroup(input.outputPath, "adrs", input.bundle.adrs, scopedRelations, files);
-	writeEntityGroup(input.outputPath, "issues", input.bundle.issues, scopedRelations, files);
+	writeEntityGroup(input.outputPath, "issues", input.bundle.issues, scopedRelations, files, input.commentsByIssueId, input.users);
 	writeEntityGroup(input.outputPath, "entities", input.bundle.entities.filter((entity) => entity.id !== input.bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), scopedRelations, files);
 	writeRelationGroups(input.outputPath, scopedRelations, files);
 
@@ -57,6 +61,7 @@ export function writeInitiativeDirectoryExport(input: {
 }
 
 export function writeProjectDirectoryExport(input: {
+	commentsByIssueId?: Record<string, IssueCommentRecord[]>;
 	snapshot: DatabaseSnapshot;
 	outputPath: string;
 	force?: boolean;
@@ -67,7 +72,8 @@ export function writeProjectDirectoryExport(input: {
 
 	writeMarkdownFile(input.outputPath, "project.md", renderProjectMarkdownExport(input), files);
 	writeMarkdownFile(input.outputPath, "shared-context.md", renderContextMarkdown(input.snapshot.contexts.shared), files);
-	writeEntityGroup(input.outputPath, "entities", input.snapshot.entities, input.snapshot.relations, files);
+	writeJsonFile(input.outputPath, "users.json", collectReferencedUsers(input.snapshot), files);
+	writeEntityGroup(input.outputPath, "entities", input.snapshot.entities, input.snapshot.relations, files, input.commentsByIssueId, input.snapshot.users);
 	writeRelationGroups(input.outputPath, input.snapshot.relations, files);
 
 	const initiativesRoot = path.join(input.outputPath, "initiatives");
@@ -77,9 +83,11 @@ export function writeProjectDirectoryExport(input: {
 		const initiativeDir = path.join(initiativesRoot, bundle.initiative.id);
 		const initiativeResult = writeInitiativeDirectoryExport({
 			bundle,
+			commentsByIssueId: input.commentsByIssueId,
 			context,
 			outputPath: initiativeDir,
 			relations: input.snapshot.relations,
+			users: input.snapshot.users,
 			force: true
 		});
 		files.push(...initiativeResult.files);
@@ -93,7 +101,12 @@ export function writeProjectDirectoryExport(input: {
 	};
 }
 
-function renderEntityMarkdown(entity: EntityRecord, relations: RelationRecord[]): string {
+function renderEntityMarkdown(
+	entity: EntityRecord,
+	relations: RelationRecord[],
+	commentsByIssueId: Record<string, IssueCommentRecord[]> = {},
+	users: UserDirectoryRecord[] = []
+): string {
 	const directIncoming = relations.filter((relation) => relation.toId === entity.id);
 	const directOutgoing = relations.filter((relation) => relation.fromId === entity.id);
 	const frontmatter = {
@@ -102,19 +115,25 @@ function renderEntityMarkdown(entity: EntityRecord, relations: RelationRecord[])
 		status: entity.status,
 		title: entity.title,
 		bodySource: entity.bodySource,
+		createdBy: entity.createdBy,
+		updatedBy: entity.updatedBy,
 		createdAt: entity.createdAt,
 		updatedAt: entity.updatedAt,
 		incomingConnections: directIncoming.map(summarizeRelation),
 		outgoingConnections: directOutgoing.map(summarizeRelation)
 	};
 	const body = entity.body.trim().length > 0 ? entity.body : "_No body._";
+	const conversation = entity.kind === "issue"
+		? renderIssueConversationMarkdown(commentsByIssueId[entity.id] ?? [], users, 2)
+		: "";
 
 	return [
 		renderFrontmatter(frontmatter),
 		`# ${entity.id} ${entity.title}`,
 		`Kind: ${entity.kind}`,
 		`Status: ${entity.status}`,
-		body
+		body,
+		conversation
 	].join("\n\n");
 }
 
@@ -126,11 +145,13 @@ function renderContextMarkdown(context: ContextDetails): string {
 		scopeLabel: context.context.scopeLabel,
 		title: context.context.title,
 		summary: context.context.summary,
+		createdBy: context.context.createdBy,
+		updatedBy: context.context.updatedBy,
 		termCount: context.terms.length
 	};
 	const termLines = context.terms.length === 0
 		? ["No terms."]
-		: context.terms.map((term) => `- ${term.term}: ${term.definition}${term.avoid.length > 0 ? ` Avoid: ${term.avoid.join(", ")}.` : ""}`);
+		: context.terms.map((term) => `- ${term.term}: ${term.definition}${term.avoid.length > 0 ? ` Avoid: ${term.avoid.join(", ")}.` : ""} Created by: ${term.createdBy}. Updated by: ${term.updatedBy}.`);
 
 	return [renderFrontmatter(frontmatter), `# ${context.context.title}`, context.context.summary || "No summary.", "## Terms", ...termLines].join("\n\n");
 }
@@ -143,18 +164,26 @@ function renderRelationGroupMarkdown(relationType: string, relations: RelationRe
 	};
 	const lines = relations.length === 0
 		? ["None."]
-		: relations.map((relation) => `- ${relation.fromId} -> ${relation.toId} (${relation.createdAt})`);
+		: relations.map((relation) => `- ${relation.fromId} -> ${relation.toId} (${relation.createdAt}, created by ${relation.createdBy})`);
 
 	return [renderFrontmatter(frontmatter), `# ${relationType}`, ...lines].join("\n\n");
 }
 
-function writeEntityGroup(rootPath: string, groupName: string, entities: EntityRecord[], relations: RelationRecord[], files: string[]) {
+function writeEntityGroup(
+	rootPath: string,
+	groupName: string,
+	entities: EntityRecord[],
+	relations: RelationRecord[],
+	files: string[],
+	commentsByIssueId: Record<string, IssueCommentRecord[]> = {},
+	users: UserDirectoryRecord[] = []
+) {
 	if (entities.length === 0) {
 		return;
 	}
 
 	for (const entity of entities) {
-		writeMarkdownFile(rootPath, path.join(groupName, `${entity.id}.md`), renderEntityMarkdown(entity, relations), files);
+		writeMarkdownFile(rootPath, path.join(groupName, `${entity.id}.md`), renderEntityMarkdown(entity, relations, commentsByIssueId, users), files);
 	}
 }
 
@@ -182,6 +211,13 @@ function writeMarkdownFile(rootPath: string, relativePath: string, content: stri
 	files.push(path.resolve(absolutePath));
 }
 
+function writeJsonFile(rootPath: string, relativePath: string, value: unknown, files: string[]) {
+	const absolutePath = path.join(rootPath, relativePath);
+	mkdirSync(path.dirname(absolutePath), { recursive: true });
+	writeFileSync(absolutePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	files.push(path.resolve(absolutePath));
+}
+
 function prepareOutputDirectory(outputPath: string, force: boolean) {
 	const resolvedPath = path.resolve(outputPath);
 	if (existsSync(resolvedPath)) {
@@ -200,8 +236,38 @@ function summarizeRelation(relation: RelationRecord) {
 		from: relation.fromId,
 		type: relation.type,
 		to: relation.toId,
+		createdBy: relation.createdBy,
 		createdAt: relation.createdAt
 	};
+}
+
+type UserDirectoryExportRecord = {
+	id: string;
+	authenticationSubject: string;
+	displayName?: string;
+};
+
+function collectReferencedUsers(snapshot: DatabaseSnapshot): UserDirectoryExportRecord[] {
+	const userIds = new Set<string>();
+	for (const entity of snapshot.entities) {
+		userIds.add(entity.createdBy);
+		userIds.add(entity.updatedBy);
+	}
+	for (const relation of snapshot.relations) {
+		userIds.add(relation.createdBy);
+	}
+	for (const context of [snapshot.contexts.shared, ...snapshot.contexts.initiatives]) {
+		if (context.context.createdBy) userIds.add(context.context.createdBy);
+		if (context.context.updatedBy) userIds.add(context.context.updatedBy);
+		for (const term of context.terms) {
+			userIds.add(term.createdBy);
+			userIds.add(term.updatedBy);
+		}
+	}
+
+	return snapshot.users
+		.filter((user) => userIds.has(user.id))
+		.map((user) => ({ id: user.id, authenticationSubject: user.authenticationSubject, ...(user.displayName !== null && { displayName: user.displayName }) }));
 }
 
 function collectBundleEntityIds(bundle: InitiativeBundle): Set<string> {
@@ -213,6 +279,8 @@ function emptyInitiativeContext(initiative: EntityRecord): ContextDetails {
 		context: {
 			id: null,
 			reference: null,
+			createdBy: null,
+			updatedBy: null,
 			key: initiative.id,
 			scopeKind: "initiative",
 			scopeEntityId: initiative.id,

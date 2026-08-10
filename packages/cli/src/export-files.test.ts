@@ -11,6 +11,7 @@ import {
 	getDatabaseSnapshot,
 	getInitiativeBundle,
 	linkEntities,
+	SqliteStore,
 	upsertContext
 } from "@agent-issues/api-local";
 
@@ -66,8 +67,9 @@ describe("directory export", () => {
 
 	it("writes a project folder with nested initiative exports and project groupings", async () => {
 		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
-		const issue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Render detail view" });
+		const store = new SqliteStore(db);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Console Viewer" });
+		const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Render detail view" });
 		const adr = createEntity(db, { kind: "adr", title: "Use SVG graphs" });
 		const orphanIssue = createEntity(db, { kind: "issue", title: "Loose end" });
 		linkEntities(db, { fromId: initiative.id, toId: issue.id, relationType: "tracks" });
@@ -89,6 +91,12 @@ describe("directory export", () => {
 		expect(existsSync(path.join(outputPath, "entities", `${orphanIssue.id}.md`))).toBe(true);
 		expect(existsSync(path.join(outputPath, "entities", `${handoff.id}.md`))).toBe(true);
 		expect(existsSync(path.join(outputPath, "relations", "tracks.md"))).toBe(true);
+		expect(existsSync(path.join(outputPath, "users.json"))).toBe(true);
+		expect(JSON.parse(readFileSync(path.join(outputPath, "users.json"), "utf8"))).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: expect.any(String), authenticationSubject: expect.any(String) })
+			])
+		);
 		expect(existsSync(path.join(outputPath, "initiatives", initiative.id, "initiative.md"))).toBe(true);
 		expect(existsSync(path.join(outputPath, "initiatives", initiative.id, "issues", `${issue.id}.md`))).toBe(true);
 		expect(readFileSync(path.join(outputPath, "project.md"), "utf8")).toContain("type: \"project-export\"");

@@ -20,7 +20,7 @@ const KIND_PREFIX: Record<string, string> = {
 };
 
 /**
- * Derives a short, user-friendly display reference (kind prefix + a 6-char
+ * Derives a short, user-friendly display reference (kind prefix, separator, and a 6-char
  * Crockford Base32 code) from an entity's id. This is presentation-only:
  * navigation and lookups continue to use the full `entity.id`. The code is a
  * hash of the id rather than a slice of it, so it works whether the id is a
@@ -42,7 +42,7 @@ function shortEntityReference(entity: { id: string; kind: string }): string {
 		code = CROCKFORD_ALPHABET[Number(value & 31n)]! + code;
 		value >>= 5n;
 	}
-	return `${prefix}${code}`;
+	return `${prefix}_${code}`;
 }
 
 type IssueTreeNode = {

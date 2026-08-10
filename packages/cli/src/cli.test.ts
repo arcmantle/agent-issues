@@ -136,6 +136,192 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues help");
 	});
 
+	it("adds and lists an issue comment with explicit references", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "comments.db");
+		const output = createCapture();
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const issueOutput = createCapture();
+			expect(await runCli(["create", "issue", "--title", "Conversation host", "--db", dbPath, "--view", "full", "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: issueOutput.stream
+			})).toBe(0);
+			const issue = JSON.parse(issueOutput.read());
+			const referencedIssueOutput = createCapture();
+			expect(await runCli(["create", "issue", "--title", "Referenced issue", "--db", dbPath, "--view", "full", "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: referencedIssueOutput.stream
+			})).toBe(0);
+			const referencedIssue = JSON.parse(referencedIssueOutput.read());
+			const bodyFile = writeBodyFile(root, "A comment from the CLI.");
+
+			expect(await runCli([
+				"comment",
+				"add",
+				issue.reference,
+				"--body-file",
+				bodyFile,
+				"--reference",
+				referencedIssue.reference,
+				"--db",
+				dbPath,
+				"--json"
+			], { cwd: root, stderr: createCapture().stream, stdout: output.stream })).toBe(0);
+
+			const added = JSON.parse(output.read());
+			expect(added).toMatchObject({
+				issueId: issue.id,
+				body: "A comment from the CLI.",
+				referencedIssueIds: [referencedIssue.id],
+				tombstone: false
+			});
+
+			const listed = createCapture();
+			expect(await runCli(["comment", "list", issue.reference, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: listed.stream
+			})).toBe(0);
+			expect(JSON.parse(listed.read())).toMatchObject({
+				comments: [expect.objectContaining({ body: "A comment from the CLI.", referencedIssueIds: [referencedIssue.id] })],
+				total: 1,
+				nextBefore: null
+			});
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
+	it("edits an issue comment with replacement explicit references", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "comments-edit.db");
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const createIssue = async (title: string) => {
+				const output = createCapture();
+				expect(await runCli(["create", "issue", "--title", title, "--db", dbPath, "--view", "full", "--json"], {
+					cwd: root,
+					stderr: createCapture().stream,
+					stdout: output.stream
+				})).toBe(0);
+				return JSON.parse(output.read());
+			};
+			const issue = await createIssue("Conversation host");
+			const initialReference = await createIssue("Initial reference");
+			const replacementReference = await createIssue("Replacement reference");
+			const addOutput = createCapture();
+			expect(await runCli([
+				"comment",
+				"add",
+				issue.reference,
+				"--body-file",
+				writeBodyFile(root, "Initial comment."),
+				"--reference",
+				initialReference.reference,
+				"--db",
+				dbPath,
+				"--json"
+			], { cwd: root, stderr: createCapture().stream, stdout: addOutput.stream })).toBe(0);
+			const added = JSON.parse(addOutput.read());
+
+			const editOutput = createCapture();
+			expect(await runCli([
+				"comment",
+				"edit",
+				issue.reference,
+				added.reference,
+				"--body-file",
+				writeBodyFile(root, "Edited comment."),
+				"--reference",
+				replacementReference.reference,
+				"--db",
+				dbPath,
+				"--json"
+			], { cwd: root, stderr: createCapture().stream, stdout: editOutput.stream })).toBe(0);
+
+			expect(JSON.parse(editOutput.read())).toMatchObject({
+				body: "Edited comment.",
+				referencedIssueIds: [replacementReference.id],
+				revision: 2
+			});
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
+	it("deletes an issue comment and retains its history", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "comments-delete.db");
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const issueOutput = createCapture();
+			expect(await runCli(["create", "issue", "--title", "Conversation host", "--db", dbPath, "--view", "full", "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: issueOutput.stream
+			})).toBe(0);
+			const issue = JSON.parse(issueOutput.read());
+			const addOutput = createCapture();
+			expect(await runCli([
+				"comment",
+				"add",
+				issue.reference,
+				"--body-file",
+				writeBodyFile(root, "A comment that will be deleted."),
+				"--db",
+				dbPath,
+				"--json"
+			], { cwd: root, stderr: createCapture().stream, stdout: addOutput.stream })).toBe(0);
+			const added = JSON.parse(addOutput.read());
+
+			const deleteOutput = createCapture();
+			expect(await runCli(["comment", "delete", issue.reference, added.reference, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: deleteOutput.stream
+			})).toBe(0);
+			expect(JSON.parse(deleteOutput.read())).toMatchObject({
+				reference: added.reference,
+				tombstone: true,
+				revision: 2
+			});
+
+			const historyOutput = createCapture();
+			expect(await runCli(["comment", "history", added.reference, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: historyOutput.stream
+			})).toBe(0);
+			expect(JSON.parse(historyOutput.read())).toEqual([
+				expect.objectContaining({ body: "A comment that will be deleted.", tombstone: false, targetRevision: 1 }),
+				expect.objectContaining({ body: "A comment that will be deleted.", tombstone: true, targetRevision: 2 })
+			]);
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
 	it("routes command help through the existing help renderer", async () => {
 		const stdout = createCapture();
 		const stderr = createCapture();
@@ -1443,6 +1629,44 @@ describe("cli", () => {
 		expect(existsSync(path.join(root, "agent-issues-export", initiative.id, "issues", `${issue.id}.md`))).toBe(true);
 	});
 
+	it("resolves comment provenance in an initiative directory export", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Conversation export" });
+		const issue = createEntity(executor, { kind: "issue", parentId: initiative.id, title: "Export comments" });
+		db.close();
+		const { store } = await openSqliteStore(dbPath);
+		const commentStore = store.withAuthenticatedIdentity({
+			userId: "commenter",
+			tenantId: store.tenantId,
+			displayName: "Commenter Name"
+		});
+		await commentStore.createIssueComment({ issueId: issue.id, body: "Conversation content." });
+		await store.close();
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const exitCode = await runCli(["export", initiative.id, "--db", dbPath], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: createCapture().stream
+			});
+
+			expect(exitCode).toBe(0);
+			const issueExport = readFileSync(path.join(root, "agent-issues-export", initiative.id, "issues", `${issue.id}.md`), "utf8");
+			expect(issueExport).toContain("Created by: Commenter Name (commenter)");
+			expect(issueExport).toContain("Updated by: Commenter Name (commenter)");
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
 	it("exports the whole project to a grouped directory by default", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
@@ -1485,6 +1709,39 @@ describe("cli", () => {
 		expect(stderr.read()).toBe("");
 		expect(stdout.read()).toContain("type: \"initiative-export\"");
 		expect(stdout.read()).toContain(`# ${initiative.id} Console Viewer`);
+	});
+
+	it("includes full issue conversations in a single-file initiative export", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Conversation export" });
+		const issue = createEntity(executor, { kind: "issue", parentId: initiative.id, title: "Export comments" });
+		db.close();
+		const { store } = await openSqliteStore(dbPath);
+		const comment = await store.createIssueComment({ issueId: issue.id, body: "Conversation content." });
+		await store.close();
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const stdout = createCapture();
+			const exitCode = await runCli(["export", initiative.id, "--single-file", "--db", dbPath], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: stdout.stream
+			});
+
+			expect(exitCode).toBe(0);
+			expect(stdout.read()).toContain(`##### ${comment.reference}`);
+			expect(stdout.read()).toContain("Conversation content.");
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
 	});
 
 	it("writes single-file markdown to an explicit file path", async () => {

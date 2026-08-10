@@ -114,8 +114,38 @@ export type SnapshotContexts = {
 	initiatives: ContextDetails[];
 };
 
+export type IssueComment = {
+	id: string;
+	reference: string;
+	issueId: string;
+	createdBy: string;
+	updatedBy: string;
+	body?: string;
+	referencedIssueIds: string[];
+	tombstone: boolean;
+	revision: number;
+	contentHash: string;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type IssueCommentPage = {
+	comments: IssueComment[];
+	total: number;
+	nextBefore: string | null;
+};
+
+export type UserDirectoryEntry = {
+	id: string;
+	authenticationSubject: string;
+	displayName: string | null;
+	updatedAt: string;
+};
+
 export type Snapshot = {
 	generatedAt: string;
+	users: UserDirectoryEntry[];
+	issueComments: Record<string, IssueCommentPage>;
 	entities: Entity[];
 	relations: Relation[];
 	initiatives: InitiativeBundle[];

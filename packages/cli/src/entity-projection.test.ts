@@ -6,6 +6,8 @@ import { toCompactEntity, toCompactEntityDetails, toCompactEntityList, toCompact
 const entity: EntityRecord = {
 	id: "ISS_01",
 	reference: "ISS1",
+	createdBy: "user-1",
+	updatedBy: "user-1",
 	kind: "issue",
 	title: "Define compact projections",
 	status: "in-progress",

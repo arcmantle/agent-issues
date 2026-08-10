@@ -54,9 +54,11 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 		entities: [],
 		generatedAt: "2026-01-01T00:00:00.000Z",
 		initiatives: [],
+		issueComments: overrides.issueComments ?? {},
 		orphans: [],
 		projectAdrs: [],
 		relations: [],
+		users: overrides.users ?? [],
 		...overrides
 	};
 }

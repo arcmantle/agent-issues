@@ -59,9 +59,11 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 		entities: [],
 		generatedAt: "2026-01-01T00:00:00.000Z",
 		initiatives: [],
+		issueComments: {},
 		orphans: [],
 		projectAdrs: [],
 		relations: [],
+		users: [],
 		...overrides
 	};
 }
@@ -103,6 +105,111 @@ describe("entity detail pane", () => {
 		expect(root?.querySelector(".ai-d-title")?.textContent).toContain("Wire the detail pane");
 		expect(root?.querySelector(".ai-d-title .ai-id")?.textContent?.trim()).toBe(store.shortRef(issue));
 		expect(root?.querySelector(".ai-d-title .badge")?.textContent?.trim()).toBe("todo");
+	});
+
+	it("renders an issue's newest comment page in chronological order", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "todo", title: "Discuss detail rendering" });
+		const referencedIssue = makeEntity({ id: "ISS10", kind: "issue", status: "todo", title: "Referenced issue" });
+		const snapshot: Snapshot = {
+			...makeSnapshot({
+				entities: [initiative, issue, referencedIssue],
+				initiatives: [makeBundle(initiative, { issues: [issue, referencedIssue] })]
+			}),
+			issueComments: {
+				ISS9: {
+					comments: [
+						{
+							body: "First comment.",
+							createdAt: "2026-01-01T00:00:00.000Z",
+							createdBy: "user-1",
+							contentHash: "hash-1",
+							id: "comment-1",
+							issueId: "ISS9",
+							reference: "COM_FIRST",
+							referencedIssueIds: ["ISS10"],
+							revision: 1,
+							tombstone: false,
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							updatedBy: "user-1"
+						},
+						{
+							body: "Second comment.",
+							createdAt: "2026-01-02T00:00:00.000Z",
+							createdBy: "user-1",
+							contentHash: "hash-2",
+							id: "comment-2",
+							issueId: "ISS9",
+							reference: "COM_SECOND",
+							referencedIssueIds: [],
+							revision: 1,
+							tombstone: false,
+							updatedAt: "2026-01-02T00:00:00.000Z",
+							updatedBy: "user-1"
+						}
+					],
+					nextBefore: null,
+					total: 2
+				}
+			},
+			users: []
+		};
+		const store = makeStore(snapshot);
+		store.selectEntity("ISS9");
+		const view = await mountDetail(store);
+
+		const comments = [...(view.shadowRoot?.querySelectorAll(".ai-comment") ?? [])].map((comment) => comment.textContent?.trim());
+		expect(comments).toEqual([
+			expect.stringContaining("COM_FIRST"),
+			expect.stringContaining("COM_SECOND")
+		]);
+		expect(comments[0]).toContain("First comment.");
+		expect(comments[0]).toContain("ISS10");
+	});
+
+	it("resolves comment provenance and preserves a deleted-comment placeholder", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "todo", title: "Discuss detail rendering" });
+		const snapshot: Snapshot = {
+			...makeSnapshot({
+				entities: [initiative, issue],
+				initiatives: [makeBundle(initiative, { issues: [issue] })]
+			}),
+			issueComments: {
+				ISS9: {
+					comments: [{
+						body: "Hidden deleted body.",
+						contentHash: "hash-deleted",
+						createdAt: "2026-01-01T00:00:00.000Z",
+						createdBy: "user-1",
+						id: "comment-deleted",
+						issueId: "ISS9",
+						reference: "COM_DELETED",
+						referencedIssueIds: [],
+						revision: 2,
+						tombstone: true,
+						updatedAt: "2026-01-03T00:00:00.000Z",
+						updatedBy: "user-2"
+					}],
+					nextBefore: null,
+					total: 1
+				}
+			},
+			users: [
+				{ authenticationSubject: "ada", displayName: "Ada", id: "user-1", updatedAt: "2026-01-01T00:00:00.000Z" },
+				{ authenticationSubject: "ben", displayName: "Ben", id: "user-2", updatedAt: "2026-01-03T00:00:00.000Z" }
+			]
+		};
+		const store = makeStore(snapshot);
+		store.selectEntity("ISS9");
+		const view = await mountDetail(store);
+
+		const comment = view.shadowRoot?.querySelector(".ai-comment");
+		expect(comment?.textContent).toContain("COM_DELETED");
+		expect(comment?.textContent).toContain("Deleted 2026-01-03T00:00:00.000Z");
+		expect(comment?.textContent).toContain("Created by Ada");
+		expect(comment?.textContent).toContain("Updated by Ben");
+		expect(comment?.textContent).not.toContain("Hidden deleted body.");
 	});
 
 	it("uses the real status vocabulary for the title badge across record kinds", async () => {
