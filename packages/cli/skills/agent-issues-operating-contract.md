@@ -13,6 +13,8 @@ All bundled `ai-*` skills follow this contract. They also follow the shared [lan
 - Change status on issues only. Derive user story and PRD status from their linked issues. An ADR is `current` unless it is `superseded` or `archived`.
 - Treat each entity's complete `reference` field as its public tracker identity. Copy it exactly as returned by the CLI whenever you report or pass an entity to another command. Never abbreviate or truncate it, and never replace it with the internal `id`.
 
+Issue comments use complete `COM_` references. They are issue discussion, not tracker state: use tracker records for scope, decisions, blockers, handoffs, and status.
+
 ## Current contracts replace obsolete tests
 
 Do not keep old behavior or compatibility paths only because an old test expects them. When the active issue or a relevant ADR replaces behavior, update or remove the old implementation and its tests. Keep them only when a current compatibility or migration requirement says so.

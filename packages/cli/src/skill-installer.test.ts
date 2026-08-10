@@ -62,6 +62,31 @@ describe("skill installer", () => {
 		expect(existsSync(operatingContractFile)).toBe(false);
 	});
 
+	it("installs the preview-first Recipe migration skill", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		const installResult = installSkills({ targetDir });
+		const installedMigration = installResult.installed.find(
+			({ installedName }) => installedName === "ai-recipe-migration"
+		);
+
+		expect(installedMigration?.status).toBe("installed");
+		expect(existsSync(path.join(targetDir, "ai-recipe-migration", "SKILL.md"))).toBe(true);
+	});
+
+	it("installs Recipe migration guidance for preview approval and stale records", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+		const skill = readFileSync(path.join(targetDir, "ai-recipe-migration", "SKILL.md"), "utf8");
+
+		expect(skill).toContain("entity, initiative, shared context, or full project");
+		expect(skill).toContain("per-record exclusions");
+		expect(skill).toContain("explicit approval");
+		expect(skill).toContain("skips it when the body changed after preview");
+		expect(skill).toContain("updated, unchanged, excluded, and stale records");
+	});
+
 	it("preserves existing shared files without force", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
 		const languageFile = path.join(targetDir, "agent-issues-language.md");

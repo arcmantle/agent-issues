@@ -18,7 +18,7 @@ A PRD is not created until the `prd` entity exists and its user stories exist as
 
 3. Choose the seams where you will test the feature. Prefer an existing seam over a new one. Use the highest seam you can. If you need a new seam, propose it at the highest point you can.
 
-4. Write the PRD with the template below.
+4. Write the PRD from the [PRD recipe](../recipes/prd.md). Write each user story from the [User Story recipe](../recipes/user-story.md).
 
 5. Save the full PRD markdown from the template in the tracked record body. For multiline content, write the markdown to a temporary file and use `--body-file`. Create the `prd` with `agent-issues create prd --title ... --parent INITx --body-file "$prdBodyFile" --json`. If you reuse an existing PRD, update it with `agent-issues edit PRDx --body-file "$prdBodyFile" --json`.
 
@@ -27,41 +27,3 @@ A PRD is not created until the `prd` entity exists and its user stories exist as
 7. Return the PRD content together with the tracked IDs you created or reused. Do not create or update a markdown PRD file. The `agent-issues` records are the only canonical PRD representation for this workflow.
 
 Do not treat a markdown document, a chat response, or an external issue as the source of truth on its own. Do not create a side markdown PRD as part of this workflow. The tracked `prd` and `userStory` records must exist.
-
-<prd-template>
-
-## Problem Statement
-
-The problem, from the user's point of view.
-
-## Solution
-
-The solution, from the user's point of view.
-
-## User Stories
-
-A numbered list of user stories, in this form:
-
-1. As an <actor>, I want a <feature>, so that <benefit>
-
-Make the list wide enough to cover the full feature.
-
-## Implementation Decisions
-
-A list of implementation decisions made for this feature. This can include modules, interface changes, technical clarifications, architecture decisions, schema changes, API contracts, and specific interactions.
-
-Do not include file paths or code unless a prototype produced a short snippet that encodes a decision more precisely than prose can.
-
-## Testing Decisions
-
-A list of testing decisions made for this feature. State what makes a good test, which modules will be tested, and any relevant prior art in the codebase.
-
-## Out of Scope
-
-The things this PRD intentionally does not cover.
-
-## Further Notes
-
-Any further notes about the feature.
-
-</prd-template>

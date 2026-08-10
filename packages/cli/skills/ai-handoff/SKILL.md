@@ -8,6 +8,7 @@ Follow the shared [language standard](../agent-issues-language.md).
 Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
 
 Write a handoff that lets a new agent continue the work without rebuilding the state from scratch. Do not create a file, including a temp file or a workspace artifact.
+Use the [Handoff recipe](../recipes/handoff.md) for the tracked handoff body.
 
 The handoff must include:
 
@@ -55,7 +56,11 @@ PowerShell:
 - `--body-file -` is required. It reads the full handoff markdown from stdin. This avoids shell quoting problems and does not need a temp file.
 - `--title` is required. It is the one-line label shown in handoff lists.
 
-After you save the handoff, confirm the returned handoff ID (for example, `HO7`) in your response.
+After you save the handoff, return this continuation prompt in a code block, with the returned handoff ID (for example, `HO7`):
+
+```text
+Continue from handoff <handoffId>.
+```
 
 To fix a saved handoff, use the generic entity editor: `agent-issues edit <handoffId> --title "<title>" --body-file -`.
 

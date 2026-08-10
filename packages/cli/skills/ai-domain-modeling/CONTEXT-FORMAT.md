@@ -3,6 +3,7 @@
 The canonical glossary lives in the `agent-issues` database. It does not live in a raw file.
 
 Initiative-scoped context is the database equivalent of a `CONTEXT.md` file inside an initiative folder.
+Use the [Context Summary recipe](../../recipes/context-summary.md) for a context body and the [Context Term recipe](../../recipes/context-term.md) for a term definition.
 
 Read the relevant initiative glossary with `agent-issues context show <entityOrInitiativeId> --json`.
 

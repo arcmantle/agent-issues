@@ -10,6 +10,7 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 # Migrate Docs
 
 Existing markdown docs, tickets, and notes are source material. Interpret them. Do not treat them as the final source of truth.
+Use the [Context Summary](../recipes/context-summary.md), [Context Term](../recipes/context-term.md), [Initiative](../recipes/initiative.md), [PRD](../recipes/prd.md), [User Story](../recipes/user-story.md), [ADR](../recipes/adr.md), and [Issue](../recipes/issue.md) recipes when you create or edit those record bodies.
 
 ## Process
 

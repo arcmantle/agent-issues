@@ -16,10 +16,13 @@ const SKILL_NAMES = [
 	"ai-next-work",
 	"ai-plan",
 	"ai-prepare",
+	"ai-prototype-wip",
+	"ai-recipe-migration",
 	"ai-start-work",
 	"ai-tdd",
 	"ai-to-issues",
-	"ai-to-prd"
+	"ai-to-prd",
+	"ai-wayfinder-wip"
 ] as const;
 
 const SHARED_SKILL_FILES = ["agent-issues-language.md", "agent-issues-operating-contract.md"] as const;

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,10 +26,13 @@ describe("agent installer", () => {
 		const installedAgent = readFileSync(result.installed.agentFile, "utf8");
 		const expectedHookCommand = JSON.stringify(`node \"${result.installed.hookFile}\"`);
 		const languageFile = path.join(targetDir, "agent-issues-language.md");
+		const recipesDirectory = path.join(targetDir, "recipes");
 
 		expect(result.installed.status).toBe("installed");
 		expect(existsSync(result.installed.agentFile)).toBe(true);
 		expect(existsSync(result.installed.hookFile)).toBe(true);
+		expect(existsSync(path.join(recipesDirectory, "README.md"))).toBe(true);
+		expect(existsSync(path.join(recipesDirectory, "user-story.md"))).toBe(true);
 		expect(installedAgent).toContain(`command: ${expectedHookCommand}`);
 		expect(installedAgent).not.toContain("node .github/hooks/agent-issues-enforcer.mjs");
 		expect(installedAgent).toContain("agent");
@@ -46,6 +49,14 @@ describe("agent installer", () => {
 		expect(listAgent({ targetDir }).agent.status).toBe("partial");
 	});
 
+	it("reports a partial install when the recipe catalog is missing", () => {
+		const targetDir = createTargetDir();
+		const result = installAgent({ targetDir });
+		rmSync(path.join(targetDir, "recipes"), { force: true, recursive: true });
+
+		expect(listAgent({ targetDir }).agent.status).toBe("partial");
+	});
+
 	it("uninstalls both installed files", () => {
 		const targetDir = createTargetDir();
 		const result = installAgent({ targetDir });
@@ -55,6 +66,46 @@ describe("agent installer", () => {
 		expect(existsSync(result.installed.agentFile)).toBe(false);
 		expect(existsSync(result.installed.hookFile)).toBe(false);
 		expect(existsSync(path.join(targetDir, "agent-issues-language.md"))).toBe(false);
+		expect(existsSync(path.join(targetDir, "recipes"))).toBe(false);
 		expect(listAgent({ targetDir }).agent.status).toBe("missing");
+	});
+
+	it("preserves a pre-existing recipe catalog that it does not own", () => {
+		const targetDir = createTargetDir();
+		const recipesDirectory = path.join(targetDir, "recipes");
+		const customRecipe = path.join(recipesDirectory, "custom.md");
+		mkdirSync(recipesDirectory);
+		writeFileSync(customRecipe, "custom recipe");
+
+		installAgent({ targetDir });
+		expect(listAgent({ targetDir }).agent.status).toBe("partial");
+		uninstallAgent({ targetDir });
+
+		expect(readFileSync(customRecipe, "utf8")).toBe("custom recipe");
+		expect(existsSync(path.join(recipesDirectory, "README.md"))).toBe(false);
+	});
+
+	it("updates an installer-owned recipe catalog with force", () => {
+		const targetDir = createTargetDir();
+		const recipesDirectory = path.join(targetDir, "recipes");
+		installAgent({ targetDir });
+		writeFileSync(path.join(recipesDirectory, "custom.md"), "temporary recipe");
+
+		const result = installAgent({ targetDir, force: true });
+
+		expect(result.installed.status).toBe("updated");
+		expect(existsSync(path.join(recipesDirectory, "README.md"))).toBe(true);
+		expect(existsSync(path.join(recipesDirectory, "custom.md"))).toBe(false);
+	});
+
+	it("treats a malformed recipe catalog ownership marker as unowned", () => {
+		const targetDir = createTargetDir();
+		const recipesDirectory = path.join(targetDir, "recipes");
+		installAgent({ targetDir });
+		writeFileSync(path.join(targetDir, ".agent-issues-agent-files.json"), "not JSON");
+
+		expect(listAgent({ targetDir }).agent.status).toBe("partial");
+		uninstallAgent({ targetDir });
+		expect(existsSync(recipesDirectory)).toBe(true);
 	});
 });

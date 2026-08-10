@@ -56,7 +56,7 @@ Repeat until the user approves the breakdown.
 
 For each approved slice:
 
-1. Write a short markdown issue body before you publish it. Keep the substance of the approved slice in the body, not just in the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, the acceptance criteria, and any explicit blocker or dependency from the approved breakdown.
+1. Write a short markdown issue body from the [Issue recipe](../recipes/issue.md) before you publish it. Keep the substance of the approved slice in the body, not just in the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, the acceptance criteria, and any explicit blocker or dependency from the approved breakdown.
 2. For a multiline body, write the markdown to a temporary file first. Publish it with `--body-file` instead of relying on fragile shell quoting.
 3. Create the issue under the correct structural parent: `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json` for top-level initiative work, or `agent-issues create issue --title ... --parent ISSx --body-file "$issueBodyFile" --json` for a sub-issue.
 4. If you reuse an existing issue whose body is missing or old, refresh it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json` before you link anything else.

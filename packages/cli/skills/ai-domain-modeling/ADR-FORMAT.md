@@ -1,6 +1,7 @@
 # ADR Format
 
 An ADR is an `adr` entity in `agent-issues`. It is not a file, unless the user asks for one directly.
+Use the [ADR recipe](../../recipes/adr.md) for its body.
 
 ## Template
 

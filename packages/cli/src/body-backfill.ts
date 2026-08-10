@@ -1,6 +1,7 @@
-import type { EntityRecord, RelationRecord, StorageDriver } from "@agent-issues/core";
+import type { EntityRecord, StorageDriver } from "@agent-issues/core";
 
-export const BACKFILLABLE_BODY_KINDS = ["initiative", "issue", "prd", "userStory", "adr"] as const;
+export const BACKFILLABLE_BODY_KINDS = ["project", "epic", "version", "initiative", "issue", "prd", "userStory", "adr"] as const;
+const DERIVED_CONTENT_MARKER = "Not derived from tracker metadata.";
 
 export type BackfillableBodyKind = (typeof BACKFILLABLE_BODY_KINDS)[number];
 
@@ -20,12 +21,6 @@ export type BackfillBodiesResult = {
 	updated: number;
 	skipped: number;
 	byKind: BackfillBodiesKindResult[];
-};
-
-type SnapshotIndexes = {
-	entityById: Map<string, EntityRecord>;
-	incomingRelations: Map<string, RelationRecord[]>;
-	outgoingRelations: Map<string, RelationRecord[]>;
 };
 
 export function isBackfillableBodyKind(value: string): value is BackfillableBodyKind {
@@ -65,7 +60,6 @@ export async function backfillBodies(
 	input: { dryRun?: boolean; force?: boolean; kinds?: BackfillableBodyKind[] } = {}
 ): Promise<BackfillBodiesResult> {
 	const snapshot = await store.getDatabaseSnapshot();
-	const indexes = buildSnapshotIndexes(snapshot.entities, snapshot.relations);
 	const kinds = input.kinds ?? [...BACKFILLABLE_BODY_KINDS];
 	const byKind: BackfillBodiesKindResult[] = [];
 
@@ -75,7 +69,7 @@ export async function backfillBodies(
 		let skipped = 0;
 
 		for (const entity of entities) {
-			const body = buildBody(kind, entity, indexes);
+			const body = buildBody(kind);
 			if (body.trim().length === 0) {
 				skipped += 1;
 				continue;
@@ -120,328 +114,161 @@ export async function backfillBodies(
 	};
 }
 
-function buildSnapshotIndexes(entities: EntityRecord[], relations: RelationRecord[]): SnapshotIndexes {
-	const entityById = new Map(entities.map((entity) => [entity.id, entity]));
-	const incomingRelations = new Map<string, RelationRecord[]>();
-	const outgoingRelations = new Map<string, RelationRecord[]>();
-
-	for (const relation of relations) {
-		const incoming = incomingRelations.get(relation.toId) ?? [];
-		incoming.push(relation);
-		incomingRelations.set(relation.toId, incoming);
-
-		const outgoing = outgoingRelations.get(relation.fromId) ?? [];
-		outgoing.push(relation);
-		outgoingRelations.set(relation.fromId, outgoing);
-	}
-
-	return { entityById, incomingRelations, outgoingRelations };
-}
-
-function buildBody(kind: BackfillableBodyKind, entity: EntityRecord, indexes: SnapshotIndexes): string {
+function buildBody(kind: BackfillableBodyKind): string {
 	switch (kind) {
+		case "project":
+			return buildManagementBody();
+		case "epic":
+			return buildManagementBody();
+		case "version":
+			return buildVersionBody();
 		case "initiative":
-			return buildInitiativeBody(entity, indexes);
+			return buildInitiativeBody();
 		case "issue":
-			return buildIssueBody(entity, indexes);
+			return buildIssueBody();
 		case "prd":
-			return buildPrdBody(entity, indexes);
+			return buildPrdBody();
 		case "userStory":
-			return buildUserStoryBody(entity, indexes);
+			return buildUserStoryBody();
 		case "adr":
-			return buildAdrBody(entity, indexes);
+			return buildAdrBody();
 	}
 }
 
-function buildInitiativeBody(initiative: EntityRecord, indexes: SnapshotIndexes): string {
-	const prds = collectOutgoingEntities(indexes, initiative.id, "owns");
-	const adrs = collectOutgoingEntities(indexes, initiative.id, "records");
-	const trackedIssues = collectOutgoingEntities(indexes, initiative.id, "tracks");
-	const stories = uniqueSortedEntities(prds.flatMap((prd) => collectOutgoingEntities(indexes, prd.id, "creates")));
-	const doneStories = stories.filter((story) => story.status === "done").length;
-	const doneIssues = trackedIssues.filter((issue) => issue.status === "done").length;
-
+function buildManagementBody(): string {
 	return [
-		withTerminalPunctuation(initiative.title),
+		"## Purpose",
+		"",
+		DERIVED_CONTENT_MARKER,
 		"",
 		"## Scope",
 		"",
-		`- Initiative status: ${initiative.status}`,
-		`- PRDs linked: ${prds.length}`,
-		`- User stories linked through PRDs: ${stories.length}`,
-		`- Tracked issues: ${trackedIssues.length}`,
-		`- ADRs recorded: ${adrs.length}`,
+		`- ${DERIVED_CONTENT_MARKER}`,
 		"",
-		"## Delivery Status",
+		"## Success Conditions",
 		"",
-		`- Done user stories: ${doneStories}`,
-		`- Done issues: ${doneIssues}`,
-		stories.length > 0
-			? `- Remaining user stories: ${stories.length - doneStories}`
-			: "- Remaining user stories: no user stories are linked yet.",
-		trackedIssues.length > 0
-			? `- Remaining issues: ${trackedIssues.length - doneIssues}`
-			: "- Remaining issues: no tracked issues are linked yet.",
+		`- ${DERIVED_CONTENT_MARKER}`,
 		"",
-		"## Product Commitments",
+		"## Non-Goals",
 		"",
-		...toBullets(prds, "No PRDs are linked yet."),
-		"",
-		"## User Stories",
-		"",
-		...toBullets(stories, "No user stories are linked yet through initiative PRDs."),
-		"",
-		"## Implementation Slices",
-		"",
-		...toBullets(trackedIssues, "No tracked issues are linked yet."),
-		"",
-		"## Decision Records",
-		"",
-		...toBullets(adrs, "No ADRs are recorded yet."),
-		"",
-		"## Further Notes",
-		"",
-		"- Backfilled from tracker metadata because no authored initiative body was present."
+		`- ${DERIVED_CONTENT_MARKER}`
 	].join("\n");
 }
 
-function buildIssueBody(issue: EntityRecord, indexes: SnapshotIndexes): string {
-	const initiative = findParent(indexes, issue.id, "tracks", "initiative");
-	const fixedStories = collectOutgoingEntities(indexes, issue.id, "fixes");
-	const blockedBy = collectIncomingEntities(indexes, issue.id, "blocks");
-	const blocks = collectOutgoingEntities(indexes, issue.id, "blocks");
-	const constrainedBy = collectIncomingEntities(indexes, issue.id, "constrains");
-
+function buildVersionBody(): string {
 	return [
-		withTerminalPunctuation(issue.title),
+		"## Release Intent",
 		"",
-		"## Context",
+		DERIVED_CONTENT_MARKER,
 		"",
-		initiative
-			? `- Initiative: ${initiative.id} ${initiative.title}`
-			: "- Initiative: none linked in the tracker.",
-		`- Current status: ${issue.status}`,
-		`- Fixes user stories: ${fixedStories.length}`,
-		`- Blocked by issues: ${blockedBy.length}`,
-		`- Blocks issues: ${blocks.length}`,
-		`- Constraining ADRs: ${constrainedBy.length}`,
+		"## Compatibility and Migration Notes",
 		"",
-		"## User Stories",
-		"",
-		...toBullets(fixedStories, "No user stories are linked yet. Add issue slices that satisfy a story end to end."),
-		"",
-		"## Dependencies",
-		"",
-		...buildIssueDependencyBullets(blockedBy, blocks, constrainedBy),
-		"",
-		"## Further Notes",
-		"",
-		"- Backfilled from tracker metadata because no authored issue body was present."
+		`- ${DERIVED_CONTENT_MARKER}`
 	].join("\n");
 }
 
-function buildPrdBody(prd: EntityRecord, indexes: SnapshotIndexes): string {
-	const initiative = findParent(indexes, prd.id, "owns", "initiative");
-	const stories = collectOutgoingEntities(indexes, prd.id, "creates");
-	const fixingIssues = uniqueSortedEntities(
-		stories.flatMap((story) => collectIncomingEntities(indexes, story.id, "fixes"))
-	);
-	const normalizedTitle = prd.title.replace(/\s+PRD$/i, "");
-	const doneStories = stories.filter((story) => story.status === "done").length;
+function buildInitiativeBody(): string {
+	return buildManagementBody();
+}
 
+function buildIssueBody(): string {
 	return [
-		initiative
-			? `This PRD captures the tracked product commitments for ${normalizedTitle} within ${initiative.title}.`
-			: `This PRD captures the tracked product commitments for ${normalizedTitle}.`,
+		"## Work Mode",
 		"",
+		DERIVED_CONTENT_MARKER,
+		"",
+		"## Outcome",
+		"",
+		DERIVED_CONTENT_MARKER,
+		"",
+		"## Scope",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Work Plan",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Acceptance Criteria",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Verification",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Notes",
+		"",
+		DERIVED_CONTENT_MARKER
+	].join("\n");
+}
+
+function buildPrdBody(): string {
+	return [
 		"## Problem Statement",
 		"",
-		initiative
-			? `Deliver the ${normalizedTitle} work for ${initiative.title} through the committed user stories and linked implementation slices already present in the tracker.`
-			: `Deliver the ${normalizedTitle} work through the committed user stories and linked implementation slices already present in the tracker.`,
+		DERIVED_CONTENT_MARKER,
+		"",
+		"## Solution",
+		"",
+		DERIVED_CONTENT_MARKER,
 		"",
 		"## User Stories",
 		"",
-		...buildPrdStoryLines(stories),
+		`1. ${DERIVED_CONTENT_MARKER}`,
 		"",
-		"## Delivery Status",
+		"## Implementation Decisions",
 		"",
-		initiative
-			? `- Initiative: ${initiative.id} ${initiative.title}`
-			: "- Initiative: none linked in the tracker.",
-		`- PRD status: ${prd.status}`,
-		`- Child user stories: ${stories.length}`,
-		`- Done user stories: ${doneStories}`,
-		`- Linked issues across the PRD: ${fixingIssues.length}`,
+		`- ${DERIVED_CONTENT_MARKER}`,
 		"",
-		"## Implementation Slices",
+		"## Testing Decisions",
 		"",
-		...toBullets(fixingIssues, "No issues are linked to this PRD yet through its child stories."),
+		`- ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Out of Scope",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`,
 		"",
 		"## Further Notes",
 		"",
-		"- Backfilled from tracker metadata because no authored PRD body was present."
+		DERIVED_CONTENT_MARKER
 	].join("\n");
 }
 
-function buildUserStoryBody(story: EntityRecord, indexes: SnapshotIndexes): string {
-	const prd = findParent(indexes, story.id, "creates", "prd");
-	const initiative = prd ? findParent(indexes, prd.id, "owns", "initiative") : null;
-	const fixingIssues = collectIncomingEntities(indexes, story.id, "fixes");
-
+function buildUserStoryBody(): string {
 	return [
-		withTerminalPunctuation(story.title),
+		`As an actor, I want ${DERIVED_CONTENT_MARKER}, so that ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Acceptance Criteria",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`,
+		"",
+		"## Boundaries",
+		"",
+		`- ${DERIVED_CONTENT_MARKER}`
+	].join("\n");
+}
+
+function buildAdrBody(): string {
+	return [
+		"## Status",
+		"",
+		DERIVED_CONTENT_MARKER,
 		"",
 		"## Context",
 		"",
-		initiative
-			? `- Initiative: ${initiative.id} ${initiative.title}`
-			: "- Initiative: none linked in the tracker.",
-		prd ? `- PRD: ${prd.id} ${prd.title}` : "- PRD: none linked in the tracker.",
-		`- Current status: ${story.status}`,
-		`- Fixing issues linked: ${fixingIssues.length}`,
+		DERIVED_CONTENT_MARKER,
 		"",
-		"## Delivery Slices",
+		"## Decision",
 		"",
-		...toBullets(fixingIssues, "No fixing issues are linked yet. Add issue slices that satisfy this story end to end."),
+		DERIVED_CONTENT_MARKER,
 		"",
-		"## Completion Notes",
+		"## Consequences",
 		"",
-		"- This story is satisfied when the linked issues deliver the behavior described above and the story status can derive from that connected work.",
-		"- Backfilled from tracker metadata because no authored story body was present."
+		`- ${DERIVED_CONTENT_MARKER}`
 	].join("\n");
-}
-
-function buildAdrBody(adr: EntityRecord, indexes: SnapshotIndexes): string {
-	const initiative = findParent(indexes, adr.id, "records", "initiative");
-	const constrainedIssues = collectOutgoingEntities(indexes, adr.id, "constrains");
-	const supersedes = collectOutgoingEntities(indexes, adr.id, "supersedes");
-	const supersededBy = collectIncomingEntities(indexes, adr.id, "supersedes");
-
-	return [
-		initiative
-			? `This ADR records the tracked architecture decision for ${adr.title} within ${initiative.title}.`
-			: `This ADR records the tracked architecture decision for ${adr.title}.`,
-		"",
-		"## Context",
-		"",
-		initiative
-			? `- Initiative: ${initiative.id} ${initiative.title}`
-			: "- Initiative: none linked in the tracker.",
-		`- ADR status: ${adr.status}`,
-		`- Constrained issues: ${constrainedIssues.length}`,
-		`- Supersedes ADRs: ${supersedes.length}`,
-		`- Superseded by ADRs: ${supersededBy.length}`,
-		"",
-		"## Governed Work",
-		"",
-		...toBullets(constrainedIssues, "No constrained issues are linked yet."),
-		"",
-		"## Decision Lineage",
-		"",
-		...buildAdrLineageBullets(supersedes, supersededBy),
-		"",
-		"## Further Notes",
-		"",
-		"- Backfilled from tracker metadata because no authored ADR body was present."
-	].join("\n");
-}
-
-function buildIssueDependencyBullets(
-	blockedBy: EntityRecord[],
-	blocks: EntityRecord[],
-	constrainedBy: EntityRecord[]
-): string[] {
-	const lines: string[] = [];
-
-	lines.push(...blockedBy.map((entity) => `- Blocked by ${entity.id} (${entity.status}): ${entity.title}`));
-	lines.push(...blocks.map((entity) => `- Blocks ${entity.id} (${entity.status}): ${entity.title}`));
-	lines.push(...constrainedBy.map((entity) => `- Governed by ${entity.id} (${entity.status}): ${entity.title}`));
-
-	if (lines.length === 0) {
-		return ["- No blocking or constraining records are linked yet."];
-	}
-
-	return lines;
-}
-
-function buildAdrLineageBullets(supersedes: EntityRecord[], supersededBy: EntityRecord[]): string[] {
-	const lines: string[] = [];
-
-	lines.push(...supersedes.map((entity) => `- Supersedes ${entity.id} (${entity.status}): ${entity.title}`));
-	lines.push(...supersededBy.map((entity) => `- Superseded by ${entity.id} (${entity.status}): ${entity.title}`));
-
-	if (lines.length === 0) {
-		return ["- No supersession links are recorded yet."];
-	}
-
-	return lines;
-}
-
-function buildPrdStoryLines(stories: EntityRecord[]): string[] {
-	if (stories.length === 0) {
-		return ["1. No user stories are linked to this PRD yet."];
-	}
-
-	return stories.map((story, index) => `${index + 1}. ${story.id} (${story.status}) ${story.title}`);
-}
-
-function toBullets(entities: EntityRecord[], emptyLine: string): string[] {
-	if (entities.length === 0) {
-		return [`- ${emptyLine}`];
-	}
-
-	return entities.map((entity) => `- ${entity.id} (${entity.status}): ${entity.title}`);
-}
-
-function collectIncomingEntities(indexes: SnapshotIndexes, entityId: string, relationType: RelationRecord["type"]): EntityRecord[] {
-	return uniqueSortedEntities(
-		(indexes.incomingRelations.get(entityId) ?? [])
-			.filter((relation) => relation.type === relationType)
-			.map((relation) => indexes.entityById.get(relation.fromId))
-	);
-}
-
-function collectOutgoingEntities(indexes: SnapshotIndexes, entityId: string, relationType: RelationRecord["type"]): EntityRecord[] {
-	return uniqueSortedEntities(
-		(indexes.outgoingRelations.get(entityId) ?? [])
-			.filter((relation) => relation.type === relationType)
-			.map((relation) => indexes.entityById.get(relation.toId))
-	);
-}
-
-function findParent(indexes: SnapshotIndexes, entityId: string, relationType: RelationRecord["type"], kind: string): EntityRecord | null {
-	for (const relation of indexes.incomingRelations.get(entityId) ?? []) {
-		if (relation.type !== relationType) {
-			continue;
-		}
-
-		const entity = indexes.entityById.get(relation.fromId);
-		if (entity?.kind === kind) {
-			return entity;
-		}
-	}
-
-	return null;
-}
-
-function uniqueSortedEntities(entities: Array<EntityRecord | undefined>): EntityRecord[] {
-	const map = new Map<string, EntityRecord>();
-	for (const entity of entities) {
-		if (!entity) {
-			continue;
-		}
-
-		map.set(entity.id, entity);
-	}
-
-	return sortEntities([...map.values()]);
 }
 
 function sortEntities<T extends EntityRecord>(entities: T[]): T[] {
 	return [...entities].sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
-}
-
-function withTerminalPunctuation(text: string): string {
-	return /[.!?]$/.test(text) ? text : `${text}.`;
 }
