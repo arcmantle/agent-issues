@@ -27,6 +27,7 @@ const SKILL_NAMES = [
 
 const SHARED_SKILL_FILES = ["agent-issues-language.md", "agent-issues-operating-contract.md"] as const;
 const SHARED_FILES_MANIFEST = ".agent-issues-shared-files.json";
+const RECIPES_DIRECTORY_NAME = "recipes";
 
 const SKILL_INSTALLS = SKILL_NAMES.map((name) => ({ sourceDir: name, installedName: name }));
 
@@ -58,8 +59,10 @@ export function getDefaultSkillsInstallDir(): string {
 export function installSkills(input: { targetDir?: string; force?: boolean }): InstallSkillsResult {
 	const targetDir = path.resolve(input.targetDir ?? getDefaultSkillsInstallDir());
 	const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "skills");
+	const sourceRecipesDirectory = path.join(sourceRoot, RECIPES_DIRECTORY_NAME);
+	const destinationRecipesDirectory = path.join(targetDir, RECIPES_DIRECTORY_NAME);
 
-	if (!existsSync(sourceRoot)) {
+	if (!existsSync(sourceRoot) || !existsSync(sourceRecipesDirectory)) {
 		throw new Error(`Packaged skills directory not found: ${sourceRoot}`);
 	}
 
@@ -73,6 +76,13 @@ export function installSkills(input: { targetDir?: string; force?: boolean }): I
 		}
 	}
 	writeOwnedSharedFiles(targetDir, ownedSharedFiles);
+	if (input.force || !existsSync(destinationRecipesDirectory)) {
+		if (existsSync(destinationRecipesDirectory)) {
+			rmSync(destinationRecipesDirectory, { force: true, recursive: true });
+		}
+		cpSync(sourceRecipesDirectory, destinationRecipesDirectory, { recursive: true });
+		writeOwnedRecipeCatalog(targetDir);
+	}
 
 	const installed = SKILL_INSTALLS.map((skill) => {
 		const sourceDir = path.join(sourceRoot, skill.sourceDir);
@@ -112,6 +122,7 @@ export function installSkills(input: { targetDir?: string; force?: boolean }): I
 export function uninstallSkills(input: { targetDir?: string }): UninstallSkillsResult {
 	const targetDir = path.resolve(input.targetDir ?? getDefaultSkillsInstallDir());
 	const ownedSharedFiles = readOwnedSharedFiles(targetDir);
+	const destinationRecipesDirectory = path.join(targetDir, RECIPES_DIRECTORY_NAME);
 	let removedInstalledSkill = false;
 
 	const removed = SKILL_INSTALLS.map((skill) => {
@@ -133,6 +144,9 @@ export function uninstallSkills(input: { targetDir?: string }): UninstallSkillsR
 	if (removedInstalledSkill) {
 		for (const fileName of ownedSharedFiles) {
 			rmSync(path.join(targetDir, fileName), { force: true });
+		}
+		if (hasOwnedRecipeCatalog(targetDir) && existsSync(destinationRecipesDirectory)) {
+			rmSync(destinationRecipesDirectory, { force: true, recursive: true });
 		}
 		rmSync(path.join(targetDir, SHARED_FILES_MANIFEST), { force: true });
 	}
@@ -185,5 +199,30 @@ function writeOwnedSharedFiles(targetDir: string, sharedFiles: Set<string>): voi
 	writeFileSync(
 		path.join(targetDir, SHARED_FILES_MANIFEST),
 		`${JSON.stringify({ sharedFiles: [...sharedFiles].sort() }, null, "\t")}\n`
+	);
+}
+
+function hasOwnedRecipeCatalog(targetDir: string): boolean {
+	const manifestPath = path.join(targetDir, SHARED_FILES_MANIFEST);
+	if (!existsSync(manifestPath)) {
+		return false;
+	}
+
+	try {
+		const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { recipeCatalog?: unknown };
+		return parsed.recipeCatalog === true;
+	} catch {
+		return false;
+	}
+}
+
+function writeOwnedRecipeCatalog(targetDir: string): void {
+	const manifestPath = path.join(targetDir, SHARED_FILES_MANIFEST);
+	const parsed = existsSync(manifestPath)
+		? JSON.parse(readFileSync(manifestPath, "utf8")) as { sharedFiles?: unknown }
+		: {};
+	writeFileSync(
+		manifestPath,
+		`${JSON.stringify({ ...parsed, recipeCatalog: true }, null, "\t")}\n`
 	);
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,8 +30,10 @@ describe("skill installer", () => {
 
 		const languageFile = path.join(targetDir, "agent-issues-language.md");
 		const operatingContractFile = path.join(targetDir, "agent-issues-operating-contract.md");
+		const recipeCatalog = path.join(targetDir, "recipes", "README.md");
 		expect(readFileSync(languageFile, "utf8")).toContain("# Language standard");
 		expect(readFileSync(operatingContractFile, "utf8")).toContain("# Shared Skill Operating Contract");
+		expect(existsSync(recipeCatalog)).toBe(true);
 
 		for (const { installedName: skillName } of listSkills({ targetDir }).skills) {
 			const installedSkill = readFileSync(path.join(targetDir, skillName, "SKILL.md"), "utf8");
@@ -60,6 +62,7 @@ describe("skill installer", () => {
 
 		expect(existsSync(languageFile)).toBe(false);
 		expect(existsSync(operatingContractFile)).toBe(false);
+		expect(existsSync(recipeCatalog)).toBe(false);
 	});
 
 	it("installs the preview-first Recipe migration skill", () => {
@@ -85,6 +88,35 @@ describe("skill installer", () => {
 		expect(skill).toContain("explicit approval");
 		expect(skill).toContain("skips it when the body changed after preview");
 		expect(skill).toContain("updated, unchanged, excluded, and stale records");
+	});
+
+	it("preserves an unowned recipe catalog without force", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+		const recipesDirectory = path.join(targetDir, "recipes");
+		const customRecipe = path.join(recipesDirectory, "custom.md");
+		mkdirSync(recipesDirectory);
+		writeFileSync(customRecipe, "custom recipe");
+
+		installSkills({ targetDir });
+		uninstallSkills({ targetDir });
+
+		expect(readFileSync(customRecipe, "utf8")).toBe("custom recipe");
+		expect(existsSync(path.join(recipesDirectory, "README.md"))).toBe(false);
+	});
+
+	it("replaces an unowned recipe catalog only with force", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+		const recipesDirectory = path.join(targetDir, "recipes");
+		const customRecipe = path.join(recipesDirectory, "custom.md");
+		mkdirSync(recipesDirectory);
+		writeFileSync(customRecipe, "custom recipe");
+
+		installSkills({ targetDir, force: true });
+
+		expect(existsSync(path.join(recipesDirectory, "README.md"))).toBe(true);
+		expect(existsSync(customRecipe)).toBe(false);
+		uninstallSkills({ targetDir });
+		expect(existsSync(recipesDirectory)).toBe(false);
 	});
 
 	it("preserves existing shared files without force", () => {
