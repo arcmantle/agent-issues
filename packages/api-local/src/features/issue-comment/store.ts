@@ -42,10 +42,7 @@ export function createIssueComment(
 	input: { issueId: string; body: string; referencedIssueIds?: string[] },
 	actorId: string
 ): IssueCommentRecord {
-	const issue = getSqliteEntityOrThrow(executor, input.issueId);
-	if (issue.kind !== "issue") {
-		throw new Error(`Comments can only attach to issues: ${input.issueId}`);
-	}
+	const issue = getProjectIssueOrThrow(executor, input.issueId);
 
 	const body = input.body;
 	if (body.trim().length === 0) {
@@ -54,10 +51,7 @@ export function createIssueComment(
 
 	const referencedIssueIds = [...new Set(input.referencedIssueIds ?? [])];
 	for (const referencedIssueId of referencedIssueIds) {
-		const referencedIssue = getSqliteEntityOrThrow(executor, referencedIssueId);
-		if (referencedIssue.kind !== "issue") {
-			throw new Error(`Issue comment references must target issues: ${referencedIssueId}`);
-		}
+		getProjectIssueOrThrow(executor, referencedIssueId);
 	}
 
 	const id = randomUUID();
@@ -100,10 +94,7 @@ export function listIssueComments(
 	executor: SqliteExecutor,
 	input: { issueId: string; before?: string; all?: boolean }
 ): IssueCommentPage {
-	const issue = getSqliteEntityOrThrow(executor, input.issueId);
-	if (issue.kind !== "issue") {
-		throw new Error(`Comments can only attach to issues: ${input.issueId}`);
-	}
+	const issue = getProjectIssueOrThrow(executor, input.issueId);
 
 	const cursor = input.before ? decodeCursor(input.before) : undefined;
 	const beforePredicate = cursor
@@ -237,8 +228,18 @@ export function deleteIssueComment(
 }
 
 export function listIssueCommentHistory(executor: SqliteExecutor, input: { commentId: string }): IssueCommentHistoryEntry[] {
+	const comment = executor.drizzle.all(sql`SELECT issue_comments.id
+		FROM issue_comments
+		JOIN entities AS issue ON issue.tenant_id = issue_comments.tenant_id AND issue.id = issue_comments.issue_id
+		WHERE issue_comments.tenant_id = ${executor.tenantId}
+			AND issue.project_id = ${executor.currentProjectId}
+			AND (issue_comments.id = ${input.commentId} OR issue_comments.reference = ${input.commentId})`)[0] as { id: string } | undefined;
+	if (!comment) {
+		return [];
+	}
+
 	const current = exportCanonicalChains(executor);
-	const chain = current.issueComments.find((candidate) => candidate.head.id === input.commentId || candidate.head.reference === input.commentId);
+	const chain = current.issueComments.find((candidate) => candidate.head.id === comment.id);
 	if (!chain) {
 		return [];
 	}
@@ -287,7 +288,12 @@ export class LocalIssueCommentStore {
 }
 
 function getIssueComment(executor: SqliteExecutor, commentId: string): IssueCommentRecord {
-	const row = executor.drizzle.all(sql`SELECT * FROM issue_comments WHERE tenant_id = ${executor.tenantId} AND (id = ${commentId} OR reference = ${commentId})`)[0] as IssueCommentRow | undefined;
+	const row = executor.drizzle.all(sql`SELECT issue_comments.*
+		FROM issue_comments
+		JOIN entities AS issue ON issue.tenant_id = issue_comments.tenant_id AND issue.id = issue_comments.issue_id
+		WHERE issue_comments.tenant_id = ${executor.tenantId}
+			AND issue.project_id = ${executor.currentProjectId}
+			AND (issue_comments.id = ${commentId} OR issue_comments.reference = ${commentId})`)[0] as IssueCommentRow | undefined;
 	if (!row) {
 		throw new Error(`Issue comment not found: ${commentId}`);
 	}
@@ -297,12 +303,17 @@ function getIssueComment(executor: SqliteExecutor, commentId: string): IssueComm
 function validateReferencedIssueIds(executor: SqliteExecutor, referencedIssueIds: string[]): string[] {
 	const deduplicated = [...new Set(referencedIssueIds)];
 	for (const referencedIssueId of deduplicated) {
-		const referencedIssue = getSqliteEntityOrThrow(executor, referencedIssueId);
-		if (referencedIssue.kind !== "issue") {
-			throw new Error(`Issue comment references must target issues: ${referencedIssueId}`);
-		}
+		getProjectIssueOrThrow(executor, referencedIssueId);
 	}
 	return deduplicated;
+}
+
+function getProjectIssueOrThrow(executor: SqliteExecutor, issueId: string) {
+	const issue = getSqliteEntityOrThrow(executor, issueId);
+	if (issue.kind !== "issue" || issue.projectId !== executor.currentProjectId) {
+		throw new Error(`Entity not found: ${issueId}`);
+	}
+	return issue;
 }
 
 function toIssueCommentRecord(executor: SqliteExecutor, row: IssueCommentRow): IssueCommentRecord {

@@ -1954,6 +1954,85 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 	});
 
 	describe(`storage-driver seam: issue comments (${label})`, () => {
+		it("does not attach another project's conversation to an issue detail", async () => {
+			const projectA = await openStoreForProject("comment-project-a");
+			const projectB = await openStoreForProject("comment-project-b");
+
+			try {
+				const issue = await projectA.createEntity({ kind: "issue", title: "Project A issue" });
+				await projectA.createIssueComment({ issueId: issue.id, body: "Project A comment." });
+
+				await expect(projectB.getEntityDetails(issue.id)).rejects.toThrow(`Entity not found: ${issue.id}`);
+			} finally {
+				await projectA.close();
+				await projectB.close();
+			}
+		});
+
+		it("does not list or add comments on another project's issue", async () => {
+			const projectA = await openStoreForProject("comment-project-a");
+			const projectB = await openStoreForProject("comment-project-b");
+
+			try {
+				const issue = await projectA.createEntity({ kind: "issue", title: "Project A issue" });
+				await projectA.createIssueComment({ issueId: issue.id, body: "Project A comment." });
+
+				await expect(projectB.listIssueComments({ issueId: issue.id })).rejects.toThrow(`Entity not found: ${issue.id}`);
+				await expect(projectB.createIssueComment({ issueId: issue.id, body: "Project B comment." })).rejects.toThrow(`Entity not found: ${issue.id}`);
+			} finally {
+				await projectA.close();
+				await projectB.close();
+			}
+		});
+
+		it("does not delete another project's comment by ID or canonical reference", async () => {
+			const projectA = await openStoreForProject("comment-project-a");
+			const projectB = await openStoreForProject("comment-project-b");
+
+			try {
+				const issue = await projectA.createEntity({ kind: "issue", title: "Project A issue" });
+				const comment = await projectA.createIssueComment({ issueId: issue.id, body: "Project A comment." });
+
+				await expect(projectB.deleteIssueComment({ commentId: comment.id, expectedRevision: comment.revision, expectedContentHash: comment.contentHash })).rejects.toThrow(`Issue comment not found: ${comment.id}`);
+				await expect(projectB.deleteIssueComment({ commentId: comment.reference, expectedRevision: comment.revision, expectedContentHash: comment.contentHash })).rejects.toThrow(`Issue comment not found: ${comment.reference}`);
+			} finally {
+				await projectA.close();
+				await projectB.close();
+			}
+		});
+
+		it("does not update another project's comment by ID or canonical reference", async () => {
+			const projectA = await openStoreForProject("comment-project-a");
+			const projectB = await openStoreForProject("comment-project-b");
+
+			try {
+				const issue = await projectA.createEntity({ kind: "issue", title: "Project A issue" });
+				const comment = await projectA.createIssueComment({ issueId: issue.id, body: "Project A comment." });
+
+				await expect(projectB.updateIssueComment({ commentId: comment.id, body: "Changed by Project B.", expectedRevision: comment.revision, expectedContentHash: comment.contentHash })).rejects.toThrow(`Issue comment not found: ${comment.id}`);
+				await expect(projectB.updateIssueComment({ commentId: comment.reference, body: "Changed by Project B.", expectedRevision: comment.revision, expectedContentHash: comment.contentHash })).rejects.toThrow(`Issue comment not found: ${comment.reference}`);
+			} finally {
+				await projectA.close();
+				await projectB.close();
+			}
+		});
+
+		it("does not return another project's comment history by ID or canonical reference", async () => {
+			const projectA = await openStoreForProject("comment-project-a");
+			const projectB = await openStoreForProject("comment-project-b");
+
+			try {
+				const issue = await projectA.createEntity({ kind: "issue", title: "Project A issue" });
+				const comment = await projectA.createIssueComment({ issueId: issue.id, body: "Project A comment." });
+
+				await expect(projectB.listIssueCommentHistory({ commentId: comment.id })).resolves.toEqual([]);
+				await expect(projectB.listIssueCommentHistory({ commentId: comment.reference })).resolves.toEqual([]);
+			} finally {
+				await projectA.close();
+				await projectB.close();
+			}
+		});
+
 		it("creates a comment on an issue and returns it from the conversation", async () => {
 			const store = await openStore();
 

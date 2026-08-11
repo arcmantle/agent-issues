@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import type {
 	BodySource,
 	CanonicalIssueCommentChain,
@@ -45,6 +46,7 @@ import { deleteTenant, listTenants, renameTenant } from "./db/tenant-admin.js";
 import { PgContextStore } from "./features/context/context-store.js";
 import { PgEntityStore, resolveCurrentProjectId } from "./features/entity-store/store.js";
 import { PgHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
+import { PgIssueCommentStore } from "./features/issue-comment/store.js";
 
 /**
  * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
@@ -197,9 +199,19 @@ export class PgStore implements StorageDriver {
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
 		const details = await this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getEntityDetails(entityId));
-		return details.entity.kind === "issue"
-			? { ...details, comments: await this.listIssueComments({ issueId: details.entity.id }) }
-			: details;
+		if (details.entity.kind !== "issue") {
+			return details;
+		}
+
+		const issue = await this.transaction((executor) => findProjectIssue(executor, details.entity.id));
+		if (!issue) {
+			if (this.projectIdentity !== undefined) {
+				throw new Error(`Entity not found: ${entityId}`);
+			}
+			return { ...details, comments: { comments: [], total: 0, nextBefore: null } };
+		}
+
+		return { ...details, comments: await this.listIssueComments({ issueId: issue.id }) };
 	}
 
 	public async queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails> {
@@ -219,98 +231,23 @@ export class PgStore implements StorageDriver {
 	}
 
 	public async createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }): Promise<IssueCommentRecord> {
-		return this.mutation(async (executor, actorId) => {
-			const entityStore = new PgEntityStore(executor, this.projectIdentity);
-			const issue = (await entityStore.getEntityDetails(input.issueId)).entity;
-			if (issue.kind !== "issue") throw new Error(`Comments can only attach to issues: ${input.issueId}`);
-			if (input.body.trim().length === 0) throw new Error("Issue comment body must not be empty.");
-			const referencedIssueIds = await validateReferencedIssueIds(entityStore, input.referencedIssueIds ?? []);
-			const synchronizeStore = new PgSynchronizeStore(executor);
-			const current = await synchronizeStore.exportCanonicalChains();
-			const id = randomUUID();
-			const reference = encodeCanonicalReference("issueComment", id);
-			const createdAt = new Date().toISOString();
-			const state = { body: input.body, referencedIssueIds, tombstone: false };
-			const chain = {
-				head: { id, reference, issueId: issue.id, createdBy: actorId, updatedBy: actorId, ...state, revision: 1, contentHash: computeIssueCommentContentHash(state.body, state.referencedIssueIds, state.tombstone), createdAt, updatedAt: createdAt },
-				deltas: [{ id: randomUUID(), revision: 1, author: actorId, createdAt, ...createReverseFieldPatch(state, state, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY) }]
-			};
-			await synchronizeStore.importCanonicalChains({ ...current, issueComments: [...current.issueComments, chain] });
-			return toIssueCommentRecord(chain.head);
-		});
+		return this.mutation((executor, actorId) => new PgIssueCommentStore(executor).createIssueComment(input, actorId));
 	}
 
 	public async updateIssueComment(input: { commentId: string; body: string; referencedIssueIds?: string[]; expectedRevision: number; expectedContentHash: string }): Promise<IssueCommentRecord> {
-		return this.mutation(async (executor, actorId) => {
-			if (input.body.trim().length === 0) throw new Error("Issue comment body must not be empty.");
-			const synchronizeStore = new PgSynchronizeStore(executor);
-			const current = await synchronizeStore.exportCanonicalChains();
-			const chain = current.issueComments.find((candidate) => candidate.head.id === input.commentId || candidate.head.reference === input.commentId);
-			if (!chain || chain.head.tombstone) throw new Error(`Issue comment not found: ${input.commentId}`);
-			if (chain.head.revision !== input.expectedRevision || chain.head.contentHash !== input.expectedContentHash) throw new IssueCommentConflictError(chain.head.id, chain.head.revision, chain.head.contentHash);
-			const referencedIssueIds = input.referencedIssueIds === undefined
-				? chain.head.referencedIssueIds
-				: await validateReferencedIssueIds(new PgEntityStore(executor, this.projectIdentity), input.referencedIssueIds);
-			const updatedAt = new Date().toISOString();
-			const successor = { body: input.body, referencedIssueIds, tombstone: false };
-			const revision = chain.head.revision + 1;
-			const updated = {
-				...chain,
-				head: { ...chain.head, ...successor, updatedBy: actorId, revision, contentHash: computeIssueCommentContentHash(successor.body, successor.referencedIssueIds, successor.tombstone), updatedAt },
-				deltas: [...chain.deltas, { id: randomUUID(), revision, author: actorId, createdAt: updatedAt, ...createReverseFieldPatch(successor, { body: chain.head.body, referencedIssueIds: chain.head.referencedIssueIds, tombstone: false }, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY) }]
-			};
-			await synchronizeStore.importCanonicalChains({ ...current, issueComments: current.issueComments.map((candidate) => candidate.head.id === chain.head.id ? updated : candidate) });
-			return toIssueCommentRecord(updated.head);
-		});
+		return this.mutation((executor, actorId) => new PgIssueCommentStore(executor).updateIssueComment(input, actorId));
 	}
 
 	public async deleteIssueComment(input: { commentId: string; expectedRevision: number; expectedContentHash: string }): Promise<IssueCommentRecord> {
-		return this.mutation(async (executor, actorId) => {
-			const synchronizeStore = new PgSynchronizeStore(executor);
-			const current = await synchronizeStore.exportCanonicalChains();
-			const chain = current.issueComments.find((candidate) => candidate.head.id === input.commentId || candidate.head.reference === input.commentId);
-			if (!chain || chain.head.tombstone) throw new Error(`Issue comment not found: ${input.commentId}`);
-			if (chain.head.revision !== input.expectedRevision || chain.head.contentHash !== input.expectedContentHash) throw new IssueCommentConflictError(chain.head.id, chain.head.revision, chain.head.contentHash);
-			const updatedAt = new Date().toISOString();
-			const successor = { body: chain.head.body, referencedIssueIds: chain.head.referencedIssueIds, tombstone: true };
-			const revision = chain.head.revision + 1;
-			const updated = {
-				...chain,
-				head: { ...chain.head, ...successor, updatedBy: actorId, revision, contentHash: computeIssueCommentContentHash(successor.body, successor.referencedIssueIds, successor.tombstone), updatedAt },
-				deltas: [...chain.deltas, { id: randomUUID(), revision, author: actorId, createdAt: updatedAt, ...createReverseFieldPatch(successor, { ...successor, tombstone: false }, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY) }]
-			};
-			await synchronizeStore.importCanonicalChains({ ...current, issueComments: current.issueComments.map((candidate) => candidate.head.id === chain.head.id ? updated : candidate) });
-			return toIssueCommentRecord(updated.head);
-		});
+		return this.mutation((executor, actorId) => new PgIssueCommentStore(executor).deleteIssueComment(input, actorId));
 	}
 
 	public async listIssueComments(input: { issueId: string; before?: string; all?: boolean }): Promise<IssueCommentPage> {
-		return this.transaction(async (executor) => {
-			const issue = (await new PgEntityStore(executor, this.projectIdentity).getEntityDetails(input.issueId)).entity;
-			if (issue.kind !== "issue") throw new Error(`Comments can only attach to issues: ${input.issueId}`);
-			const comments = (await new PgSynchronizeStore(executor).exportCanonicalChains()).issueComments
-				.filter((chain) => chain.head.issueId === issue.id)
-				.map((chain) => toIssueCommentRecord(chain.head))
-				.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.reference.localeCompare(right.reference));
-			const cursor = input.before ? decodeCommentCursor(input.before) : undefined;
-			const available = cursor ? comments.filter((comment) => comment.createdAt < cursor.createdAt || (comment.createdAt === cursor.createdAt && comment.reference < cursor.reference)) : comments;
-			const page = input.all ? available : available.slice(-50);
-			return { comments: page, total: comments.length, nextBefore: !input.all && available.length > page.length && page[0] ? encodeCommentCursor(page[0]) : null };
-		});
+		return this.transaction((executor) => new PgIssueCommentStore(executor).listIssueComments(input));
 	}
 
 	public async listIssueCommentHistory(input: { commentId: string }): Promise<IssueCommentHistoryEntry[]> {
-		return this.transaction(async (executor) => {
-			const chain = (await new PgSynchronizeStore(executor).exportCanonicalChains()).issueComments
-				.find((candidate) => candidate.head.id === input.commentId || candidate.head.reference === input.commentId);
-			if (!chain) return [];
-			return Array.from({ length: chain.head.revision }, (_, index) => {
-				const targetRevision = index + 1;
-				const state = materializeIssueCommentFromPatches(chain.head, chain.deltas, targetRevision);
-				const delta = chain.deltas.find((candidate) => candidate.revision === targetRevision)!;
-				return { commentId: chain.head.id, targetRevision, headRevision: chain.head.revision, ...state, author: delta.author, createdAt: delta.createdAt, restoredFromRevision: delta.restoredFromRevision ?? null };
-			});
-		});
+		return this.transaction((executor) => new PgIssueCommentStore(executor).listIssueCommentHistory(input));
 	}
 
 	public async listAllRelations(): Promise<RelationRecord[]> {
@@ -472,15 +409,45 @@ export class PgStore implements StorageDriver {
 	}
 }
 
-async function validateReferencedIssueIds(entityStore: PgEntityStore, referencedIssueIds: string[]): Promise<string[]> {
+async function validateReferencedIssueIds(executor: TenantExecutor, referencedIssueIds: string[]): Promise<string[]> {
 	const deduplicated = [...new Set(referencedIssueIds)];
 	for (const referencedIssueId of deduplicated) {
-		const referencedIssue = (await entityStore.getEntityDetails(referencedIssueId)).entity;
-		if (referencedIssue.kind !== "issue") {
-			throw new Error(`Issue comment references must target issues: ${referencedIssueId}`);
-		}
+		await getProjectIssueOrThrow(executor, referencedIssueId);
 	}
 	return deduplicated;
+}
+
+async function getProjectIssueOrThrow(executor: TenantExecutor, issueId: string): Promise<{ id: string }> {
+	const issue = await findProjectIssue(executor, issueId);
+	if (!issue) {
+		throw new Error(`Entity not found: ${issueId}`);
+	}
+	return issue;
+}
+
+async function findProjectIssue(executor: TenantExecutor, issueId: string): Promise<{ id: string } | undefined> {
+	const result = await executor.execute(sql`
+		SELECT entities.id::text AS id
+		FROM entities
+		WHERE entities.tenant_id = ${executor.tenantId}
+			AND entities.project_id = ${executor.currentProjectId}
+			AND entities.kind = 'issue'
+			AND entities.tombstone = false
+			AND (entities.id::text = ${issueId} OR entities.reference = ${issueId})
+	`);
+	return result.rows[0] as { id: string } | undefined;
+}
+
+async function findProjectIssueComment(executor: TenantExecutor, commentId: string): Promise<{ id: string } | undefined> {
+	const result = await executor.execute(sql`
+		SELECT issue_comments.id::text AS id
+		FROM issue_comments
+		JOIN entities AS issue ON issue.tenant_id = issue_comments.tenant_id AND issue.id = issue_comments.issue_id
+		WHERE issue_comments.tenant_id = ${executor.tenantId}
+			AND issue.project_id = ${executor.currentProjectId}
+			AND (issue_comments.id::text = ${commentId} OR issue_comments.reference = ${commentId})
+	`);
+	return result.rows[0] as { id: string } | undefined;
 }
 
 function toIssueCommentRecord(head: CanonicalIssueCommentChain["head"]): IssueCommentRecord {
