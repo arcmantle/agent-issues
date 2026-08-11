@@ -1,0 +1,42 @@
+{
+	"name": "@agent-issues/api-pg",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Deployable agent-issues cloud API service (stub). The JSON-RPC Postgres gate is filled in by a later slice.",
+	"type": "module",
+	"main": "./dist/index.js",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.6",
+		"@types/node": "^25.9.2",
+		"@types/pg": "^8.20.0",
+		"@types/supertest": "^7.2.0",
+		"supertest": "^7.2.2",
+		"typescript": "^7.0.0",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"@agent-issues/core": "workspace:*",
+		"drizzle-orm": "^0.45.2",
+		"express": "^5.2.1",
+		"jose": "^6.2.3",
+		"pg": "^8.22.0"
+	}
+}

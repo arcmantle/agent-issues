@@ -1,0 +1,40 @@
+{
+	"name": "@agent-issues/core",
+	"version": "0.1.0",
+	"description": "Shared domain core for agent-issues: schema, database, and store layers.",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./storage-driver-contract": {
+			"types": "./dist/features/storage-driver/storage-driver-contract.d.ts",
+			"default": "./dist/features/storage-driver/storage-driver-contract.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.6",
+		"@types/node": "^25.9.2",
+		"typescript": "^7.0.0",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"drizzle-orm": "^0.45.2",
+		"express": "^5.2.1",
+		"fuse.js": "^7.4.2",
+		"jose": "^6.2.3"
+	}
+}

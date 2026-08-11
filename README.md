@@ -2,7 +2,7 @@
 
 `agent-issues` is a TypeScript ESM CLI for managing shared context, initiatives, PRDs, user stories, ADRs, and issues in a local SQLite database.
 
-The CLI implementation lives under `src/` and compiles to `dist/`. The browser viewer is a separate Lit app under `site/` that builds with Vite and is served live by the CLI. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
+The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds the shared domain (schema, database, and store layers), `agent-issues` (the CLI) compiles to `dist/` and depends on core, `@agent-issues/site` is a separate Lit app that builds with Vite and is served live by the CLI, and `@agent-issues/api-pg` is a deployable cloud API service scaffold. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
 
 ## Requirements
 
@@ -16,7 +16,7 @@ pnpm install
 pnpm run build
 ```
 
-For frontend development, run `pnpm site:dev` from the repo root or `pnpm --dir site dev`.
+For frontend development, run `pnpm site:dev` from the repo root or `pnpm --filter @agent-issues/site dev`.
 The Vite dev server now auto-starts the live backend used for `site-config.json`, `/api/snapshot`, and `/events`.
 Set `AGENT_ISSUES_DB=/path/to/agent-issues.db` before starting the dev server if you want the browser to point at a non-default database.
 
@@ -51,8 +51,8 @@ Context is a first-class database-backed concept.
 - Read only the shared project glossary with `agent-issues context show default --json`.
 - List available contexts with `agent-issues context list --json`.
 - Read initiative-scoped context with `agent-issues context show <entityOrInitiativeId> --json`.
-- Initialize or update context metadata with `agent-issues context set --scope <entityOrInitiativeId|default> --title ... --summary ... --json`.
-- Add or update a canonical term with `agent-issues context define <term> --scope <entityOrInitiativeId|default> --definition ... [--avoid ...] --json`.
+- Initialize or update context metadata with `agent-issues context set --scope <entityOrInitiativeId|default> --title ... --body-file <path|-> --json`.
+- Add or update a canonical term with `agent-issues context define <term> --scope <entityOrInitiativeId|default> --body-file <path|-> [--avoid ...] --json`.
 - Remove a stale term with `agent-issues context forget <term> --scope <entityOrInitiativeId|default> --json`.
 
 The project-wide context directory combines the shared glossary with initiative-scoped discovery, while preserving source scope so initiative-local terms do not silently become project-canonical. Initiative-scoped context is still the database equivalent of `CONTEXT.md` files that would live inside initiative folders. Agents should read the context for the active initiative before using project-specific terms and should update it immediately when a term is resolved.
@@ -69,8 +69,8 @@ agent-issues context list --json
 agent-issues context show default --json
 agent-issues context show --view global --query Administration --json
 agent-issues context show INIT1 --json
-agent-issues context set --scope INIT1 --title "Payments Context" --summary "Glossary for the payments initiative."
-agent-issues context define "Order" --scope INIT1 --definition "A customer request accepted and tracked by the system." --avoid "purchase, transaction"
+agent-issues context set --scope INIT1 --title "Payments Context" --body-file /tmp/payments-summary.md
+agent-issues context define "Order" --scope INIT1 --body-file /tmp/order-definition.md --avoid "purchase, transaction"
 agent-issues help create --json
 agent-issues schema --json
 agent-issues capabilities --json
@@ -94,15 +94,22 @@ agent-issues create userStory --title "Story one" --parent PRD1
 agent-issues create issue --title "Implement CLI" --parent INIT1
 agent-issues create issue --title "Handle parser edge cases" --parent ISS1
 agent-issues bundle INIT1
-agent-issues handoff show ISS1 --json
+agent-issues create handoff --title "Resume parser work" --body-file - --link handsOff ISS1
+agent-issues edit HO1 --title "Resume parser work" --body-file -
 agent-issues move US1 PRD2
 agent-issues move ISS7 ISS1
 agent-issues relations ISS1
 agent-issues orphans
 agent-issues link ISS1 fixes US1
 agent-issues unlink ISS1 fixes US1
-agent-issues show INIT1 --json
+agent-issues show INIT1 --view full --json
 agent-issues list issue
+agent-issues auth login
+agent-issues auth list
+agent-issues auth status
+agent-issues auth switch work
+agent-issues auth switch
+agent-issues auth logout work
 ```
 
 ## Current relation model
@@ -115,12 +122,15 @@ agent-issues list issue
 - Issues fix user stories.
 - ADRs constrain issues.
 - Issues block other issues.
+- Handoffs are entities linked to their active focus with `handsOff`.
 
 ## Output
 
 - Default output is human-readable text.
-- Use `--json` for compact machine-readable skill-friendly output.
+- Use `--json` for compact machine-readable output. Entity lists return `{ items, total }`, and mutation acknowledgements are compact.
+- Add `--view full` when an entity command must return complete records or authored body content.
 - Add `--pretty` with `--json` when you want indented JSON.
+- Human-readable output is unchanged by the JSON response-shape change. See [release notes](docs/release-notes.md) for migration details.
 
 ## Tenant management
 
@@ -128,6 +138,34 @@ agent-issues list issue
 - `list-tenants` shows all tenant namespaces currently present in the selected database.
 - `delete-tenant <tenantId> --force` removes one tenant and all of its rows.
 - `rename-tenant <tenantId> <newTenantId> --force` renames one tenant namespace across all stored rows.
+
+## Auth (Entra ID)
+
+The cloud API (`@agent-issues/api-pg`) validates requests through a swappable `AuthProvider` seam, with Entra ID (Azure AD) as the first concrete provider. The CLI stores named remote logins and includes a permanent built-in local login:
+
+```bash
+agent-issues auth login
+agent-issues auth login --name work --url https://agent-issues.example.com # one-shot
+agent-issues auth list
+agent-issues auth status
+agent-issues auth switch work
+agent-issues auth switch
+agent-issues auth logout work
+```
+
+- `auth login` prompts for a name and service URL, discovers the service's Entra configuration, runs the interactive device-code flow, and saves the resulting remote login.
+- `auth login --name <name> --url <url>` supplies both values for one-shot or automated use.
+- `auth list` shows the permanent local login first, then remote saved logins in creation order, and marks the active login.
+- `auth switch <name>` activates local or a named remote login directly. Bare `auth switch` advances through local, each remote in creation order, and wraps to local.
+- The active saved login controls routing globally for subsequent CLI requests.
+- `auth logout [name]` removes a remote saved login; removing the active remote atomically falls back to local.
+- Remote credentials are stored in the OS credential store, not plaintext files.
+- `auth status` never prints the raw access token.
+- You need a real Entra ID app registration before `auth login` will work. See [`docs/auth-entra-id-setup.md`](docs/auth-entra-id-setup.md) for a step-by-step guide to creating one.
+
+### Local dev auth (no Azure required)
+
+`LocalAuthProvider` remains available inside `@agent-issues/api-pg` for API service tests and local service development only. It is not exposed through `agent-issues auth login`; local CLI storage uses the permanent built-in `local` saved login. See [`docs/local-dev-setup.md`](docs/local-dev-setup.md).
 
 ## Discovery
 
@@ -156,7 +194,9 @@ agent-issues list issue
 	- `ai-agent-issues`
 	- `ai-grill-with-docs`
 	- `ai-handoff`
+	- `ai-implement`
 	- `ai-migrate-docs`
+	- `ai-prepare`
 	- `ai-start-work`
 	- `ai-tdd`
 	- `ai-to-issues`
@@ -177,8 +217,8 @@ agent-issues list issue
 - Remove it again: `agent-issues uninstall-agent`
 - Override the prompts directory: `agent-issues install-agent --target /path/to/prompts`
 - Force-refresh an existing installed copy: `agent-issues install-agent --force`
-- Workspace source agent: `.github/agents/agent-issues.agent.md`
-- Workspace source hook: `.github/hooks/agent-issues-enforcer.mjs`
+- Workspace source agent: `packages/cli/.github/agents/agent-issues.agent.md`
+- Workspace source hook: `packages/cli/.github/hooks/agent-issues-enforcer.mjs`
 - Installed user agent path (default): the VS Code user prompts directory for your OS, e.g. `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md` (macOS), `%APPDATA%\Code\User\prompts\agent-issues.agent.md` (Windows), `~/.config/Code/User/prompts/agent-issues.agent.md` (Linux)
 - Installed user hook path (default): the same prompts directory, e.g. `.../Code/User/prompts/agent-issues-enforcer.mjs`
 - Enable `chat.useCustomAgentHooks` in VS Code so the inline hooks run only while the Agent Issues custom agent is active.
@@ -189,7 +229,7 @@ agent-issues list issue
 
 ## Browser viewer
 
-The browser viewer is built from the separate Lit project in `site/`. Root `pnpm run build` builds both the CLI and the viewer.
+The browser viewer is built from the separate Lit project in `packages/site/`. Root `pnpm run build` builds both the CLI and the viewer.
 
 For local UI work, `pnpm site:dev` starts Vite on `127.0.0.1:5173` and automatically spins up the live backend on `127.0.0.1:4313` unless something is already listening there.
 Set `AGENT_ISSUES_DB` if you want the dev server to target a specific database path, or use a named tenant via the regular CLI commands when you are not overriding the DB path directly.
@@ -208,7 +248,8 @@ The live server exposes the viewer assets together with `site-config.json`, `/ap
 
 - `bundle <initiativeId>` returns one initiative bundle directly.
 - Initiative bundles include structural sub-issue links so issue trees can be reconstructed in the CLI and UI.
-- `handoff <entityId>` returns focused handoff context for one entity, including its structural path, active blockers, and owning initiative bundle when one exists.
+- `create handoff --title ... --body-file - --link handsOff <focusId>` records a handoff as a graph entity.
+- `list handoff`, `show HOx`, `relations HOx`, and `edit HOx --title ... --body-file -` read and update handoffs through the generic entity commands.
 - `relations <entityId>` returns incoming and outgoing relations for one entity.
 - `orphans [kind]` returns entities not reachable from any initiative.
 

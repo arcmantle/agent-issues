@@ -1,0 +1,39 @@
+{
+	"name": "agent-issues",
+	"version": "0.1.0",
+	"description": "CLI for managing initiatives, PRDs, user stories, ADRs, and issues.",
+	"type": "module",
+	"bin": {
+		"agent-issues": "./dist/cli.js"
+	},
+	"files": [
+		"dist",
+		"site/dist",
+		".github/agents",
+		".github/hooks",
+		"skills"
+	],
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"build": "node --eval \"import { rmSync, cpSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true }); rmSync('site/dist', { recursive: true, force: true }); cpSync('../site/dist', 'site/dist', { recursive: true });\" && tsc -p tsconfig.build.json",
+		"postbuild": "node --eval \"import { chmodSync, writeFileSync } from 'node:fs'; writeFileSync('dist/build-mode.js', 'export const BUILD_MODE = \\\"production\\\";\\n'); chmodSync('dist/cli.js', 0o755);\"",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@babel/parser": "^7.29.7",
+		"@types/node": "^25.9.2",
+		"typescript": "^7.0.0",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"@agent-issues/api-pg": "workspace:*",
+		"@agent-issues/api-local": "workspace:*",
+		"@agent-issues/core": "workspace:*",
+		"@azure/msal-node": "^5.4.0",
+		"clipanion": "4.0.0-rc.4"
+	}
+}
