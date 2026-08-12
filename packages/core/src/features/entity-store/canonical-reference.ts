@@ -71,6 +71,23 @@ export function generateCanonicalIdentity(kind: EntityKind): { stableId: string;
 	return { stableId, reference: encodeCanonicalReference(kind, stableId) };
 }
 
+export function shortEntityReference(entity: { id: string; kind: string }): string {
+	const prefix = ID_PREFIX[entity.kind as EntityKind] ?? entity.kind.slice(0, 4).toUpperCase();
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < entity.id.length; index += 1) {
+		hash ^= entity.id.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+
+	let value = BigInt(hash >>> 0);
+	let code = "";
+	for (let index = 0; index < 6; index += 1) {
+		code = CROCKFORD_ALPHABET[Number(value & 31n)]! + code;
+		value >>= 5n;
+	}
+	return `${prefix}_${code}`;
+}
+
 const STABLE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

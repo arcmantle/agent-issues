@@ -410,8 +410,12 @@ export class ListCommand extends PositionalsTenantCommand {
 			const result = await store.queryEntities({ kind, statuses, parentId: this.parent, limit });
 
 			this.print(
-				this.asJson && view === "compact" ? toCompactEntityList(result.entities, result.total, result.openBlockers) : result.entities,
-				renderEntityList(kind, result.entities, result.openBlockers)
+				this.asJson
+					? view === "compact"
+						? toCompactEntityList(result.entities, result.total, result.openBlockers, result.parentGroups)
+						: result.parentGroups ? result : result.entities
+					: result.entities,
+				renderEntityList(kind, result.entities, result.openBlockers, result.parentGroups)
 			);
 			return 0;
 		});

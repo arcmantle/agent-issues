@@ -9,8 +9,18 @@ import type { installSkills, listSkills, uninstallSkills } from "../skill-instal
 export function renderEntityList(
 	kind: string,
 	entities: Array<{ id: string; reference: string; status: string; title: string }>,
-	openBlockers?: Record<string, string[]>
+	openBlockers?: Record<string, string[]>,
+	parentGroups?: Array<{
+		parent: { reference: string; status: string; title: string };
+		entities: Array<{ id: string; reference: string; status: string; title: string }>;
+	}>
 ): string {
+	if (parentGroups) {
+		return parentGroups.map((group) => [
+			`${group.parent.reference} ${group.parent.status} ${group.parent.title}`,
+			renderEntityList(kind, group.entities, openBlockers)
+		].join("\n")).join("\n\n");
+	}
 	if (entities.length === 0) {
 		return `No ${kind} entities found.`;
 	}

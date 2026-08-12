@@ -10,6 +10,7 @@ import type {
 	MaterializedContextTermRevision,
 	MaterializedEntityRevision,
 	MoveResult,
+	QueryEntityParentGroup,
 	RelationType,
 	StatusUpdateResult,
 	ContextDetails,
@@ -39,6 +40,7 @@ export type CompactEntityDetails = {
 export type CompactEntityList = {
 	items: CompactEntity[];
 	total: number;
+	parentGroups?: Array<{ parent: CompactEntity; items: CompactEntity[] }>;
 	/** Only present for issue lists; see `QueryEntitiesResult.openBlockers`. */
 	openBlockers?: Record<string, string[]>;
 };
@@ -207,10 +209,16 @@ export function toCompactEntityDetails(details: EntityDetails): CompactEntityDet
 	};
 }
 
-export function toCompactEntityList(entities: EntityRecord[], total = entities.length, openBlockers?: Record<string, string[]>): CompactEntityList {
+export function toCompactEntityList(
+	entities: EntityRecord[],
+	total = entities.length,
+	openBlockers?: Record<string, string[]>,
+	parentGroups?: QueryEntityParentGroup[]
+): CompactEntityList {
 	return {
 		items: entities.map(toCompactEntity),
 		total,
+		...(parentGroups ? { parentGroups: parentGroups.map((group) => ({ parent: toCompactEntity(group.parent), items: group.entities.map(toCompactEntity) })) } : {}),
 		...(openBlockers ? { openBlockers } : {})
 	};
 }

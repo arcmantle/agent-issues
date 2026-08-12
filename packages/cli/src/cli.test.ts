@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { shortEntityReference } from "@agent-issues/core";
 import { isEntrypointInvocation, runCli, shouldRunLocalDaemon } from "./cli.js";
 import { main } from "./cli/index.js";
 import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listTenants, materializeEntityRevision, openSqliteStore } from "@agent-issues/api-local";
@@ -894,6 +895,32 @@ describe("cli", () => {
 			total: 1,
 			openBlockers: { [created.reference]: [] }
 		});
+	});
+
+	it("keeps compact JSON list output for an unambiguous short parent reference", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const create = async (kind: string, title: string, parent?: string) => {
+			const stdout = createCapture();
+			await runCli(
+				["create", kind, "--title", title, ...(parent ? ["--parent", parent] : []), "--db", dbPath, "--json", "--view", "full"],
+				{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+			);
+			return JSON.parse(stdout.read()) as { id: string; reference: string; kind: string; status: string; title: string };
+		};
+		const initiative = await create("initiative", "Short parent");
+		const issue = await create("issue", "Grouped child", initiative.reference);
+		const stdout = createCapture();
+
+		await runCli(
+			["list", "issue", "--parent", shortEntityReference(initiative), "--db", dbPath, "--json", "--view", "compact"],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(JSON.parse(stdout.read())).toMatchObject({
+			items: [expect.objectContaining({ id: issue.id })]
+		});
+		expect(JSON.parse(stdout.read()).parentGroups).toBeUndefined();
 	});
 
 	it("lists empty compact JSON as empty items and zero total", async () => {

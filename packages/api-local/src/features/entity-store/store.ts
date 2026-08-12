@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 
 import { and, eq, sql, type SQL } from "drizzle-orm";
 
-import { getSqliteEntityOrThrow, resolveSqliteEntity, type SqliteExecutor } from "../../db/sqlite-executor.js";
+import { getSqliteEntityOrThrow, resolveSqliteEntities, resolveSqliteEntity, type SqliteExecutor } from "../../db/sqlite-executor.js";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 import { recordHistoryMaterialization } from "../history-diagnostics.js";
 import { listIssueComments } from "../issue-comment/store.js";
@@ -899,17 +899,22 @@ export function queryEntities(
 	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
 ): QueryEntitiesResult {
 	let selected = listEntities(executor, input.kind);
+	let parents: EntityRecord[] | undefined;
+	let structuralRelations: RelationRecord[] = [];
 	if (input.statuses?.length) {
 		const statuses = new Set(input.statuses);
 		selected = selected.filter((entity) => statuses.has(entity.status));
 	}
 	if (input.parentId) {
-		const parent = resolveSqliteEntity(executor, input.parentId);
-		if (!parent) {
+		const parentRows = resolveSqliteEntities(executor, input.parentId);
+		if (parentRows.length === 0) {
 			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
-		const childIds = new Set(listAllRelations(executor)
-			.filter((relation) => relation.fromId === parent.id && isStructuralRelationType(relation.type))
+		parents = parentRows.map((parent) => getEntityDetails(executor, parent.id).entity);
+		const parentIds = new Set(parents.map((parent) => parent.id));
+		structuralRelations = listAllRelations(executor)
+			.filter((relation) => parentIds.has(relation.fromId) && isStructuralRelationType(relation.type));
+		const childIds = new Set(structuralRelations
 			.map((relation) => relation.toId));
 		selected = selected.filter((entity) => childIds.has(entity.id));
 	}
@@ -919,6 +924,10 @@ export function queryEntities(
 	return {
 		entities: limited,
 		total: selected.length,
+		...(parents && parents.length > 1 ? { parentGroups: parents.map((parent) => ({
+			parent,
+			entities: limited.filter((entity) => structuralRelations.some((relation) => relation.fromId === parent.id && relation.toId === entity.id))
+		})) } : {}),
 		openBlockers: input.kind === "issue" ? getOpenBlockers(executor, limited) : undefined
 	};
 }

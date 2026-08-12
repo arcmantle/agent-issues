@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 
+import { shortEntityReference } from "@agent-issues/core";
 import { entities } from "../schema.js";
 import { openSqliteConnection, type SqliteConnection } from "./sqlite-connection.js";
 
@@ -25,6 +26,14 @@ export function getSqliteEntityOrThrow(executor: SqliteExecutor, entityId: strin
 }
 
 export function resolveSqliteEntity(executor: SqliteExecutor, entityId: string, includeTombstone: boolean = false) {
+	const rows = resolveSqliteEntities(executor, entityId, includeTombstone);
+	if (rows.length > 1) {
+		throw new Error(`Ambiguous short entity reference: ${entityId}. Use one of: ${rows.map((row) => row.reference).join(", ")}`);
+	}
+	return rows[0];
+}
+
+export function resolveSqliteEntities(executor: SqliteExecutor, entityId: string, includeTombstone: boolean = false) {
 	const livePredicate = includeTombstone ? undefined : eq(entities.tombstone, false);
 	let row = executor.drizzle
 		.select()
@@ -40,5 +49,14 @@ export function resolveSqliteEntity(executor: SqliteExecutor, entityId: string, 
 			.get();
 	}
 
-	return row;
+	if (row) {
+		return [row];
+	}
+
+	return executor.drizzle
+		.select()
+		.from(entities)
+		.where(and(eq(entities.tenantId, executor.tenantId), livePredicate))
+		.all()
+		.filter((candidate) => shortEntityReference(candidate) === entityId);
 }

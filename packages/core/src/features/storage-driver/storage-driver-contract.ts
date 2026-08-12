@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeCanonicalReference, deriveMigratedEntityIdentity } from "../entity-store/canonical-reference.js";
+import { decodeCanonicalReference, deriveMigratedEntityIdentity, shortEntityReference } from "../entity-store/canonical-reference.js";
 import { computeEntityContentHash, DEFAULT_EPIC_ID, EntityConflictError, EntityRevisionError } from "../entity-store/domain.js";
 import { computeContextTermContentHash, ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
@@ -337,6 +337,22 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const byReference = await store.getEntityDetails(created.reference);
 				expect(byId.entity).toMatchObject({ id: created.id, reference: created.reference });
 				expect(byReference.entity).toMatchObject({ id: created.id, reference: created.reference });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("accepts a viewer short reference as a parent selector", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Short parent reference" });
+				const issue = await store.createEntity({ kind: "issue", title: "Short reference child", parentId: initiative.id });
+
+				const result = await store.queryEntities({ kind: "issue", parentId: shortEntityReference(initiative) });
+
+				expect(result.entities).toEqual([expect.objectContaining({ id: issue.id })]);
+				expect(result.parentGroups).toBeUndefined();
 			} finally {
 				await store.close();
 			}

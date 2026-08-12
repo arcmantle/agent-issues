@@ -30,9 +30,16 @@ export type QueryEntitiesInput = {
 	limit?: number;
 };
 
+export type QueryEntityParentGroup = {
+	parent: EntityRecord;
+	entities: EntityRecord[];
+};
+
 export type QueryEntitiesResult = {
 	entities: EntityRecord[];
 	total: number;
+	/** Present when a short `parentId` resolves to multiple structural parents. */
+	parentGroups?: QueryEntityParentGroup[];
 	/**
 	 * Only populated when `kind` is `"issue"`: maps each returned issue's
 	 * canonical reference to the references of its open (not-`done`)

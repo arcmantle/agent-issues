@@ -33,6 +33,7 @@ import {
 	isValidStatus,
 	materializeFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
+	shortEntityReference,
 	SYSTEM_AUTHENTICATION_SUBJECT,
 	sanitizePathSegment,
 	STRUCTURAL_RELATION_TYPES,
@@ -333,6 +334,14 @@ export async function getEntityOrThrow(executor: TenantExecutor, entityId: strin
 }
 
 async function resolveEntity(executor: TenantExecutor, entityId: string, includeTombstone: boolean = false): Promise<typeof entities.$inferSelect | undefined> {
+	const rows = await resolveEntities(executor, entityId, includeTombstone);
+	if (rows.length > 1) {
+		throw new Error(`Ambiguous short entity reference: ${entityId}. Use one of: ${rows.map((row) => row.reference).join(", ")}`);
+	}
+	return rows[0];
+}
+
+async function resolveEntities(executor: TenantExecutor, entityId: string, includeTombstone: boolean = false): Promise<Array<typeof entities.$inferSelect>> {
 	const livePredicate = includeTombstone ? undefined : eq(entities.tombstone, false);
 	let row: typeof entities.$inferSelect | undefined;
 	if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entityId)) {
@@ -347,7 +356,15 @@ async function resolveEntity(executor: TenantExecutor, entityId: string, include
 			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.reference, entityId), livePredicate));
 	}
 
-	return row;
+	if (row) {
+		return [row];
+	}
+
+	const candidates = await executor
+		.select()
+		.from(entities)
+		.where(and(eq(entities.tenantId, executor.tenantId), livePredicate));
+	return candidates.filter((candidate) => shortEntityReference(candidate) === entityId);
 }
 
 async function getStructuralParentRelations(executor: TenantExecutor, entityId: string): Promise<RelationRecord[]> {
@@ -1037,15 +1054,17 @@ export async function queryEntities(
 		throw new Error(`Unknown entity kind: ${input.kind}`);
 	}
 
-	let parentId: string | undefined;
+	let parentIds: string[] | undefined;
+	let parents: Array<typeof entities.$inferSelect> | undefined;
 	if (input.parentId) {
-		const parent = await resolveEntity(executor, input.parentId);
-		if (!parent) {
+		const parentRows = await resolveEntities(executor, input.parentId);
+		if (parentRows.length === 0) {
 			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
-		parentId = parent.id;
+		parents = parentRows;
+		parentIds = parentRows.map((parent) => parent.id);
 	}
-	const candidateResult = parentId
+	const candidateResult = parentIds
 		? await executor.execute(sql`
 			SELECT entity.id
 			FROM entities AS entity
@@ -1054,7 +1073,7 @@ export async function queryEntities(
 			WHERE entity.tenant_id = ${executor.tenantId}
 				AND entity.tombstone = false
 				AND entity.kind = ${input.kind}
-				AND parent_relation.from_id = ${parentId}
+				AND parent_relation.from_id IN ${parentIds}
 				AND parent_relation.type IN ${STRUCTURAL_RELATION_TYPES}
 			ORDER BY entity.id
 		`)
@@ -1084,10 +1103,25 @@ export async function queryEntities(
 	));
 	const selectedById = new Map(selectedRows.map((row) => [row.id, applyDerivedStatus(mapDrizzleEntityRow(row), statusMap)]));
 	const resultEntities = limitedIds.map((entityId) => selectedById.get(entityId)!);
+	const parentGroups = parents
+		&& parents.length > 1
+		? await Promise.all(parents.map(async (parent) => {
+			const details = await getEntityDetails(executor, parent.id);
+			const childResult = await executor.execute(sql`
+				SELECT to_id FROM relations
+				WHERE tenant_id = ${executor.tenantId}
+					AND from_id = ${parent.id}
+					AND type IN ${STRUCTURAL_RELATION_TYPES}
+			`);
+			const childIds = new Set((childResult.rows as Array<{ to_id: string }>).map((row) => row.to_id));
+			return { parent: details.entity, entities: resultEntities.filter((entity) => childIds.has(entity.id)) };
+		}))
+		: undefined;
 
 	return {
 		entities: resultEntities,
 		total,
+		...(parentGroups ? { parentGroups } : {}),
 		openBlockers: input.kind === "issue" ? await getOpenBlockers(executor, resultEntities) : undefined
 	};
 }

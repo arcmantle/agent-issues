@@ -1,9 +1,6 @@
 import { computed, signal } from "@lit-labs/signals";
 import { PROJECT_GRAPH_KINDS, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
-// Crockford Base32 (no I, L, O, U) mirrors the encoding the tracked stores use
-// for their own canonical references, so a short display code never contains
-// characters that are easy to misread or confuse with one another.
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
 
@@ -19,17 +16,8 @@ const KIND_PREFIX: Record<string, string> = {
 	handoff: "HO"
 };
 
-/**
- * Derives a short, user-friendly display reference (kind prefix, separator, and a 6-char
- * Crockford Base32 code) from an entity's id. This is presentation-only:
- * navigation and lookups continue to use the full `entity.id`. The code is a
- * hash of the id rather than a slice of it, so it works whether the id is a
- * GUID or any other opaque string.
- */
 function shortEntityReference(entity: { id: string; kind: string }): string {
 	const prefix = KIND_PREFIX[entity.kind] ?? entity.kind.slice(0, 4).toUpperCase();
-
-	// FNV-1a 32-bit hash.
 	let hash = 0x811c9dc5;
 	for (let index = 0; index < entity.id.length; index += 1) {
 		hash ^= entity.id.charCodeAt(index);
