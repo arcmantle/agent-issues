@@ -2,10 +2,10 @@
 
 The canonical glossary lives in the `agent-issues` database. It does not live in a raw file.
 
-Initiative-scoped context is the database equivalent of a `CONTEXT.md` file inside an initiative folder.
+Project context contains project-wide terms. Initiative context is the database equivalent of a `CONTEXT.md` file inside an initiative folder.
 Use the [Context Summary recipe](../../recipes/context-summary.md) for a context body and the [Context Term recipe](../../recipes/context-term.md) for a term definition.
 
-Read the relevant initiative glossary with `agent-issues context show <entityOrInitiativeId> --json`.
+Read the relevant project or initiative glossary with `agent-issues context show <entityOrProjectOrInitiativeId> --json`.
 
 For project-wide discovery across shared and initiative scopes, use `agent-issues context search <query> --json`.
 
@@ -16,7 +16,7 @@ Use `agent-issues context list --json` only when you need the raw list of stored
 Set up or update the shared context with:
 
 ```bash
-agent-issues context set --scope INIT1 --title "Payments Context" --body-file /tmp/payments-summary.md --json
+agent-issues context set --scope PROJ1 --title "Payments Context" --body-file /tmp/payments-summary.md --json
 ```
 
 Add or update a term with:

@@ -10,7 +10,8 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import "./context-view.js";
 import "./relationship-graph.js";
-import type { Entity, InitiativeBundle, InitiativeTab } from "../models.js";
+import "./relationship-graph-filters.js";
+import type { Entity, InitiativeBundle, InitiativeTab, ProjectGraphKind } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
@@ -23,6 +24,8 @@ type IssueTreeNode = {
 	issue: Entity;
 	children: IssueTreeNode[];
 };
+
+const INITIATIVE_GRAPH_KINDS: ProjectGraphKind[] = ["initiative", "prd", "adr", "story", "issue"];
 
 class InitiativeDetailView extends SignalWatcher(LitElement) {
 	static properties = {
@@ -38,6 +41,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	public activeChildId: string | null = null;
 	protected collapsedIssueIds = new Set<string>();
 	protected collapsedOverviewSectionIds = new Set<string>();
+	protected visibleGraphKinds = new Set<ProjectGraphKind>(INITIATIVE_GRAPH_KINDS);
 
 	protected activeBundle() {
 		const store = this.store;
@@ -77,6 +81,22 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 
 		this.store?.selectEntity(id);
+	};
+
+	protected onToggleGraphKind = (event: Event) => {
+		const kind = (event as CustomEvent<{ kind: ProjectGraphKind }>).detail.kind;
+		if (!kind) {
+			return;
+		}
+
+		const visibleKinds = new Set(this.visibleGraphKinds);
+		if (visibleKinds.has(kind)) {
+			visibleKinds.delete(kind);
+		} else {
+			visibleKinds.add(kind);
+		}
+		this.visibleGraphKinds = visibleKinds;
+		this.requestUpdate();
 	};
 
 	protected onToggleIssueBranch = (event: Event) => {
@@ -119,7 +139,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderIssueBranch(node: IssueTreeNode): TemplateResult {
+	protected renderIssueBranch(node: IssueTreeNode, reserveBranchGutter = true): TemplateResult {
 		const store = this.store;
 		if (!store) {
 			return html``;
@@ -145,7 +165,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 						${isCollapsed ? "+" : "-"}
 					</button>
 					`,
-					() => html`<span class="branch-spacer"></span>`
+					() => when(reserveBranchGutter, () => html`<span class="branch-spacer"></span>`, () => nothing)
 				)}
 				<button
 					class=${`child issue-branch-head ${node.issue.id === this.activeChildId ? "is-active-ref" : ""}`}
@@ -211,7 +231,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		<div class="sec-body direct-issues">
 			${when(
 				issueTree.length > 0,
-				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node))}</div>`,
+				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node, false))}</div>`,
 							() => html`<div class="empty-children">No unassigned issues.</div>`
 			)}
 		</div>
@@ -290,6 +310,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const tab = store.initTab.get();
 		const body = (bundle.initiative.body ?? "").trim();
 		const bodySource = bundle.initiative.bodySource ?? "authored";
+		const visibleGraphKinds = this.visibleGraphKinds;
+		const graphFilterActive = visibleGraphKinds.size !== INITIATIVE_GRAPH_KINDS.length;
+		const graph = store.buildInitiativeGraph(bundle, graphFilterActive ? visibleGraphKinds : undefined);
 
 		return html`
 		<div class="detail-inner">
@@ -418,19 +441,21 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					`],
 					["graph", () => html`
 					<div class="ai-graph-wrap">
-						<div class="ai-graph-legend">
-							<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
-							<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
-							<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
-							<span class="lg"><span class="sw" style="background:#bf8700"></span>Story</span>
-							<span class="lg"><span class="sw" style="background:#0a7ea4"></span>Issue</span>
-							<span class="ai-graph-hint">Click any node to open it</span>
-						</div>
-						<div class="graph-host">
-							<agent-issues-relationship-graph
-								.graph=${store.buildInitiativeGraph(bundle)}
-								@node-open=${this.onNodeOpen}
-							></agent-issues-relationship-graph>
+						<div class="graph-scroll-content">
+							<div class="ai-graph-legend">
+								<agent-issues-relationship-graph-filters
+									.kinds=${INITIATIVE_GRAPH_KINDS}
+									.visibleKinds=${visibleGraphKinds}
+									@graph-kind-toggle=${this.onToggleGraphKind}
+								></agent-issues-relationship-graph-filters>
+								<span class="ai-graph-hint">Click any node to open it</span>
+							</div>
+							<div class="graph-host">
+								<agent-issues-relationship-graph
+									.graph=${graph}
+									@node-open=${this.onNodeOpen}
+								></agent-issues-relationship-graph>
+							</div>
 						</div>
 					</div>
 					`]
@@ -658,6 +683,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		.children {
 			padding: 0 8px 8px 28px;
 		}
+		.direct-issues .children {
+			padding-left: 0;
+		}
 		.issue-tree {
 			display: grid;
 			gap: 6px;
@@ -844,6 +872,11 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				var(--surface);
 			overflow: auto;
 		}
+			.graph-scroll-content,
+			.graph-host {
+				width: max-content;
+				min-width: 100%;
+			}
 		.ai-graph-legend {
 			display: flex;
 			gap: 16px;

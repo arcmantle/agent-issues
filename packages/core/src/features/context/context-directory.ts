@@ -40,7 +40,7 @@ export function mergeContextDirectory(shared: ContextDetails, initiatives: Conte
 				termsByKey.set(key, {
 					term: term.term,
 					sources: [source],
-					hasSharedSource: details.context.scopeKind === "default",
+					hasSharedSource: isSharedContextScope(details.context.scopeKind),
 					hasDuplicates: false,
 					hasConflictingDefinitions: false
 				});
@@ -49,7 +49,7 @@ export function mergeContextDirectory(shared: ContextDetails, initiatives: Conte
 
 			existing.sources.push(source);
 			existing.hasDuplicates = existing.sources.length > 1;
-			existing.hasSharedSource = existing.hasSharedSource || details.context.scopeKind === "default";
+			existing.hasSharedSource = existing.hasSharedSource || isSharedContextScope(details.context.scopeKind);
 			existing.hasConflictingDefinitions = hasConflictingDefinitions(existing.sources);
 			if (term.term.localeCompare(existing.term) < 0) {
 				existing.term = term.term;
@@ -119,7 +119,7 @@ function hasConflictingDefinitions(sources: ContextDirectoryTermSource[]): boole
 
 function compareContextDirectorySources(left: ContextDirectoryTermSource, right: ContextDirectoryTermSource): number {
 	if (left.scopeKind !== right.scopeKind) {
-		return left.scopeKind === "default" ? -1 : 1;
+		return isSharedContextScope(left.scopeKind) ? -1 : 1;
 	}
 
 	if (left.scopeLabel !== right.scopeLabel) {
@@ -192,11 +192,11 @@ function filterContextDirectoryTerm(
 	view: ContextDirectoryView
 ): ContextDirectoryTerm | null {
 	const sources = entry.sources.filter((source) => {
-		if (view === "global" && source.scopeKind !== "default") {
+		if (view === "global" && !isSharedContextScope(source.scopeKind)) {
 			return false;
 		}
 
-		if (view === "initiatives" && source.scopeKind === "default") {
+		if (view === "initiatives" && isSharedContextScope(source.scopeKind)) {
 			return false;
 		}
 
@@ -214,8 +214,12 @@ function filterContextDirectoryTerm(
 	return {
 		term: entry.term,
 		sources,
-		hasSharedSource: sources.some((source) => source.scopeKind === "default"),
+		hasSharedSource: sources.some((source) => isSharedContextScope(source.scopeKind)),
 		hasDuplicates: sources.length > 1,
 		hasConflictingDefinitions: hasConflictingDefinitions(sources)
 	};
+}
+
+function isSharedContextScope(scopeKind: ContextDirectoryTermSource["scopeKind"]): boolean {
+	return scopeKind === "default" || scopeKind === "project";
 }

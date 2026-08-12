@@ -38,6 +38,8 @@ export const ALLOWED_RELATIONS = [
 	{ fromKind: "initiative", toKind: "initiative", type: "supersedes" },
 	{ fromKind: "initiative", toKind: "prd", type: "owns" },
 	{ fromKind: "prd", toKind: "prd", type: "supersedes" },
+	{ fromKind: "project", toKind: "adr", type: "records" },
+	{ fromKind: "epic", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "issue", type: "tracks" },
 	{ fromKind: "prd", toKind: "userStory", type: "creates" },

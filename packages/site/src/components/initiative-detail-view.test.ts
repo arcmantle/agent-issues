@@ -177,9 +177,10 @@ describe("initiative detail overview tab", () => {
 		const directIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Direct initiative issue" });
 		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Direct issue child" });
 		const storyIssue = makeEntity({ id: "ISS3", kind: "issue", status: "todo", title: "Story issue" });
+		const directLeafIssue = makeEntity({ id: "ISS4", kind: "issue", status: "todo", title: "Direct leaf issue" });
 		const bundle = makeBundle(initiative, {
 			fixLinks: [{ issue: storyIssue, userStory: story }],
-			issues: [directIssue, childIssue, storyIssue],
+			issues: [directIssue, childIssue, storyIssue, directLeafIssue],
 			subIssueLinks: [{ issue: childIssue, parent: directIssue }],
 			userStories: [story]
 		});
@@ -189,11 +190,13 @@ describe("initiative detail overview tab", () => {
 		await view.updateComplete;
 
 		const directIssueButtons = [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".direct-issues .child") ?? [])];
-		expect(directIssueButtons.map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2"]);
+		expect(directIssueButtons.map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2", "ISS4"]);
 		expect(view.shadowRoot?.textContent).toContain("Unassigned issues");
 		expect(view.shadowRoot?.querySelector<HTMLButtonElement>(".direct-issues .branch-toggle")?.getAttribute("aria-label")).toBe(
 			"Collapse sub-issues for Direct initiative issue"
 		);
+		const directLeafRow = view.shadowRoot?.querySelector('.direct-issues .child[data-id="ISS4"]')?.closest(".issue-branch-row");
+		expect(directLeafRow?.querySelector(".branch-spacer")).toBeNull();
 	});
 
 	it("shows child issues when the parent issue itself fixes the story", async () => {
@@ -306,6 +309,38 @@ describe("initiative detail graph tab", () => {
 		expect(nodes.length).toBe(1);
 		const svgNodes = nodes[0]?.shadowRoot?.querySelectorAll(".ai-node") ?? [];
 		expect(svgNodes.length).toBe(3);
+	});
+
+	it("uses the shared graph filter controls to hide an initiative graph column", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ id: "US1", kind: "userStory", title: "Explore the graph" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "done", title: "Render nodes" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue, userStory: story }],
+			issues: [issue],
+			userStories: [story]
+		});
+		const store = makeStore(bundle);
+		store.setInitTab("graph");
+
+		const view = await mountView(store);
+		await view.updateComplete;
+
+		const filters = view.shadowRoot?.querySelector("agent-issues-relationship-graph-filters");
+		expect([...filters?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".graph-kind-chip") ?? []].map((chip) => chip.textContent?.trim())).toEqual([
+			"Initiative",
+			"PRD",
+			"ADR",
+			"User story",
+			"Issue"
+		]);
+
+		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="issue"]')?.click();
+		await view.updateComplete;
+
+		const graph = view.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		expect(graph?.shadowRoot?.querySelector('.ai-node[data-id="ISS1"]')).toBeNull();
+		expect([...graph?.shadowRoot?.querySelectorAll<SVGTextElement>(".ai-colhead") ?? []].map((node) => node.textContent?.trim())).not.toContain("Issues");
 	});
 
 	it("renders sub-issues in their own graph column", async () => {

@@ -27,7 +27,7 @@ function agentIssuesLiveBackendPlugin(): Plugin {
 				return;
 			}
 
-			liveSiteHandle = startLiveSite({
+			liveSiteHandle = await startLiveSite({
 				dbPath: process.env.AGENT_ISSUES_DB,
 				host: devBackendHost,
 				port: devBackendPort

@@ -78,6 +78,11 @@ describe("context and glossary", () => {
 			title: "Migrate eye-share-devops to .NET 10 (Photino) Context",
 			revision: 2
 		});
+		const listed = await store.listContexts();
+		expect(listed.contexts.find((entry) => entry.context.scopeEntityId === initiative.id)?.context).toMatchObject({
+			key: "INIT15",
+			title: "Migrate eye-share-devops to .NET 10 (Photino) Context"
+		});
 	});
 
 	it("stores ordered context reverse patches that materialize predecessor facts and attribution", async () => {
@@ -202,6 +207,43 @@ describe("context and glossary", () => {
 
 		const details = await store.getContextDetails({ scopeRef: initiative.id });
 		expect(details.terms.map((term) => term.term)).toEqual(["Settlement"]);
+	});
+
+	it("creates context at the project scope", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const project = await store.createEntity({ kind: "project", title: "Console" });
+
+		const created = await store.upsertContext({
+			scopeRef: project.id,
+			title: "Console Context",
+			summary: "Project-wide language."
+		});
+
+		expect(created.context).toMatchObject({
+			exists: true,
+			key: `default:${project.id}`,
+			scopeKind: "project",
+			scopeEntityId: project.id,
+			scopeLabel: "Console"
+		});
+	});
+
+	it("lists only the active project's initiative contexts", async () => {
+		const tenantId = createTestTenantId();
+		const firstStore = new PgStore(appPool, tenantId, "first-project");
+		const secondStore = new PgStore(appPool, tenantId, "second-project");
+		const firstInitiative = await firstStore.createEntity({ kind: "initiative", title: "First initiative" });
+		const secondInitiative = await secondStore.createEntity({ kind: "initiative", title: "Second initiative" });
+
+		await firstStore.defineContextTerm({ scopeRef: firstInitiative.id, term: "First term", definition: "First project only." });
+		await secondStore.defineContextTerm({ scopeRef: secondInitiative.id, term: "Second term", definition: "Second project only." });
+
+		const listed = await secondStore.listContexts();
+		const directory = await secondStore.getContextDirectory();
+
+		expect(listed.contexts.map((entry) => entry.context.scopeEntityId)).toContain(secondInitiative.id);
+		expect(listed.contexts.map((entry) => entry.context.scopeEntityId)).not.toContain(firstInitiative.id);
+		expect(directory.initiatives.map((details) => details.context.scopeEntityId)).toEqual([secondInitiative.id]);
 	});
 
 	it("lists contexts with term counts for shared and each initiative", async () => {

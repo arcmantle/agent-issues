@@ -118,19 +118,19 @@ const ENTITY_VIEW_OPTION: OptionSpec = {
 const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "context",
-		summary: "Read and update shared and initiative-scoped database-backed context.",
+		summary: "Read and update shared, project-scoped, and initiative-scoped database-backed context.",
 		usage: [
 			"agent-issues context",
 			"agent-issues context list",
 			"agent-issues context show",
 			"agent-issues context show --view initiatives --query <text>",
 			"agent-issues context show default",
-			"agent-issues context show <entityOrInitiativeId>",
+			"agent-issues context show <entityOrProjectOrInitiativeId>",
 			"agent-issues context search <query> [--view <all|global|initiatives>]",
 			"agent-issues context conflicts [<query>] [--view <all|initiatives>]",
-			"agent-issues context set [--scope <entityOrInitiativeId|default>] --title <title> --body-file <path|-> [--view <compact|full>]",
-			"agent-issues context define <term> [--scope <entityOrInitiativeId|default>] --body-file <path|-> [--avoid <comma-separated terms>] [--view <compact|full>]",
-			"agent-issues context forget <term> [--scope <entityOrInitiativeId|default>] [--view <compact|full>]"
+			"agent-issues context set [--scope <entityOrProjectOrInitiativeId|default>] --title <title> --body-file <path|-> [--view <compact|full>]",
+			"agent-issues context define <term> [--scope <entityOrProjectOrInitiativeId|default>] --body-file <path|-> [--avoid <comma-separated terms>] [--view <compact|full>]",
+			"agent-issues context forget <term> [--scope <entityOrProjectOrInitiativeId|default>] [--view <compact|full>]"
 		],
 		positionals: [
 			{
@@ -145,8 +145,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		options: [
 			{
-				name: "--scope <entityOrInitiativeId|default>",
-				description: "Resolve context from an initiative or any entity inside that initiative."
+				name: "--scope <entityOrProjectOrInitiativeId|default>",
+				description: "Resolve context from a project, an initiative, or an entity inside an initiative."
 			},
 			{
 				name: "--title <title>",
@@ -178,23 +178,24 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues context show --view initiatives --query review --json",
 			"agent-issues context list --json",
 			"agent-issues context show default --json",
+			"agent-issues context show PROJ1 --json",
 			"agent-issues context show INIT1 --json",
 			"agent-issues context show ISS3 --json",
 			"agent-issues context search review --view initiatives --json",
 			"agent-issues context search review --view initiatives --terms-only --json",
 			"agent-issues context conflicts --json",
-			'agent-issues context set --scope INIT1 --title "Payments Context" --body-file /tmp/summary.md',
+			'agent-issues context set --scope PROJ1 --title "Payments Context" --body-file /tmp/summary.md',
 			'agent-issues context define "Order" --scope INIT1 --body-file /tmp/order-definition.md --avoid "purchase, transaction" --json',
 			'agent-issues context forget "Legacy order" --scope INIT1 --json'
 		],
 		notes: [
 			"Context is stored in the agent-issues database, not in a raw CONTEXT.md file.",
-			"`context show` without a scope returns the project-wide context directory: shared context plus initiative-scoped discovery.",
+			"`context show` without a scope returns the current project's shared context plus initiative-scoped discovery.",
 			"Use `context show default` to read only the shared project glossary.",
-			"Use `context search <query>` or `context show --query <text>` to narrow project-wide discovery before reading a specific initiative scope.",
+			"Use `context search <query>` or `context show --query <text>` to narrow project-wide discovery before reading a specific project or initiative scope.",
 			"Use `context search <query> --terms-only --json` when you only need matching definitions and do not want the surrounding project directory summary.",
 			"Use `context conflicts` to list duplicate labels across scopes so agents can resolve terminology collisions early.",
-			"Initiative-scoped context is the primary model: resolve the context from the active initiative or any entity inside it.",
+			"Use project context for project-wide terms and initiative context for workstream-specific terms.",
 			"Read the context before using project-specific vocabulary, and update it immediately when a term is resolved.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
 		],
@@ -1156,16 +1157,16 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			usage: spec.usage
 		})),
 		discovery: [
-			"Use `agent-issues context --json` to read the project-wide context directory: shared glossary plus initiative-scoped discovery.",
+			"Use `agent-issues context --json` to read the current project's shared glossary plus initiative-scoped discovery.",
 			"Use `agent-issues current-tenant --json` to see which workspace-derived tenant the CLI will use by default.",
 			"Use `agent-issues list-tenants --json` to inspect all tenant namespaces present in the selected database before switching or deleting one.",
 			"Use `agent-issues rename-tenant <tenantId> <newTenantId> --force --json` to normalize a tenant namespace without deleting and recreating it.",
 			"Use `agent-issues backfill-bodies --json` to fill missing issue, PRD, and user story bodies from existing tracker metadata.",
 			"Use `agent-issues context show default --json` to read only the shared glossary.",
-			"Use `agent-issues context show <entityOrInitiativeId> --json` to read the initiative-scoped glossary for active work.",
+			"Use `agent-issues context show <entityOrProjectOrInitiativeId> --json` to read project or initiative context for active work.",
 			"Use `agent-issues context search <query> --view initiatives --json` to find initiative-local terminology without reading the full project directory.",
 			"Use `agent-issues context conflicts --json` to detect duplicate labels across scopes before you rely on a term.",
-			"Use `agent-issues context define <term> --scope <entityOrInitiativeId> --body-file <path|-> [--avoid <comma-separated>] --json` to update the scoped glossary when a term is resolved.",
+			"Use `agent-issues context define <term> --scope <entityOrProjectOrInitiativeId> --body-file <path|-> [--avoid <comma-separated>] --json` to update the scoped glossary when a term is resolved.",
 			"Use `agent-issues help <command> --json` for command-specific guidance.",
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
 			"Use `agent-issues serve-site --json` to start a local live browser view with snapshot and event endpoints.",
@@ -1237,15 +1238,15 @@ export function getSchemaPayload(): SchemaPayload {
 		),
 		context: {
 			storage: "database",
-			scopes: ["default", "initiative"],
+			scopes: ["default", "project", "initiative"],
 			defaultKey: DEFAULT_CONTEXT_KEY,
 			listCommand: "agent-issues context list --json",
-			readCommand: "agent-issues context show [<entityOrInitiativeId>|default] --json",
+			readCommand: "agent-issues context show [<entityOrProjectOrInitiativeId>|default] --json",
 			searchCommand: "agent-issues context search <query> [--view <all|global|initiatives>] --json",
 			conflictsCommand: "agent-issues context conflicts [<query>] [--view <all|initiatives>] --json",
-			initializeCommand: "agent-issues context set --scope <entityOrInitiativeId|default> --title <title> --body-file <path|-> --json",
-			defineCommand: "agent-issues context define <term> --scope <entityOrInitiativeId|default> --body-file <path|-> [--avoid <comma-separated terms>] --json",
-			forgetCommand: "agent-issues context forget <term> --scope <entityOrInitiativeId|default> --json",
+			initializeCommand: "agent-issues context set --scope <entityOrProjectOrInitiativeId|default> --title <title> --body-file <path|-> --json",
+			defineCommand: "agent-issues context define <term> --scope <entityOrProjectOrInitiativeId|default> --body-file <path|-> [--avoid <comma-separated terms>] --json",
+			forgetCommand: "agent-issues context forget <term> --scope <entityOrProjectOrInitiativeId|default> --json",
 			termFields: ["term", "definition", "avoid", "createdAt", "updatedAt"]
 		}
 	};

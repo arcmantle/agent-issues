@@ -164,7 +164,7 @@ describe("three-pane console shell", () => {
 		expect(unavailableApp.shadowRoot?.querySelector("[data-project]")).toBeNull();
 	});
 
-	it("opens a chosen project and returns to the same tenant's chooser from Projects", async () => {
+	it("opens a chosen project and returns to the same tenant's chooser from the project switcher", async () => {
 		vi.stubGlobal(
 			"EventSource",
 			class {
@@ -208,7 +208,8 @@ describe("three-pane console shell", () => {
 		await app.updateComplete;
 
 		expect(app.shadowRoot?.querySelector('[data-pane="rail"]')).not.toBeNull();
-		app.shadowRoot?.querySelector<HTMLButtonElement>(".projects-button")?.click();
+		expect(app.shadowRoot?.querySelector<HTMLButtonElement>(".projects-button")).toBeNull();
+		app.shadowRoot?.querySelector<HTMLButtonElement>(".switcher-button")?.click();
 		await app.updateComplete;
 
 		expect(store.selectedTenant.get()).toBe("demo");
@@ -443,7 +444,7 @@ describe("three-pane console shell", () => {
 		const snapshot = makeSnapshot({
 			projectAdrs: [
 				makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "Use cytoscape" }),
-				makeEntity({ id: "ADR2", kind: "adr", status: "current", title: "Adopt signals" })
+				makeEntity({ id: "ADR2", kind: "adr", status: "archived", title: "Adopt signals" })
 			]
 		});
 		const store = makeStore(makeConfig(), snapshot);
@@ -457,6 +458,37 @@ describe("three-pane console shell", () => {
 			(element) => element.getAttribute("data-id")
 		);
 		expect(adrCards).toEqual(["ADR1", "ADR2"]);
+		expect([...app.shadowRoot?.querySelectorAll<HTMLButtonElement>('[data-master-section="adrs"]') ?? []].map((button) => button.textContent?.trim())).toEqual([
+			"All",
+			"Archived",
+			"Current"
+		]);
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-master-section="adrs"][data-master-status="archived"]')?.click();
+		await app.updateComplete;
+
+		expect([...app.shadowRoot?.querySelectorAll('[data-pane="master"] [data-id]') ?? []].map((element) => element.getAttribute("data-id"))).toEqual(["ADR2"]);
+	});
+
+	it("filters initiatives in the master list by status", async () => {
+		const doneInitiative = makeEntity({ id: "INIT_DONE", kind: "initiative", status: "done", title: "Completed work" });
+		const activeInitiative = makeEntity({ id: "INIT_ACTIVE", kind: "initiative", status: "active", title: "Current work" });
+		const snapshot = makeSnapshot({
+			initiatives: [makeBundle(doneInitiative), makeBundle(activeInitiative)]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+
+		expect([...app.shadowRoot?.querySelectorAll<HTMLButtonElement>('[data-master-section="initiatives"]') ?? []].map((button) => button.textContent?.trim())).toEqual([
+			"All",
+			"Active",
+			"Done"
+		]);
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-master-section="initiatives"][data-master-status="done"]')?.click();
+		await app.updateComplete;
+
+		expect([...app.shadowRoot?.querySelectorAll('[data-pane="master"] [data-initiative]') ?? []].map((element) => element.getAttribute("data-initiative"))).toEqual(["INIT_DONE"]);
 	});
 
 	it("labels a project-scoped ADR as a project-level decision in the ADRs section", async () => {
@@ -618,12 +650,17 @@ describe("project relationship graph section", () => {
 	it("renders project decisions and project-scoped epic hierarchy nodes only", async () => {
 		const epic = makeEntity({ id: "EPIC1", kind: "epic", title: "Viewer experience" });
 		const projectAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Use project snapshots" });
+		const story = makeEntity({ id: "US1", kind: "userStory", title: "Explore the graph" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", title: "Render graph nodes" });
 		const snapshot = makeSnapshot({
 			entities: [epic],
 			initiatives: [
 				makeBundle(makeEntity({ id: "INIT1", title: "Console Viewer" }), {
 					adrs: [makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" })],
-					prds: [makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" })]
+					fixLinks: [{ issue, userStory: story }],
+					issues: [issue],
+					prds: [makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" })],
+					userStories: [story]
 				})
 			],
 			projectAdrs: [projectAdr],
@@ -638,7 +675,24 @@ describe("project relationship graph section", () => {
 		const graph = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
 		expect(graph).not.toBeNull();
 		const nodes = graph?.shadowRoot?.querySelectorAll(".ai-node") ?? [];
-		expect([...nodes].map((node) => node.getAttribute("data-id")).sort()).toEqual(["", "ADR1", "ADR2", "EPIC1", "INIT1", "PRD1"]);
+		expect([...nodes].map((node) => node.getAttribute("data-id")).sort()).toEqual(["", "ADR1", "ADR2", "EPIC1", "INIT1", "ISS1", "PRD1", "US1"]);
+		const filters = app.shadowRoot?.querySelector("agent-issues-relationship-graph-filters");
+		expect([...filters?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".graph-kind-chip") ?? []].map((chip) => chip.textContent?.trim())).toEqual([
+			"Project",
+			"Epic",
+			"Initiative",
+			"PRD",
+			"ADR",
+			"User story",
+			"Issue"
+		]);
+
+		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="issue"]')?.click();
+		await app.updateComplete;
+
+		const graphWithoutIssues = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		expect(graphWithoutIssues?.shadowRoot?.querySelector('.ai-node[data-id="ISS1"]')).toBeNull();
+		expect([...graphWithoutIssues?.shadowRoot?.querySelectorAll<SVGTextElement>(".ai-colhead") ?? []].map((node) => node.textContent?.trim())).not.toContain("Issues");
 	});
 
 	it("opens graph nodes while preserving the selected tenant and project route", async () => {
@@ -673,20 +727,24 @@ describe("project relationship graph section", () => {
 		const graphAgain = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
 		const prdNode = graphAgain?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="PRD1"]');
 		prdNode?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+		await app.updateComplete;
 		expect(store.selectedId.get()).toBe("PRD1");
 		expect(window.location.hash).toContain("tenant=demo");
 		expect(window.location.hash).toContain("project=PROJ1");
 		expect(window.location.hash).toContain("entity=PRD1");
+		expect(app.shadowRoot?.querySelector("agent-issues-detail-view")).not.toBeNull();
 
 		store.selectSection("graph");
 		await app.updateComplete;
 		const graphWithProjectAdr = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
 		const projectAdrNode = graphWithProjectAdr?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="ADR2"]');
 		projectAdrNode?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+		await app.updateComplete;
 		expect(store.selectedId.get()).toBe("ADR2");
 		expect(window.location.hash).toContain("tenant=demo");
 		expect(window.location.hash).toContain("project=PROJ1");
 		expect(window.location.hash).toContain("entity=ADR2");
+		expect(app.shadowRoot?.querySelector("agent-issues-detail-view")).not.toBeNull();
 
 		store.selectSection("graph");
 		await app.updateComplete;
@@ -697,6 +755,35 @@ describe("project relationship graph section", () => {
 		expect(window.location.hash).toContain("tenant=demo");
 		expect(window.location.hash).toContain("project=PROJ1");
 		expect(window.location.hash).toContain("entity=EPIC1");
+	});
+
+	it("opens bundle-only project graph records", async () => {
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", title: "Viewer experience" });
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", title: "Console Viewer" });
+		const prd = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" });
+		const story = makeEntity({ id: "US1", kind: "userStory", title: "Explore the graph" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", title: "Render nodes" });
+		const snapshot = makeSnapshot({
+			entities: [epic],
+			initiatives: [makeBundle(initiative, { adrs: [adr], issues: [issue], prds: [prd], userStories: [story] })],
+			relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: initiative.id, type: "contains" }]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+
+		for (const entityId of [prd.id, adr.id, story.id, issue.id]) {
+			store.selectSection("graph");
+			await app.updateComplete;
+			const graph = app.shadowRoot?.querySelector("agent-issues-relationship-graph");
+			const node = graph?.shadowRoot?.querySelector<SVGGElement>(`.ai-node[data-id="${entityId}"]`);
+			node?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+			await app.updateComplete;
+
+			expect(store.selectedEntity.get()?.id).toBe(entityId);
+			expect(window.location.hash).toContain(`entity=${entityId}`);
+			expect(app.shadowRoot?.querySelector("agent-issues-detail-view")).not.toBeNull();
+		}
 	});
 });
 
@@ -838,6 +925,73 @@ describe("project context section", () => {
 		expect(contextView).not.toBeNull();
 		const globalText = contextView?.shadowRoot?.textContent ?? "";
 		expect(globalText).toContain("No shared context matches the current search.");
+	});
+
+	it("filters the Initiatives context tab to a selected initiative", async () => {
+		const shared = makeSharedContext();
+		const analytics = makeEntity({ id: "INIT_ANALYTICS", kind: "initiative", status: "draft", title: "Analytics" });
+		const payments = makeEntity({ id: "INIT_PAYMENTS", kind: "initiative", status: "active", title: "Payments" });
+		const shipping = makeEntity({ id: "INIT_SHIPPING", kind: "initiative", status: "active", title: "Shipping" });
+		const store = makeStore(
+			makeConfig(),
+			makeSnapshot({
+				contexts: {
+					shared,
+					initiatives: [
+						{
+							context: {
+								createdAt: null,
+								exists: true,
+								key: "INIT_PAYMENTS",
+								scopeEntityId: "INIT_PAYMENTS",
+								scopeKind: "initiative",
+								scopeLabel: "Payments",
+								summary: "Payments terms.",
+								title: "Payments Context",
+								updatedAt: null
+							},
+							terms: [{ avoid: [], createdAt: "", definition: "Captured funds.", term: "Settlement", updatedAt: "" }]
+						},
+						{
+							context: {
+								createdAt: null,
+								exists: true,
+								key: "INIT_SHIPPING",
+								scopeEntityId: "INIT_SHIPPING",
+								scopeKind: "initiative",
+								scopeLabel: "Shipping",
+								summary: "Shipping terms.",
+								title: "Shipping Context",
+								updatedAt: null
+							},
+							terms: [{ avoid: [], createdAt: "", definition: "A grouped dispatch.", term: "Shipment batch", updatedAt: "" }]
+						}
+					]
+				},
+				initiatives: [makeBundle(analytics), makeBundle(payments), makeBundle(shipping)]
+			})
+		);
+		const app = await mountApp(store);
+
+		store.selectSection("context");
+		await app.updateComplete;
+		app.shadowRoot?.querySelector<HTMLElement>('[data-context-tab="initiatives"]')?.click();
+		await app.updateComplete;
+
+		const initiativeTabs = [...(app.shadowRoot?.querySelectorAll<HTMLButtonElement>(".ctx-initiative-tab") ?? [])];
+		expect(initiativeTabs.map((tab) => tab.textContent?.trim())).toEqual([
+			"All initiatives",
+			"Analytics",
+			"Payments",
+			"Shipping"
+		]);
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-context-initiative="INIT_SHIPPING"]')?.click();
+		await app.updateComplete;
+
+		const filteredText = app.shadowRoot?.querySelector(".ctx-block")?.textContent ?? "";
+		expect(filteredText).toContain("Shipment batch");
+		expect(filteredText).not.toContain("Settlement");
 	});
 });
 

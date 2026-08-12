@@ -134,7 +134,7 @@ type ContextTermDeltaRow = {
 
 type ResolvedContextScope = {
 	key: string;
-	scopeKind: "default" | "initiative";
+	scopeKind: "default" | "project" | "initiative";
 	scopeEntityId: string | null;
 	scopeLabel: string;
 	defaultTitle: string;
@@ -159,7 +159,7 @@ export function listContexts(executor: SqliteExecutor): ContextListResult {
 	];
 
 	const initiativeRows = executor.drizzle.all(
-		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND kind = 'initiative' AND tombstone = FALSE ORDER BY id`
+		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND kind = 'initiative' AND tombstone = FALSE ORDER BY id`
 	) as EntityRow[];
 
 	for (const initiativeRow of initiativeRows) {
@@ -197,7 +197,7 @@ export function getContextDetails(executor: SqliteExecutor, input?: { scopeRef?:
 export function getContextDirectory(executor: SqliteExecutor): ContextDirectory {
 	const shared = getContextDetails(executor);
 	const initiativeRows = executor.drizzle.all(
-		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND kind = 'initiative' AND tombstone = FALSE ORDER BY id`
+		sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND kind = 'initiative' AND tombstone = FALSE ORDER BY id`
 	) as EntityRow[];
 	const initiatives = initiativeRows.map((row) => getContextDetails(executor, { scopeRef: row.id }));
 
@@ -618,7 +618,7 @@ function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRec
 		updatedBy: row.updated_by ?? null,
 		key: row.key,
 		scopeKind: scope.scopeKind,
-		scopeEntityId: row.scope_entity_id,
+		scopeEntityId: scope.scopeEntityId,
 		scopeLabel: scope.scopeLabel,
 		title: row.title,
 		summary: row.summary,
@@ -737,8 +737,8 @@ function createProjectScope(project: EntityRecord): ResolvedContextScope {
 
 	return {
 		key: `${DEFAULT_CONTEXT_KEY}:${project.id}`,
-		scopeKind: "default",
-		scopeEntityId: null,
+		scopeKind: "project",
+		scopeEntityId: project.id,
 		scopeLabel: project.title,
 		defaultTitle: `${project.title} Context`,
 		defaultSummary: `Shared glossary of project-specific domain terms and preferred language for ${project.title}.`

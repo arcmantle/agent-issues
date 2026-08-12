@@ -32,7 +32,7 @@ Once you have this information, act. Do not keep explaining the task to yourself
 - `userStory`: the user-visible slice that the PRD commits to.
 - `issue`: the unit of work you can execute.
 - `adr`: a hard-to-reverse architecture decision.
-- `context`: the database-backed glossary for shared or initiative-scoped terms.
+- `context`: the database-backed glossary for shared, project-scoped, or initiative-scoped terms.
 
 An issue is not always a flat leaf. An issue can `decompose` into sub-issues.
 

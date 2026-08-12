@@ -1797,10 +1797,15 @@ export async function listOrphans(executor: TenantExecutor, kind?: string): Prom
 export async function listProjectAdrs(executor: TenantExecutor, projectId?: string): Promise<EntityRecord[]> {
 	const entityRecords = await getAllEntities(executor);
 	const relations = await getAllRelations(executor);
-	const childIds = new Set(relations.filter((relation) => isStructuralRelationType(relation.type)).map((relation) => relation.toId));
+	const kindById = new Map(entityRecords.map((entity) => [entity.id, entity.kind]));
+	const initiativeAdrIds = new Set(
+		relations
+			.filter((relation) => relation.type === "records" && kindById.get(relation.fromId) === "initiative")
+			.map((relation) => relation.toId)
+	);
 
 	if (!projectId) {
-		return entityRecords.filter((entity) => entity.kind === "adr" && !childIds.has(entity.id));
+		return entityRecords.filter((entity) => entity.kind === "adr" && !initiativeAdrIds.has(entity.id));
 	}
 
 	const rows = await executor
@@ -1808,7 +1813,7 @@ export async function listProjectAdrs(executor: TenantExecutor, projectId?: stri
 		.from(entities)
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "adr"), eq(entities.projectId, projectId), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
-	return rows.map(mapDrizzleEntityRow).filter((entity) => !childIds.has(entity.id));
+	return rows.map(mapDrizzleEntityRow).filter((entity) => !initiativeAdrIds.has(entity.id));
 }
 
 export async function getInitiativeBundle(

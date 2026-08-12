@@ -62,6 +62,21 @@ describe("project-scoped ADRs", () => {
 
 		expect(snapshot.projectAdrs.map((entity) => entity.id)).not.toContain(recordedAdr.id);
 	});
+
+	it("includes project and epic ADRs in the project snapshot", async () => {
+		const db = await openTestDatabase();
+		const project = createEntity(db, { kind: "project", title: "Console" });
+		const epic = createEntity(db, { kind: "epic", parentId: project.id, title: "Viewer" });
+		const projectAdr = createEntity(db, { kind: "adr", parentId: project.id, title: "Use signals" });
+		const epicAdr = createEntity(db, { kind: "adr", parentId: epic.id, title: "Use Lit" });
+
+		const result = getDatabaseSnapshot(db, { projectId: project.id });
+		if (result.kind === "unavailable") {
+			throw new Error("Expected project snapshot to be available.");
+		}
+
+		expect(result.snapshot.projectAdrs.map((entity) => entity.id)).toEqual(expect.arrayContaining([projectAdr.id, epicAdr.id]));
+	});
 });
 describe("database snapshot issue conversations", () => {
 	it("includes an issue's newest comment page", async () => {

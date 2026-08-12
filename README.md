@@ -50,12 +50,12 @@ Context is a first-class database-backed concept.
 - List duplicate labels across scopes with `agent-issues context conflicts [<query>] --json`.
 - Read only the shared project glossary with `agent-issues context show default --json`.
 - List available contexts with `agent-issues context list --json`.
-- Read initiative-scoped context with `agent-issues context show <entityOrInitiativeId> --json`.
-- Initialize or update context metadata with `agent-issues context set --scope <entityOrInitiativeId|default> --title ... --body-file <path|-> --json`.
-- Add or update a canonical term with `agent-issues context define <term> --scope <entityOrInitiativeId|default> --body-file <path|-> [--avoid ...] --json`.
-- Remove a stale term with `agent-issues context forget <term> --scope <entityOrInitiativeId|default> --json`.
+- Read project or initiative context with `agent-issues context show <entityOrProjectOrInitiativeId> --json`.
+- Initialize or update context metadata with `agent-issues context set --scope <entityOrProjectOrInitiativeId|default> --title ... --body-file <path|-> --json`.
+- Add or update a canonical term with `agent-issues context define <term> --scope <entityOrProjectOrInitiativeId|default> --body-file <path|-> [--avoid ...] --json`.
+- Remove a stale term with `agent-issues context forget <term> --scope <entityOrProjectOrInitiativeId|default> --json`.
 
-The project-wide context directory combines the shared glossary with initiative-scoped discovery, while preserving source scope so initiative-local terms do not silently become project-canonical. Initiative-scoped context is still the database equivalent of `CONTEXT.md` files that would live inside initiative folders. Agents should read the context for the active initiative before using project-specific terms and should update it immediately when a term is resolved.
+The project context holds project-wide terms. Initiative context holds workstream-specific terms. The project-wide context directory preserves source scope so initiative-local terms do not silently become project-canonical. Agents should read the context for the active project or initiative before they use project-specific terms and should update it immediately when a term is resolved.
 
 ## Commands
 

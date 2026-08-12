@@ -90,7 +90,7 @@ type ContextTermHead = ContextTermRecord & { tombstone: boolean };
 // title/summary to synthesize when no row has been saved yet.
 type ResolvedContextScope = {
 	key: string;
-	scopeKind: "default" | "initiative";
+	scopeKind: "default" | "project" | "initiative";
 	scopeEntityId: string | null;
 	scopeLabel: string;
 	defaultTitle: string;
@@ -117,8 +117,8 @@ function getDefaultContextScope(): ResolvedContextScope {
 function createProjectScope(project: EntityRecord): ResolvedContextScope {
 	return {
 		key: `${DEFAULT_CONTEXT_KEY}:${project.id}`,
-		scopeKind: "default",
-		scopeEntityId: null,
+		scopeKind: "project",
+		scopeEntityId: project.id,
 		scopeLabel: project.title,
 		defaultTitle: `${project.title} Context`,
 		defaultSummary: `Shared glossary of project-specific domain terms and preferred language for ${project.title}.`
@@ -181,7 +181,7 @@ function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRec
 		updatedBy: row.updated_by ?? null,
 		key: row.key,
 		scopeKind: scope.scopeKind,
-		scopeEntityId: row.scope_entity_id,
+		scopeEntityId: scope.scopeEntityId,
 		scopeLabel: scope.scopeLabel,
 		title: row.title,
 		summary: row.summary,
@@ -297,6 +297,9 @@ async function resolveContextScope(
 	if (entity.kind === "initiative") {
 		return createInitiativeScope(entity, await getInitiativeContextKey(executor, entity.id));
 	}
+	if (entity.kind === "project") {
+		return createProjectScope(entity);
+	}
 
 	const initiative = await getOwningInitiativeOrThrow(executor, entity.id);
 	return createInitiativeScope(initiative, await getInitiativeContextKey(executor, initiative.id));
@@ -405,7 +408,7 @@ async function queryListContexts(executor: TenantExecutor, projectIdentity: stri
 	const initiativeRows = await executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative"), eq(entities.tombstone, false)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.projectId, executor.currentProjectId), eq(entities.kind, "initiative"), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
 
 	for (const initiativeRow of initiativeRows) {
@@ -424,7 +427,7 @@ async function queryListContexts(executor: TenantExecutor, projectIdentity: stri
 			createdAt: initiativeRow.createdAt,
 			updatedAt: initiativeRow.updatedAt
 		};
-		const scope = createInitiativeScope(initiative);
+		const scope = createInitiativeScope(initiative, await getInitiativeContextKey(executor, initiative.id));
 		const row = await fetchContextRow(executor, scope.key);
 		contexts.push({
 			context: row ? mapContextRow(row, scope) : createContextRecord(scope),
@@ -440,7 +443,7 @@ async function buildContextDirectory(executor: TenantExecutor, projectIdentity: 
 	const initiativeRows = await executor
 		.select({ id: entities.id })
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.kind, "initiative"), eq(entities.tombstone, false)))
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.projectId, executor.currentProjectId), eq(entities.kind, "initiative"), eq(entities.tombstone, false)))
 		.orderBy(asc(entities.id));
 	const initiatives = await Promise.all(initiativeRows.map((row) => queryContextDetails(executor, projectIdentity, row.id)));
 

@@ -19,7 +19,7 @@ export type ContextRecord = {
 	createdBy: string | null;
 	updatedBy: string | null;
 	key: string;
-	scopeKind: "default" | "initiative";
+	scopeKind: "default" | "project" | "initiative";
 	scopeEntityId: string | null;
 	scopeLabel: string;
 	title: string;
@@ -161,7 +161,7 @@ export type ContextDetails = {
 export type ContextDirectoryTermSource = {
 	contextKey: string;
 	contextTitle: string;
-	scopeKind: "default" | "initiative";
+	scopeKind: "default" | "project" | "initiative";
 	scopeEntityId: string | null;
 	scopeLabel: string;
 	definition: string;

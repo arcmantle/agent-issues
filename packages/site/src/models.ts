@@ -67,7 +67,7 @@ export type EpicInitiativeGroup = {
 
 export type ContextRecord = {
 	key: string;
-	scopeKind: "default" | "initiative";
+	scopeKind: "default" | "project" | "initiative";
 	scopeEntityId: string | null;
 	scopeLabel: string;
 	title: string;
@@ -93,7 +93,7 @@ export type ContextDetails = {
 export type ProjectContextTermSource = {
 	contextKey: string;
 	contextTitle: string;
-	scopeKind: "default" | "initiative";
+	scopeKind: "default" | "project" | "initiative";
 	scopeEntityId: string | null;
 	scopeLabel: string;
 	definition: string;
@@ -194,6 +194,10 @@ export type InitiativeTab = "overview" | "graph" | "context";
 export type GraphStatus = "idle" | "loading" | "ready" | "error";
 
 export type CytoscapeFactory = (options: Record<string, unknown>) => Core;
+
+export const PROJECT_GRAPH_KINDS = ["project", "epic", "initiative", "prd", "adr", "story", "issue"] as const;
+
+export type ProjectGraphKind = (typeof PROJECT_GRAPH_KINDS)[number];
 
 export type GraphNode = {
 	key: string;

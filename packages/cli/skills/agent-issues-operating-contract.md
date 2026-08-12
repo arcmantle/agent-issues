@@ -37,10 +37,10 @@ Routine `jq` filtering shows a missing CLI feature. Use the command's compact vi
 
 The canonical glossary lives in the `agent-issues` database. Do not treat a raw `CONTEXT.md` or `CONTEXT-MAP.md` file as a source of truth.
 
-- Read initiative-scoped context with `agent-issues context show <entityOrInitiativeId> --json` before you use project-specific terms.
+- Read project or initiative context with `agent-issues context show <entityOrProjectOrInitiativeId> --json` before you use project-specific terms.
 - Use `agent-issues context search <query> --json` for project-wide discovery. Use `agent-issues context conflicts --json` before you standardize a term that may have more than one meaning.
-- Set up missing initiative context with `agent-issues context set --scope <entityOrInitiativeId> --title ... --body-file <path|-> --json`.
-- Save resolved terms right away with `agent-issues context define <term> --scope <entityOrInitiativeId> --body-file <path|-> [--avoid ...] --json`. Remove old terms with `agent-issues context forget <term> --scope <entityOrInitiativeId> --json`.
+- Set up missing project or initiative context with `agent-issues context set --scope <entityOrProjectOrInitiativeId> --title ... --body-file <path|-> --json`.
+- Save resolved terms right away with `agent-issues context define <term> --scope <entityOrProjectOrInitiativeId> --body-file <path|-> [--avoid ...] --json`. Remove old terms with `agent-issues context forget <term> --scope <entityOrProjectOrInitiativeId> --json`.
 - Keep the shared context free of implementation detail. It is a glossary, not a specification and not a scratch pad.
 
 ## Preserve continuity

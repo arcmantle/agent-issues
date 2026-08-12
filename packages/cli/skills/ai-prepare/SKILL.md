@@ -38,7 +38,7 @@ If an entity has no owning initiative (a standalone ADR, project, or epic), keep
 For every initiative in scope:
 
 - Read `agent-issues bundle <initiativeId> --json` (or `agent-issues show <initiativeId> --view full --json`, same shape) once. This single call returns the initiative plus every PRD, user story, ADR, and issue reachable from it — including sub-issues several `decomposes` hops deep — together with `fixLinks`, `subIssueLinks`, `blockerLinks`, and `constrainsLinks`. This is the ground truth for what belongs to the initiative. Do not rebuild it from separate `list` or `relations` calls per entity.
-- Read `agent-issues context show <initiativeId> --json` for the initiative-scoped glossary.
+- Read `agent-issues context show <initiativeId> --json` for initiative scope, or `agent-issues context show <projectId> --json` for project scope.
 - Read open blockers straight off `blockerLinks`: a `source` whose status is not `done` means its `target` is still blocked. Do not call `relations` per issue for this.
 
 Stay within the owning initiative. Follow a linked handoff only when it is the input or when it contains information that changes the initiative-level briefing. Do not expand into related initiatives or other linked records just because they are reachable.

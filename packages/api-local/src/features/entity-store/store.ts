@@ -1147,11 +1147,14 @@ export function listOrphans(executor: SqliteExecutor, kind?: string): EntityReco
 export function listProjectAdrs(executor: SqliteExecutor): EntityRecord[] {
 	const entities = getAllEntities(executor);
 	const relations = getAllRelations(executor);
-	const childIds = new Set(
-		relations.filter((relation) => isStructuralRelationType(relation.type)).map((relation) => relation.toId)
+	const kindById = new Map(entities.map((entity) => [entity.id, entity.kind]));
+	const initiativeAdrIds = new Set(
+		relations
+			.filter((relation) => relation.type === "records" && kindById.get(relation.fromId) === "initiative")
+			.map((relation) => relation.toId)
 	);
 
-	return entities.filter((entity) => entity.kind === "adr" && !childIds.has(entity.id));
+	return entities.filter((entity) => entity.kind === "adr" && !initiativeAdrIds.has(entity.id));
 }
 
 export function getDatabaseSnapshot(executor: SqliteExecutor): DatabaseSnapshot;

@@ -1,5 +1,5 @@
 import { computed, signal } from "@lit-labs/signals";
-import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, Entity, EpicInitiativeGroup, FixLink, GraphEdge, GraphNode, InitiativeBundle, InitiativeTab, PageMode, ProjectContextTermEntry, ProjectContextTermSource, ProjectDiscovery, Relation, RelationshipGraph, RootTab, SiteConfig, Snapshot, ViewMode } from "../models.js";
+import { PROJECT_GRAPH_KINDS, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
 // Crockford Base32 (no I, L, O, U) mirrors the encoding the tracked stores use
 // for their own canonical references, so a short display code never contains
@@ -64,6 +64,19 @@ type ViewerRoute = {
 	cascadePath: string[];
 };
 
+function filterGraphByKind(graph: RelationshipGraph, visibleKinds: ReadonlySet<ProjectGraphKind>): RelationshipGraph {
+	const visibleNodes = graph.nodes.filter((node) => visibleKinds.has(node.kind as ProjectGraphKind));
+	const visibleKeys = new Set(visibleNodes.map((node) => node.key));
+	const visibleColumnIndexes = [...new Set(visibleNodes.map((node) => node.col))].sort((left, right) => left - right);
+	const compactColumnByIndex = new Map(visibleColumnIndexes.map((column, index) => [column, index]));
+
+	return {
+		columns: visibleColumnIndexes.map((column) => graph.columns[column]!),
+		edges: graph.edges.filter((edge) => visibleKeys.has(edge.from) && visibleKeys.has(edge.to)),
+		nodes: visibleNodes.map((node) => ({ ...node, col: compactColumnByIndex.get(node.col)! }))
+	};
+}
+
 export class AgentIssuesStore {
 	public config = signal<SiteConfig | null>(null);
 	public snapshot = signal<Snapshot | null>(null);
@@ -71,6 +84,10 @@ export class AgentIssuesStore {
 	public search = signal("");
 	public contextSearch = signal("");
 	public contextTab = signal<ContextPageTab>("all");
+	public selectedContextInitiativeId = signal<string | null>(null);
+	public visibleProjectGraphKinds = signal<Set<ProjectGraphKind>>(new Set(PROJECT_GRAPH_KINDS));
+	public initiativeStatusFilter = signal("all");
+	public adrStatusFilter = signal("all");
 	public kindFilter = signal("all");
 	public selectedTenant = signal<string | null>(null);
 	public selectedProjectId = signal<string | null>(null);
@@ -128,7 +145,21 @@ export class AgentIssuesStore {
 		return discovery.projects.find((entry) => entry.project.id === selectedProjectId)?.project.title ?? selectedProjectId;
 	});
 
-	public entityById = computed(() => new Map((this.snapshot.get()?.entities ?? []).map((entity) => [entity.id, entity])));
+	public entityById = computed(() => {
+		const snapshot = this.snapshot.get();
+		if (!snapshot) {
+			return new Map<string, Entity>();
+		}
+
+		const bundleEntities = snapshot.initiatives.flatMap((bundle) => [
+			bundle.initiative,
+			...bundle.prds,
+			...bundle.userStories,
+			...bundle.adrs,
+			...bundle.issues
+		]);
+		return new Map([...snapshot.entities, ...snapshot.projectAdrs, ...bundleEntities].map((entity) => [entity.id, entity]));
+	});
 
 	public entityForId(entityId: string | null): Entity | null {
 		return entityId ? this.entityById.get().get(entityId) ?? null : null;
@@ -404,6 +435,44 @@ export class AgentIssuesStore {
 		});
 	});
 
+	public filteredInitiativeContextTerms = computed(() => {
+		const selectedInitiativeId = this.selectedContextInitiativeId.get();
+		const query = this.contextSearch.get().trim().toLowerCase();
+
+		return this.projectContextTerms.get()
+			.map((entry) => {
+				const sources = entry.sources.filter(
+					(source) =>
+						source.scopeKind === "initiative" &&
+						(!selectedInitiativeId || source.scopeEntityId === selectedInitiativeId)
+				);
+
+				if (sources.length === 0) {
+					return null;
+				}
+
+				const matchesQuery = !query || entry.term.toLowerCase().includes(query) || sources.some((source) =>
+					[source.scopeLabel, source.contextTitle, source.definition, ...source.avoid]
+						.join(" ")
+						.toLowerCase()
+						.includes(query)
+				);
+
+				if (!matchesQuery) {
+					return null;
+				}
+
+				return {
+					...entry,
+					sources,
+					hasSharedSource: false,
+					hasDuplicates: sources.length > 1,
+					hasConflictingDefinitions: hasConflictingDefinitions(sources)
+				};
+			})
+			.filter((entry): entry is ProjectContextTermEntry => entry !== null);
+	});
+
 	public filteredSharedContext = computed(() => {
 		const details = this.sharedContext.get();
 		if (!details) {
@@ -661,12 +730,26 @@ export class AgentIssuesStore {
 		this.initTab.set("overview");
 		this.contextSearch.set("");
 		this.contextTab.set("all");
+		this.selectedContextInitiativeId.set(null);
 		this.activePage.set("list");
 		this.writeRoute(this.currentRoute());
 	}
 
 	public setContextTab(tab: ContextPageTab) {
 		this.contextTab.set(tab);
+	}
+
+	public setContextInitiativeFilter(initiativeId: string | null) {
+		this.selectedContextInitiativeId.set(initiativeId);
+	}
+
+	public setMasterStatusFilter(section: "initiatives" | "adrs", status: string) {
+		if (section === "initiatives") {
+			this.initiativeStatusFilter.set(status);
+			return;
+		}
+
+		this.adrStatusFilter.set(status);
 	}
 
 	public setInitTab(tab: InitiativeTab) {
@@ -702,6 +785,11 @@ export class AgentIssuesStore {
 		this.selectedId.set(entityId);
 		this.activePage.set("entity");
 		this.writeRoute(this.currentRoute());
+	}
+
+	public selectProjectGraphEntity(entityId: string, kind: string) {
+		this.activeSection.set(kind === "adr" ? "adrs" : "initiatives");
+		this.selectEntity(entityId);
 	}
 
 	public selectInitiativeFromEvent = (event: Event) => {
@@ -1007,7 +1095,7 @@ export class AgentIssuesStore {
 		);
 	}
 
-	public buildInitiativeGraph(bundle: InitiativeBundle): RelationshipGraph {
+	public buildInitiativeGraph(bundle: InitiativeBundle, visibleKinds?: ReadonlySet<ProjectGraphKind>): RelationshipGraph {
 		const initiative = bundle.initiative;
 		const nodes: GraphNode[] = [];
 		const edges: GraphEdge[] = [];
@@ -1101,7 +1189,8 @@ export class AgentIssuesStore {
 			issueColumns.push(depth === 1 ? "Sub-issues" : "Nested sub-issues");
 		}
 
-		return { columns: ["Initiative", "PRDs & ADRs", "User stories", ...issueColumns], edges, nodes };
+		const graph = { columns: ["Initiative", "PRDs & ADRs", "User stories", ...issueColumns], edges, nodes };
+		return visibleKinds ? filterGraphByKind(graph, visibleKinds) : graph;
 	}
 
 	public buildProjectGraph(): RelationshipGraph {
@@ -1140,6 +1229,8 @@ export class AgentIssuesStore {
 
 			for (const bundle of group.initiatives) {
 				const initiative = bundle.initiative;
+				const storyKeyById = new Map<string, string>();
+				const fixingStoryIdsByIssueId = new Map<string, string[]>();
 				nodes.push({
 					col: 2,
 					fullLabel: `${initiative.title} — ${bundle.userStories.length} stories, ${bundle.issues.length} issues`,
@@ -1160,10 +1251,51 @@ export class AgentIssuesStore {
 					nodes.push({ col: 3, fullLabel: entity.title, id: entity.id, key, kind, label: entity.title, status: entity.status });
 					edges.push({ from: initiative.id, to: key });
 				}
+
+				for (const story of this.sortEntities(bundle.userStories)) {
+					const key = `${initiative.id}:${story.id}`;
+					storyKeyById.set(story.id, key);
+					nodes.push({ col: 4, fullLabel: story.title, id: story.id, key, kind: "story", label: story.title, status: story.status });
+					edges.push({ from: initiative.id, to: key });
+				}
+
+				for (const link of bundle.fixLinks) {
+					const storyIds = fixingStoryIdsByIssueId.get(link.issue.id) ?? [];
+					storyIds.push(link.userStory.id);
+					fixingStoryIdsByIssueId.set(link.issue.id, storyIds);
+				}
+
+				for (const issue of this.sortEntities(bundle.issues)) {
+					const key = `${initiative.id}:${issue.id}`;
+					nodes.push({ col: 5, fullLabel: issue.title, id: issue.id, key, kind: "issue", label: issue.title, status: issue.status });
+					const storyKeys = (fixingStoryIdsByIssueId.get(issue.id) ?? [])
+						.map((storyId) => storyKeyById.get(storyId))
+						.filter((storyKey): storyKey is string => Boolean(storyKey));
+					if (storyKeys.length > 0) {
+						for (const storyKey of storyKeys) {
+							edges.push({ from: storyKey, to: key });
+						}
+					} else {
+						edges.push({ from: initiative.id, to: key });
+					}
+				}
 			}
 		}
 
-		return { columns: ["Project", "Epics", "Initiatives", "PRDs & ADRs"], edges, nodes };
+		return filterGraphByKind(
+			{ columns: ["Project", "Epics", "Initiatives", "PRDs & ADRs", "User stories", "Issues"], edges, nodes },
+			this.visibleProjectGraphKinds.get()
+		);
+	}
+
+	public toggleProjectGraphKind(kind: ProjectGraphKind) {
+		const visibleKinds = new Set(this.visibleProjectGraphKinds.get());
+		if (visibleKinds.has(kind)) {
+			visibleKinds.delete(kind);
+		} else {
+			visibleKinds.add(kind);
+		}
+		this.visibleProjectGraphKinds.set(visibleKinds);
 	}
 
 	public isDoneStatus(status: string) {
@@ -1488,6 +1620,8 @@ export class AgentIssuesStore {
 		this.activePage.set("list");
 		this.activeView.set("overview");
 		this.initTab.set("overview");
+		this.initiativeStatusFilter.set("all");
+		this.adrStatusFilter.set("all");
 		this.clearMasterOverrideIfShallow();
 	}
 

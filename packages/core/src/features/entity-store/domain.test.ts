@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { deriveEntityStatuses, derivePrdStatus, isAllowedRelation, isInitiativeComplete, isValidStatus } from "./domain.js";
 
 describe("superseded planning records", () => {
+	it("allows ADRs to be recorded by projects, epics, and initiatives", () => {
+		expect(isAllowedRelation("project", "adr", "records")).toBe(true);
+		expect(isAllowedRelation("epic", "adr", "records")).toBe(true);
+		expect(isAllowedRelation("initiative", "adr", "records")).toBe(true);
+	});
+
 	it("allows superseded as a derived PRD and user-story status", () => {
 		expect(isValidStatus("prd", "superseded")).toBe(true);
 		expect(isValidStatus("userStory", "superseded")).toBe(true);

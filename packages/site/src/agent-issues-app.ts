@@ -10,7 +10,8 @@ import "./components/context-view.js";
 import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
 import "./components/relationship-graph.js";
-import type { AdrRailEntry, ConsoleSection, ContextPageTab, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectRollup } from "./models.js";
+import "./components/relationship-graph-filters.js";
+import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
@@ -55,7 +56,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		void this.store.selectProject(projectId);
 	};
 
-	protected onReturnToProjects = () => {
+	protected onOpenProjectChooser = () => {
 		void this.store.returnToProjectChooser();
 	};
 
@@ -102,6 +103,43 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		this.store.setContextTab(tab);
 	};
 
+	protected onSetContextInitiativeFilter = (event: Event) => {
+		const initiativeId = (event.currentTarget as HTMLElement).dataset.contextInitiative ?? "";
+		this.store.setContextInitiativeFilter(initiativeId || null);
+	};
+
+	protected onSetMasterStatusFilter = (event: Event) => {
+		const target = event.currentTarget as HTMLElement;
+		const section = target.dataset.masterSection;
+		const status = target.dataset.masterStatus;
+		if ((section !== "initiatives" && section !== "adrs") || !status) {
+			return;
+		}
+
+		this.store.setMasterStatusFilter(section, status);
+	};
+
+	protected onToggleProjectGraphKind = (event: Event) => {
+		const kind = (event as CustomEvent<{ kind: ProjectGraphKind }>).detail.kind;
+		if (!kind) {
+			return;
+		}
+
+		this.store.toggleProjectGraphKind(kind);
+	};
+
+	protected toAriaBoolean(value: boolean): "true" | "false" {
+		return value ? "true" : "false";
+	}
+
+	protected formatStatusFilter(status: string): string {
+		if (status === "all") {
+			return "All";
+		}
+
+		return status.split("-").map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" ");
+	}
+
 	protected onProjectNodeOpen = (event: Event) => {
 		const { id, kind } = (event as CustomEvent<{ id: string; kind: string }>).detail;
 		if (!id) {
@@ -113,7 +151,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			return;
 		}
 
-		this.store.selectEntity(id);
+		this.store.selectProjectGraphEntity(id, kind);
 	};
 
 	connectedCallback(): void {
@@ -182,25 +220,27 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				${store.railCollapsed.get() ? "»" : "«"}
 			</button>
 			<div class="rail-switcher">
-				<button
-					class="switcher-button"
-					popovertarget=${SWITCHER_MENU_ID}
-				>
-					<span class="avatar">${projectName.charAt(0)}</span>
-					<span class="sw-text">
-						<span class="sw-name">${projectName}</span>
-						<span class="sw-sub">Switch project</span>
-					</span>
-					<span class="sw-caret">⇅</span>
-				</button>
+				<div class="switcher-actions">
+					<button
+						class="switcher-button"
+						@click=${this.onOpenProjectChooser}
+					>
+						<span class="avatar">${projectName.charAt(0)}</span>
+						<span class="sw-text">
+							<span class="sw-name">${projectName}</span>
+							<span class="sw-sub">Switch project</span>
+						</span>
+					</button>
+					<button
+						aria-label="Switch tenant"
+						class="switcher-tenant-button"
+						popovertarget=${SWITCHER_MENU_ID}
+					>
+						⇅
+					</button>
+				</div>
 				${this.renderSwitcherMenu()}
 			</div>
-			<button
-				class="projects-button"
-				@click=${this.onReturnToProjects}
-			>
-				Projects
-			</button>
 			<nav class="rail-nav">
 				<div class="nav-group-label">Plan</div>
 				${map(
@@ -467,11 +507,16 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderInitiativeContextIndexPanel() {
+	protected renderInitiativeContextIndexPanel(showInitiativeFilter = false) {
 		const store = this.store;
-		const totalTerms = store.projectContextTerms.get().length;
+		const filteredTerms = showInitiativeFilter
+			? store.filteredInitiativeContextTerms.get()
+			: store.filteredProjectContextTerms.get();
+		const totalTerms = filteredTerms.length;
 		const duplicateCount = store.projectContextDuplicateCount.get();
-		const initiativeCount = store.initiativeContextById.get().size;
+		const contextInitiatives = store.projectInitiatives.get();
+		const initiativeCount = contextInitiatives.length;
+		const selectedInitiativeId = store.selectedContextInitiativeId.get();
 		const stats = [
 			`${totalTerms} discovered terms`,
 			`${initiativeCount} initiative contexts`,
@@ -479,8 +524,6 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		]
 			.filter((value): value is string => Boolean(value))
 			.join(" · ");
-		const filteredTerms = store.filteredProjectContextTerms.get();
-
 		return html`
 		<section class="ctx-block">
 			<div class="ctx-section-head">
@@ -490,6 +533,41 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				</div>
 				<div class="ctx-stats">${stats}</div>
 			</div>
+			${when(
+				showInitiativeFilter,
+				() => html`
+				<div
+					aria-label="Filter initiative context"
+					class="ctx-initiative-tabs"
+					role="tablist"
+				>
+					<button
+						aria-selected=${this.toAriaBoolean(selectedInitiativeId === null)}
+						class=${classMap({ active: selectedInitiativeId === null, "ctx-initiative-tab": true })}
+						role="tab"
+						@click=${this.onSetContextInitiativeFilter}
+					>
+						All initiatives
+					</button>
+					${repeat(
+						contextInitiatives,
+						(bundle) => bundle.initiative.id,
+						(bundle) => html`
+						<button
+							aria-selected=${this.toAriaBoolean(selectedInitiativeId === bundle.initiative.id)}
+							class=${classMap({ active: selectedInitiativeId === bundle.initiative.id, "ctx-initiative-tab": true })}
+							data-context-initiative=${bundle.initiative.id}
+							role="tab"
+							@click=${this.onSetContextInitiativeFilter}
+						>
+							${bundle.initiative.title}
+						</button>
+						`
+					)}
+				</div>
+				`,
+				() => nothing
+			)}
 			${when(
 				filteredTerms.length > 0,
 				() => html`
@@ -508,14 +586,32 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const section = store.activeSection.get();
 		const query = store.search.get().trim().toLowerCase();
 		const isAdrs = section === "adrs";
+		const masterSection = isAdrs ? "adrs" : "initiatives";
+		const statusFilter = isAdrs ? store.adrStatusFilter.get() : store.initiativeStatusFilter.get();
+		const statusValues = isAdrs
+			? store.adrRailEntries.get().map((entry) => entry.adr.status)
+			: store.projectInitiatives.get().map((bundle) => bundle.initiative.status);
+		const statusOptions = ["all", ...new Set(statusValues)].sort((left, right) => {
+			if (left === "all") {
+				return -1;
+			}
+			if (right === "all") {
+				return 1;
+			}
+			return left.localeCompare(right);
+		});
 
 		const epicGroups = store.epicInitiativeGroups.get().map((group) => ({
 			...group,
 			initiatives: group.initiatives.filter((bundle) =>
+				(statusFilter === "all" || bundle.initiative.status === statusFilter) &&
 				`${bundle.initiative.title} ${bundle.initiative.id}`.toLowerCase().includes(query)
 			)
 		})).filter((group) => group.initiatives.length > 0);
-		const adrEntries = store.adrRailEntries.get().filter((entry) => `${entry.adr.title} ${entry.adr.id}`.toLowerCase().includes(query));
+		const adrEntries = store.adrRailEntries.get().filter((entry) =>
+			(statusFilter === "all" || entry.adr.status === statusFilter) &&
+			`${entry.adr.title} ${entry.adr.id}`.toLowerCase().includes(query)
+		);
 
 		return html`
 		<section class="master" data-pane="master">
@@ -540,6 +636,27 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					.value=${store.search.get()}
 					@input=${this.onSearchInput}
 				/>
+				<div
+					aria-label=${`Filter ${isAdrs ? "ADRs" : "initiatives"} by status`}
+					class="master-status-filters"
+					role="group"
+				>
+					${repeat(
+						statusOptions,
+						(status) => status,
+						(status) => html`
+						<button
+							aria-pressed=${this.toAriaBoolean(statusFilter === status)}
+							class=${classMap({ active: statusFilter === status, "master-status-chip": true })}
+							data-master-section=${masterSection}
+							data-master-status=${status}
+							@click=${this.onSetMasterStatusFilter}
+						>
+							${this.formatStatusFilter(status)}
+						</button>
+						`
+					)}
+				</div>
 			</div>
 			<div class="master-list">
 				${when(
@@ -604,7 +721,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 						${choose(contextTab, [
 							["all", () => html`${this.renderSharedContextPanel()}${this.renderInitiativeContextIndexPanel()}`],
 							["global", () => html`${this.renderSharedContextPanel()}`],
-							["initiatives", () => html`${this.renderInitiativeContextIndexPanel()}`]
+							["initiatives", () => html`${this.renderInitiativeContextIndexPanel(true)}`]
 						])}
 					</div>
 				</div>
@@ -613,26 +730,28 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 
 		if (section === "graph") {
+			const visibleGraphKinds = store.visibleProjectGraphKinds.get();
 			return html`
 			<section class="detail" data-pane="detail">
 				<div class="detail-inner wide-inner">
 					<div class="ai-crumbs">${store.selectedTenantDisplayName.get()} · Graph</div>
 					<h1 class="d-title">Project relationship graph</h1>
-					<p class="d-sub">Project decisions, epics, initiatives, and their PRDs &amp; ADRs. Click an initiative or record to open it.</p>
+					<p class="d-sub">Project decisions, epics, initiatives, and their PRDs, ADRs, and issues. Click an initiative or record to open it.</p>
 					<div class="ai-graph-wrap">
-						<div class="ai-graph-legend">
-							<span class="lg"><span class="sw" style="background:#24292f"></span>Project</span>
-							<span class="lg"><span class="sw" style="background:#9a6700"></span>Epic</span>
-							<span class="lg"><span class="sw" style="background:#0969da"></span>Initiative</span>
-							<span class="lg"><span class="sw" style="background:#1f883d"></span>PRD</span>
-							<span class="lg"><span class="sw" style="background:#8250df"></span>ADR</span>
-							<span class="ai-graph-hint">Tip: hover a node for its full title</span>
-						</div>
-						<div class="graph-host">
-							<agent-issues-relationship-graph
-								.graph=${store.buildProjectGraph()}
-								@node-open=${this.onProjectNodeOpen}
-							></agent-issues-relationship-graph>
+						<div class="graph-scroll-content">
+							<div class="ai-graph-legend">
+								<agent-issues-relationship-graph-filters
+									.visibleKinds=${visibleGraphKinds}
+									@graph-kind-toggle=${this.onToggleProjectGraphKind}
+								></agent-issues-relationship-graph-filters>
+								<span class="ai-graph-hint">Tip: hover a node for its full title</span>
+							</div>
+							<div class="graph-host">
+								<agent-issues-relationship-graph
+									.graph=${store.buildProjectGraph()}
+									@node-open=${this.onProjectNodeOpen}
+								></agent-issues-relationship-graph>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -773,24 +892,13 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			padding: 12px;
 			border-bottom: 1px solid var(--border-muted);
 		}
-		.projects-button {
-			margin: 0 12px 8px;
-			padding: 7px 10px;
-			border: 1px solid var(--border);
-			border-radius: 6px;
-			background: var(--surface);
-			color: var(--text);
-			cursor: pointer;
-			font: inherit;
-			font-size: 13px;
-			font-weight: 600;
-			text-align: left;
-		}
-		.projects-button:hover {
-			background: var(--surface-muted);
+		.switcher-actions {
+			display: flex;
+			gap: 6px;
 		}
 		.switcher-button {
 			display: flex;
+			flex: 1;
 			gap: 10px;
 			align-items: center;
 			width: stretch;
@@ -804,6 +912,20 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 		.switcher-button:hover {
 			background: var(--surface-muted);
+		}
+		.switcher-tenant-button {
+			width: 36px;
+			padding: 0;
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			background: var(--surface);
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+		}
+		.switcher-tenant-button:hover {
+			background: var(--surface-muted);
+			color: var(--text);
 		}
 		.avatar {
 			display: grid;
@@ -831,10 +953,6 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		.sw-sub {
 			color: var(--muted);
 			font-size: 12px;
-		}
-		.sw-caret {
-			margin-left: auto;
-			color: var(--muted);
 		}
 		.menu {
 			position: fixed;
@@ -952,6 +1070,28 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		.master-search {
 			margin-top: 12px;
 			background: var(--surface-muted);
+		}
+		.master-status-filters {
+			display: flex;
+			gap: 6px;
+			flex-wrap: wrap;
+			margin-top: 10px;
+		}
+		.master-status-chip {
+			padding: 4px 8px;
+			border: 1px solid var(--border);
+			border-radius: 999px;
+			background: var(--surface);
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+			font-size: 12px;
+		}
+		.master-status-chip.active {
+			border-color: var(--accent);
+			background: var(--accent-soft);
+			color: var(--text);
+			font-weight: 600;
 		}
 		.master-list {
 			flex: 1;
@@ -1138,6 +1278,26 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			font-size: 12px;
 			text-align: right;
 		}
+		.ctx-initiative-tabs {
+			display: flex;
+			gap: 8px;
+			flex-wrap: wrap;
+			margin-top: 16px;
+		}
+		.ctx-initiative-tab {
+			padding: 7px 10px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--text);
+			cursor: pointer;
+			font: inherit;
+		}
+		.ctx-initiative-tab.active {
+			border-color: var(--accent);
+			background: var(--accent-soft);
+			font-weight: 600;
+		}
 		.ctx-list {
 			display: grid;
 			gap: 12px;
@@ -1239,6 +1399,11 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				var(--surface);
 			overflow: auto;
 		}
+			.graph-scroll-content,
+			.graph-host {
+				width: max-content;
+				min-width: 100%;
+			}
 		.ai-graph-legend {
 			display: flex;
 			gap: 16px;
@@ -1251,16 +1416,6 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			position: sticky;
 			top: 0;
 			z-index: 1;
-		}
-		.ai-graph-legend .lg {
-			display: inline-flex;
-			gap: 6px;
-			align-items: center;
-		}
-		.ai-graph-legend .sw {
-			width: 10px;
-			height: 10px;
-			border-radius: 50%;
 		}
 		.ai-graph-hint {
 			margin-left: auto;

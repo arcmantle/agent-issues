@@ -166,8 +166,10 @@ describe("project relationship graph model", () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
 		const initiativeAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" });
+		const story = makeEntity({ id: "US1", kind: "userStory", title: "Explore the graph" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render graph nodes" });
 		const projectAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Use project snapshots" });
-		const bundle = makeBundle(initiative, { adrs: [initiativeAdr], prds: [prd] });
+		const bundle = makeBundle(initiative, { adrs: [initiativeAdr], fixLinks: [{ issue, userStory: story }], issues: [issue], prds: [prd], userStories: [story] });
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("content-hub");
 		store.selectedProjectId.set("PROJ1");
@@ -182,7 +184,7 @@ describe("project relationship graph model", () => {
 
 		const graph = store.buildProjectGraph();
 
-		expect(graph.columns).toEqual(["Project", "Epics", "Initiatives", "PRDs & ADRs"]);
+		expect(graph.columns).toEqual(["Project", "Epics", "Initiatives", "PRDs & ADRs", "User stories", "Issues"]);
 		const projectNode = graph.nodes.find((node) => node.kind === "project");
 		expect(projectNode?.col).toBe(0);
 		const nodeColumns = new Map(graph.nodes.map((node) => [node.id, node.col]));
@@ -191,9 +193,18 @@ describe("project relationship graph model", () => {
 		expect(nodeColumns.get("PRD1")).toBe(3);
 		expect(nodeColumns.get("ADR1")).toBe(3);
 		expect(nodeColumns.get("ADR2")).toBe(1);
+		expect(nodeColumns.get("US1")).toBe(4);
+		expect(nodeColumns.get("ISS1")).toBe(5);
 		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "EPIC1" });
 		expect(graph.edges).toContainEqual({ from: "EPIC1", to: "INIT1" });
 		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "ADR2" });
+		expect(graph.edges).toContainEqual({ from: "INIT1:US1", to: "INIT1:ISS1" });
+
+		store.toggleProjectGraphKind("issue");
+		const graphWithoutIssues = store.buildProjectGraph();
+		expect(graphWithoutIssues.columns).toEqual(["Project", "Epics", "Initiatives", "PRDs & ADRs", "User stories"]);
+		expect(graphWithoutIssues.nodes.map((node) => node.id)).not.toContain("ISS1");
+		expect(graphWithoutIssues.edges).not.toContainEqual({ from: "INIT1:US1", to: "INIT1:ISS1" });
 	});
 
 	it("connects the project to each epic, epics to initiatives, and initiatives to their records", () => {

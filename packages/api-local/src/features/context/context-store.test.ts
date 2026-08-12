@@ -6,7 +6,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { encodeContextRecordKey, encodeContextTermRecordKey, formatTenantDisplayName, sanitizePathSegment } from "@agent-issues/core";
-import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, materializeContextRevision, materializeContextTermRevision, queryContextDirectory, upsertContext } from "./context-store.js";
+import { defineContextTerm, forgetContextTerm, getContextDetails, getContextDirectory, listContexts, materializeContextRevision, materializeContextTermRevision, queryContextDirectory, upsertContext } from "./context-store.js";
 import { ensureDatabase, resolveLegacyWorkspaceTenantId } from "../../db/database.js";
 import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
 import { createEntity, deleteEntity } from "../entity-store/store.js";
@@ -177,6 +177,46 @@ describe("context directory", () => {
 		expect(details.context.scopeKind).toBe("initiative");
 		expect(details.context.scopeEntityId).toBe(initiative.id);
 		expect(details.terms.map((term) => term.term)).toEqual(["Review Snapshot"]);
+	});
+
+	it("creates context at the project scope", async () => {
+		const db = await openTestDatabase();
+		const project = createEntity(db, { kind: "project", title: "Console" });
+
+		const created = upsertContext(db, {
+			scopeRef: project.id,
+			title: "Console Context",
+			summary: "Project-wide language."
+		});
+
+		expect(created.context).toMatchObject({
+			exists: true,
+			key: `default:${project.id}`,
+			scopeKind: "project",
+			scopeEntityId: project.id,
+			scopeLabel: "Console"
+		});
+	});
+
+	it("lists only the active project's initiative contexts", async () => {
+		const db = await openTestDatabase();
+		const firstProject = createEntity(db, { kind: "project", title: "First" });
+		const firstEpic = createEntity(db, { kind: "epic", parentId: firstProject.id, title: "First epic" });
+		const firstInitiative = createEntity(db, { kind: "initiative", parentId: firstEpic.id, title: "First initiative" });
+		const secondProject = createEntity(db, { kind: "project", title: "Second" });
+		const secondEpic = createEntity(db, { kind: "epic", parentId: secondProject.id, title: "Second epic" });
+		const secondInitiative = createEntity(db, { kind: "initiative", parentId: secondEpic.id, title: "Second initiative" });
+
+		defineContextTerm(db, { scopeRef: firstInitiative.id, term: "First term", definition: "First project only." });
+		defineContextTerm(db, { scopeRef: secondInitiative.id, term: "Second term", definition: "Second project only." });
+		db.currentProjectId = secondProject.id;
+
+		const listed = listContexts(db);
+		const directory = getContextDirectory(db);
+
+		expect(listed.contexts.map((entry) => entry.context.scopeEntityId)).toContain(secondInitiative.id);
+		expect(listed.contexts.map((entry) => entry.context.scopeEntityId)).not.toContain(firstInitiative.id);
+		expect(directory.initiatives.map((details) => details.context.scopeEntityId)).toEqual([secondInitiative.id]);
 	});
 
 	it("updates initiative contexts that retain a legacy key", async () => {

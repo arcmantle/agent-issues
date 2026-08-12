@@ -464,6 +464,20 @@ describe("PgStore entity lifecycle", () => {
 		expect(projectAdrs.map((entity) => entity.id)).not.toContain(initiativeAdr.id);
 	});
 
+	it("lists ADRs recorded by a project or epic as project-scoped", async () => {
+		const store = new PgStore(appPool, createTestTenantId());
+		const project = await store.createEntity({ kind: "project", title: "Console" });
+		const epic = await store.createEntity({ kind: "epic", parentId: project.id, title: "Viewer" });
+		const projectAdr = await store.createEntity({ kind: "adr", parentId: project.id, title: "Use signals" });
+		const epicAdr = await store.createEntity({ kind: "adr", parentId: epic.id, title: "Use Lit" });
+
+		const result = await store.getDatabaseSnapshot({ projectId: project.id });
+		expect(result).toEqual(expect.objectContaining({ kind: "available" }));
+		if (result.kind === "available") {
+			expect(result.snapshot.projectAdrs.map((entity) => entity.id)).toEqual(expect.arrayContaining([projectAdr.id, epicAdr.id]));
+		}
+	});
+
 	it("excludes deleted ADRs from project reads", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const project = await store.createEntity({ kind: "project", title: "Project with deleted ADR" });

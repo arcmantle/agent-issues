@@ -526,9 +526,14 @@ describe("cli", () => {
 
 		const contextStdout = createCapture();
 		await runCli(["help", "context", "--json"], { stderr: createCapture().stream, stdout: contextStdout.stream });
-		expect(JSON.parse(contextStdout.read()).command.options).toContainEqual(expect.objectContaining({
+		const contextHelp = JSON.parse(contextStdout.read()).command;
+		expect(contextHelp.options).toContainEqual(expect.objectContaining({
 			name: "--view <all|global|initiatives|compact|full>"
 		}));
+		expect(contextHelp.options).toContainEqual({
+			name: "--scope <entityOrProjectOrInitiativeId|default>",
+			description: "Resolve context from a project, an initiative, or an entity inside an initiative."
+		});
 	});
 
 	it("prints compact json by default and pretty json when requested", async () => {
