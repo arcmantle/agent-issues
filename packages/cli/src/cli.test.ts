@@ -137,6 +137,48 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues help");
 	});
 
+	it("creates an initiative-owned Plan and marks it ready", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "plan.db");
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const initiativeOutput = createCapture();
+			expect(await runCli(["create", "initiative", "--title", "Plan owner", "--db", dbPath, "--view", "full", "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: initiativeOutput.stream
+			})).toBe(0);
+			const initiative = JSON.parse(initiativeOutput.read());
+			const planOutput = createCapture();
+			const bodyFile = writeBodyFile(root, "## Goal\n\nBuild the feature.\n\n## Context\n\nTrack its decisions.");
+			expect(await runCli(["create", "plan", "--title", "Feature plan", "--parent", initiative.reference, "--body-file", bodyFile, "--db", dbPath, "--view", "full", "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: planOutput.stream
+			})).toBe(0);
+			const plan = JSON.parse(planOutput.read());
+
+			expect(plan).toMatchObject({ body: "## Goal\n\nBuild the feature.\n\n## Context\n\nTrack its decisions.", kind: "plan", status: "draft" });
+			expect(plan.reference).toMatch(/^PLAN_[0-9A-HJKMNP-TV-Z]{26}$/);
+
+			const statusOutput = createCapture();
+			expect(await runCli(["status", plan.reference, "ready", "--db", dbPath, "--view", "full", "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: statusOutput.stream
+			})).toBe(0);
+			expect(JSON.parse(statusOutput.read())).toMatchObject({ entity: { id: plan.id, status: "ready" }, previousStatus: "draft" });
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
 	it("adds and lists an issue comment with explicit references", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "comments.db");
@@ -334,6 +376,28 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues create <kind>");
 	});
 
+	it("documents issue comments as issue-owned database records", async () => {
+		const commentStdout = createCapture();
+		const commentExitCode = await runCli(["comment", "--json"], { stderr: createCapture().stream, stdout: commentStdout.stream });
+
+		expect(commentExitCode).toBe(0);
+		const commentHelp = JSON.parse(commentStdout.read()).command;
+		expect(commentHelp.name).toBe("comment");
+		expect(commentHelp.usage).toContain("agent-issues comment add <issueId> --body-file <path|-> [--reference <issueId>]");
+		expect(commentHelp.notes).toContain("Issue comments are database records owned by an issue. They are not workflow entity kinds.");
+
+		const schemaStdout = createCapture();
+		const schemaExitCode = await runCli(["schema", "--json"], { stderr: createCapture().stream, stdout: schemaStdout.stream });
+
+		expect(schemaExitCode).toBe(0);
+		expect(JSON.parse(schemaStdout.read()).issueComments).toEqual(expect.objectContaining({
+			storage: "database",
+			parentKind: "issue",
+			recordPrefix: "COM",
+			listCommand: "agent-issues comment list <issueId> [--before <cursor>] [--all] --json"
+		}));
+	});
+
 	it("resolves help for a multi-word command like 'auth login' by its full name, not just its first word", async () => {
 		const stdout = createCapture();
 		const stderr = createCapture();
@@ -442,22 +506,38 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues auth login --name <name> --url <url>");
 	});
 
-	it("documents generic handoff creation and title or body edits in help", async () => {
+	it("documents debt metadata in help and capabilities", async () => {
 		const createStdout = createCapture();
 		const createExitCode = await runCli(["help", "create", "--json"], { stdout: createStdout.stream, stderr: createCapture().stream });
 
 		expect(createExitCode).toBe(0);
-		expect(JSON.parse(createStdout.read()).command.examples).toContain(
+		const createHelp = JSON.parse(createStdout.read()).command;
+		expect(createHelp.examples).toContain(
 			'agent-issues create handoff --title "Resume export work" --body-file - --link handsOff ISS1'
 		);
+		expect(createHelp.options).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: "--category <category>" }),
+			expect.objectContaining({ name: "--priority <priority>" })
+		]));
 
 		const editStdout = createCapture();
 		const editExitCode = await runCli(["help", "edit", "--json"], { stdout: editStdout.stream, stderr: createCapture().stream });
 
 		expect(editExitCode).toBe(0);
-		expect(JSON.parse(editStdout.read()).command.usage).toContain(
-			"agent-issues edit <id> [--title <title>] [--body-file <path|->] [--view <compact|full>]"
-		);
+		const editHelp = JSON.parse(editStdout.read()).command;
+		expect(editHelp.options).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: "--category <category>" }),
+			expect.objectContaining({ name: "--priority <priority>" })
+		]));
+
+		const capabilitiesStdout = createCapture();
+		const capabilitiesExitCode = await runCli(["capabilities", "--target", createTempDir(), "--json"], { stdout: capabilitiesStdout.stream, stderr: createCapture().stream });
+
+		expect(capabilitiesExitCode).toBe(0);
+		expect(JSON.parse(capabilitiesStdout.read()).schema).toEqual(expect.objectContaining({
+			entityCategories: ["technical", "product", "operational", "security", "process", "other"],
+			entityPriorities: ["low", "medium", "high", "critical"]
+		}));
 	});
 
 	it.each(["list", "relations", "show", "bundle"])("documents compact and full JSON views for %s", async (command) => {
@@ -635,6 +715,111 @@ describe("cli", () => {
 		} finally {
 			db.close();
 		}
+	});
+
+	it("creates debt with required metadata through the CLI", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const owner = createEntity(executor, { kind: "project", title: "Platform" });
+		db.close();
+		const stdout = createCapture();
+
+		const exitCode = await runCli([
+			"create", "debt", "--title", "Replace deprecated API", "--parent", owner.id,
+			"--category", "technical", "--priority", "high", "--view", "full", "--db", dbPath, "--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual(expect.objectContaining({
+			reference: expect.stringMatching(/^DEBT_/),
+			category: "technical",
+			priority: "high"
+		}));
+	});
+
+	it("creates typed Wayfinder issues through the CLI", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Wayfinder" });
+		db.close();
+		const stdout = createCapture();
+
+		const exitCode = await runCli([
+			"create", "issue", "--title", "Choose architecture", "--parent", initiative.reference,
+			"--type", "wayfinder-map", "--view", "full", "--db", dbPath, "--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual(expect.objectContaining({
+			type: "wayfinder-map"
+		}));
+	});
+
+	it("rejects debt creation without all required metadata through the CLI", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const owner = createEntity(executor, { kind: "project", title: "Platform" });
+		db.close();
+
+		await expect(runCli([
+			"create", "debt", "--title", "Replace deprecated API", "--parent", owner.id,
+			"--category", "technical", "--db", dbPath
+		], { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream })).rejects.toThrow(
+			"Debt requires category and priority."
+		);
+	});
+
+	it("edits debt metadata independently through the CLI", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const owner = createEntity(executor, { kind: "project", title: "Platform" });
+		const debt = createEntity(executor, {
+			kind: "debt",
+			title: "Replace deprecated API",
+			parentId: owner.id,
+			category: "technical",
+			priority: "high"
+		});
+		db.close();
+		const stdout = createCapture();
+
+		const exitCode = await runCli([
+			"edit", debt.reference, "--priority", "critical", "--view", "full", "--db", dbPath, "--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual(expect.objectContaining({
+			category: "technical",
+			priority: "critical"
+		}));
+	});
+
+	it("edits an entity category without changing its priority through the CLI", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, {
+			kind: "initiative",
+			title: "Platform",
+			category: "technical",
+			priority: "high"
+		});
+		db.close();
+		const stdout = createCapture();
+
+		const exitCode = await runCli([
+			"edit", initiative.reference, "--category", "product", "--view", "full", "--db", dbPath, "--json"
+		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual(expect.objectContaining({
+			category: "product",
+			priority: "high"
+		}));
 	});
 
 	it("prints the canonical reference after creating a handoff", async () => {
@@ -1190,6 +1375,93 @@ describe("cli", () => {
 		});
 	});
 
+	it("renders the type in typed issue detail output", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const initiative = createEntity(executor, { kind: "initiative", title: "Wayfinder owner" });
+		const issue = createEntity(executor, {
+			kind: "issue",
+			parentId: initiative.id,
+			title: "Choose architecture",
+			type: "wayfinder-map"
+		});
+		db.close();
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["show", issue.reference, "--db", dbPath],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(stdout.read()).toContain(`${issue.reference} issue wayfinder-map todo Choose architecture`);
+	});
+
+	it("keeps ordinary issue detail output unchanged", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { db, executor } = await ensureDatabase(dbPath);
+		const issue = createEntity(executor, { kind: "issue", title: "Ordinary issue" });
+		db.close();
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["show", issue.reference, "--db", dbPath],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(stdout.read()).toContain(`${issue.reference} issue todo Ordinary issue`);
+	});
+
+	it("shows generated current Plan entries and chronological history", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan owner" });
+		const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Generated Plan" });
+		const question = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which view should the CLI show?" });
+		const referencedIssue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Referenced issue" });
+		const decision = await store.createPlanEntry({
+			planId: plan.id,
+			role: "decision",
+			body: "Show active groups and complete history.",
+			referencedEntityIds: [referencedIssue.id],
+			supersededEntryIds: [question.id]
+		});
+		const deleted = await store.createPlanEntry({ planId: plan.id, role: "consideration", body: "Keep deleted history." });
+		await store.deletePlanEntry({ entryId: deleted.id, expectedRevision: deleted.revision, expectedContentHash: deleted.contentHash });
+		await store.close();
+		const stdout = createCapture();
+
+		expect(await runCli(["show", plan.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: stdout.stream
+		})).toBe(0);
+
+		const result = JSON.parse(stdout.read());
+		expect(result.current.map((group: { key: string; entries: Array<{ id: string }> }) => [group.key, group.entries.map((entry) => entry.id)])).toEqual([
+			["questions", []],
+			["decisions", [decision.id]],
+			["includedScope", []],
+			["excludedScope", []],
+			["constraints", []],
+			["preferences", []],
+			["considerations", []]
+		]);
+		expect(result.history.map((entry: { id: string }) => entry.id)).toEqual([question.id, decision.id, deleted.id]);
+		const text = createCapture();
+		expect(await runCli(["show", plan.reference, "--db", dbPath], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: text.stream
+		})).toBe(0);
+		expect(text.read()).toContain(`supersedes ${question.reference}`);
+		expect(text.read()).toContain(`references ${referencedIssue.id}`);
+	});
+
 	it("renders a compact initiative show as a compact bundle", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
@@ -1471,7 +1743,7 @@ describe("cli", () => {
 
 		const error = createCapture();
 		await expect(runCli(["edit", created!.id, "--db", dbPath], { cwd: root, stderr: error.stream, stdout: createCapture().stream })).rejects.toThrow(
-			"--title or --body-file is required for edit."
+			"--title, --body-file, --category, --priority, or --type is required for edit."
 		);
 	});
 

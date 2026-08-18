@@ -33,8 +33,22 @@ import { recordProvenanceMigration } from "./record-provenance.js";
 import { contextTermProvenanceMigration } from "./context-term-provenance.js";
 import { relationProvenanceMigration } from "./relation-provenance.js";
 import { issueCommentsMigration } from "./issue-comments.js";
+import { debtMetadataMigration } from "./debt-metadata.js";
+import { shortEntityReferenceMigration } from "./short-entity-reference.js";
+import { shortRecordReferenceMigration } from "./short-record-reference.js";
 
 export const LEGACY_V7_DIRECT_CHECKPOINT = "legacy-v7-direct";
+export const LEGACY_V7_DIRECT_APPLIED_MIGRATION_IDS = [
+	"final-baseline",
+	"user-directory",
+	"issue-comments",
+	"debt-metadata",
+	"short-entity-reference",
+	"short-record-reference",
+	"record-provenance",
+	"context-term-provenance",
+	"relation-provenance"
+] as const;
 
 const LEGACY_TABLES = ["metadata", "counters", "entities", "relations", "contexts", "context_terms", "history_entries"] as const;
 const TENANT_TABLES = ["counters", "users", "entities", "relations", "contexts", "context_terms", "revision_entries", "issue_comments", "issue_comment_references"] as const;
@@ -185,11 +199,14 @@ export async function transformLegacyPostgresV7(client: PoolClient): Promise<voi
 	await finalBaselineMigration.up(createPgMigrationConn(client));
 	await userDirectoryMigration.up(createPgMigrationConn(client));
 	await issueCommentsMigration.up(createPgMigrationConn(client));
+	await debtMetadataMigration.up(createPgMigrationConn(client));
 	for (const table of TENANT_TABLES) {
 		await client.query(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
 	}
 	await createIdentityMap(client, identities);
 	await copyHeads(client, entities, contexts, terms, revisionRows);
+	await shortEntityReferenceMigration.up(createPgMigrationConn(client));
+	await shortRecordReferenceMigration.up(createPgMigrationConn(client));
 	await recordProvenanceMigration.up(createPgMigrationConn(client));
 	await contextTermProvenanceMigration.up(createPgMigrationConn(client));
 	await relationProvenanceMigration.up(createPgMigrationConn(client));
@@ -200,6 +217,9 @@ export async function transformLegacyPostgresV7(client: PoolClient): Promise<voi
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`);
 	await client.query("INSERT INTO schema_migrations (id, applied_at) VALUES ($1, clock_timestamp())", [LEGACY_V7_DIRECT_CHECKPOINT]);
+	for (const migrationId of LEGACY_V7_DIRECT_APPLIED_MIGRATION_IDS) {
+		await client.query("INSERT INTO schema_migrations (id, applied_at) VALUES ($1, clock_timestamp())", [migrationId]);
+	}
 	for (const table of TENANT_TABLES) {
 		await client.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
 		await client.query(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
@@ -753,9 +773,12 @@ async function validateTransformation(
 			const materialized = materializeFromPatches(identity.stableId, {
 				body: head.body,
 				bodySource: head.body_source,
+				category: null,
 				createdAt: head.created_at,
 				id: identity.stableId,
 				parentId: parentByKey.get(identityKey(entity.tenant_id, identity.stableId)) ?? null,
+				priority: null,
+				type: null,
 				revision: head.revision,
 				status: head.status,
 				title: head.title,
@@ -779,9 +802,12 @@ async function validateTransformation(
 		const materializedHead = materializeFromPatches(identity.stableId, {
 			body: head.body,
 			bodySource: head.body_source,
+			category: null,
 			createdAt: head.created_at,
 			id: identity.stableId,
 			parentId: parentByKey.get(identityKey(entity.tenant_id, identity.stableId)) ?? null,
+			priority: null,
+			type: null,
 			revision: head.revision,
 			status: head.status,
 			title: head.title,

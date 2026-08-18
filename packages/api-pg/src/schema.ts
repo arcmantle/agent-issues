@@ -44,6 +44,7 @@ export const entities = pgTable(
 		tenantId: text("tenant_id").notNull(),
 		id: uuid("id").notNull(),
 		reference: text("reference").notNull(),
+		shortReference: text("short_reference").notNull(),
 		createdBy: uuid("created_by"),
 		updatedBy: uuid("updated_by"),
 		kind: text("kind").notNull(),
@@ -51,6 +52,9 @@ export const entities = pgTable(
 		status: text("status").notNull(),
 		body: text("body").notNull().default(""),
 		bodySource: text("body_source").notNull().default("authored"),
+		category: text("category"),
+		priority: text("priority"),
+		type: text("type"),
 		revision: integer("revision").notNull().default(1),
 		contentHash: text("content_hash").notNull().default(""),
 		tombstone: boolean("tombstone").notNull().default(false),
@@ -60,7 +64,8 @@ export const entities = pgTable(
 	},
 	(table) => [
 		primaryKey({ columns: [table.tenantId, table.id] }),
-		uniqueIndex("entities_tenant_reference_idx").on(table.tenantId, table.reference)
+		uniqueIndex("entities_tenant_reference_idx").on(table.tenantId, table.reference),
+		uniqueIndex("entities_tenant_short_reference_idx").on(table.tenantId, table.shortReference)
 	]
 );
 
@@ -94,6 +99,7 @@ export const contexts = pgTable(
 		tenantId: text("tenant_id").notNull(),
 		id: uuid("id").notNull(),
 		reference: text("reference").notNull(),
+		shortReference: text("short_reference").notNull(),
 		key: text("key").notNull(),
 		createdBy: uuid("created_by"),
 		updatedBy: uuid("updated_by"),
@@ -109,6 +115,7 @@ export const contexts = pgTable(
 		primaryKey({ columns: [table.tenantId, table.key] }),
 		uniqueIndex("contexts_tenant_id_idx").on(table.tenantId, table.id),
 		uniqueIndex("contexts_tenant_reference_idx").on(table.tenantId, table.reference),
+		uniqueIndex("contexts_tenant_short_reference_idx").on(table.tenantId, table.shortReference),
 		foreignKey({
 			columns: [table.tenantId, table.scopeEntityId],
 			foreignColumns: [entities.tenantId, entities.id]
@@ -124,6 +131,7 @@ export const contextTerms = pgTable(
 	{
 		tenantId: text("tenant_id").notNull(),
 		id: uuid("id").notNull(),
+		shortReference: text("short_reference").notNull(),
 		contextKey: text("context_key").notNull(),
 		createdBy: uuid("created_by"),
 		updatedBy: uuid("updated_by"),
@@ -143,7 +151,8 @@ export const contextTerms = pgTable(
 			foreignColumns: [contexts.tenantId, contexts.key]
 		}).onDelete("cascade"),
 		index("context_terms_tenant_context_key_idx").on(table.tenantId, table.contextKey),
-		uniqueIndex("context_terms_tenant_id_idx").on(table.tenantId, table.id)
+		uniqueIndex("context_terms_tenant_id_idx").on(table.tenantId, table.id),
+		uniqueIndex("context_terms_tenant_short_reference_idx").on(table.tenantId, table.shortReference)
 	]
 );
 
@@ -153,6 +162,7 @@ export const issueComments = pgTable(
 		tenantId: text("tenant_id").notNull(),
 		id: uuid("id").notNull(),
 		reference: text("reference").notNull(),
+		shortReference: text("short_reference").notNull(),
 		issueId: uuid("issue_id").notNull(),
 		createdBy: uuid("created_by").notNull(),
 		updatedBy: uuid("updated_by").notNull(),
@@ -166,6 +176,7 @@ export const issueComments = pgTable(
 	(table) => [
 		primaryKey({ columns: [table.tenantId, table.id] }),
 		uniqueIndex("issue_comments_tenant_reference_idx").on(table.tenantId, table.reference),
+		uniqueIndex("issue_comments_tenant_short_reference_idx").on(table.tenantId, table.shortReference),
 		foreignKey({
 			columns: [table.tenantId, table.issueId],
 			foreignColumns: [entities.tenantId, entities.id]

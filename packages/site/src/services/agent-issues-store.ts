@@ -1,8 +1,19 @@
 import { computed, signal } from "@lit-labs/signals";
-import { PROJECT_GRAPH_KINDS, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
+import { PROJECT_GRAPH_KINDS, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type PlanEntry, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
+const PLAN_CURRENT_GROUPS = [
+	{ key: "questions", title: "Questions" },
+	{ key: "decisions", title: "Decisions" },
+	{ key: "includedScope", title: "Included scope" },
+	{ key: "excludedScope", title: "Excluded scope" },
+	{ key: "constraints", title: "Constraints" },
+	{ key: "preferences", title: "Preferences" },
+	{ key: "considerations", title: "Considerations" }
+] as const;
+
+type PlanCurrentGroupKey = (typeof PLAN_CURRENT_GROUPS)[number]["key"];
 
 const KIND_PREFIX: Record<string, string> = {
 	project: "PROJ",
@@ -13,10 +24,15 @@ const KIND_PREFIX: Record<string, string> = {
 	userStory: "US",
 	adr: "ADR",
 	issue: "ISS",
+	debt: "DEBT",
 	handoff: "HO"
 };
 
-function shortEntityReference(entity: { id: string; kind: string }): string {
+function shortEntityReference(entity: { id: string; kind: string; shortReference?: string }): string {
+	if (entity.shortReference) {
+		return entity.shortReference;
+	}
+
 	const prefix = KIND_PREFIX[entity.kind] ?? entity.kind.slice(0, 4).toUpperCase();
 	let hash = 0x811c9dc5;
 	for (let index = 0; index < entity.id.length; index += 1) {
@@ -76,6 +92,9 @@ export class AgentIssuesStore {
 	public visibleProjectGraphKinds = signal<Set<ProjectGraphKind>>(new Set(PROJECT_GRAPH_KINDS));
 	public initiativeStatusFilter = signal("all");
 	public adrStatusFilter = signal("all");
+	public debtLifecycleFilter = signal("open");
+	public debtCategoryFilter = signal("all");
+	public debtPriorityFilter = signal("all");
 	public kindFilter = signal("all");
 	public selectedTenant = signal<string | null>(null);
 	public selectedProjectId = signal<string | null>(null);
@@ -573,6 +592,24 @@ export class AgentIssuesStore {
 		initiatives: this.snapshot.get()?.initiatives.length ?? 0
 	}));
 
+	public allDebtRecords = computed(() =>
+		this.sortEntities((this.snapshot.get()?.entities ?? []).filter((entity) => entity.kind === "debt"))
+	);
+
+	public debtRecords = computed(() => {
+		const lifecycle = this.debtLifecycleFilter.get();
+		const category = this.debtCategoryFilter.get();
+		const priority = this.debtPriorityFilter.get();
+		return this.sortEntities(
+			this.allDebtRecords.get().filter(
+				(entity) =>
+					(lifecycle === "all" || entity.status === lifecycle) &&
+					(category === "all" || entity.category === category) &&
+					(priority === "all" || entity.priority === priority)
+			)
+		);
+	});
+
 	public projectInitiatives = computed(() => this.snapshot.get()?.initiatives ?? []);
 
 	public epicInitiativeGroups = computed<EpicInitiativeGroup[]>(() => {
@@ -738,6 +775,20 @@ export class AgentIssuesStore {
 		}
 
 		this.adrStatusFilter.set(status);
+	}
+
+	public setDebtFilter(filter: DebtFilter, value: string) {
+		if (filter === "lifecycle") {
+			this.debtLifecycleFilter.set(value);
+			return;
+		}
+
+		if (filter === "category") {
+			this.debtCategoryFilter.set(value);
+			return;
+		}
+
+		this.debtPriorityFilter.set(value);
 	}
 
 	public setInitTab(tab: InitiativeTab) {
@@ -1085,14 +1136,21 @@ export class AgentIssuesStore {
 
 	public buildInitiativeGraph(bundle: InitiativeBundle, visibleKinds?: ReadonlySet<ProjectGraphKind>): RelationshipGraph {
 		const initiative = bundle.initiative;
+		const snapshot = this.snapshot.get();
 		const nodes: GraphNode[] = [];
 		const edges: GraphEdge[] = [];
 		const issueById = new Map(bundle.issues.map((issue) => [issue.id, issue]));
 		const childIssuesByParentId = new Map<string, Entity[]>();
 		const childIssueIds = new Set(bundle.subIssueLinks.map((link) => link.issue.id));
 		const fixingStoryIdsByIssueId = new Map<string, string[]>();
+		const plans = this.sortEntities(bundle.entities.filter((entity) => entity.kind === "plan"));
 
 		nodes.push({ col: 0, fullLabel: initiative.title, id: initiative.id, key: initiative.id, kind: "initiative", label: initiative.title });
+
+		for (const plan of plans) {
+			nodes.push({ col: 1, fullLabel: plan.title, id: plan.id, key: plan.id, kind: "plan", label: plan.title, status: plan.status });
+			edges.push({ from: initiative.id, to: plan.id });
+		}
 
 		for (const prd of bundle.prds) {
 			nodes.push({ col: 1, fullLabel: prd.title, id: prd.id, key: prd.id, kind: "prd", label: prd.title });
@@ -1176,8 +1234,48 @@ export class AgentIssuesStore {
 		for (let depth = 1; depth <= maxIssueDepth; depth += 1) {
 			issueColumns.push(depth === 1 ? "Sub-issues" : "Nested sub-issues");
 		}
+		const debtColumn = 3 + issueColumns.length;
+		const ownedDebt = this.sortEntities(
+			(snapshot?.entities ?? []).filter(
+				(entity) =>
+					entity.kind === "debt" &&
+					(snapshot?.relations ?? []).some(
+						(relation) => relation.fromId === initiative.id && relation.toId === entity.id && relation.type === "records"
+					)
+			)
+		);
 
-		const graph = { columns: ["Initiative", "PRDs & ADRs", "User stories", ...issueColumns], edges, nodes };
+		for (const debt of ownedDebt) {
+			nodes.push({
+				col: debtColumn,
+				fullLabel: debt.title,
+				id: debt.id,
+				key: debt.id,
+				kind: "debt",
+				label: debt.title,
+				status: debt.status
+			});
+			edges.push({ from: initiative.id, label: "records", to: debt.id });
+		}
+
+		const visibleNodeIds = new Set(nodes.map((node) => node.id));
+		const debtIds = new Set(ownedDebt.map((debt) => debt.id));
+		const planIds = new Set(plans.map((plan) => plan.id));
+		for (const relation of snapshot?.relations ?? []) {
+			if (relation.type === "informs" && planIds.has(relation.fromId) && visibleNodeIds.has(relation.toId)) {
+				edges.push({ from: relation.fromId, label: "informs", to: relation.toId });
+			}
+
+			if (relation.type === "resolves" && visibleNodeIds.has(relation.fromId) && debtIds.has(relation.toId)) {
+				edges.push({ from: relation.fromId, label: "resolves", to: relation.toId });
+			}
+
+			if (relation.type === "relatesTo" && debtIds.has(relation.fromId) && visibleNodeIds.has(relation.toId)) {
+				edges.push({ from: relation.fromId, label: "relatesTo", to: relation.toId });
+			}
+		}
+
+		const graph = { columns: ["Initiative", "Plans, PRDs & ADRs", "User stories", ...issueColumns, "Debt records"], edges, nodes };
 		return visibleKinds ? filterGraphByKind(graph, visibleKinds) : graph;
 	}
 
@@ -1185,6 +1283,8 @@ export class AgentIssuesStore {
 		const snapshot = this.snapshot.get();
 		const epicGroups = this.epicInitiativeGroups.get();
 		const projectKey = "__project";
+		const nodeKeyByEntityId = new Map<string, string>();
+		const selectedProjectId = this.selectedProjectId.get();
 		const nodes: GraphNode[] = [
 			{
 				col: 0,
@@ -1196,9 +1296,13 @@ export class AgentIssuesStore {
 			}
 		];
 		const edges: GraphEdge[] = [];
+		if (selectedProjectId) {
+			nodeKeyByEntityId.set(selectedProjectId, projectKey);
+		}
 
 		for (const adr of snapshot?.projectAdrs ?? []) {
 			nodes.push({ col: 1, fullLabel: adr.title, id: adr.id, key: adr.id, kind: "adr", label: adr.title, status: adr.status });
+			nodeKeyByEntityId.set(adr.id, adr.id);
 			edges.push({ from: projectKey, to: adr.id });
 		}
 
@@ -1213,6 +1317,7 @@ export class AgentIssuesStore {
 				label: epic.title,
 				status: epic.status
 			});
+			nodeKeyByEntityId.set(epic.id, epic.id);
 			edges.push({ from: projectKey, to: epic.id });
 
 			for (const bundle of group.initiatives) {
@@ -1228,21 +1333,25 @@ export class AgentIssuesStore {
 					label: initiative.title,
 					status: initiative.status
 				});
+				nodeKeyByEntityId.set(initiative.id, initiative.id);
 				edges.push({ from: epic.id, to: initiative.id });
 
 				const records: { entity: Entity; kind: string }[] = [
+					...this.sortEntities(bundle.entities.filter((entity) => entity.kind === "plan")).map((plan) => ({ entity: plan, kind: "plan" })),
 					...bundle.prds.map((prd) => ({ entity: prd, kind: "prd" })),
 					...bundle.adrs.map((adr) => ({ entity: adr, kind: "adr" }))
 				];
 				for (const { entity, kind } of records) {
 					const key = `${initiative.id}:${entity.id}`;
 					nodes.push({ col: 3, fullLabel: entity.title, id: entity.id, key, kind, label: entity.title, status: entity.status });
+					nodeKeyByEntityId.set(entity.id, key);
 					edges.push({ from: initiative.id, to: key });
 				}
 
 				for (const story of this.sortEntities(bundle.userStories)) {
 					const key = `${initiative.id}:${story.id}`;
 					storyKeyById.set(story.id, key);
+					nodeKeyByEntityId.set(story.id, key);
 					nodes.push({ col: 4, fullLabel: story.title, id: story.id, key, kind: "story", label: story.title, status: story.status });
 					edges.push({ from: initiative.id, to: key });
 				}
@@ -1255,6 +1364,7 @@ export class AgentIssuesStore {
 
 				for (const issue of this.sortEntities(bundle.issues)) {
 					const key = `${initiative.id}:${issue.id}`;
+					nodeKeyByEntityId.set(issue.id, key);
 					nodes.push({ col: 5, fullLabel: issue.title, id: issue.id, key, kind: "issue", label: issue.title, status: issue.status });
 					const storyKeys = (fixingStoryIdsByIssueId.get(issue.id) ?? [])
 						.map((storyId) => storyKeyById.get(storyId))
@@ -1270,8 +1380,50 @@ export class AgentIssuesStore {
 			}
 		}
 
+		const debtKeyById = new Map<string, string>();
+		const debtRecords = this.sortEntities((snapshot?.entities ?? []).filter((entity) => entity.kind === "debt"));
+		for (const debt of debtRecords) {
+			const owner = (snapshot?.relations ?? []).find(
+				(relation) => relation.fromId !== debt.id && relation.toId === debt.id && relation.type === "records"
+			);
+			const ownerKey = owner ? nodeKeyByEntityId.get(owner.fromId) : undefined;
+			if (!ownerKey) {
+				continue;
+			}
+
+			debtKeyById.set(debt.id, debt.id);
+			nodes.push({ col: 6, fullLabel: debt.title, id: debt.id, key: debt.id, kind: "debt", label: debt.title, status: debt.status });
+			edges.push({ from: ownerKey, label: "records", to: debt.id });
+		}
+
+		for (const relation of snapshot?.relations ?? []) {
+			if (relation.type === "informs") {
+				const sourceKey = nodeKeyByEntityId.get(relation.fromId);
+				const targetKey = nodeKeyByEntityId.get(relation.toId);
+				if (sourceKey && targetKey) {
+					edges.push({ from: sourceKey, label: "informs", to: targetKey });
+				}
+			}
+
+			if (relation.type === "resolves") {
+				const resolverKey = nodeKeyByEntityId.get(relation.fromId);
+				const debtKey = debtKeyById.get(relation.toId);
+				if (resolverKey && debtKey) {
+					edges.push({ from: resolverKey, label: "resolves", to: debtKey });
+				}
+			}
+
+			if (relation.type === "relatesTo") {
+				const debtKey = debtKeyById.get(relation.fromId);
+				const relatedKey = nodeKeyByEntityId.get(relation.toId) ?? debtKeyById.get(relation.toId);
+				if (debtKey && relatedKey) {
+					edges.push({ from: debtKey, label: "relatesTo", to: relatedKey });
+				}
+			}
+		}
+
 		return filterGraphByKind(
-			{ columns: ["Project", "Epics", "Initiatives", "PRDs & ADRs", "User stories", "Issues"], edges, nodes },
+			{ columns: ["Project", "Epics", "Initiatives", "Plans, PRDs & ADRs", "User stories", "Issues", "Debt records"], edges, nodes },
 			this.visibleProjectGraphKinds.get()
 		);
 	}
@@ -1388,7 +1540,7 @@ export class AgentIssuesStore {
 		return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 	}
 
-	public shortRef(entity: { id: string; kind: string }) {
+	public shortRef(entity: { id: string; kind: string; shortReference?: string }) {
 		return shortEntityReference(entity);
 	}
 
@@ -1431,8 +1583,10 @@ export class AgentIssuesStore {
 			decomposes: "Parent issue",
 			creates: "Created by",
 			fixes: "Fixed by",
+			handsOff: "Incoming handoffs",
 			owns: "Owned by",
 			records: "Recorded by",
+			resolves: "Resolved by",
 			tracks: "Tracked by"
 		};
 		const outgoingLabels: Record<string, string> = {
@@ -1441,6 +1595,8 @@ export class AgentIssuesStore {
 			decomposes: "Sub-issues",
 			creates: "Creates",
 			fixes: "Fixes",
+			relatesTo: "Related records",
+			resolves: "Resolves debt",
 			owns: "Owns",
 			records: "Records",
 			tracks: "Tracks"
@@ -1460,25 +1616,49 @@ export class AgentIssuesStore {
 	public detailMetaFor(entityId: string | null): Array<[string, string]> {
 		const entity = entityId ? this.entityById.get().get(entityId) ?? null : null;
 		const bundle = this.bundleForEntityId(entityId);
+		const owner = entity
+			? this.incomingRelationsFor(entity.id)
+				.find((relation) => relation.type === "records")
+				?.fromId
+			: null;
+		const ownerEntity = owner ? this.entityById.get().get(owner) ?? null : null;
+		const debtMeta: Array<[string, string]> = entity?.kind === "debt"
+			? [
+				["Category", entity.category ?? "—"],
+				["Priority", entity.priority ?? "—"],
+				["Lifecycle", entity.status],
+				["Owner", ownerEntity ? `${this.shortRef(ownerEntity)} ${ownerEntity.title}` : "—"]
+			]
+			: [];
+		const statusMeta: Array<[string, string]> = entity?.kind === "debt" ? [] : [["Status", entity?.status ?? "—"]];
+		const typeMeta: Array<[string, string]> = entity?.type ? [["Type", entity.type]] : [];
 		return [
 			["Initiative", bundle ? `${this.shortRef(bundle.initiative)} ${bundle.initiative.title}` : "—"],
-			["Status", entity?.status ?? "—"],
+			...debtMeta,
+			...statusMeta,
+			...typeMeta,
+			["Created", entity ? this.formatTimestamp(entity.createdAt) : "—"],
 			["Updated", entity ? this.formatTimestamp(entity.updatedAt) : "—"]
 		];
 	}
 
-	public linkedRecordSections(options?: { excludeRelationTypes?: string[] }): Array<{ key: string; records: Entity[]; title: string }> {
+	public linkedRecordSections(options?: { excludeRelationTypes?: string[]; excludeRelatedIds?: string[] }): Array<{ key: string; records: Entity[]; title: string }> {
 		return this.linkedRecordSectionsFor(this.selectedId.get(), options);
 	}
 
 	public linkedRecordSectionsFor(
 		entityId: string | null,
-		options?: { excludeRelationTypes?: string[] }
+		options?: { excludeRelationTypes?: string[]; excludeRelatedIds?: string[] }
 	): Array<{ key: string; records: Entity[]; title: string; crossLink: boolean }> {
 		const spineRelationTypes = new Set(["owns", "creates", "fixes", "decomposes", "tracks", "constrains"]);
 		const grouped = new Map<string, { records: Entity[]; crossLink: boolean }>();
 		const excludedRelationTypes = new Set(options?.excludeRelationTypes ?? []);
+		const excludedRelatedIds = new Set(options?.excludeRelatedIds ?? []);
 		const add = (relatedId: string, label: string, relationType: string) => {
+			if (excludedRelatedIds.has(relatedId)) {
+				return;
+			}
+
 			const entity = this.entityById.get().get(relatedId);
 			if (!entity) {
 				return;
@@ -1510,6 +1690,46 @@ export class AgentIssuesStore {
 			records: this.sortEntities(group.records),
 			title
 		}));
+	}
+
+	public debtRecordSectionsFor(entityId: string | null): Array<{ key: string; records: Entity[]; title: string }> {
+		const entity = entityId ? this.entityById.get().get(entityId) ?? null : null;
+		if (!entity || !["project", "epic", "initiative", "issue"].includes(entity.kind)) {
+			return [];
+		}
+
+		const ownedDebt = this.outgoingRelationsFor(entity.id)
+			.filter((relation) => relation.type === "records")
+			.map((relation) => this.entityById.get().get(relation.toId))
+			.filter((record): record is Entity => record?.kind === "debt");
+		const resolvedDebt = ["epic", "initiative", "issue"].includes(entity.kind)
+			? this.outgoingRelationsFor(entity.id)
+				.filter((relation) => relation.type === "resolves")
+				.map((relation) => this.entityById.get().get(relation.toId))
+				.filter((record): record is Entity => record?.kind === "debt")
+			: [];
+
+		return [
+			...(ownedDebt.length > 0 ? [{ key: "owned-debt", records: this.sortEntities(ownedDebt), title: "Owned debt" }] : []),
+			...(resolvedDebt.length > 0 ? [{ key: "resolved-debt", records: this.sortEntities(resolvedDebt), title: "Resolves debt" }] : [])
+		];
+	}
+
+	public planProjectionFor(planId: string): { current: Array<{ key: PlanCurrentGroupKey; title: string; entries: PlanEntry[] }>; history: PlanEntry[] } {
+		const history = [...(this.snapshot.get()?.planEntries ?? [])]
+			.filter((entry) => entry.planId === planId)
+			.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.reference.localeCompare(right.reference));
+		const supersededEntryIds = new Set(history.flatMap((entry) => entry.supersededEntryIds));
+		const activeEntries = history.filter((entry) => !entry.tombstone && !supersededEntryIds.has(entry.id));
+
+		return {
+			current: PLAN_CURRENT_GROUPS.map((group) => ({
+				key: group.key,
+				title: group.title,
+				entries: activeEntries.filter((entry) => belongsToPlanCurrentGroup(entry, group.key))
+			})),
+			history
+		};
 	}
 
 	public closeEntity() {
@@ -1830,6 +2050,25 @@ function hasConflictingDefinitions(sources: ProjectContextTermSource[]): boolean
 	);
 
 	return definitions.size > 1;
+}
+
+function belongsToPlanCurrentGroup(entry: PlanEntry, groupKey: PlanCurrentGroupKey): boolean {
+	switch (groupKey) {
+		case "questions":
+			return entry.role === "question";
+		case "decisions":
+			return entry.role === "decision";
+		case "includedScope":
+			return entry.role === "scope" && entry.scopeDirection === "included";
+		case "excludedScope":
+			return entry.role === "scope" && entry.scopeDirection === "excluded";
+		case "constraints":
+			return entry.role === "constraint";
+		case "preferences":
+			return entry.role === "preference";
+		case "considerations":
+			return entry.role === "consideration";
+	}
 }
 
 function compareProjectContextSources(left: ProjectContextTermSource, right: ProjectContextTermSource): number {

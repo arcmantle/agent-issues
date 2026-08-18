@@ -1,6 +1,7 @@
 export type IssueCommentRecord = {
 	id: string;
 	reference: string;
+	shortReference: string;
 	issueId: string;
 	createdBy: string;
 	updatedBy: string;

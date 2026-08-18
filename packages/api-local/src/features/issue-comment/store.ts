@@ -9,6 +9,7 @@ import {
 	ISSUE_COMMENT_REVERSE_PATCH_REGISTRY,
 	IssueCommentConflictError,
 	materializeIssueCommentFromPatches,
+	shortEntityReference,
 	type IssueCommentHistoryEntry,
 	type IssueCommentPage,
 	type IssueCommentRecord
@@ -19,6 +20,7 @@ import { exportCanonicalChains, importCanonicalChains } from "../synchronize/can
 type IssueCommentRow = {
 	id: string;
 	reference: string;
+	short_reference: string;
 	issue_id: string;
 	created_by: string;
 	updated_by: string;
@@ -56,6 +58,7 @@ export function createIssueComment(
 
 	const id = randomUUID();
 	const reference = encodeCanonicalReference("issueComment", id);
+	const shortReference = allocateShortReference(executor, id);
 	const createdAt = new Date().toISOString();
 	const state = { body, referencedIssueIds, tombstone: false };
 	const current = exportCanonicalChains(executor);
@@ -67,6 +70,7 @@ export function createIssueComment(
 				head: {
 					id,
 					reference,
+					shortReference,
 					issueId: issue.id,
 					createdBy: actorId,
 					updatedBy: actorId,
@@ -293,7 +297,7 @@ function getIssueComment(executor: SqliteExecutor, commentId: string): IssueComm
 		JOIN entities AS issue ON issue.tenant_id = issue_comments.tenant_id AND issue.id = issue_comments.issue_id
 		WHERE issue_comments.tenant_id = ${executor.tenantId}
 			AND issue.project_id = ${executor.currentProjectId}
-			AND (issue_comments.id = ${commentId} OR issue_comments.reference = ${commentId})`)[0] as IssueCommentRow | undefined;
+			AND (issue_comments.id = ${commentId} OR issue_comments.reference = ${commentId} OR issue_comments.short_reference = ${commentId})`)[0] as IssueCommentRow | undefined;
 	if (!row) {
 		throw new Error(`Issue comment not found: ${commentId}`);
 	}
@@ -321,6 +325,7 @@ function toIssueCommentRecord(executor: SqliteExecutor, row: IssueCommentRow): I
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.short_reference,
 		issueId: row.issue_id,
 		createdBy: row.created_by,
 		updatedBy: row.updated_by,
@@ -332,6 +337,19 @@ function toIssueCommentRecord(executor: SqliteExecutor, row: IssueCommentRow): I
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
+}
+
+function allocateShortReference(executor: SqliteExecutor, id: string): string {
+	const baseReference = shortEntityReference({ id, kind: "issueComment" });
+	let shortReference = baseReference;
+	let suffix = 2;
+
+	while (executor.drizzle.all(sql`SELECT id FROM issue_comments WHERE tenant_id = ${executor.tenantId} AND short_reference = ${shortReference}`).length > 0) {
+		shortReference = `${baseReference}-${suffix}`;
+		suffix += 1;
+	}
+
+	return shortReference;
 }
 
 function encodeCursor(cursor: CommentCursor): string {

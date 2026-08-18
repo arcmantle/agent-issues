@@ -57,6 +57,10 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 			issueCommentsUpdatedLocal: [],
 			issueCommentsCreatedCloud: [],
 			issueCommentsUpdatedCloud: [],
+			planEntriesCreatedLocal: [],
+			planEntriesUpdatedLocal: [],
+			planEntriesCreatedCloud: [],
+			planEntriesUpdatedCloud: [],
 			usersAppliedToLocal: 0,
 			usersAppliedToCloud: 0
 		});
@@ -148,6 +152,59 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		expect(updateSummary).toMatchObject({ issueCommentsUpdatedCloud: [id] });
 	});
 
+	it("synchronizes Plan entries and rebuilds entity references and supersessions", async () => {
+		const initiative = await local.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await local.createEntity({ kind: "plan", title: "Plan", parentId: initiative.id });
+		const referencedEntity = await local.createEntity({ kind: "issue", title: "Referenced issue", parentId: initiative.id });
+		const question = await local.createPlanEntry({ planId: plan.id, role: "question", body: "Which backend owns synchronization?" });
+		const decision = await local.createPlanEntry({
+			planId: plan.id,
+			role: "decision",
+			body: "Both backends use canonical chains.",
+			referencedEntityIds: [referencedEntity.id],
+			supersededEntryIds: [question.id]
+		});
+
+		const summary = await synchronizeStores(local, cloud);
+
+		expect(await cloud.listPlanEntries({ planId: plan.id })).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: question.id, role: "question", supersededEntryIds: [] }),
+			expect.objectContaining({ id: decision.id, role: "decision", referencedEntityIds: [referencedEntity.id], supersededEntryIds: [question.id] })
+		]));
+		expect((await cloud.exportCanonicalChains()).planEntries).toEqual(expect.arrayContaining([
+			expect.objectContaining({ head: expect.objectContaining({ id: decision.id, referencedEntityIds: [referencedEntity.id], supersededEntryIds: [question.id] }) })
+		]));
+		expect(summary.planEntriesCreatedCloud).toEqual(expect.arrayContaining([question.id, decision.id]));
+	});
+
+	it("synchronizes an updated Plan entry with supersessions in creation order", async () => {
+		const initiative = await local.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await local.createEntity({ kind: "plan", title: "Plan", parentId: initiative.id });
+		const firstQuestion = await local.createPlanEntry({ planId: plan.id, role: "question", body: "First question" });
+		const secondQuestion = await local.createPlanEntry({ planId: plan.id, role: "question", body: "Second question" });
+		const supersededEntryIds = [firstQuestion.id, secondQuestion.id].sort().reverse();
+		const decision = await local.createPlanEntry({
+			planId: plan.id,
+			role: "decision",
+			body: "Initial decision",
+			supersededEntryIds
+		});
+
+		await synchronizeStores(local, cloud);
+		const updated = await local.updatePlanEntry({
+			entryId: decision.id,
+			body: "Updated decision",
+			expectedRevision: decision.revision,
+			expectedContentHash: decision.contentHash
+		});
+
+		await expect(synchronizeStores(local, cloud)).resolves.toMatchObject({ planEntriesUpdatedCloud: [decision.id] });
+		expect((await cloud.listPlanEntries({ planId: plan.id })).find((entry) => entry.id === decision.id)).toMatchObject({
+			body: "Updated decision",
+			supersededEntryIds: updated.supersededEntryIds
+		});
+	});
+
 	it("imports a strict canonical extension with every reverse delta intact", async () => {
 		const created = await local.createEntity({ kind: "issue", title: "First", body: "First body" });
 		const revision2 = await local.updateEntity({ entityId: created.id, title: "Second", body: "Second body", expectedRevision: created.revision, expectedContentHash: created.contentHash });
@@ -161,7 +218,7 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		expect((await cloud.exportCanonicalChains()).entities.find((chain) => chain.head.id === created.id)?.deltas).toEqual(localChain?.deltas);
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
-		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], usersCreated: [], usersUpdated: [] });
+		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], usersCreated: [], usersUpdated: [] });
 	});
 
 	it("rejects a divergent batch before mutating an earlier compatible record", async () => {

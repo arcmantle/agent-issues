@@ -39,7 +39,7 @@ afterEach(() => {
 runStorageDriverContractSuite({ label: "SqliteStore", openStore: openTestStore, openStoreForProject: openTestStoreForProject });
 
 describe("storage-driver seam: persisted Stable identity (SqliteStore)", () => {
-	it("stores the UUID as entity id and the Canonical reference separately", async () => {
+	it("stores the UUID, Canonical reference, and short reference separately", async () => {
 		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-identity-"));
 		const dbPath = path.join(tempDir, "test.db");
 		const store = (await openSqliteStore(dbPath, { tenant: "test" })).store;
@@ -47,10 +47,10 @@ describe("storage-driver seam: persisted Stable identity (SqliteStore)", () => {
 		try {
 			const created = await store.createEntity({ kind: "initiative", title: "Persisted identity" });
 			const inspection = new Database(dbPath, { readonly: true, fileMustExist: true });
-			const row = inspection.prepare("SELECT id, reference FROM entities WHERE tenant_id = ? AND id = ?").get("test", created.id);
+			const row = inspection.prepare("SELECT id, reference, short_reference FROM entities WHERE tenant_id = ? AND id = ?").get("test", created.id);
 			inspection.close();
 
-			expect(row).toEqual({ id: created.id, reference: created.reference });
+			expect(row).toEqual({ id: created.id, reference: created.reference, short_reference: created.shortReference });
 		} finally {
 			await store.close();
 		}
@@ -90,7 +90,9 @@ describe("storage-driver seam: tenant administration (SqliteStore)", () => {
 		const betaStore = (await openSqliteStore(dbPath, { tenant: "beta-team" })).store;
 
 		try {
-			await alphaStore.createEntity({ kind: "initiative", title: "Alpha" });
+			const initiative = await alphaStore.createEntity({ kind: "initiative", title: "Alpha" });
+			const plan = await alphaStore.createEntity({ kind: "plan", title: "Alpha Plan", parentId: initiative.id });
+			await alphaStore.createPlanEntry({ planId: plan.id, role: "question", body: "Does tenant rename preserve entries?" });
 			await betaStore.createEntity({ kind: "initiative", title: "Beta" });
 
 			expect((await alphaStore.listTenants()).map((tenant) => tenant.id)).toEqual(["alpha-team", "beta-team"]);
@@ -98,6 +100,12 @@ describe("storage-driver seam: tenant administration (SqliteStore)", () => {
 			const renamed = await alphaStore.renameTenant("alpha-team", "renamed-team");
 			expect(renamed.renamed).toBe(true);
 			expect(renamed.newTenantId).toBe("renamed-team");
+			const renamedStore = (await openSqliteStore(dbPath, { tenant: "renamed-team" })).store;
+			try {
+				expect(await renamedStore.listPlanEntries({ planId: plan.id })).toHaveLength(1);
+			} finally {
+				await renamedStore.close();
+			}
 
 			const deleted = await betaStore.deleteTenant("beta-team");
 			expect(deleted.removed).toBe(true);

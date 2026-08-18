@@ -15,6 +15,14 @@ All bundled `ai-*` skills follow this contract. They also follow the shared [lan
 
 Issue comments use complete `COM_` references. They are issue discussion, not tracker state: use tracker records for scope, decisions, blockers, handoffs, and status.
 
+## Record body recipes
+
+Before you create or replace authored body content, identify the record type and read its matching recipe in [`recipes`](./recipes/README.md).
+
+- When the catalog has a recipe for the record type, use that recipe for the body. This applies to context summaries, context terms, entities, handoffs, issue comments, and Wayfinder records.
+- Do this before commands that write a body, including `context set`, `context define`, `create --body-file`, and `edit --body-file`.
+- Commands that do not create or replace a body do not need a recipe.
+
 ## Current contracts replace obsolete tests
 
 Do not keep old behavior or compatibility paths only because an old test expects them. When the active issue or a relevant ADR replaces behavior, update or remove the old implementation and its tests. Keep them only when a current compatibility or migration requirement says so.

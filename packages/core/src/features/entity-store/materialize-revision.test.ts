@@ -8,15 +8,60 @@ type EntityRevisionState = {
 	title: string;
 	body: string;
 	bodySource: BodySource;
+	category: "technical" | "security" | null;
+	priority: "low" | "critical" | null;
+	type: "wayfinder-map" | "wayfinder-ticket" | null;
 	status: string;
 	parentId: string | null;
 	tombstone: boolean;
 };
 
 describe("materializeFromPatches", () => {
+	it("restores category and priority from a prior revision", () => {
+		const predecessor: EntityRevisionState = {
+			title: "Initial",
+			body: "Body",
+			bodySource: "authored" as const,
+			category: "technical" as const,
+			priority: "low" as const,
+			type: null,
+			status: "open",
+			parentId: "INIT1",
+			tombstone: false
+		};
+		const successor: EntityRevisionState = {
+			...predecessor,
+			category: "security" as const,
+			priority: "critical" as const
+		};
+		const materialized = materializeFromPatches(
+			"DEBT1",
+			{
+				id: "DEBT1",
+				...successor,
+				revision: 2,
+				createdAt: "2026-01-01T00:00:00.000Z"
+			},
+			[
+				{
+					revision: 2,
+					author: "alice",
+					createdAt: "2026-01-02T00:00:00.000Z",
+					...createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY)
+				}
+			],
+			1
+		);
+
+		expect(materialized).toMatchObject({
+			category: "technical",
+			priority: "low"
+		});
+	});
+
 	it("materializes a generic reverse-field transition", () => {
-		const predecessor: EntityRevisionState = { title: "Initial", body: "Body", bodySource: "authored", status: "todo", parentId: null, tombstone: false };
-		const successor: EntityRevisionState = { title: "Current", body: "Body!", bodySource: "generated", status: "done", parentId: "INIT2", tombstone: true };
+		const predecessor: EntityRevisionState = { title: "Initial", body: "Body", bodySource: "authored", category: null, priority: null, type: null, status: "todo", parentId: null, tombstone: false };
+		const successor: EntityRevisionState = { title: "Current", body: "Body!", bodySource: "generated", category: null, priority: null, type: null, status: "done", parentId: "INIT2", tombstone: true };
 		const patch = {
 			revision: 2,
 			author: "alice",
@@ -28,9 +73,9 @@ describe("materializeFromPatches", () => {
 	});
 
 	it("applies content and lifecycle patches newest-first with target revision metadata", () => {
-		const first: EntityRevisionState = { title: "First", body: "First body", bodySource: "authored", status: "todo", parentId: null, tombstone: false };
-		const second: EntityRevisionState = { title: "Second", body: "Second body", bodySource: "generated", status: "in-progress", parentId: "INIT1", tombstone: false };
-		const third: EntityRevisionState = { title: "Third", body: "Third body", bodySource: "authored", status: "done", parentId: "INIT2", tombstone: false };
+		const first: EntityRevisionState = { title: "First", body: "First body", bodySource: "authored", category: null, priority: null, type: null, status: "todo", parentId: null, tombstone: false };
+		const second: EntityRevisionState = { title: "Second", body: "Second body", bodySource: "generated", category: null, priority: null, type: null, status: "in-progress", parentId: "INIT1", tombstone: false };
+		const third: EntityRevisionState = { title: "Third", body: "Third body", bodySource: "authored", category: null, priority: null, type: null, status: "done", parentId: "INIT2", tombstone: false };
 		const patches: EntityRevisionPatch[] = [
 			{
 				revision: 3,
@@ -65,6 +110,9 @@ describe("materializeFromPatches", () => {
 			title: "Second",
 			body: "Second body",
 			bodySource: "generated",
+			category: null,
+			priority: null,
+			type: null,
 			status: "in-progress",
 			parentId: "INIT1",
 			tombstone: false,
@@ -83,6 +131,9 @@ describe("materializeFromPatches", () => {
 					title: "Third",
 					body: "Third body",
 					bodySource: "authored",
+					category: null,
+					priority: null,
+					type: null,
 					status: "done",
 					parentId: null,
 					tombstone: false,
@@ -102,6 +153,9 @@ describe("materializeFromPatches", () => {
 					title: "Third",
 					body: "Third body",
 					bodySource: "authored",
+					category: null,
+					priority: null,
+					type: null,
 					status: "done",
 					parentId: null,
 					revision: 3,
@@ -126,6 +180,9 @@ describe("materializeFromPatches", () => {
 					title: "Third",
 					body: "Third body",
 					bodySource: "authored",
+					category: null,
+					priority: null,
+					type: null,
 					status: "done",
 					parentId: null,
 					tombstone: false,
@@ -138,8 +195,8 @@ describe("materializeFromPatches", () => {
 						author: "third-author",
 						createdAt: "2026-01-03T00:00:00.000Z",
 						...createReverseFieldPatch(
-							{ title: "Third", body: "Third body", bodySource: "authored", status: "done", parentId: null, tombstone: false },
-							{ title: "Second", body: "Second body", bodySource: "authored", status: "done", parentId: null, tombstone: false },
+							{ title: "Third", body: "Third body", bodySource: "authored", category: null, priority: null, type: null, status: "done", parentId: null, tombstone: false },
+							{ title: "Second", body: "Second body", bodySource: "authored", category: null, priority: null, type: null, status: "done", parentId: null, tombstone: false },
 							ENTITY_REVERSE_PATCH_REGISTRY
 						)
 					}

@@ -2,20 +2,24 @@ import { describe, expect, it } from "vitest";
 
 import { computeContextTermContentHash } from "../context/context-types.js";
 import { computeIssueCommentContentHash } from "../issue-comment/issue-comment-types.js";
+import { computePlanEntryContentHash } from "../plan-entry/plan-entry-types.js";
 import { computeEntityContentHash } from "../entity-store/domain.js";
 import { encodeCanonicalReference } from "../entity-store/canonical-reference.js";
 import { deriveUserIdentity } from "../user-directory/user-directory.js";
-import { CONTEXT_TERM_REVERSE_PATCH_REGISTRY, createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
-import { mergeCanonicalChainBundles, SynchronizeConflictError, type CanonicalChainBundle, type CanonicalContextChain, type CanonicalContextTermChain, type CanonicalEntityChain, type CanonicalIssueCommentChain } from "./canonical-chain.js";
+import { CONTEXT_TERM_REVERSE_PATCH_REGISTRY, createReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, PLAN_ENTRY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
+import { mergeCanonicalChainBundles, SynchronizeConflictError, type CanonicalChainBundle, type CanonicalContextChain, type CanonicalContextTermChain, type CanonicalEntityChain, type CanonicalIssueCommentChain, type CanonicalPlanEntryChain } from "./canonical-chain.js";
 
-const emptyBundle = (): CanonicalChainBundle => ({ entities: [], contexts: [], contextTerms: [], issueComments: [], users: [] });
+const emptyBundle = (): CanonicalChainBundle => ({ entities: [], contexts: [], contextTerms: [], issueComments: [], planEntries: [], users: [] });
 const ENTITY_STABLE_ID = "00000000-0000-4000-8000-000000000001";
 const ENTITY_REFERENCE = encodeCanonicalReference("issue", ENTITY_STABLE_ID);
 const ISSUE_COMMENT_STABLE_ID = "00000000-0000-4000-8000-000000000002";
+const PLAN_STABLE_ID = "00000000-0000-4000-8000-000000000003";
+const PLAN_ENTRY_STABLE_ID = "00000000-0000-4000-8000-000000000004";
+const INITIATIVE_STABLE_ID = "00000000-0000-4000-8000-000000000005";
 
 function entityChain(title: string, revision: number, predecessorTitles: string[] = []): CanonicalEntityChain {
 	const titles = [...predecessorTitles, title];
-	const state = (stateTitle: string) => ({ title: stateTitle, body: "body", bodySource: "authored" as const, status: "todo", parentId: null, tombstone: false });
+	const state = (stateTitle: string) => ({ title: stateTitle, body: "body", bodySource: "authored" as const, category: null, priority: null, type: null, status: "todo", parentId: null, tombstone: false });
 	const deltas = predecessorTitles.map((predecessorTitle, index) => {
 		const deltaRevision = index + 2;
 		return {
@@ -36,6 +40,9 @@ function entityChain(title: string, revision: number, predecessorTitles: string[
 			title,
 			body: "body",
 			bodySource: "authored",
+			category: null,
+			priority: null,
+			type: null,
 			status: "todo",
 			parentId: null,
 			tombstone: false,
@@ -46,6 +53,14 @@ function entityChain(title: string, revision: number, predecessorTitles: string[
 		},
 		deltas
 	};
+}
+
+function initiativeChain(): CanonicalEntityChain {
+	const initiative = entityChain("Initiative", 1);
+	initiative.head.id = INITIATIVE_STABLE_ID;
+	initiative.head.reference = encodeCanonicalReference("initiative", INITIATIVE_STABLE_ID);
+	initiative.head.kind = "initiative";
+	return initiative;
 }
 
 function contextTermChain(term: string, revision: number, predecessorTerm?: string): CanonicalContextTermChain {
@@ -119,7 +134,58 @@ function issueCommentChain(body: string, referencedIssueIds: string[], revision:
 	};
 }
 
+function planEntryChain(body: string, referencedEntityIds: string[], revision: number, predecessor?: { body: string; referencedEntityIds: string[] }): CanonicalPlanEntryChain {
+	const state = { role: "question" as const, body, scopeDirection: null, referencedEntityIds, supersededEntryIds: [], tombstone: false };
+	return {
+		head: {
+			id: PLAN_ENTRY_STABLE_ID,
+			reference: encodeCanonicalReference("planEntry", PLAN_ENTRY_STABLE_ID),
+			planId: PLAN_STABLE_ID,
+			createdBy: "user",
+			updatedBy: "user",
+			...state,
+			revision,
+			contentHash: computePlanEntryContentHash(state),
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: `2026-01-0${revision}T00:00:00.000Z`
+		},
+		deltas: predecessor === undefined ? [] : [{
+			id: `plan-entry-delta-${revision}`,
+			revision,
+			author: "user",
+			createdAt: `2026-01-0${revision}T00:00:00.000Z`,
+			...createReverseFieldPatch(state, { ...state, ...predecessor }, PLAN_ENTRY_REVERSE_PATCH_REGISTRY)
+		}]
+	};
+}
+
 describe("mergeCanonicalChainBundles", () => {
+	it("rejects a Wayfinder ticket without a Wayfinder map parent", () => {
+		const ticket = entityChain("Ticket", 1);
+		ticket.head.type = "wayfinder-ticket";
+
+		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [ticket] })).toThrow("wayfinder-ticket");
+	});
+
+	it("rejects a parentless Plan", () => {
+		const plan = entityChain("Plan", 1);
+		plan.head.id = PLAN_STABLE_ID;
+		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);
+		plan.head.kind = "plan";
+
+		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [plan] })).toThrow("initiative parent");
+	});
+
+	it("rejects a Plan without an initiative parent", () => {
+		const plan = entityChain("Plan", 1);
+		plan.head.id = PLAN_STABLE_ID;
+		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);
+		plan.head.kind = "plan";
+		plan.head.parentId = ENTITY_STABLE_ID;
+
+		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [entityChain("Issue parent", 1), plan] })).toThrow("initiative parent");
+	});
+
 	it("merges user directories by newest non-empty display name", () => {
 		const identity = deriveUserIdentity("entra:alice");
 		const original = { ...identity, displayName: "Alice", updatedAt: "2026-08-07T10:00:00.000Z" };
@@ -152,10 +218,51 @@ describe("mergeCanonicalChainBundles", () => {
 		).issueComments).toEqual([updated]);
 	});
 
+	it("merges a Plan entry body and ordered entity references as one compatible extension", () => {
+		const initiative = initiativeChain();
+		const plan = entityChain("Plan", 1);
+		plan.head.id = PLAN_STABLE_ID;
+		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);
+		plan.head.kind = "plan";
+		plan.head.parentId = initiative.head.id;
+		const referencedEntity = entityChain("Referenced entity", 1);
+		const original = planEntryChain("Initial question", [], 1);
+		const updated = planEntryChain("Updated question", [ENTITY_STABLE_ID], 2, { body: "Initial question", referencedEntityIds: [] });
+
+		expect(mergeCanonicalChainBundles(
+			{ ...emptyBundle(), entities: [initiative, plan, referencedEntity], planEntries: [original] },
+			{ ...emptyBundle(), entities: [initiative, plan, referencedEntity], planEntries: [updated] }
+		).planEntries).toEqual([updated]);
+	});
+
+	it("rejects divergent Plan entry heads with Plan-entry conflict metadata", () => {
+		const initiative = initiativeChain();
+		const plan = entityChain("Plan", 1);
+		plan.head.id = PLAN_STABLE_ID;
+		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);
+		plan.head.kind = "plan";
+		plan.head.parentId = initiative.head.id;
+		const local = planEntryChain("Local answer", [], 2, { body: "Initial question", referencedEntityIds: [] });
+		const cloud = planEntryChain("Cloud answer", [], 2, { body: "Initial question", referencedEntityIds: [] });
+
+		expect(() => mergeCanonicalChainBundles(
+			{ ...emptyBundle(), entities: [initiative, plan], planEntries: [local] },
+			{ ...emptyBundle(), entities: [initiative, plan], planEntries: [cloud] }
+		)).toThrow(SynchronizeConflictError);
+		try {
+			mergeCanonicalChainBundles(
+				{ ...emptyBundle(), entities: [initiative, plan], planEntries: [local] },
+				{ ...emptyBundle(), entities: [initiative, plan], planEntries: [cloud] }
+			);
+		} catch (error) {
+			expect(error).toMatchObject({ recordKind: "plan-entry", recordId: PLAN_ENTRY_STABLE_ID, currentRevision: 2, currentContentHash: local.head.contentHash });
+		}
+	});
+
 	it("keeps identical heads as a no-op", () => {
 		const chain = entityChain("Initial", 1);
 		const left = { ...emptyBundle(), entities: [chain] };
-		const baselineState = { title: chain.head.title, body: chain.head.body, bodySource: chain.head.bodySource, status: chain.head.status, parentId: chain.head.parentId, tombstone: chain.head.tombstone };
+		const baselineState = { title: chain.head.title, body: chain.head.body, bodySource: chain.head.bodySource, category: chain.head.category, priority: chain.head.priority, type: chain.head.type, status: chain.head.status, parentId: chain.head.parentId, tombstone: chain.head.tombstone };
 		const right = { ...emptyBundle(), entities: [{ ...chain, deltas: [{ id: "different-baseline", revision: 1, author: "other", createdAt: chain.head.createdAt, ...createReverseFieldPatch(baselineState, baselineState, ENTITY_REVERSE_PATCH_REGISTRY) }] }] };
 
 		expect(mergeCanonicalChainBundles(left, right)).toEqual(left);

@@ -1,6 +1,9 @@
 import {
 	ALLOWED_RELATIONS,
+	ENTITY_CATEGORIES,
+	ENTITY_TYPES,
 	ENTITY_KINDS,
+	ENTITY_PRIORITIES,
 	ID_PREFIX,
 	STATUS_FLOW,
 	STRUCTURAL_RELATION_TYPES,
@@ -57,6 +60,7 @@ export type CapabilitiesPayload = {
 };
 
 export type SchemaPayload = {
+	entityCategories: readonly string[];
 	entityKinds: Array<{
 		kind: EntityKind;
 		idPrefix: string;
@@ -64,6 +68,7 @@ export type SchemaPayload = {
 		statuses: readonly string[];
 		archiveStatus: string;
 	}>;
+	entityPriorities: readonly string[];
 	relationTypes: string[];
 	allowedRelations: typeof ALLOWED_RELATIONS;
 	structuralRelationTypes: readonly string[];
@@ -84,6 +89,17 @@ export type SchemaPayload = {
 		defineCommand: string;
 		forgetCommand: string;
 		termFields: string[];
+	};
+	issueComments: {
+		storage: "database";
+		parentKind: "issue";
+		recordPrefix: "COM";
+		addCommand: string;
+		listCommand: string;
+		editCommand: string;
+		deleteCommand: string;
+		historyCommand: string;
+		fields: string[];
 	};
 };
 
@@ -107,6 +123,21 @@ const GLOBAL_OPTIONS: GlobalOptionSpec[] = [
 ];
 
 const ENTITY_KIND_VALUES = ENTITY_KINDS;
+const ENTITY_CATEGORY_OPTION: OptionSpec = {
+	name: "--category <category>",
+	description: "Set a category. Debt creation requires a category.",
+	allowedValues: ENTITY_CATEGORIES
+};
+const ENTITY_PRIORITY_OPTION: OptionSpec = {
+	name: "--priority <priority>",
+	description: "Set a priority. Debt creation requires a priority.",
+	allowedValues: ENTITY_PRIORITIES
+};
+const ENTITY_TYPE_OPTION: OptionSpec = {
+	name: "--type <type>",
+	description: "Set a kind-specific entity type.",
+	allowedValues: Object.values(ENTITY_TYPES).flat()
+};
 const RELATION_TYPE_VALUES = Array.from(new Set(ALLOWED_RELATIONS.map((relation) => relation.type))).sort();
 const STATUS_VALUES = Array.from(new Set(Object.values(STATUS_FLOW).flat())).sort();
 const ENTITY_VIEW_OPTION: OptionSpec = {
@@ -205,6 +236,39 @@ const COMMAND_SPECS: CommandSpec[] = [
 				"One line per term with definition and optional avoid list, plus duplicate-scope warnings in the project directory"
 			],
 			json: ["contexts", "context", "terms", "shared", "initiatives", "duplicateTerms", "view", "query", "conflictsOnly"]
+		}
+	},
+	{
+		name: "comment",
+		summary: "Add, list, edit, delete, and inspect revision history for issue-owned comment records.",
+		usage: [
+			"agent-issues comment",
+			"agent-issues comment add <issueId> --body-file <path|-> [--reference <issueId>]",
+			"agent-issues comment list <issueId> [--before <cursor>] [--all]",
+			"agent-issues comment edit <issueId> <commentId> --body-file <path|-> [--reference <issueId>]",
+			"agent-issues comment delete <issueId> <commentId>",
+			"agent-issues comment history <commentId>"
+		],
+		positionals: [
+			{
+				name: "subcommand",
+				description: "Comment action.",
+				allowedValues: ["add", "list", "edit", "delete", "history"]
+			}
+		],
+		examples: [
+			"agent-issues comment list ISS1 --json",
+			"agent-issues comment add ISS1 --body-file - --reference ISS2 --json",
+			"agent-issues comment history COM1 --json"
+		],
+		notes: [
+			"Issue comments are database records owned by an issue. They are not workflow entity kinds.",
+			"Use `schema --json` to discover the record fields and commands.",
+			"Use `--body-file` for multiline markdown to avoid shell quoting problems."
+		],
+		output: {
+			human: ["One comment record, a comment page, or revision history"],
+			json: ["id", "reference", "issueId", "body", "referencedIssueIds", "revision", "contentHash", "comments", "total", "nextBefore"]
 		}
 	},
 	{
@@ -443,6 +507,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 				description: "Entity title.",
 				required: true
 			},
+			ENTITY_CATEGORY_OPTION,
+			ENTITY_PRIORITY_OPTION,
+			ENTITY_TYPE_OPTION,
 			{
 				name: "--parent <id>",
 				description: "Structural parent ID when one is required by the workflow."
@@ -684,7 +751,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "edit",
 		summary: "Update an entity title and/or authored markdown body.",
-		usage: ["agent-issues edit <id> [--title <title>] [--body-file <path|->] [--view <compact|full>]"],
+		usage: ["agent-issues edit <id> [--title <title>] [--body-file <path|->] [--category <category>] [--priority <priority>] [--type <type>] [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
 		options: [
 			{
@@ -695,6 +762,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 				name: "--body-file <path|->",
 				description: "Read the authored markdown body from a file, or from stdin when the value is `-`."
 			},
+			ENTITY_CATEGORY_OPTION,
+			ENTITY_PRIORITY_OPTION,
+			ENTITY_TYPE_OPTION,
 			ENTITY_VIEW_OPTION
 		],
 		examples: [
@@ -1226,6 +1296,8 @@ export function getSchemaPayload(): SchemaPayload {
 			statuses: STATUS_FLOW[kind],
 			archiveStatus: getArchiveStatus(kind)
 		})),
+		entityCategories: ENTITY_CATEGORIES,
+		entityPriorities: ENTITY_PRIORITIES,
 		relationTypes: RELATION_TYPE_VALUES,
 		allowedRelations: ALLOWED_RELATIONS,
 		structuralRelationTypes: STRUCTURAL_RELATION_TYPES,
@@ -1248,6 +1320,17 @@ export function getSchemaPayload(): SchemaPayload {
 			defineCommand: "agent-issues context define <term> --scope <entityOrProjectOrInitiativeId|default> --body-file <path|-> [--avoid <comma-separated terms>] --json",
 			forgetCommand: "agent-issues context forget <term> --scope <entityOrProjectOrInitiativeId|default> --json",
 			termFields: ["term", "definition", "avoid", "createdAt", "updatedAt"]
+		},
+		issueComments: {
+			storage: "database",
+			parentKind: "issue",
+			recordPrefix: "COM",
+			addCommand: "agent-issues comment add <issueId> --body-file <path|-> [--reference <issueId>] --json",
+			listCommand: "agent-issues comment list <issueId> [--before <cursor>] [--all] --json",
+			editCommand: "agent-issues comment edit <issueId> <commentId> --body-file <path|-> [--reference <issueId>] --json",
+			deleteCommand: "agent-issues comment delete <issueId> <commentId> --json",
+			historyCommand: "agent-issues comment history <commentId> --json",
+			fields: ["id", "reference", "issueId", "body", "referencedIssueIds", "revision", "contentHash", "tombstone", "createdAt", "updatedAt"]
 		}
 	};
 }
@@ -1284,6 +1367,15 @@ export function renderSchema(payload: SchemaPayload): string {
 	lines.push(`  define term: ${payload.context.defineCommand}`);
 	lines.push(`  forget term: ${payload.context.forgetCommand}`);
 	lines.push(`  term fields: ${payload.context.termFields.join(", ")}`);
+
+	lines.push("", "Issue comments:");
+	lines.push(`  storage=${payload.issueComments.storage} parent=${payload.issueComments.parentKind} prefix=${payload.issueComments.recordPrefix}`);
+	lines.push(`  add: ${payload.issueComments.addCommand}`);
+	lines.push(`  list: ${payload.issueComments.listCommand}`);
+	lines.push(`  edit: ${payload.issueComments.editCommand}`);
+	lines.push(`  delete: ${payload.issueComments.deleteCommand}`);
+	lines.push(`  history: ${payload.issueComments.historyCommand}`);
+	lines.push(`  fields: ${payload.issueComments.fields.join(", ")}`);
 
 	return lines.join("\n");
 }

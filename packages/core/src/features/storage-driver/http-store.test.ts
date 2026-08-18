@@ -1,9 +1,70 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { SynchronizeConflictError } from "../synchronize/canonical-chain.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
+import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import { DaemonDbPathMismatchError, DaemonHandshakeMismatchError, DaemonVersionMismatchError, HttpStore } from "./http-store.js";
+import type { StorageDriver } from "./storage-driver.js";
+
+describe("HttpStore Plan entry transport", () => {
+	it("calls the Plan-entry creation RPC method", async () => {
+		const fetchImpl: typeof fetch = async (_input, init) => {
+			const request = JSON.parse(String(init?.body)) as { method: string; params: unknown };
+			expect(request).toMatchObject({
+				method: "createPlanEntry",
+				params: { planId: "plan-id", role: "question", body: "Which backend stores entries?" }
+			});
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				id: "1",
+				result: {
+					id: "entry-id",
+					reference: "PLAN_ENTRY_00000000000000000000000000",
+					shortReference: "PLAN_ENTRY_000000",
+					planId: "plan-id",
+					createdBy: "user-id",
+					updatedBy: "user-id",
+					role: "question",
+					body: "Which backend stores entries?",
+					scopeDirection: null,
+					referencedEntityIds: [],
+					supersededEntryIds: [],
+					tombstone: false,
+					revision: 1,
+					contentHash: "hash",
+					createdAt: "2026-08-15T00:00:00.000Z",
+					updatedAt: "2026-08-15T00:00:00.000Z"
+				}
+			}), { status: 200, headers: { "content-type": "application/json" } });
+		};
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.createPlanEntry({ planId: "plan-id", role: "question", body: "Which backend stores entries?" })).resolves.toMatchObject({ id: "entry-id" });
+	});
+});
+
+describe("HttpStore entity-type transport", () => {
+	it("forwards type on entity creation and nullable type updates", async () => {
+		const requests: Array<{ method: string; params: unknown }> = [];
+		const fetchImpl: typeof fetch = async (_input, init) => {
+			const { method, params } = JSON.parse(String(init?.body)) as { method: string; params: unknown };
+			requests.push({ method, params });
+			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }), { status: 200, headers: { "content-type": "application/json" } });
+		};
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await client.createEntity({ kind: "issue", title: "Wayfinder map", type: "wayfinder-map" });
+		await client.updateEntity({ entityId: "issue-id", type: null, expectedRevision: 1, expectedContentHash: "current-hash" });
+
+		expect(requests).toEqual([
+			{ method: "createEntity", params: { kind: "issue", title: "Wayfinder map", type: "wayfinder-map" } },
+			{ method: "updateEntity", params: { entityId: "issue-id", type: null, expectedRevision: 1, expectedContentHash: "current-hash" } }
+		]);
+		expectTypeOf<Parameters<HttpStore["createEntity"]>[0]>().toEqualTypeOf<Parameters<StorageDriver["createEntity"]>[0]>();
+		expectTypeOf<Parameters<HttpStore["updateEntity"]>[0]>().toEqualTypeOf<Parameters<StorageDriver["updateEntity"]>[0]>();
+	});
+});
 
 describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
 	it("recreates a typed conflict with current record metadata", async () => {
@@ -22,11 +83,36 @@ describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
 			);
 		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
 
-		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [], issueComments: [], users: [] })).rejects.toMatchObject({
+		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [], issueComments: [], planEntries: [], users: [] })).rejects.toMatchObject({
 			name: "SynchronizeConflictError",
 			recordKind: "context-term",
 			recordId: "project:tenant",
 			currentRevision: 3,
+			currentContentHash: "current-hash"
+		} satisfies Partial<SynchronizeConflictError>);
+	});
+
+	it("recreates a Plan-entry synchronization conflict", async () => {
+		const fetchImpl: typeof fetch = async () =>
+			new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: "1",
+					error: {
+						code: -32603,
+						message: "Cannot synchronize divergent Plan entry entry-id: current revision is 2.",
+						data: { recordKind: "plan-entry", recordId: "entry-id", currentRevision: 2, currentContentHash: "current-hash" }
+					}
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } }
+			);
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [], issueComments: [], planEntries: [], users: [] })).rejects.toMatchObject({
+			name: "SynchronizeConflictError",
+			recordKind: "plan-entry",
+			recordId: "entry-id",
+			currentRevision: 2,
 			currentContentHash: "current-hash"
 		} satisfies Partial<SynchronizeConflictError>);
 	});
@@ -58,6 +144,35 @@ describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
 			currentRevision: 3,
 			currentContentHash: "current-hash"
 		} satisfies Partial<IssueCommentConflictError>);
+	});
+
+	it("recreates a typed Plan-entry conflict with current record metadata", async () => {
+		const fetchImpl: typeof fetch = async () =>
+			new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: "1",
+					error: {
+						code: -32603,
+						message: "Stale edit for Plan entry entry-id: current revision is 3.",
+						data: { entryId: "entry-id", currentRevision: 3, currentContentHash: "current-hash" }
+					}
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } }
+			);
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.updatePlanEntry({
+			entryId: "entry-id",
+			body: "Updated Plan entry.",
+			expectedRevision: 1,
+			expectedContentHash: "stale-hash"
+		})).rejects.toMatchObject({
+			name: "PlanEntryConflictError",
+			entryId: "entry-id",
+			currentRevision: 3,
+			currentContentHash: "current-hash"
+		} satisfies Partial<PlanEntryConflictError>);
 	});
 });
 

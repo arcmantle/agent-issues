@@ -1,9 +1,11 @@
 import { LitElement, css, html, nothing, svg } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { when } from "lit/directives/when.js";
 import type { GraphNode, RelationshipGraph } from "../models.js";
 
 const KIND_COLOR: Record<string, string> = {
 	adr: "#8250df",
+	debt: "#bf3989",
 	initiative: "#0969da",
 	issue: "#0a7ea4",
 	prd: "#1f883d",
@@ -123,13 +125,25 @@ class RelationshipGraphView extends LitElement {
 					const y1 = a.cy;
 					const x2 = b.cx - NODE_W / 2;
 					const y2 = b.cy;
-					return svg`<path
-						class="ai-edge"
-						d=${`M${x1} ${y1} C ${x1 + 46} ${y1}, ${x2 - 46} ${y2}, ${x2} ${y2}`}
-						fill="none"
-						stroke="#d0d7de"
-						stroke-width="1.5"
-					/>`;
+					return svg`
+						<path
+							class="ai-edge"
+							d=${`M${x1} ${y1} C ${x1 + 46} ${y1}, ${x2 - 46} ${y2}, ${x2} ${y2}`}
+							fill="none"
+							stroke="#d0d7de"
+							stroke-width="1.5"
+						/>
+						${when(
+							edge.label,
+							() => svg`<text
+								class="ai-edge-label"
+								x=${(x1 + x2) / 2}
+								y=${(y1 + y2) / 2 - 5}
+								text-anchor="middle"
+							>${edge.label}</text>`,
+							() => nothing
+						)}
+					`;
 				}
 			)}
 			${repeat(
@@ -194,6 +208,11 @@ class RelationshipGraphView extends LitElement {
 		fill: var(--muted);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+	}
+	.ai-edge-label {
+		font: 600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		fill: var(--muted);
+		pointer-events: none;
 	}
 	.ai-node-rect {
 		transition: stroke-width 0.1s, filter 0.1s;

@@ -6,6 +6,7 @@ import { toCompactEntity, toCompactEntityDetails, toCompactEntityList, toCompact
 const entity: EntityRecord = {
 	id: "ISS_01",
 	reference: "ISS1",
+	shortReference: "ISS1",
 	createdBy: "user-1",
 	updatedBy: "user-1",
 	kind: "issue",
@@ -13,6 +14,9 @@ const entity: EntityRecord = {
 	status: "in-progress",
 	body: "Verbose body",
 	bodySource: "authored",
+	category: null,
+	priority: null,
+	type: null,
 	revision: 3,
 	contentHash: "content-hash",
 	createdAt: "2026-07-24T10:00:00.000Z",

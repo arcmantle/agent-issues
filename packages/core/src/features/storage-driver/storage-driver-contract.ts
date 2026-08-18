@@ -40,6 +40,239 @@ export type StorageDriverContractOptions = {
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore, openStoreForProject } = options;
 
+	describe(`storage-driver seam: Plan lifecycle (${label})`, () => {
+		it("requires Plans to have an initiative owner", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Plan project" });
+
+				await expect(store.createEntity({ kind: "plan", title: "Parentless Plan" })).rejects.toThrow(/initiative parent/i);
+				await expect(store.createEntity({ kind: "plan", title: "Project-owned Plan", parentId: project.id })).rejects.toThrow(/initiative parent/i);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("creates an initiative-owned draft Plan and links it to a PRD as provenance", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Implementation plan", body: "## Goal\n\nBuild the feature.\n\n## Context\n\nTrack the work.", parentId: initiative.id });
+				const prd = await store.createEntity({ kind: "prd", title: "Feature PRD", parentId: initiative.id });
+
+				expect(plan).toMatchObject({ kind: "plan", status: "draft", reference: expect.stringMatching(/^PLAN_/) });
+				expect((await store.getEntityDetails(plan.id)).incoming).toEqual(expect.arrayContaining([
+					expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: initiative.id }) })
+				]));
+				await expect(store.updateEntityStatus({ entityId: plan.id, status: "ready" })).resolves.toMatchObject({
+					previousStatus: "draft",
+					entity: expect.objectContaining({ status: "ready" })
+				});
+				await expect(store.linkEntities({ fromId: plan.id, toId: prd.id, relationType: "informs" })).resolves.toMatchObject({ created: true });
+				expect((await store.getEntityDetails(prd.id)).incoming).toEqual(expect.arrayContaining([
+					expect.objectContaining({ relationType: "informs", entity: expect.objectContaining({ id: plan.id }) }),
+					expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: initiative.id }) })
+				]));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("ignores caller-supplied statuses when creating a Plan", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan owner" });
+
+				for (const status of ["ready", "superseded"]) {
+					await expect(store.createEntity({
+						kind: "plan",
+						title: `Plan requested as ${status}`,
+						parentId: initiative.id,
+						status
+					})).resolves.toMatchObject({ status: "draft" });
+				}
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("rejects invalid Plan statuses and preserves supplied statuses for other kinds", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan owner" });
+
+				await expect(store.createEntity({
+					kind: "plan",
+					title: "Plan requested with an invalid status",
+					parentId: initiative.id,
+					status: "invalid"
+				})).rejects.toThrow(/invalid status/i);
+				await expect(store.createEntity({ kind: "issue", title: "Explicitly started issue", status: "in-progress" })).resolves.toMatchObject({ status: "in-progress" });
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: Plan entry lifecycle (${label})`, () => {
+		it("creates a typed entry and advances its Plan to in-progress", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan with entries", parentId: initiative.id });
+
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which storage contract applies?" });
+
+				expect(entry).toMatchObject({
+					planId: plan.id,
+					role: "question",
+					body: "Which storage contract applies?",
+					tombstone: false,
+					revision: 1,
+					reference: expect.stringMatching(/^PLAN_ENTRY_/)
+				});
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("advances a Plan only when its first entry is created", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan with entries", parentId: initiative.id });
+
+				await store.createPlanEntry({ planId: plan.id, role: "question", body: "First entry." });
+				await store.updateEntityStatus({ entityId: plan.id, status: "draft" });
+				await store.createPlanEntry({ planId: plan.id, role: "consideration", body: "Second entry." });
+
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("draft");
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: Plan entry supersession (${label})`, () => {
+		it("lets decisions explicitly supersede questions only", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Supersession owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Supersession Plan", parentId: initiative.id });
+				const question = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which store should own entries?" });
+				const consideration = await store.createPlanEntry({ planId: plan.id, role: "consideration", body: "The stores must stay symmetric." });
+				const decision = await store.createPlanEntry({
+					planId: plan.id,
+					role: "decision",
+					body: "Both stores own entries.",
+					supersededEntryIds: [question.id]
+				});
+
+				expect(decision.supersededEntryIds).toEqual([question.id]);
+				await expect(store.createPlanEntry({
+					planId: plan.id,
+					role: "decision",
+					body: "Invalid resolution.",
+					supersededEntryIds: [consideration.id]
+				})).rejects.toThrow(/question/i);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: Plan entry history (${label})`, () => {
+		it("preserves revisions and tombstones after an optimistic update", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry history owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan entry history", parentId: initiative.id });
+				const created = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Initial question." });
+				const updated = await store.updatePlanEntry({
+					entryId: created.id,
+					body: "Revised question.",
+					expectedRevision: created.revision,
+					expectedContentHash: created.contentHash
+				});
+
+				expect(updated).toMatchObject({ body: "Revised question.", revision: 2, tombstone: false });
+				await expect(store.updatePlanEntry({
+					entryId: created.id,
+					body: "Stale question.",
+					expectedRevision: created.revision,
+					expectedContentHash: created.contentHash
+				})).rejects.toThrow(/stale edit/i);
+				const deleted = await store.deletePlanEntry({
+					entryId: updated.id,
+					expectedRevision: updated.revision,
+					expectedContentHash: updated.contentHash
+				});
+
+				expect(deleted).toMatchObject({ tombstone: true, revision: 3 });
+				expect(await store.listPlanEntryHistory({ entryId: created.id })).toEqual([
+					expect.objectContaining({ targetRevision: 1, body: "Initial question.", tombstone: false }),
+					expect.objectContaining({ targetRevision: 2, body: "Revised question.", tombstone: false }),
+					expect.objectContaining({ targetRevision: 3, body: "Revised question.", tombstone: true })
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: Plan entry roles (${label})`, () => {
+		it("accepts only valid scope directions for scope entries", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Scoped Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Scoped Plan", parentId: initiative.id });
+
+				await expect(store.createPlanEntry({ planId: plan.id, role: "scope", body: "Missing direction." })).rejects.toThrow(/scope direction/i);
+				await expect(store.createPlanEntry({ planId: plan.id, role: "scope", body: "Invalid direction.", scopeDirection: "maybe" as "included" })).rejects.toThrow(/scope direction/i);
+				await expect(store.createPlanEntry({ planId: plan.id, role: "decision", body: "Wrong direction.", scopeDirection: "included" })).rejects.toThrow(/only scope/i);
+				await expect(store.createPlanEntry({ planId: plan.id, role: "scope", body: "Included scope.", scopeDirection: "included" })).resolves.toMatchObject({ scopeDirection: "included" });
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: Plan entry references (${label})`, () => {
+		it("preserves ordered references to Plan-related entities", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Referenced Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Referenced Plan", parentId: initiative.id });
+				const firstReference = await store.createEntity({ kind: "issue", title: "First reference", parentId: initiative.id });
+				const secondReference = await store.createEntity({ kind: "issue", title: "Second reference", parentId: initiative.id });
+
+				await store.createPlanEntry({
+					planId: plan.id,
+					role: "consideration",
+					body: "Use both references.",
+					referencedEntityIds: [secondReference.id, firstReference.id]
+				});
+
+				await expect(store.listPlanEntries({ planId: plan.id })).resolves.toEqual([
+					expect.objectContaining({ referencedEntityIds: [secondReference.id, firstReference.id] })
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: user directory (${label})`, () => {
 		it("upserts one deterministic user and keeps a non-empty display name", async () => {
 			const store = await openStore();
@@ -329,14 +562,17 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				expect(created).toEqual(expect.objectContaining({
 					id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
-					reference: expect.stringMatching(/^INIT_[0-7][0-9A-HJKMNP-TV-Z]{25}$/)
+					reference: expect.stringMatching(/^INIT_[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
+					shortReference: expect.stringMatching(/^INIT_[0-9A-HJKMNP-TV-Z]{6}$/)
 				}));
 				expect(decodeCanonicalReference(created.reference)).toEqual({ kind: "initiative", stableId: created.id });
 
 				const byId = await store.getEntityDetails(created.id);
 				const byReference = await store.getEntityDetails(created.reference);
-				expect(byId.entity).toMatchObject({ id: created.id, reference: created.reference });
-				expect(byReference.entity).toMatchObject({ id: created.id, reference: created.reference });
+				const byShortReference = await store.getEntityDetails(created.shortReference);
+				expect(byId.entity).toMatchObject({ id: created.id, reference: created.reference, shortReference: created.shortReference });
+				expect(byReference.entity).toMatchObject({ id: created.id, reference: created.reference, shortReference: created.shortReference });
+				expect(byShortReference.entity).toMatchObject({ id: created.id, reference: created.reference, shortReference: created.shortReference });
 			} finally {
 				await store.close();
 			}
@@ -349,7 +585,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const initiative = await store.createEntity({ kind: "initiative", title: "Short parent reference" });
 				const issue = await store.createEntity({ kind: "issue", title: "Short reference child", parentId: initiative.id });
 
-				const result = await store.queryEntities({ kind: "issue", parentId: shortEntityReference(initiative) });
+				const result = await store.queryEntities({ kind: "issue", parentId: initiative.shortReference });
 
 				expect(result.entities).toEqual([expect.objectContaining({ id: issue.id })]);
 				expect(result.parentGroups).toBeUndefined();
@@ -604,6 +840,261 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
+		it("creates open debt with required metadata under a supported owner", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Debt owner" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: project.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				expect(debt).toEqual(expect.objectContaining({
+					reference: expect.stringMatching(/^DEBT_[0-9A-HJKMNP-TV-Z]{26}$/),
+					kind: "debt",
+					status: "open",
+					category: "technical",
+					priority: "high"
+				}));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("materializes debt metadata at its initial revision", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Debt owner" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: project.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				await expect(store.materializeEntityRevision({ entityId: debt.id, revision: 1 })).resolves.toEqual(
+					expect.objectContaining({ category: "technical", priority: "high", status: "open" })
+				);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("prevents a debt record from gaining a second structural owner", async () => {
+			const store = await openStore();
+
+			try {
+				const owner = await store.createEntity({ kind: "project", title: "Debt owner" });
+				const secondOwner = await store.createEntity({ kind: "project", title: "Second debt owner" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: owner.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				await expect(store.linkEntities({ fromId: secondOwner.id, toId: debt.id, relationType: "records" })).rejects.toThrow(/structural owner/i);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("requires controlled debt metadata and permits it on other entity kinds", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Debt owner" });
+				await expect(store.createEntity({ kind: "debt", title: "Missing metadata", parentId: project.id })).rejects.toThrow(/requires category and priority/i);
+				await expect(store.createEntity({
+					kind: "debt",
+					title: "Invalid category",
+					parentId: project.id,
+					category: "unknown",
+					priority: "high"
+				})).rejects.toThrow(/invalid entity category/i);
+				await expect(store.createEntity({
+					kind: "debt",
+					title: "Invalid priority",
+					parentId: project.id,
+					category: "technical",
+					priority: "urgent"
+				})).rejects.toThrow(/invalid entity priority/i);
+
+				const initiative = await store.createEntity({ kind: "initiative", title: "Optional metadata", category: "product", priority: "low" });
+				expect(initiative).toEqual(expect.objectContaining({ category: "product", priority: "low" }));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("edits metadata independently and preserves the prior revision", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({
+					kind: "initiative",
+					title: "Metadata edits",
+					category: "technical",
+					priority: "high"
+				});
+				const categoryEdited = await store.updateEntity({
+					entityId: initiative.id,
+					category: "product",
+					expectedRevision: initiative.revision,
+					expectedContentHash: initiative.contentHash
+				});
+				expect(categoryEdited).toEqual(expect.objectContaining({ category: "product", priority: "high" }));
+
+				const priorityEdited = await store.updateEntity({
+					entityId: initiative.id,
+					priority: "critical",
+					expectedRevision: categoryEdited.revision,
+					expectedContentHash: categoryEdited.contentHash
+				});
+				expect(priorityEdited).toEqual(expect.objectContaining({ category: "product", priority: "critical" }));
+				await expect(store.materializeEntityRevision({ entityId: initiative.id, revision: 1 })).resolves.toEqual(
+					expect.objectContaining({ category: "technical", priority: "high" })
+				);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("changes debt lifecycle manually and reversibly", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Debt owner" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: project.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				const resolved = await store.updateEntityStatus({ entityId: debt.id, status: "resolved" });
+				expect(resolved.entity.status).toBe("resolved");
+				const archived = await store.archiveEntity({ entityId: debt.id });
+				expect(archived.entity.status).toBe("archived");
+				const reopened = await store.updateEntityStatus({ entityId: debt.id, status: "open" });
+				expect(reopened.entity.status).toBe("open");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("links an issue to debt that it resolves", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Debt initiative" });
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Resolve debt" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: initiative.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				await expect(store.linkEntities({ fromId: issue.id, toId: debt.id, relationType: "resolves" })).resolves.toEqual(
+					expect.objectContaining({ relation: expect.objectContaining({ fromId: issue.id, toId: debt.id, type: "resolves" }) })
+				);
+				expect((await store.getEntityDetails(debt.id)).entity.status).toBe("open");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("links epics and initiatives to debt that they resolve without changing its lifecycle", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Debt project" });
+				const epic = await store.createEntity({ kind: "epic", parentId: project.id, title: "Resolve debt" });
+				const initiative = await store.createEntity({ kind: "initiative", parentId: epic.id, title: "Resolve debt" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: initiative.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				for (const resolver of [epic, initiative]) {
+					await expect(store.linkEntities({ fromId: resolver.id, toId: debt.id, relationType: "resolves" })).resolves.toEqual(
+						expect.objectContaining({ relation: expect.objectContaining({ fromId: resolver.id, toId: debt.id, type: "resolves" }) })
+					);
+				}
+				await expect(store.linkEntities({ fromId: project.id, toId: debt.id, relationType: "resolves" })).rejects.toThrow("not allowed");
+				expect((await store.getEntityDetails(debt.id)).entity.status).toBe("open");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("links debt to a record for context but rejects handoffs as context targets", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Debt initiative" });
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Context issue" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: initiative.id,
+					category: "technical",
+					priority: "high"
+				});
+				const handoff = await store.createEntity({
+					kind: "handoff",
+					title: "Investigate debt"
+				});
+
+				await expect(store.linkEntities({ fromId: debt.id, toId: issue.id, relationType: "relatesTo" })).resolves.toEqual(
+					expect.objectContaining({ relation: expect.objectContaining({ fromId: debt.id, toId: issue.id, type: "relatesTo" }) })
+				);
+				await expect(store.linkEntities({ fromId: debt.id, toId: handoff.id, relationType: "relatesTo" })).rejects.toThrow("not allowed");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("creates a handoff that targets debt", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Debt initiative" });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Replace the legacy worker",
+					parentId: initiative.id,
+					category: "technical",
+					priority: "high"
+				});
+
+				const handoff = await store.createEntity({
+					kind: "handoff",
+					title: "Investigate debt",
+					links: [{ relationType: "handsOff", targetId: debt.id }]
+				});
+
+				expect(await store.listAllRelations()).toEqual(expect.arrayContaining([
+					expect.objectContaining({ fromId: handoff.id, toId: debt.id, type: "handsOff" })
+				]));
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("creates a handoff as an ordinary entity with handsOff links only to ADR50 focus kinds", async () => {
 			const store = await openStore();
 
@@ -806,6 +1297,32 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 	});
 
 	describe(`storage-driver seam: canonical-chain import (${label})`, () => {
+		it("imports an initiative-owned ready Plan through its canonical entity chain", async () => {
+			const source = await openStore();
+			const target = await openStore();
+			try {
+				const initiative = await source.createEntity({ kind: "initiative", title: "Plan owner" });
+				const plan = await source.createEntity({ kind: "plan", title: "Imported plan", body: "## Goal\n\nBuild it.\n\n## Context\n\nTrack it.", parentId: initiative.id });
+				await source.updateEntityStatus({ entityId: plan.id, status: "ready" });
+				const bundle = await source.exportCanonicalChains();
+
+				await target.importCanonicalChains(bundle);
+
+				expect((await target.getEntityDetails(plan.id)).entity).toMatchObject({
+					body: plan.body,
+					kind: "plan",
+					reference: plan.reference,
+					status: "ready"
+				});
+				expect((await target.getEntityDetails(plan.id)).incoming).toEqual(expect.arrayContaining([
+					expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: initiative.id }) })
+				]));
+			} finally {
+				await source.close();
+				await target.close();
+			}
+		});
+
 		it("imports new records, strict extensions, contexts, and terms exactly once", async () => {
 			const source = await openStore();
 			const target = await openStore();
@@ -816,6 +1333,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const context = await source.upsertContext({ title: "Language", summary: "Canonical terms." });
 				const term = await source.defineContextTerm({ term: "Order", definition: "Initial." });
 				await source.defineContextTerm({ term: "Order", definition: "Current.", expectedRevision: term.term.revision, expectedContentHash: term.term.contentHash });
+				expect(context.context.shortReference).toMatch(/^CTX_[0-9A-HJKMNP-TV-Z]{6}$/);
+				expect(term.term.shortReference).toMatch(/^TERM_[0-9A-HJKMNP-TV-Z]{6}$/);
 
 				const bundle = await source.exportCanonicalChains();
 				await source.deleteTenant(source.tenantId);
@@ -826,7 +1345,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
 				await expect(target.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toMatchObject({ definition: "Initial.", headRevision: 2 });
-				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], usersCreated: [], usersUpdated: [] });
+				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], usersCreated: [], usersUpdated: [] });
 				const afterImport = await target.createEntity({ kind: "issue", title: "After import" });
 				expect(afterImport.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 				expect(afterImport.reference).toMatch(/^ISS_[0-9A-HJKMNP-TV-Z]{26}$/);
@@ -2055,10 +2574,11 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			try {
 				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
 				const comment = await store.createIssueComment({ issueId: issue.id, body: "First comment." });
+				expect(comment.shortReference).toMatch(/^COM_[0-9A-HJKMNP-TV-Z]{6}$/);
 
 				expect(await store.listIssueComments({ issueId: issue.id })).toEqual(
 					expect.objectContaining({
-						comments: [expect.objectContaining({ id: comment.id, issueId: issue.id, body: "First comment." })],
+						comments: [expect.objectContaining({ id: comment.id, issueId: issue.id, body: "First comment.", shortReference: comment.shortReference })],
 						total: 1,
 						nextBefore: null
 					})

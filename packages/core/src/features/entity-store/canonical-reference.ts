@@ -8,8 +8,9 @@ const ENCODED_UUID_LENGTH = 26;
 const REFERENCE_SEPARATOR = "_";
 const MIGRATED_ENTITY_ID_NAMESPACE = "agent-issues/entity-stable-id/v1";
 const MIGRATED_CONTEXT_ID_NAMESPACE = "agent-issues/context-stable-id/v1";
-const CANONICAL_REFERENCE_PREFIX = { ...ID_PREFIX, context: "CTX", contextTerm: "TERM", issueComment: "COM" } as const;
-const CANONICAL_REFERENCE_KINDS = [...ENTITY_KINDS, "context", "contextTerm", "issueComment"] as const;
+const CANONICAL_REFERENCE_PREFIX = { ...ID_PREFIX, context: "CTX", contextTerm: "TERM", issueComment: "COM", planEntry: "PLAN_ENTRY" } as const;
+const SHORT_REFERENCE_PREFIX = CANONICAL_REFERENCE_PREFIX;
+const CANONICAL_REFERENCE_KINDS = ["planEntry", ...ENTITY_KINDS, "context", "contextTerm", "issueComment"] as const;
 
 export type CanonicalReferenceKind = (typeof CANONICAL_REFERENCE_KINDS)[number];
 
@@ -71,8 +72,12 @@ export function generateCanonicalIdentity(kind: EntityKind): { stableId: string;
 	return { stableId, reference: encodeCanonicalReference(kind, stableId) };
 }
 
-export function shortEntityReference(entity: { id: string; kind: string }): string {
-	const prefix = ID_PREFIX[entity.kind as EntityKind] ?? entity.kind.slice(0, 4).toUpperCase();
+export function shortEntityReference(entity: { id: string; kind: string; shortReference?: string }): string {
+	if (entity.shortReference) {
+		return entity.shortReference;
+	}
+
+	const prefix = SHORT_REFERENCE_PREFIX[entity.kind as CanonicalReferenceKind] ?? entity.kind.slice(0, 4).toUpperCase();
 	let hash = 0x811c9dc5;
 	for (let index = 0; index < entity.id.length; index += 1) {
 		hash ^= entity.id.charCodeAt(index);

@@ -1,4 +1,4 @@
-import type { BodySource } from "./domain.js";
+import type { BodySource, EntityCategory, EntityPriority, EntityType } from "./domain.js";
 import { EntityRevisionError, type EntityRevisionPatch, type MaterializedEntityRevision } from "./domain.js";
 import { materializeRevisionChain } from "./materialize-revision-chain.js";
 import { applyReverseFieldPatch, ENTITY_REVERSE_PATCH_REGISTRY } from "../reverse-field-patch/reverse-field-patch.js";
@@ -8,6 +8,9 @@ type EntityHead = {
 	title: string;
 	body: string;
 	bodySource: BodySource;
+	category: EntityCategory | null;
+	priority: EntityPriority | null;
+	type: EntityType | null;
 	status: string;
 	parentId: string | null;
 	revision: number;
@@ -21,9 +24,9 @@ type EntityHead = {
  * mutate `state`.
  */
 export function applyReversePatch(
-	state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null },
+	state: { title: string; body: string; bodySource: BodySource; category: EntityCategory | null; priority: EntityPriority | null; type: EntityType | null; status: string; parentId: string | null; tombstone: boolean | null },
 	patch: EntityRevisionPatch
-): { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } {
+): { title: string; body: string; bodySource: BodySource; category: EntityCategory | null; priority: EntityPriority | null; type: EntityType | null; status: string; parentId: string | null; tombstone: boolean | null } {
 	return applyReverseFieldPatch(state, patch, ENTITY_REVERSE_PATCH_REGISTRY);
 }
 
@@ -52,6 +55,9 @@ export function materializeFromPatches(
 			title: head.title,
 			body: head.body,
 			bodySource: head.bodySource,
+			category: head.category,
+			priority: head.priority,
+			type: head.type,
 			status: head.status,
 			parentId: head.parentId,
 			tombstone: head.tombstone ?? null

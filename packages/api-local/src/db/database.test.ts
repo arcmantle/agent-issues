@@ -170,6 +170,9 @@ describe("tenant resolution", () => {
 				{ name: "entities" },
 				{ name: "issue_comment_references" },
 				{ name: "issue_comments" },
+				{ name: "plan_entries" },
+				{ name: "plan_entry_references" },
+				{ name: "plan_entry_supersessions" },
 				{ name: "relations" },
 				{ name: "revision_entries" },
 				{ name: "schema_migrations" },
@@ -182,19 +185,30 @@ describe("tenant resolution", () => {
 				{ id: "record-provenance" },
 				{ id: "context-term-provenance" },
 				{ id: "relation-provenance" },
-				{ id: "issue-comments" }
+				{ id: "issue-comments" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
 			).all()).toEqual([
 				{ name: "context_terms_tenant_context_key_idx" },
 				{ name: "context_terms_tenant_id_idx" },
+				{ name: "context_terms_tenant_short_reference_idx" },
 				{ name: "contexts_tenant_id_idx" },
 				{ name: "contexts_tenant_reference_idx" },
 				{ name: "contexts_tenant_scope_entity_id_idx" },
+				{ name: "contexts_tenant_short_reference_idx" },
 				{ name: "entities_tenant_reference_idx" },
+				{ name: "entities_tenant_short_reference_idx" },
 				{ name: "issue_comment_references_tenant_issue_idx" },
 				{ name: "issue_comments_tenant_issue_idx" },
+				{ name: "issue_comments_tenant_short_reference_idx" },
+				{ name: "plan_entries_tenant_plan_idx" },
 				{ name: "relations_tenant_to_id_idx" },
 				{ name: "revision_entries_chain_idx" },
 				{ name: "revision_entries_project_idx" },
@@ -214,7 +228,7 @@ describe("tenant resolution", () => {
 			id TEXT PRIMARY KEY NOT NULL,
 			tenant_id TEXT NOT NULL,
 			project_id TEXT NOT NULL,
-			record_kind TEXT NOT NULL CHECK (record_kind IN ('entity', 'context', 'context-term', 'issue-comment')),
+			record_kind TEXT NOT NULL CHECK (record_kind IN ('entity', 'context', 'context-term', 'issue-comment', 'plan-entry')),
 			record_key TEXT NOT NULL,
 			revision INTEGER NOT NULL CHECK (revision > 0),
 			author TEXT NOT NULL,
@@ -272,7 +286,13 @@ describe("tenant resolution", () => {
 				{ id: "record-provenance" },
 				{ id: "context-term-provenance" },
 				{ id: "relation-provenance" },
-				{ id: "issue-comments" }
+				{ id: "issue-comments" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" }
 			]);
 		} finally {
 			upgraded.db.close();
@@ -616,7 +636,7 @@ describe("tenant resolution", () => {
 					historyEntries: 5,
 					relations: 4
 				},
-				counters: 9,
+				counters: 11,
 				displayName: "Alpha Team",
 				removed: true,
 				tenantId: "alpha-team"
@@ -670,7 +690,7 @@ describe("tenant resolution", () => {
 					historyEntries: 5,
 					relations: 4
 				},
-				counters: 9,
+				counters: 11,
 				newDisplayName: "Renamed Team",
 				newTenantId: "renamed-team",
 				previousDisplayName: "Source Team",

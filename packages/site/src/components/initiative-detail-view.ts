@@ -25,7 +25,7 @@ type IssueTreeNode = {
 	children: IssueTreeNode[];
 };
 
-const INITIATIVE_GRAPH_KINDS: ProjectGraphKind[] = ["initiative", "prd", "adr", "story", "issue"];
+const INITIATIVE_GRAPH_KINDS: ProjectGraphKind[] = ["initiative", "plan", "prd", "adr", "story", "issue", "debt"];
 
 class InitiativeDetailView extends SignalWatcher(LitElement) {
 	static properties = {
@@ -313,6 +313,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const visibleGraphKinds = this.visibleGraphKinds;
 		const graphFilterActive = visibleGraphKinds.size !== INITIATIVE_GRAPH_KINDS.length;
 		const graph = store.buildInitiativeGraph(bundle, graphFilterActive ? visibleGraphKinds : undefined);
+		const debtSections = store.debtRecordSectionsFor(bundle.initiative.id);
 
 		return html`
 		<div class="detail-inner">
@@ -384,6 +385,20 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 						</div>
 						`,
 						() => nothing
+					)}
+					${repeat(
+						debtSections,
+						(section) => section.key,
+						(section) => this.renderOverviewSection(
+							section.key,
+							section.title,
+							html`
+							<div class="sec-body">
+								${repeat(section.records, (record) => record.id, (record) => this.renderLine(record))}
+							</div>
+							`,
+							{ count: String(section.records.length) }
+						)
 					)}
 					${this.renderOverviewSection(
 						"stories",

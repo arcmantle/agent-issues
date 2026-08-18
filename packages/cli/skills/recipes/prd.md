@@ -1,6 +1,6 @@
 # PRD Recipe
 
-Use this recipe for a PRD record body.
+Use this recipe for a PRD record body. Child `userStory` entities are authoritative for the PRD's committed user stories. Do not duplicate their story text in this body.
 
 ```markdown
 ## Problem Statement
@@ -10,10 +10,6 @@ Use this recipe for a PRD record body.
 ## Solution
 
 <The solution, from the user's point of view.>
-
-## User Stories
-
-1. As an <actor>, I want a <feature>, so that <benefit>
 
 ## Implementation Decisions
 

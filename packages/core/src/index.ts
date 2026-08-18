@@ -1,6 +1,7 @@
 export * from "./features/entity-store/domain.js";
 export * from "./features/entity-store/canonical-reference.js";
 export * from "./features/issue-comment/issue-comment-types.js";
+export * from "./features/plan-entry/plan-entry-types.js";
 export * from "./features/context/context-term-id.js";
 export * from "./features/reverse-field-patch/reverse-field-patch.js";
 export * from "./features/revision-patch-ledger/record-key.js";
@@ -13,6 +14,7 @@ export * from "./features/context/context-types.js";
 export * from "./features/storage-driver/entity-store.js";
 export * from "./features/storage-driver/context-store.js";
 export * from "./features/storage-driver/issue-comment-store.js";
+export * from "./features/storage-driver/plan-entry-store.js";
 export * from "./features/storage-driver/synchronize-store.js";
 export * from "./features/storage-driver/user-directory-store.js";
 export * from "./features/storage-driver/history-diagnostics-store.js";

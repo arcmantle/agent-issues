@@ -64,7 +64,8 @@ it("provides a PRD recipe with its required headings", () => {
 
 	expect(recipe).toContain("## Problem Statement");
 	expect(recipe).toContain("## Solution");
-	expect(recipe).toContain("## User Stories");
+	expect(recipe).toContain("Child `userStory` entities are authoritative");
+	expect(recipe).not.toContain("## User Stories");
 	expect(recipe).toContain("## Implementation Decisions");
 	expect(recipe).toContain("## Testing Decisions");
 	expect(recipe).toContain("## Out of Scope");

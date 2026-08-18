@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 
 import type { SourceProfileResult } from "@agent-issues/core";
 
+const PLAN_ENTRY_CURRENT_FINAL_SCHEMA_SIGNATURE = "85acb3c100b141597768a75ea68dd6bde25498c499dbcc9938f2ebb53e3ec839";
 const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	// Approved baseline, user-directory, and provenance schema states.
 	"7338aea98e85ac93de5fcfc938d424ba8aa7a75727be17e9bfc39a57c425cde8",
@@ -10,7 +11,16 @@ const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	"82a0f44eb2dd317d2e736e74c1843e4181589c91e1da7bcdf6481841daaf9363",
 	"b5bb9bb161f3232d502a3d9c37d99170a25e4b864a185ff440938ebe74fdb8f4",
 	"e57e950cb17f96e5236069ac076664395049b81363c2906ff3580af074d6bbb5",
-	"867e63130040b24b7c2d8beaa0e3253f5a435f1291078e7ac4f978bf7708d10f"
+	"867e63130040b24b7c2d8beaa0e3253f5a435f1291078e7ac4f978bf7708d10f",
+	"a6a894d15f5de8420066212c3705b142965f9cf4bfdaefe1637047fcd0504fae",
+	"3f931c8581d03d6074a91f9ecfecc8eb2098aaf97e83d3f56031ec157ae56b5a",
+	"b5b3b8fb4004aa0a60a1d06fc09df7001df75adc96482b30fd87801b3df01275",
+	"cded6c1f630cf7416ad1c9c94bc2b8f54bea4f1290952418ca9b561c05ab9b43",
+	"2b114dc6e1b5591c4506aa978d45039128fc9afe40abe1ef1a8a44e6161ed8f6",
+	"e2ac00755b2681520a6fe30d91d2fde23b6c3b60c333d580210ed47d8f8d9e09",
+	"1371ec3500ba5aabb1e56b2a2f04664451887e3b1fdb810844057d3cb6fe61db",
+	"9dc2891e9c000873652567e0a3c7fdb03ac78666895a31d35df7067914d090df",
+	PLAN_ENTRY_CURRENT_FINAL_SCHEMA_SIGNATURE
 ]);
 const LEGACY_V7_SCHEMA_SIGNATURE = "a56ad7487ddca6b9095b9af7e197da17507f541bd714b627e70cedca54e5f2da";
 
@@ -285,10 +295,18 @@ export async function inspectPgSourceProfile(client: Pick<PoolClient, "query">, 
 	if (schemaSignature === LEGACY_V7_SCHEMA_SIGNATURE && !hasLedger) {
 		return { evidence, profile: "legacy-postgres-v7", supported: true };
 	}
-	if (CURRENT_FINAL_SCHEMA_SIGNATURES.has(schemaSignature)
-		&& ((ledgerIds.length > 0
+	const expectedCurrentLedgerIds = expectedLedgerIds.filter((id) => id !== "legacy-v7-direct");
+	const hasCompleteExpectedLedger = ledgerIds.length === expectedCurrentLedgerIds.length
+		&& ledgerIds.every((id, index) => id === expectedCurrentLedgerIds[index]);
+	const hasSupportedLedger = schemaSignature === PLAN_ENTRY_CURRENT_FINAL_SCHEMA_SIGNATURE
+		? hasCompleteExpectedLedger
+		: (ledgerIds.length > 0
 			&& ledgerIds.every((id, index) => id === expectedLedgerIds[index]))
-			|| (ledgerIds.length === 1 && ledgerIds[0] === "legacy-v7-direct"))) {
+			|| (ledgerIds.length === expectedLedgerIds.length
+				&& ledgerIds[0] === "legacy-v7-direct"
+				&& expectedLedgerIds.every((id) => ledgerIds.includes(id)))
+			|| (ledgerIds.length === 1 && ledgerIds[0] === "legacy-v7-direct");
+	if (CURRENT_FINAL_SCHEMA_SIGNATURES.has(schemaSignature) && hasSupportedLedger) {
 		return { evidence, profile: "current-final", supported: true };
 	}
 	return unsupported(evidence, applicationObjects);

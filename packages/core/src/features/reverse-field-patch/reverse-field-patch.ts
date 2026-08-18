@@ -30,7 +30,10 @@ export const ENTITY_REVERSE_PATCH_REGISTRY = [
 	{ id: 3, key: "bodySource", kind: "value" },
 	{ id: 4, key: "status", kind: "value" },
 	{ id: 5, key: "parentId", kind: "value" },
-	{ id: 6, key: "tombstone", kind: "value" }
+	{ id: 6, key: "tombstone", kind: "value" },
+	{ id: 7, key: "category", kind: "value" },
+	{ id: 8, key: "priority", kind: "value" },
+	{ id: 9, key: "type", kind: "value" }
 ] as const satisfies ReversePatchRegistry;
 
 export const CONTEXT_REVERSE_PATCH_REGISTRY = [
@@ -49,6 +52,15 @@ export const ISSUE_COMMENT_REVERSE_PATCH_REGISTRY = [
 	{ id: 1, key: "body", kind: "text" },
 	{ id: 2, key: "referencedIssueIds", kind: "value" },
 	{ id: 3, key: "tombstone", kind: "value" }
+] as const satisfies ReversePatchRegistry;
+
+export const PLAN_ENTRY_REVERSE_PATCH_REGISTRY = [
+	{ id: 1, key: "role", kind: "value" },
+	{ id: 2, key: "body", kind: "text" },
+	{ id: 3, key: "scopeDirection", kind: "value" },
+	{ id: 4, key: "referencedEntityIds", kind: "value" },
+	{ id: 5, key: "supersededEntryIds", kind: "value" },
+	{ id: 6, key: "tombstone", kind: "value" }
 ] as const satisfies ReversePatchRegistry;
 
 export function computeCanonicalStateHash(state: object, registry: ReversePatchRegistry): string {

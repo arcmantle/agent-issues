@@ -50,4 +50,12 @@ describe("relationship graph", () => {
 
 		expect(openedId).toBe("ISS1");
 	});
+
+	it("renders a relationship label for a labeled edge", async () => {
+		const graph = makeGraph();
+		graph.edges = [{ from: "US1", label: "resolves", to: "ISS1" }];
+		const view = await mountGraph(graph);
+
+		expect(view.shadowRoot?.querySelector(".ai-edge-label")?.textContent).toBe("resolves");
+	});
 });

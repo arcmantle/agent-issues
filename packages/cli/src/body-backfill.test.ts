@@ -54,7 +54,7 @@ describe("body backfill", () => {
 		expect(reloadedIssue?.body).toContain("Not derived from tracker metadata.");
 		expect(reloadedPrd?.body).toContain("## Problem Statement");
 		expect(reloadedPrd?.body).toContain("## Solution");
-		expect(reloadedPrd?.body).toContain("## User Stories");
+		expect(reloadedPrd?.body).not.toContain("## User Stories");
 		expect(reloadedPrd?.body).toContain("## Implementation Decisions");
 		expect(reloadedPrd?.body).toContain("## Testing Decisions");
 		expect(reloadedPrd?.body).toContain("## Out of Scope");

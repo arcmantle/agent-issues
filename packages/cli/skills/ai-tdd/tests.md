@@ -41,6 +41,23 @@ Watch for these warning signs:
 - Breaking on a refactor with no behavior change.
 - Test names that describe how, not what.
 - Checking through an external system instead of through the interface.
+- Restating a static object, manifest, route table, schema, or constant map.
+- Failing on an intentional declaration edit when no caller behavior changed.
+
+```typescript
+test("groups accounting setup modules", () => {
+  expect(moduleTree).toMatchObject({
+    setup: {
+      accountingsetup: {
+        codingtemplate: {},
+        invoiceagreement: {},
+      },
+    },
+  });
+});
+```
+
+This test copies the declaration into the assertion. Test behavior that resolves or inherits modules from this hierarchy. If there is no distinct consumer behavior to test, use a type-check, lint, build, or focused inspection instead.
 
 ```typescript
 test("createUser saves to database", async () => {

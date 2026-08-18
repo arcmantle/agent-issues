@@ -26,6 +26,7 @@ import {
 	materializeContextFromPatches,
 	materializeContextTermFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
+	shortEntityReference,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextDirectoryTerm,
@@ -73,6 +74,7 @@ const STRUCTURAL_CONTEXT_RELATIONS = ["owns", "records", "tracks", "creates", "d
 type ContextRow = {
 	id: string;
 	reference: string;
+	short_reference: string;
 	created_by?: string | null;
 	updated_by?: string | null;
 	key: string;
@@ -96,6 +98,7 @@ type EntityRow = {
 
 type ContextTermRow = {
 	id: string;
+	short_reference: string;
 	created_by?: string | null;
 	updated_by?: string | null;
 	term: string;
@@ -179,7 +182,7 @@ export function getContextDetails(executor: SqliteExecutor, input?: { scopeRef?:
 	)[0] as ContextRow | undefined;
 	const termRows = contextRow
 		? (executor.drizzle.all(
-				sql`SELECT id, created_by, updated_by, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at
+				sql`SELECT id, short_reference, created_by, updated_by, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at
 					FROM context_terms
 					WHERE tenant_id = ${executor.tenantId}
 						AND context_key = ${scope.key}
@@ -252,9 +255,10 @@ export function upsertContext(executor: SqliteExecutor, input: { scopeRef?: stri
 			appendContextDeltaEntry(executor, scope.key, newRevision, existing.title, existing.summary, actorId, now);
 		} else {
 			const identity = generateContextIdentity();
+			const shortReference = allocateShortReference(executor, "contexts", "context", identity.stableId);
 			executor.drizzle.run(
-				sql`INSERT INTO contexts (tenant_id, id, reference, key, created_by, updated_by, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
-					VALUES (${executor.tenantId}, ${identity.stableId}, ${identity.reference}, ${scope.key}, ${actorId}, ${actorId}, ${scope.scopeEntityId}, ${title}, ${summary}, 1, ${newContentHash}, ${now}, ${now})`
+				sql`INSERT INTO contexts (tenant_id, id, reference, short_reference, key, created_by, updated_by, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
+					VALUES (${executor.tenantId}, ${identity.stableId}, ${identity.reference}, ${shortReference}, ${scope.key}, ${actorId}, ${actorId}, ${scope.scopeEntityId}, ${title}, ${summary}, 1, ${newContentHash}, ${now}, ${now})`
 			);
 			appendContextDeltaEntry(executor, scope.key, 1, title, summary, actorId, now);
 		}
@@ -300,14 +304,15 @@ export function defineContextTerm(
 			appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, actorId, now);
 		} else {
 			const id = generateContextTermId();
-			executor.drizzle.run(sql`INSERT INTO context_terms (tenant_id, id, context_key, created_by, updated_by, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at)
-				VALUES (${executor.tenantId}, ${id}, ${scope.key}, ${actorId}, ${actorId}, ${term}, ${definition}, ${JSON.stringify(normalizedAvoid)}, 1, ${contentHash}, FALSE, ${now}, ${now})`);
+			const shortReference = allocateShortReference(executor, "context_terms", "contextTerm", id);
+			executor.drizzle.run(sql`INSERT INTO context_terms (tenant_id, id, short_reference, context_key, created_by, updated_by, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at)
+				VALUES (${executor.tenantId}, ${id}, ${shortReference}, ${scope.key}, ${actorId}, ${actorId}, ${term}, ${definition}, ${JSON.stringify(normalizedAvoid)}, 1, ${contentHash}, FALSE, ${now}, ${now})`);
 			appendContextTermDeltaEntry(
 				executor,
 				scope.key,
 				term,
 				1,
-				{ id, reference: encodeCanonicalReference("contextTerm", id), createdBy: actorId, updatedBy: actorId, term, definition, avoid: normalizedAvoid, revision: 1, contentHash, tombstone: false, createdAt: now, updatedAt: now },
+				{ id, reference: encodeCanonicalReference("contextTerm", id), shortReference, createdBy: actorId, updatedBy: actorId, term, definition, avoid: normalizedAvoid, revision: 1, contentHash, tombstone: false, createdAt: now, updatedAt: now },
 				actorId,
 				now
 			);
@@ -495,8 +500,9 @@ function ensureContextExists(executor: SqliteExecutor, scopeRef?: string, actorI
 	const now = new Date().toISOString();
 	const contentHash = computeContextContentHash(scope.defaultTitle, scope.defaultSummary);
 	const identity = generateContextIdentity();
-	executor.drizzle.run(sql`INSERT INTO contexts (tenant_id, id, reference, key, created_by, updated_by, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
-		VALUES (${executor.tenantId}, ${identity.stableId}, ${identity.reference}, ${scope.key}, ${actorId}, ${actorId}, ${scope.scopeEntityId}, ${scope.defaultTitle}, ${scope.defaultSummary}, 1, ${contentHash}, ${now}, ${now})`);
+	const shortReference = allocateShortReference(executor, "contexts", "context", identity.stableId);
+	executor.drizzle.run(sql`INSERT INTO contexts (tenant_id, id, reference, short_reference, key, created_by, updated_by, scope_entity_id, title, summary, revision, content_hash, created_at, updated_at)
+		VALUES (${executor.tenantId}, ${identity.stableId}, ${identity.reference}, ${shortReference}, ${scope.key}, ${actorId}, ${actorId}, ${scope.scopeEntityId}, ${scope.defaultTitle}, ${scope.defaultSummary}, 1, ${contentHash}, ${now}, ${now})`);
 	appendContextDeltaEntry(executor, scope.key, 1, scope.defaultTitle, scope.defaultSummary, actorId, now);
 
 	return scope;
@@ -528,7 +534,7 @@ function appendContextDeltaEntry(
 }
 
 function getContextTerm(executor: SqliteExecutor, contextKey: string, term: string): ContextTermHead | null {
-	const row = executor.drizzle.all(sql`SELECT id, created_by, updated_by, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at
+	const row = executor.drizzle.all(sql`SELECT id, short_reference, created_by, updated_by, term, definition, avoid_terms, revision, content_hash, tombstone, created_at, updated_at
 		FROM context_terms
 		WHERE tenant_id = ${executor.tenantId} AND context_key = ${contextKey} AND term = ${term}`)[0] as ContextTermRow | undefined;
 
@@ -594,6 +600,7 @@ function createContextRecord(scope: ResolvedContextScope): ContextRecord {
 	return {
 		id: null,
 		reference: null,
+		shortReference: null,
 		createdBy: null,
 		updatedBy: null,
 		key: scope.key,
@@ -614,6 +621,7 @@ function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRec
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.short_reference,
 		createdBy: row.created_by ?? null,
 		updatedBy: row.updated_by ?? null,
 		key: row.key,
@@ -634,6 +642,7 @@ function mapContextTermRow(row: ContextTermRow): ContextTermRecord {
 	return {
 		id: row.id,
 		reference: encodeCanonicalReference("contextTerm", row.id),
+		shortReference: row.short_reference,
 		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
 		term: row.term,
@@ -644,6 +653,19 @@ function mapContextTermRow(row: ContextTermRow): ContextTermRecord {
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
+}
+
+function allocateShortReference(executor: SqliteExecutor, table: "contexts" | "context_terms", kind: "context" | "contextTerm", id: string): string {
+	const baseReference = shortEntityReference({ id, kind });
+	let shortReference = baseReference;
+	let suffix = 2;
+
+	while (executor.drizzle.all(sql`SELECT id FROM ${sql.raw(table)} WHERE tenant_id = ${executor.tenantId} AND short_reference = ${shortReference}`).length > 0) {
+		shortReference = `${baseReference}-${suffix}`;
+		suffix += 1;
+	}
+
+	return shortReference;
 }
 
 function parseAvoidTerms(value: string): string[] {

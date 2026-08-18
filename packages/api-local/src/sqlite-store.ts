@@ -18,6 +18,7 @@ import type { SqliteExecutor, SqliteInternalConnection } from "./db/sqlite-execu
 import { LocalEntityStore } from "./features/entity-store/store.js";
 import * as localEntityStore from "./features/entity-store/store.js";
 import { LocalIssueCommentStore } from "./features/issue-comment/store.js";
+import { LocalPlanEntryStore } from "./features/plan-entry/store.js";
 
 export type OpenSqliteStoreResult = {
 	store: SqliteStore;
@@ -41,6 +42,7 @@ export class SqliteStore implements StorageDriver {
 		this.contextStore = new LocalContextStore(executor);
 		this.entityStore = new LocalEntityStore(executor);
 		this.issueCommentStore = new LocalIssueCommentStore(executor);
+		this.planEntryStore = new LocalPlanEntryStore(executor);
 	}
 
 	protected executor: SqliteInternalConnection;
@@ -51,6 +53,7 @@ export class SqliteStore implements StorageDriver {
 	private readonly contextStore: LocalContextStore;
 	private readonly entityStore: LocalEntityStore;
 	protected readonly issueCommentStore: LocalIssueCommentStore;
+	protected readonly planEntryStore: LocalPlanEntryStore;
 
 	public get tenantId(): string {
 		return this.executor.tenantId;
@@ -135,6 +138,26 @@ export class SqliteStore implements StorageDriver {
 		return this.issueCommentStore.listIssueCommentHistory(input);
 	}
 
+	public async createPlanEntry(input: Parameters<StorageDriver["createPlanEntry"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.createPlanEntry(input, actorId));
+	}
+
+	public async listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]) {
+		return this.planEntryStore.listPlanEntries(input);
+	}
+
+	public async updatePlanEntry(input: Parameters<StorageDriver["updatePlanEntry"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.updatePlanEntry(input, actorId));
+	}
+
+	public async deletePlanEntry(input: Parameters<StorageDriver["deletePlanEntry"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.deletePlanEntry(input, actorId));
+	}
+
+	public async listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]) {
+		return this.planEntryStore.listPlanEntryHistory(input);
+	}
+
 	public async listAllRelations() {
 		return this.entityStore.listAllRelations();
 	}
@@ -155,7 +178,7 @@ export class SqliteStore implements StorageDriver {
 		return this.mutate((actorId) => localEntityStore.updateEntityStatus(this.executor, input, actorId));
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }) {
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; author?: string; expectedRevision: number; expectedContentHash: string }) {
 		return this.mutate((actorId) => localEntityStore.updateEntity(this.executor, input, actorId));
 	}
 

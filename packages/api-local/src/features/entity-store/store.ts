@@ -7,6 +7,7 @@ import { getSqliteEntityOrThrow, resolveSqliteEntities, resolveSqliteEntity, typ
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 import { recordHistoryMaterialization } from "../history-diagnostics.js";
 import { listIssueComments } from "../issue-comment/store.js";
+import { listPlanEntries } from "../plan-entry/store.js";
 import { entities } from "../../schema.js";
 import { getContextDetails, type ContextDetails } from "../context/context-store.js";
 import {
@@ -27,13 +28,17 @@ import {
 	DEFAULT_PROJECT_ID,
 	getInitialStatus,
 	isBodySource,
+	isEntityCategory,
 	isAllowedRelation,
 	isEntityKind,
+	isEntityPriority,
+	isEntityType,
 	isInitiativeComplete,
 	isStructuralRelationType,
 	isValidStatus,
 	materializeFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
+	shortEntityReference,
 	STRUCTURAL_RELATION_TYPES,
 	type BodySource,
 	type DatabaseSnapshot,
@@ -72,6 +77,7 @@ export {
 type EntityRow = {
 	id: string;
 	reference: string;
+	short_reference: string;
 	created_by?: string | null;
 	updated_by?: string | null;
 	kind: string;
@@ -79,6 +85,9 @@ type EntityRow = {
 	status: string;
 	body: string;
 	body_source?: string | null;
+	category?: string | null;
+	priority?: string | null;
+	type?: string | null;
 	revision?: number | null;
 	content_hash?: string | null;
 	tombstone?: number | null;
@@ -117,6 +126,9 @@ export function createEntity(
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
+		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	},
@@ -133,19 +145,47 @@ export function createEntity(
 	}
 	const body = input.body ?? "";
 	const bodySource: BodySource = "authored";
-	const status = input.status ?? getInitialStatus(kind);
+	const requestedStatus = input.status ?? getInitialStatus(kind);
+	const status = kind === "plan" ? getInitialStatus(kind) : requestedStatus;
+	const category = input.category;
+	const priority = input.priority;
+	const entityType = input.type ?? null;
 
-	if (!isValidStatus(kind, status)) {
-		throw new Error(`Invalid status for ${kind}: ${status}`);
+	if (!isValidStatus(kind, requestedStatus)) {
+		throw new Error(`Invalid status for ${kind}: ${requestedStatus}`);
+	}
+	if (category !== undefined && !isEntityCategory(category)) {
+		throw new Error(`Invalid entity category: ${category}`);
+	}
+	if (priority !== undefined && !isEntityPriority(priority)) {
+		throw new Error(`Invalid entity priority: ${priority}`);
+	}
+	if (entityType !== null && !isEntityType(kind, entityType)) {
+		throw new Error(`Invalid entity type: ${entityType}`);
+	}
+	if (kind === "debt" && (category === undefined || priority === undefined)) {
+		throw new Error("Debt requires category and priority.");
 	}
 
 	const now = new Date().toISOString();
 	const parentId = input.parentId ?? (kind === "initiative" ? resolveDefaultEpicId(executor) : undefined);
 	const parent = parentId ? getEntityOrThrow(executor, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
+	if (kind === "debt" && !parent) {
+		throw new Error("Debt requires a project, epic, initiative, or issue owner.");
+	}
+	if (kind === "plan" && parent?.kind !== "initiative") {
+		throw new Error("Plan requires an initiative parent.");
+	}
 
 	if (parent && !relationType) {
 		throw new Error(`Cannot create ${kind} under ${parent.kind}.`);
+	}
+	if (entityType === "wayfinder-map" && parent?.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (entityType === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
 	}
 
 	// The new entity belongs to its parent's project (structural children
@@ -157,12 +197,14 @@ export function createEntity(
 	return executor.drizzle.transaction(() => {
 		const identity = generateCanonicalIdentity(kind);
 		const id = identity.stableId;
+		const shortReference = allocateShortReference(executor, kind, id);
 		// A project owns itself, so scoped reads from its own workspace see it.
 		const projectId = kind === "project" ? id : inheritedProjectId;
 		const contentHash = computeEntityContentHash(title, body);
 		const values = tenantParams(executor, {
 			id,
 			reference: identity.reference,
+			shortReference,
 			createdBy: actorId,
 			updatedBy: actorId,
 			kind,
@@ -170,6 +212,9 @@ export function createEntity(
 			status,
 			body,
 			bodySource,
+			category: category ?? null,
+			priority: priority ?? null,
+			type: entityType,
 			revision: 1,
 			contentHash,
 			projectId,
@@ -224,6 +269,12 @@ function linkEntitiesInTransaction(
 
 	if (!isAllowedRelation(from.kind, to.kind, input.relationType)) {
 		throw new Error(`Relation ${input.relationType} is not allowed from ${from.kind} to ${to.kind}.`);
+	}
+	if (to.kind === "debt" && isStructuralRelationType(input.relationType)) {
+		const structuralParents = getStructuralParentRelations(executor, to.id);
+		if (structuralParents.some((relation) => relation.fromId !== from.id || relation.type !== input.relationType)) {
+			throw new Error(`Debt ${to.id} already has a structural owner.`);
+		}
 	}
 
 	if (
@@ -387,11 +438,17 @@ export function setEntityBody(
 
 export function updateEntity(
 	executor: SqliteExecutor,
-	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string },
+	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; type?: string | null; author?: string; expectedRevision: number; expectedContentHash: string },
 	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): EntityRecord {
-	if (input.title === undefined && input.body === undefined) {
-		throw new Error("Entity edit requires --title, --body, or both.");
+	if (input.title === undefined && input.body === undefined && input.category === undefined && input.priority === undefined && input.type === undefined) {
+		throw new Error("Entity edit requires --title, --body, --category, --priority, or --type.");
+	}
+	if (input.category !== undefined && !isEntityCategory(input.category)) {
+		throw new Error(`Invalid entity category: ${input.category}`);
+	}
+	if (input.priority !== undefined && !isEntityPriority(input.priority)) {
+		throw new Error(`Invalid entity priority: ${input.priority}`);
 	}
 
 	return executor.drizzle.transaction(() => {
@@ -407,13 +464,30 @@ export function updateEntity(
 		}
 		const body = input.body ?? current.body;
 		const bodySource = input.body === undefined ? current.bodySource : input.bodySource ?? "authored";
+		const category = input.category ?? current.category;
+		const priority = input.priority ?? current.priority;
+		const entityType = input.type === undefined ? current.type : input.type;
+		if (entityType !== null && !isEntityType(current.kind, entityType)) {
+			throw new Error(`Invalid entity type: ${entityType}`);
+		}
+		const parentId = getStructuralParentRelations(executor, current.id)[0]?.fromId;
+		const parent = parentId ? getEntityOrThrow(executor, parentId) : null;
+		if (current.type === "wayfinder-map" && entityType !== "wayfinder-map" && getEntityDetails(executor, current.id).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "wayfinder-ticket")) {
+			throw new Error("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+		}
+		if (entityType === "wayfinder-map" && parent?.kind !== "initiative") {
+			throw new Error("wayfinder-map requires an initiative parent.");
+		}
+		if (entityType === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
+			throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+		}
 		const newRevision = current.revision + 1;
 		const newContentHash = computeEntityContentHash(title, body);
 		const updatedAt = new Date().toISOString();
 
 		const result = executor.drizzle
 			.update(entities)
-			.set({ body, bodySource, title, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
+			.set({ body, bodySource, category, priority, type: entityType, title, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
 			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 			.run();
 
@@ -422,7 +496,11 @@ export function updateEntity(
 			throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 		}
 
-		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
+		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt, {
+			...(input.category !== undefined && { priorCategory: current.category }),
+			...(input.priority !== undefined && { priorPriority: current.priority }),
+			...(input.type !== undefined && { priorType: current.type })
+		});
 		return getEntityOrThrow(executor, current.id);
 	});
 }
@@ -490,6 +568,9 @@ export function materializeEntityRevision(
 		title: row.title,
 		body: row.body,
 		bodySource: (isBodySource(row.bodySource ?? "") ? row.bodySource : "authored") as BodySource,
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 		status: row.status,
 		tombstone: row.tombstone
 	};
@@ -540,6 +621,15 @@ export function restoreEntityRevision(
 			throw new Error(`Cannot restore ${current.id} under ${restoredParent.id} because that would create a cycle.`);
 		}
 	}
+	if (source.type === "wayfinder-map" && restoredParent?.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (source.type === "wayfinder-ticket" && (restoredParent?.kind !== "issue" || restoredParent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	}
+	if (current.type === "wayfinder-map" && source.type !== "wayfinder-map" && getEntityDetails(executor, current.id).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "wayfinder-ticket")) {
+		throw new Error("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+	}
 
 	return executor.drizzle.transaction(() => {
 		const updatedAt = new Date().toISOString();
@@ -548,6 +638,7 @@ export function restoreEntityRevision(
 			title: source.title,
 			body: source.body,
 			bodySource: source.bodySource,
+			type: source.type,
 			status: source.status,
 			revision: newRevision,
 			contentHash: computeEntityContentHash(source.title, source.body),
@@ -582,6 +673,7 @@ export function restoreEntityRevision(
 
 		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt, {
 			priorStatus: current.status,
+			priorType: current.type,
 			priorParentId: currentParentId,
 			priorTombstone: row.tombstone,
 			restoredFromRevision: input.revision
@@ -605,6 +697,12 @@ export function moveEntity(
 	const relationType = getAllowedRelationType(newParent.kind, entity.kind);
 	if (!relationType || !isStructuralRelationType(relationType)) {
 		throw new Error(`Cannot move ${entity.kind} under ${newParent.kind}.`);
+	}
+	if (entity.type === "wayfinder-map" && newParent.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (entity.type === "wayfinder-ticket" && (newParent.kind !== "issue" || newParent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
 	}
 
 	const currentParentRelations = getStructuralParentRelations(executor, entity.id);
@@ -769,14 +867,14 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 
 export function getEntityDetails(executor: SqliteExecutor, entityId: string): EntityDetails {
 	const entity = getEntityOrThrow(executor, entityId);
-	const incomingRows = all<EntityRow & { type: string }>(executor, sql`SELECT relations.type, entities.*
+	const incomingRows = all<EntityRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.to_id = ${entity.id}
 			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
-	const outgoingRows = all<EntityRow & { type: string }>(executor, sql`SELECT relations.type, entities.*
+	const outgoingRows = all<EntityRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId}
@@ -788,11 +886,11 @@ export function getEntityDetails(executor: SqliteExecutor, entityId: string): En
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
 		incoming: incomingRows.map((row) => ({
-			relationType: row.type as RelationType,
+			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
 		})),
 		outgoing: outgoingRows.map((row) => ({
-			relationType: row.type as RelationType,
+			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
 		}))
 	};
@@ -1023,6 +1121,9 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 			title: row.title,
 			body: row.body,
 			bodySource: isBodySource(row.body_source ?? "") ? (row.body_source as BodySource) : "authored",
+			category: row.category && isEntityCategory(row.category) ? row.category : null,
+			priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+			type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 			status: row.status,
 			tombstone: row.tombstone !== 0
 		},
@@ -1030,10 +1131,13 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 		newestPatch ? decodeRevisionPatchHash(newestPatch.source_hash) : undefined
 	);
 
-	let state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } = {
+	let state: { title: string; body: string; bodySource: BodySource; category: EntityRecord["category"]; priority: EntityRecord["priority"]; type: EntityRecord["type"]; status: string; parentId: string | null; tombstone: boolean | null } = {
 		title: row.title,
 		body: row.body,
 		bodySource: isBodySource(row.body_source ?? "") ? (row.body_source as BodySource) : "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 		status: row.status,
 		parentId: currentParentId,
 		tombstone: row.tombstone !== 0
@@ -1054,6 +1158,7 @@ export function listEntityHistory(executor: SqliteExecutor, entityId: string): H
 			title: state.title,
 			body: state.body,
 			bodySource: state.bodySource,
+			type: state.type,
 			status: state.status,
 			parentId: state.parentId,
 			createdAt: patch.created_at
@@ -1201,6 +1306,7 @@ function getCurrentProjectSnapshot(executor: SqliteExecutor): DatabaseSnapshot {
 				.filter((entity) => entity.kind === "issue")
 				.map((entity) => [entity.id, listIssueComments(executor, { issueId: entity.id })])
 		),
+		planEntries: entities.filter((entity) => entity.kind === "plan").flatMap((plan) => listPlanEntries(executor, { planId: plan.id })),
 		entities,
 		relations,
 		orphans: listOrphans(executor),
@@ -1269,6 +1375,7 @@ function mapDrizzleEntityRow(row: DrizzleEntityRow): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.shortReference,
 		createdBy: row.createdBy ?? RESERVED_SYSTEM_AUTHOR,
 		updatedBy: row.updatedBy ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind as EntityKind,
@@ -1276,11 +1383,27 @@ function mapDrizzleEntityRow(row: DrizzleEntityRow): EntityRecord {
 		status: row.status,
 		body: row.body,
 		bodySource: isBodySource(row.bodySource) ? row.bodySource : "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+			type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 		revision: row.revision ?? 1,
 		contentHash: row.contentHash ?? "",
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt
 	};
+}
+
+function allocateShortReference(executor: SqliteExecutor, kind: string, id: string): string {
+	const baseReference = shortEntityReference({ id, kind });
+	let shortReference = baseReference;
+	let suffix = 2;
+
+	while (first<{ id: string }>(executor, sql`SELECT id FROM entities WHERE tenant_id = ${executor.tenantId} AND short_reference = ${shortReference}`)) {
+		shortReference = `${baseReference}-${suffix}`;
+		suffix += 1;
+	}
+
+	return shortReference;
 }
 
 function getRelationOrThrow(
@@ -1331,7 +1454,7 @@ function getStructuralParentRelations(executor: SqliteExecutor, entityId: string
 
 function resolveRevisionHeadParentId(
 	entityId: string,
-	state: { title: string; body: string; bodySource: BodySource; status: string; tombstone: boolean | null },
+	state: { title: string; body: string; bodySource: BodySource; category: EntityRecord["category"]; priority: EntityRecord["priority"]; type: EntityRecord["type"]; status: string; tombstone: boolean | null },
 	parentIds: string[],
 	sourceHash: string | undefined
 ): string | null {
@@ -1397,13 +1520,23 @@ function appendDeltaEntry(
 	priorBodySource: string,
 	author: string | undefined,
 	createdAt: string,
-	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; restoredFromRevision?: number } = {}
+	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; priorCategory?: EntityRecord["category"]; priorPriority?: EntityRecord["priority"]; priorType?: EntityRecord["type"]; restoredFromRevision?: number } = {}
 ): void {
 	const row = first<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND id = ${entityId}`);
 	if (!row) {
 		throw new Error(`Cannot append reverse patch for missing entity ${entityId}.`);
 	}
-	const successor = { title: row.title, body: row.body, bodySource: row.body_source ?? "authored", status: row.status, parentId: getStructuralParentRelations(executor, entityId)[0]?.fromId ?? null, tombstone: row.tombstone !== 0 };
+	const successor = {
+		title: row.title,
+		body: row.body,
+		bodySource: row.body_source ?? "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
+		status: row.status,
+		parentId: getStructuralParentRelations(executor, entityId)[0]?.fromId ?? null,
+		tombstone: row.tombstone !== 0
+	};
 	const predecessor = {
 		...successor,
 		title: priorTitle,
@@ -1411,6 +1544,9 @@ function appendDeltaEntry(
 		bodySource: priorBodySource,
 		...(lifecycle.priorStatus !== undefined && { status: lifecycle.priorStatus }),
 		...(Object.hasOwn(lifecycle, "priorParentId") && { parentId: lifecycle.priorParentId ?? null }),
+		...(Object.hasOwn(lifecycle, "priorCategory") && { category: lifecycle.priorCategory ?? null }),
+		...(Object.hasOwn(lifecycle, "priorPriority") && { priority: lifecycle.priorPriority ?? null }),
+		...(Object.hasOwn(lifecycle, "priorType") && { type: lifecycle.priorType ?? null }),
 		...(lifecycle.priorTombstone != null && { tombstone: lifecycle.priorTombstone })
 	};
 	const transition = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
@@ -1663,6 +1799,7 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.short_reference,
 		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind,
@@ -1670,6 +1807,9 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 		status: row.status,
 		body: row.body ?? "",
 		bodySource: bodySource && isBodySource(bodySource) ? bodySource : "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 		revision: row.revision ?? 1,
 		contentHash: row.content_hash ?? "",
 		createdAt: row.created_at,
@@ -1722,6 +1862,9 @@ export class LocalEntityStore implements EntityStore {
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
+		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord> {
@@ -1768,7 +1911,7 @@ export class LocalEntityStore implements EntityStore {
 		return updateEntityStatus(this.executor, input);
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; type?: string | null; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
 		return updateEntity(this.executor, input);
 	}
 

@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, type RelationDirection, type RelationType } from "@agent-issues/core";
+import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type RelationDirection, type RelationType } from "@agent-issues/core";
 
 import {
 	toCompactCreateAcknowledgement,
@@ -16,7 +16,7 @@ import {
 	toCompactMoveAcknowledgement,
 	toCompactStatusAcknowledgement
 } from "../../entity-projection.js";
-import { renderEntityDetails, renderEntityList, renderInitiativeBundle, renderOptionalEntityList } from "../renderers.js";
+import { renderEntityDetails, renderEntityList, renderInitiativeBundle, renderOptionalEntityList, renderPlanDetails } from "../renderers.js";
 import { BodyTenantCommand, TenantCommand, parseCsvOption, parseEntityView, parsePositiveIntegerOption, requireOption, requirePositional, withStore } from "../shared.js";
 
 abstract class PositionalsTenantCommand extends TenantCommand {
@@ -34,11 +34,14 @@ function parseRevision(value: string): number {
 export class CreateCommand extends BodyTenantCommand {
 	public static paths = [["create"]];
 
+	public category = Option.String("--category");
 	public links = Option.Array("--link", { arity: 2 });
 	public parent = Option.String("--parent");
 	public positionals = Option.Rest();
+	public priority = Option.String("--priority");
 	public statusValue = Option.String("--status");
 	public title = Option.String("--title");
+	public entityType = Option.String("--type");
 	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
@@ -51,11 +54,14 @@ export class CreateCommand extends BodyTenantCommand {
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entity = await store.createEntity({
 				body: this.resolveBody(),
+				category: this.category,
 				kind,
 				links: this.links?.map(([relationType, targetId]) => ({ relationType, targetId })),
 				parentId: this.parent,
+				priority: this.priority,
 				status: this.statusValue,
-				title: requireOption(this.title, "--title is required for create.")
+				title: requireOption(this.title, "--title is required for create."),
+				type: this.entityType
 			});
 
 			this.print(this.asJson && view === "compact" ? toCompactCreateAcknowledgement(entity) : entity, `${entity.reference} ${entity.kind} ${entity.status} ${entity.title}`);
@@ -67,8 +73,11 @@ export class CreateCommand extends BodyTenantCommand {
 export class EditCommand extends BodyTenantCommand {
 	public static paths = [["edit"]];
 
+	public category = Option.String("--category");
 	public positionals = Option.Rest();
+	public priority = Option.String("--priority");
 	public title = Option.String("--title");
+	public entityType = Option.String("--type");
 	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
@@ -76,11 +85,11 @@ export class EditCommand extends BodyTenantCommand {
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "edit <id> (--title <text> | --body-file <path|->)");
 			const body = this.resolveBody();
-			if (this.title === undefined && body === undefined) {
-				throw new Error("--title or --body-file is required for edit.");
+			if (this.title === undefined && body === undefined && this.category === undefined && this.priority === undefined && this.entityType === undefined) {
+				throw new Error("--title, --body-file, --category, --priority, or --type is required for edit.");
 			}
 			const { entity: current } = await store.getEntityDetails(entityId);
-			const entity = await store.updateEntity({ body, entityId, title: this.title, expectedRevision: current.revision, expectedContentHash: current.contentHash });
+			const entity = await store.updateEntity({ body, category: this.category, entityId, priority: this.priority, title: this.title, type: this.entityType, expectedRevision: current.revision, expectedContentHash: current.contentHash });
 
 			this.print(this.asJson && view === "compact" ? toCompactEditAcknowledgement(entity) : entity, `Updated ${entity.id} ${entity.kind} ${entity.title}`);
 			return 0;
@@ -378,6 +387,13 @@ export class ShowCommand extends PositionalsTenantCommand {
 			if (details.entity.kind === "initiative") {
 				const bundle = await store.getInitiativeBundle(entityId);
 				this.print(this.asJson && view === "compact" ? toCompactInitiativeBundle(bundle) : bundle, renderInitiativeBundle(bundle));
+				return 0;
+			}
+
+			if (details.entity.kind === "plan") {
+				const projection = projectPlanEntries(await store.listPlanEntries({ planId: details.entity.id }));
+				const planDetails = { ...details, ...projection };
+				this.print(planDetails, renderPlanDetails(planDetails));
 				return 0;
 			}
 

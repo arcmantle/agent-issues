@@ -6,7 +6,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { when } from "lit/directives/when.js";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import type { Entity, IssueComment } from "../models.js";
+import type { Entity, IssueComment, PlanEntry } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
@@ -182,6 +182,31 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
+	protected renderPlanEntry(entry: PlanEntry): TemplateResult {
+		const planEntries = this.store?.snapshot.get()?.planEntries ?? [];
+		const entryReferences = new Map(planEntries.map((candidate) => [candidate.id, candidate.reference]));
+		return html`
+		<div class="ai-plan-entry">
+			<div class="ai-plan-entry-reference">${entry.reference}</div>
+			${when(
+				entry.tombstone,
+				() => html`<div class="ai-plan-entry-deleted">Deleted</div>`,
+				() => html`<div class="ai-plan-entry-body">${entry.body ?? ""}</div>`
+			)}
+			${when(
+				entry.referencedEntityIds.length > 0,
+				() => html`<div class="ai-plan-entry-links">References: ${entry.referencedEntityIds.join(", ")}</div>`,
+				() => nothing
+			)}
+			${when(
+				entry.supersededEntryIds.length > 0,
+				() => html`<div class="ai-plan-entry-links">Supersedes: ${entry.supersededEntryIds.map((id) => entryReferences.get(id) ?? id).join(", ")}</div>`,
+				() => nothing
+			)}
+		</div>
+		`;
+	}
+
 	render() {
 		const store = this.store;
 		if (!store) {
@@ -206,18 +231,23 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 				store.outgoingRelationsFor(entity.id).some((relation) => relation.type === "creates" && relation.toId === story.id)
 			) ?? []
 			: [];
+		const debtSections = store.debtRecordSectionsFor(entity.id);
 		const sections = store.linkedRecordSectionsFor(
 			entity.id,
-			entity.kind === "issue"
-				? { excludeRelationTypes: ["decomposes"] }
-				: entity.kind === "prd"
-					? { excludeRelationTypes: ["creates"] }
-					: undefined
+			{
+				excludeRelatedIds: debtSections.flatMap((section) => section.records.map((record) => record.id)),
+				excludeRelationTypes: entity.kind === "issue"
+					? ["decomposes"]
+					: entity.kind === "prd"
+						? ["creates"]
+						: []
+			}
 		);
 		const body = (entity.body ?? "").trim();
 		const bodySource = entity.bodySource ?? "authored";
 		const hasIssueStructure = entity.kind === "issue" && (parentIssue !== null || subIssueTree.length > 0);
 		const comments = entity.kind === "issue" ? store.snapshot.get()?.issueComments[entity.id]?.comments ?? [] : [];
+		const planProjection = entity.kind === "plan" ? store.planProjectionFor(entity.id) : null;
 
 		return html`
 		<div class="detail-inner">
@@ -259,6 +289,37 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 					${unsafeHTML(renderAuthoredBody(body))}
 				</section>
 				`
+			)}
+			${when(
+				planProjection !== null,
+				() => html`
+				<section class="ai-sec ai-plan-current">
+					<h2>Current Plan</h2>
+					${repeat(
+						planProjection!.current,
+						(group) => group.key,
+						(group) => html`
+						<div class="ai-plan-group">
+							<h3>${group.title}</h3>
+							${when(
+								group.entries.length > 0,
+								() => repeat(group.entries, (entry) => entry.id, (entry) => this.renderPlanEntry(entry)),
+								() => html`<div class="ai-empty">None.</div>`
+							)}
+						</div>
+						`
+					)}
+				</section>
+				<section class="ai-sec ai-plan-history">
+					<h2>Plan Entry History</h2>
+					${when(
+						planProjection!.history.length > 0,
+						() => repeat(planProjection!.history, (entry) => entry.id, (entry) => this.renderPlanEntry(entry)),
+						() => html`<div class="ai-empty">No Plan entries yet.</div>`
+					)}
+				</section>
+				`,
+				() => nothing
 			)}
 			${when(
 				comments.length > 0,
@@ -316,6 +377,22 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 					</div>
 				</section>
 				`,
+				() => nothing
+			)}
+			${when(
+				debtSections.length > 0,
+				() => repeat(
+					debtSections,
+					(section) => section.key,
+					(section) => html`
+					<section class="ai-sec">
+						<h2>${section.title}</h2>
+						<div class="ai-refs">
+							${repeat(section.records, (record) => record.id, (record) => this.renderRef(record))}
+						</div>
+					</section>
+					`
+				),
 				() => nothing
 			)}
 			${when(
@@ -462,6 +539,43 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		.ai-comment-body {
 			margin: 8px 0;
 			white-space: pre-wrap;
+		}
+		.ai-plan-current,
+		.ai-plan-history {
+			display: grid;
+			gap: 12px;
+		}
+		.ai-plan-group {
+			display: grid;
+			gap: 8px;
+		}
+		.ai-plan-group h3 {
+			margin: 0;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 700;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+		}
+		.ai-plan-entry {
+			padding: 10px 12px;
+			border: 1px solid var(--border-muted);
+			border-radius: 6px;
+		}
+		.ai-plan-entry-reference,
+		.ai-plan-entry-links,
+		.ai-plan-entry-deleted {
+			color: var(--muted);
+			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+			font-size: 12px;
+		}
+		.ai-plan-entry-body {
+			margin: 8px 0;
+			white-space: pre-wrap;
+		}
+		.ai-plan-entry-deleted {
+			margin: 8px 0;
+			font-style: italic;
 		}
 		.ai-body {
 			max-width: 75ch;

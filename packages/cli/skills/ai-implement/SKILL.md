@@ -15,6 +15,8 @@ You write and verify every slice yourself, in this conversation. Never start a s
 
 If a slice turns out to have a natural test seam, write the test for that slice. Verification and tests can work together in this skill.
 
+When an issue removes a feature, constraint, or compatibility path, remove or update its obsolete tests. Do not add a new test whose only purpose is to confirm that deleted code or an obsolete restriction has not returned. That test has no current behavior contract and adds maintenance cost. Test a replacement or newly supported observable behavior when the change creates one. Add an absence test only when the active issue or a relevant ADR makes the absence an explicit, observable requirement.
+
 ## Workflow
 
 ### 1. Planning
@@ -86,6 +88,8 @@ Stop and reconsider the current slice if any of these show up:
 ```
 [ ] Slice is a complete, working vertical step, not a partial layer
 [ ] A test, build, typecheck, or manual check ran and passed
+[ ] New tests cover current or newly supported behavior, not only the absence of removed behavior
+[ ] Obsolete tests were removed or updated
 [ ] No unrelated changes riding along in this slice
 [ ] No speculative abstractions added ahead of a real second or third use case
 [ ] The tree builds and existing checks still pass after this slice

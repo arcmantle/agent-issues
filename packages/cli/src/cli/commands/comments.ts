@@ -1,6 +1,18 @@
 import { Option } from "clipanion";
 
-import { BodyTenantCommand, TenantCommand, requireOption, requirePositional, withStore } from "../shared.js";
+import { getHelpPayload, renderHelp } from "../../help.js";
+
+import { BaseCommand, BodyTenantCommand, TenantCommand, requireOption, requirePositional, withStore } from "../shared.js";
+
+export class IssueCommentCommand extends BaseCommand {
+	public static paths = [["comment"]];
+
+	public async execute(): Promise<number> {
+		const payload = getHelpPayload("comment");
+		this.print(payload, renderHelp(payload));
+		return 0;
+	}
+}
 
 export class AddIssueCommentCommand extends BodyTenantCommand {
 	public static paths = [["comment", "add"]];

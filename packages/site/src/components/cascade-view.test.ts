@@ -164,6 +164,30 @@ describe("cascade view columns", () => {
 		expect(columnIdsAfterDrill).toEqual(["INIT4", "US18"]);
 	});
 
+	it("opens owned debt from its owner column and retains the ownership relation", async () => {
+		const initiative = makeEntity({ id: "INIT4", kind: "initiative", status: "active", title: "Lineage column navigation" });
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Retire legacy storage" });
+		const snapshot = makeSnapshot({
+			entities: [initiative, debt],
+			initiatives: [makeBundle(initiative)],
+			relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: debt.id, type: "records" }]
+		});
+		const store = makeStore(snapshot);
+		store.cascadePath.set([initiative.id]);
+
+		const view = await mountCascade(store);
+
+		const initiativeView = view.shadowRoot?.querySelector("agent-issues-initiative-detail-view") as HTMLElement & {
+			updateComplete: Promise<unknown>;
+		};
+		await initiativeView.updateComplete;
+		initiativeView.shadowRoot?.querySelector<HTMLButtonElement>(`.line[data-id="${debt.id}"]`)?.click();
+		await view.updateComplete;
+
+		expect(store.cascadePath.get()).toEqual([initiative.id, debt.id]);
+		expect(store.cascadeSeamFor(initiative.id, debt.id).relation).toBe("records");
+	});
+
 	it("opens a constrained issue when its reference is clicked inside an ADR column", async () => {
 		const initiative = makeEntity({ id: "INIT3", kind: "initiative", status: "active", title: "Design documents" });
 		const adr = makeEntity({ id: "ADR3", kind: "adr", status: "current", title: "Dedicated design table" });

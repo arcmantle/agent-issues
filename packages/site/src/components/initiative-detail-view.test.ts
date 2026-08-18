@@ -199,6 +199,31 @@ describe("initiative detail overview tab", () => {
 		expect(directLeafRow?.querySelector(".branch-spacer")).toBeNull();
 	});
 
+	it("renders owned and resolved debt in distinct initiative sections", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const ownedDebt = makeEntity({ category: "technical", id: "DEBT1", kind: "debt", priority: "high", status: "open", title: "Replace legacy storage" });
+		const resolvedDebt = makeEntity({ category: "process", id: "DEBT2", kind: "debt", priority: "medium", status: "resolved", title: "Document incident response" });
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [initiative, ownedDebt, resolvedDebt],
+				initiatives: [makeBundle(initiative)],
+				relations: [
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: ownedDebt.id, type: "records" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: resolvedDebt.id, type: "resolves" }
+				]
+			})
+		);
+		store.selectInitiative(initiative.id);
+		const view = await mountView(store);
+
+		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".sec-title") ?? [])].map((title) => title.textContent?.trim());
+		expect(sectionTitles).toEqual(expect.arrayContaining(["Owned debt", "Resolves debt"]));
+		expect(view.shadowRoot?.querySelector('.line[data-id="DEBT1"]')?.textContent).toContain("Replace legacy storage");
+		expect(view.shadowRoot?.querySelector('.line[data-id="DEBT2"]')?.textContent).toContain("Document incident response");
+	});
+
 	it("shows child issues when the parent issue itself fixes the story", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
@@ -329,10 +354,12 @@ describe("initiative detail graph tab", () => {
 		const filters = view.shadowRoot?.querySelector("agent-issues-relationship-graph-filters");
 		expect([...filters?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".graph-kind-chip") ?? []].map((chip) => chip.textContent?.trim())).toEqual([
 			"Initiative",
+			"Plan",
 			"PRD",
 			"ADR",
 			"User story",
-			"Issue"
+			"Issue",
+			"Debt"
 		]);
 
 		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="issue"]')?.click();

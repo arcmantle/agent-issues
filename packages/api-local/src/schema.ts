@@ -33,6 +33,7 @@ export const entities = sqliteTable(
 		tenantId: text("tenant_id").notNull(),
 		id: text("id").notNull(),
 		reference: text("reference").notNull(),
+		shortReference: text("short_reference").notNull(),
 		createdBy: text("created_by"),
 		updatedBy: text("updated_by"),
 		kind: text("kind").notNull(),
@@ -40,6 +41,9 @@ export const entities = sqliteTable(
 		status: text("status").notNull(),
 		body: text("body").notNull().default(""),
 		bodySource: text("body_source").notNull().default("authored"),
+		category: text("category"),
+		priority: text("priority"),
+		type: text("type"),
 		revision: integer("revision").notNull().default(1),
 		contentHash: text("content_hash").notNull().default(""),
 		tombstone: integer("tombstone", { mode: "boolean" }).notNull().default(false),
@@ -49,7 +53,8 @@ export const entities = sqliteTable(
 	},
 	(table) => [
 		primaryKey({ columns: [table.tenantId, table.id] }),
-		uniqueIndex("entities_tenant_reference_idx").on(table.tenantId, table.reference)
+		uniqueIndex("entities_tenant_reference_idx").on(table.tenantId, table.reference),
+		uniqueIndex("entities_tenant_short_reference_idx").on(table.tenantId, table.shortReference)
 	]
 );
 
@@ -83,6 +88,7 @@ export const contexts = sqliteTable(
 		tenantId: text("tenant_id").notNull(),
 		id: text("id").notNull(),
 		reference: text("reference").notNull(),
+		shortReference: text("short_reference").notNull(),
 		key: text("key").notNull(),
 		createdBy: text("created_by"),
 		updatedBy: text("updated_by"),
@@ -98,6 +104,7 @@ export const contexts = sqliteTable(
 		primaryKey({ columns: [table.tenantId, table.key] }),
 		uniqueIndex("contexts_tenant_id_idx").on(table.tenantId, table.id),
 		uniqueIndex("contexts_tenant_reference_idx").on(table.tenantId, table.reference),
+		uniqueIndex("contexts_tenant_short_reference_idx").on(table.tenantId, table.shortReference),
 		foreignKey({
 			columns: [table.tenantId, table.scopeEntityId],
 			foreignColumns: [entities.tenantId, entities.id]
@@ -113,6 +120,7 @@ export const contextTerms = sqliteTable(
 	{
 		tenantId: text("tenant_id").notNull(),
 		id: text("id").notNull(),
+		shortReference: text("short_reference").notNull(),
 		contextKey: text("context_key").notNull(),
 		createdBy: text("created_by"),
 		updatedBy: text("updated_by"),
@@ -132,7 +140,8 @@ export const contextTerms = sqliteTable(
 			foreignColumns: [contexts.tenantId, contexts.key]
 		}).onDelete("cascade"),
 		index("context_terms_tenant_context_key_idx").on(table.tenantId, table.contextKey),
-		uniqueIndex("context_terms_tenant_id_idx").on(table.tenantId, table.id)
+		uniqueIndex("context_terms_tenant_id_idx").on(table.tenantId, table.id),
+		uniqueIndex("context_terms_tenant_short_reference_idx").on(table.tenantId, table.shortReference)
 	]
 );
 

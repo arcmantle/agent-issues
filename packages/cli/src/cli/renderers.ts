@@ -46,7 +46,7 @@ export function renderOptionalEntityList(
 }
 
 export function renderEntityDetails(details: {
-	entity: { id: string; reference: string; kind: string; status: string; title: string };
+	entity: { id: string; reference: string; kind: string; status: string; title: string; type?: string | null };
 	incoming: Array<{ relationType: string; entity: { id: string; reference: string; kind: string; status: string } }>;
 	outgoing: Array<{ relationType: string; entity: { id: string; reference: string; kind: string; status: string } }>;
 }): string {
@@ -58,12 +58,32 @@ export function renderEntityDetails(details: {
 		: "none";
 
 	return [
-		`${details.entity.reference} ${details.entity.kind} ${details.entity.status} ${details.entity.title}`,
+		`${details.entity.reference} ${details.entity.kind}${details.entity.type === null || details.entity.type === undefined ? "" : ` ${details.entity.type}`} ${details.entity.status} ${details.entity.title}`,
 		"Incoming:",
 		incoming,
 		"Outgoing:",
 		outgoing
 	].join("\n");
+}
+
+export function renderPlanDetails(details: Parameters<typeof renderEntityDetails>[0] & {
+	current: Array<{ title: string; entries: Array<{ id: string; reference: string; body?: string; referencedEntityIds: string[]; supersededEntryIds: string[] }> }>;
+	history: Array<{ id: string; reference: string; body?: string; referencedEntityIds: string[]; supersededEntryIds: string[]; tombstone: boolean }>;
+}): string {
+	const referencesById = new Map(details.history.map((entry) => [entry.id, entry.reference]));
+	const renderEntry = (entry: { body?: string; reference: string; referencedEntityIds: string[]; supersededEntryIds: string[] }) => {
+		const references = entry.referencedEntityIds.length === 0 ? "" : ` references ${entry.referencedEntityIds.join(", ")}`;
+		const supersession = entry.supersededEntryIds.length === 0 ? "" : ` supersedes ${entry.supersededEntryIds.map((id) => referencesById.get(id) ?? id).join(", ")}`;
+		return `${entry.reference}${entry.body === undefined ? "" : ` ${entry.body}`}${references}${supersession}`;
+	};
+	const current = details.current
+		.map((group) => `${group.title}: ${group.entries.length === 0 ? "none" : group.entries.map(renderEntry).join("; ")}`)
+		.join("\n");
+	const history = details.history.length === 0
+		? "none"
+		: details.history.map((entry) => `${renderEntry(entry)}${entry.tombstone ? " tombstoned" : ""}`).join("\n");
+
+	return [renderEntityDetails(details), "Current Plan:", current, "History:", history].join("\n");
 }
 
 export function renderInitiativeBundle(bundle: {

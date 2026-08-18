@@ -30,6 +30,9 @@ export interface EntityStore {
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
+		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord>;
@@ -44,7 +47,7 @@ export interface EntityStore {
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
 	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;
-	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
+	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; type?: string | null; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
 	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
 	/** Materializes entity facts at a specific historical revision by walking the reverse-delta chain (ADR55/ISS261). */
 	materializeEntityRevision(input: { entityId: string; revision: number }): Promise<MaterializedEntityRevision>;

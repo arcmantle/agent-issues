@@ -16,6 +16,7 @@ export const DEFAULT_CONTEXT_SUMMARY = "Shared glossary of project-specific doma
 export type ContextRecord = {
 	id: string | null;
 	reference: string | null;
+	shortReference: string | null;
 	createdBy: string | null;
 	updatedBy: string | null;
 	key: string;
@@ -142,6 +143,7 @@ export class ContextRevisionError extends Error {
 export type ContextTermRecord = {
 	id: string;
 	reference: string;
+	shortReference: string;
 	createdBy: string;
 	updatedBy: string;
 	term: string;

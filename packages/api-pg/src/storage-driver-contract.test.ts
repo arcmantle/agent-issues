@@ -156,6 +156,50 @@ it("imports and exports a canonical issue comment with its ordered references", 
 	}
 });
 
+it("exports canonical Plan entries with their entity references and supersessions", async () => {
+	const store = await openPgTestStore();
+	try {
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await store.createEntity({ kind: "plan", title: "Plan", parentId: initiative.id });
+		const referencedEntity = await store.createEntity({ kind: "issue", title: "Referenced issue", parentId: initiative.id });
+		const question = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which backend owns synchronization?" });
+		const decision = await store.createPlanEntry({
+			planId: plan.id,
+			role: "decision",
+			body: "Both backends use canonical chains.",
+			referencedEntityIds: [referencedEntity.id],
+			supersededEntryIds: [question.id]
+		});
+
+		expect((await store.exportCanonicalChains()).planEntries).toEqual(expect.arrayContaining([
+			expect.objectContaining({ head: expect.objectContaining({ id: question.id, planId: plan.id, role: "question" }) }),
+			expect.objectContaining({ head: expect.objectContaining({ id: decision.id, referencedEntityIds: [referencedEntity.id], supersededEntryIds: [question.id] }) })
+		]));
+	} finally {
+		await store.close();
+	}
+});
+
+it("preserves Plan-entry supersession creation order after an update", async () => {
+	const store = await openPgTestStore();
+	try {
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await store.createEntity({ kind: "plan", title: "Plan", parentId: initiative.id });
+		const firstQuestion = await store.createPlanEntry({ planId: plan.id, role: "question", body: "First question" });
+		const secondQuestion = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Second question" });
+		const supersededEntryIds = [firstQuestion.id, secondQuestion.id].sort().reverse();
+		const decision = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Initial decision", supersededEntryIds });
+		await store.updatePlanEntry({ entryId: decision.id, body: "Updated decision", expectedRevision: decision.revision, expectedContentHash: decision.contentHash });
+
+		expect((await store.exportCanonicalChains()).planEntries.find((chain) => chain.head.id === decision.id)?.head).toMatchObject({
+			body: "Updated decision",
+			supersededEntryIds
+		});
+	} finally {
+		await store.close();
+	}
+});
+
 it("reads an issue conversation without canonical-export tables", async () => {
 	const store = await openPgTestStore();
 	try {

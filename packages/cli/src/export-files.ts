@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { ContextDetails, DatabaseSnapshot, InitiativeBundle } from "@agent-issues/api-local";
-import type { EntityRecord, IssueCommentRecord, RelationRecord, UserDirectoryRecord } from "@agent-issues/core";
-import { renderFrontmatter, renderInitiativeMarkdownExport, renderIssueConversationMarkdown, renderProjectMarkdownExport } from "./export-markdown.js";
+import type { EntityRecord, IssueCommentRecord, PlanEntryRecord, RelationRecord, UserDirectoryRecord } from "@agent-issues/core";
+import { renderFrontmatter, renderInitiativeMarkdownExport, renderIssueConversationMarkdown, renderPlanProjectionMarkdown, renderProjectMarkdownExport } from "./export-markdown.js";
 
 export type DirectoryExportResult = {
 	mode: "directory";
@@ -17,6 +17,7 @@ export function writeInitiativeDirectoryExport(input: {
 	commentsByIssueId?: Record<string, IssueCommentRecord[]>;
 	context: ContextDetails;
 	outputPath: string;
+	planEntries?: PlanEntryRecord[];
 	relations: RelationRecord[];
 	users?: UserDirectoryRecord[];
 	force?: boolean;
@@ -37,6 +38,7 @@ export function writeInitiativeDirectoryExport(input: {
 				bundle: input.bundle,
 				commentsByIssueId: input.commentsByIssueId,
 				context: input.context,
+				planEntries: input.planEntries,
 				relations: input.relations,
 				users: input.users
 			},
@@ -49,7 +51,7 @@ export function writeInitiativeDirectoryExport(input: {
 	writeEntityGroup(input.outputPath, "user-stories", input.bundle.userStories, scopedRelations, files);
 	writeEntityGroup(input.outputPath, "adrs", input.bundle.adrs, scopedRelations, files);
 	writeEntityGroup(input.outputPath, "issues", input.bundle.issues, scopedRelations, files, input.commentsByIssueId, input.users);
-	writeEntityGroup(input.outputPath, "entities", input.bundle.entities.filter((entity) => entity.id !== input.bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), scopedRelations, files);
+	writeEntityGroup(input.outputPath, "entities", input.bundle.entities.filter((entity) => entity.id !== input.bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), scopedRelations, files, input.commentsByIssueId, input.users, input.planEntries);
 	writeRelationGroups(input.outputPath, scopedRelations, files);
 
 	return {
@@ -73,7 +75,7 @@ export function writeProjectDirectoryExport(input: {
 	writeMarkdownFile(input.outputPath, "project.md", renderProjectMarkdownExport(input), files);
 	writeMarkdownFile(input.outputPath, "shared-context.md", renderContextMarkdown(input.snapshot.contexts.shared), files);
 	writeJsonFile(input.outputPath, "users.json", collectReferencedUsers(input.snapshot), files);
-	writeEntityGroup(input.outputPath, "entities", input.snapshot.entities, input.snapshot.relations, files, input.commentsByIssueId, input.snapshot.users);
+	writeEntityGroup(input.outputPath, "entities", input.snapshot.entities, input.snapshot.relations, files, input.commentsByIssueId, input.snapshot.users, input.snapshot.planEntries);
 	writeRelationGroups(input.outputPath, input.snapshot.relations, files);
 
 	const initiativesRoot = path.join(input.outputPath, "initiatives");
@@ -86,6 +88,7 @@ export function writeProjectDirectoryExport(input: {
 			commentsByIssueId: input.commentsByIssueId,
 			context,
 			outputPath: initiativeDir,
+			planEntries: input.snapshot.planEntries,
 			relations: input.snapshot.relations,
 			users: input.snapshot.users,
 			force: true
@@ -105,7 +108,8 @@ function renderEntityMarkdown(
 	entity: EntityRecord,
 	relations: RelationRecord[],
 	commentsByIssueId: Record<string, IssueCommentRecord[]> = {},
-	users: UserDirectoryRecord[] = []
+	users: UserDirectoryRecord[] = [],
+	planEntries: PlanEntryRecord[] = []
 ): string {
 	const directIncoming = relations.filter((relation) => relation.toId === entity.id);
 	const directOutgoing = relations.filter((relation) => relation.fromId === entity.id);
@@ -115,6 +119,9 @@ function renderEntityMarkdown(
 		status: entity.status,
 		title: entity.title,
 		bodySource: entity.bodySource,
+		category: entity.category,
+		priority: entity.priority,
+		type: entity.type,
 		createdBy: entity.createdBy,
 		updatedBy: entity.updatedBy,
 		createdAt: entity.createdAt,
@@ -126,6 +133,9 @@ function renderEntityMarkdown(
 	const conversation = entity.kind === "issue"
 		? renderIssueConversationMarkdown(commentsByIssueId[entity.id] ?? [], users, 2)
 		: "";
+	const planProjection = entity.kind === "plan"
+		? renderPlanProjectionMarkdown(planEntries.filter((entry) => entry.planId === entity.id), 2)
+		: "";
 
 	return [
 		renderFrontmatter(frontmatter),
@@ -133,6 +143,7 @@ function renderEntityMarkdown(
 		`Kind: ${entity.kind}`,
 		`Status: ${entity.status}`,
 		body,
+		planProjection,
 		conversation
 	].join("\n\n");
 }
@@ -176,14 +187,15 @@ function writeEntityGroup(
 	relations: RelationRecord[],
 	files: string[],
 	commentsByIssueId: Record<string, IssueCommentRecord[]> = {},
-	users: UserDirectoryRecord[] = []
+	users: UserDirectoryRecord[] = [],
+	planEntries: PlanEntryRecord[] = []
 ) {
 	if (entities.length === 0) {
 		return;
 	}
 
 	for (const entity of entities) {
-		writeMarkdownFile(rootPath, path.join(groupName, `${entity.id}.md`), renderEntityMarkdown(entity, relations, commentsByIssueId, users), files);
+		writeMarkdownFile(rootPath, path.join(groupName, `${entity.id}.md`), renderEntityMarkdown(entity, relations, commentsByIssueId, users, planEntries), files);
 	}
 }
 
@@ -279,6 +291,7 @@ function emptyInitiativeContext(initiative: EntityRecord): ContextDetails {
 		context: {
 			id: null,
 			reference: null,
+			shortReference: null,
 			createdBy: null,
 			updatedBy: null,
 			key: initiative.id,

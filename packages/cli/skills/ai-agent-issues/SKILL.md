@@ -34,11 +34,22 @@ Once you have this information, act. Do not keep explaining the task to yourself
 - `adr`: a hard-to-reverse architecture decision.
 - `context`: the database-backed glossary for shared, project-scoped, or initiative-scoped terms.
 
+Issue comments are database records owned by an issue, not graph entities. Use `agent-issues comment list <issueId> --json` to read them and `agent-issues comment add <issueId> --body-file <path|-> --json` to record a review result. Use `agent-issues schema --json` to discover comment fields and the complete command group.
+
 An issue is not always a flat leaf. An issue can `decompose` into sub-issues.
 
 - Use `agent-issues create issue --parent ISSx ...` to create a sub-issue under another issue.
 - Use `agent-issues move ISSx ISSy` to move a sub-issue to a different parent issue.
 - Link `fixes` from leaf issues to user stories. Parent issues group work and can own sub-issues.
+
+## Debt records
+
+Debt records are reference-only records for accepted cost or risk. They do not represent committed work.
+
+- A debt record has one project, epic, initiative, or issue owner. PRDs and user stories cannot own debt records.
+- Debt lifecycle states are open, resolved, and archived. Lifecycle changes are manual and reversible.
+- An epic, initiative, or issue can resolve debt. Resolver state does not change debt lifecycle state.
+- Use the [Debt Recipe](../recipes/debt.md) before an authored debt body write. Keep category, priority, lifecycle, ownership, and graph relations outside the body.
 
 Use `agent-issues list <kind> --json` to find records. Add `--status`, `--parent`, or `--limit` to narrow the result. Use `agent-issues relations <id> --json` to inspect edges. Add `--direction` or `--type` to select the edges you need. Use `agent-issues show <id> --view full --json` when you need the authored content or the complete record. Use `bundle` only for a planned initiative-wide read.
 
@@ -71,6 +82,7 @@ Use the right command group for the job:
 
 - Find entities: `list`, `show`, `relations`, `bundle`.
 - Change tracked data: `create`, `edit`, `link`, `status`.
+- Record issue discussion: `comment add`, `comment list`, `comment edit`, `comment delete`, `comment history`.
 - Manage vocabulary: `context list`, `context show`, `context search`, `context conflicts`, `context set`, `context define`, `context forget`.
 - View the live graph: `serve-site`, `open-site`, `stop-site`.
 - Find agent integration commands: `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `capabilities`.

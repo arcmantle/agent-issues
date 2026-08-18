@@ -18,6 +18,7 @@ import {
 	resolveAgentIssuesHomeDirectory,
 	resolveWellKnownLocalTenantId,
 	sanitizePathSegment,
+	shortEntityReference,
 	type DeleteTenantResult,
 	type RenameTenantResult,
 	type TenantRecordCounts,
@@ -218,6 +219,9 @@ export function deleteTenant(db: SqliteInternalConnection, tenantId: string): De
 
 	const counters = db.drizzle.transaction(() => {
 		db.drizzle.run(sql`DELETE FROM revision_entries WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM plan_entry_references WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM plan_entry_supersessions WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM plan_entries WHERE tenant_id = ${tenantId}`);
 		db.drizzle.run(sql`DELETE FROM context_terms WHERE tenant_id = ${tenantId}`);
 		db.drizzle.run(sql`DELETE FROM relations WHERE tenant_id = ${tenantId}`);
 		db.drizzle.run(sql`DELETE FROM contexts WHERE tenant_id = ${tenantId}`);
@@ -262,6 +266,9 @@ export function renameTenant(db: SqliteInternalConnection, previousTenantId: str
 	db.drizzle.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
 	try {
 		db.drizzle.transaction(() => {
+				db.drizzle.run(sql`UPDATE plan_entry_references SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+				db.drizzle.run(sql`UPDATE plan_entry_supersessions SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+				db.drizzle.run(sql`UPDATE plan_entries SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE counters SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE entities SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE relations SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
@@ -361,6 +368,9 @@ function tenantHasAnyRows(db: SqliteInternalConnection, tenantId: string): boole
 			UNION SELECT 1 FROM relations WHERE tenant_id = ${tenantId}
 			UNION SELECT 1 FROM contexts WHERE tenant_id = ${tenantId}
 			UNION SELECT 1 FROM context_terms WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM plan_entries WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM plan_entry_references WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM plan_entry_supersessions WHERE tenant_id = ${tenantId}
 		) AS has_rows
 	`)!;
 
@@ -430,8 +440,8 @@ function insertSentinelEntity(db: DatabaseHandle, id: string, kind: string, titl
 		const identity = deriveMigratedEntityIdentity(kind === "project" ? "project" : "epic", id);
 		const projectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
 		db.drizzle.run(sql`
-			INSERT INTO entities (tenant_id, id, reference, kind, title, status, body, body_source, project_id, created_at, updated_at)
-			VALUES (${db.tenantId}, ${identity.stableId}, ${identity.reference}, ${kind}, ${title}, 'active', '', 'generated', ${projectId}, ${now}, ${now})
+			INSERT INTO entities (tenant_id, id, reference, short_reference, kind, title, status, body, body_source, project_id, created_at, updated_at)
+			VALUES (${db.tenantId}, ${identity.stableId}, ${identity.reference}, ${shortEntityReference({ id: identity.stableId, kind })}, ${kind}, ${title}, 'active', '', 'generated', ${projectId}, ${now}, ${now})
 			ON CONFLICT (tenant_id, id) DO NOTHING
 		`);
 		return;

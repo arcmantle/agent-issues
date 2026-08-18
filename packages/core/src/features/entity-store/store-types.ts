@@ -1,6 +1,7 @@
 import type { EntityRecord, RelationRecord, RelationType } from "./domain.js";
 import type { ContextDetails } from "../context/context-types.js";
 import type { IssueCommentPage } from "../storage-driver/issue-comment-store.js";
+import type { PlanEntryRecord } from "../plan-entry/plan-entry-types.js";
 import type { UserDirectoryRecord } from "../user-directory/user-directory.js";
 
 /**
@@ -93,6 +94,7 @@ export type DatabaseSnapshot = {
 	generatedAt: string;
 	users: UserDirectoryRecord[];
 	issueComments: Record<string, IssueCommentPage>;
+	planEntries: PlanEntryRecord[];
 	entities: EntityRecord[];
 	relations: RelationRecord[];
 	orphans: EntityRecord[];

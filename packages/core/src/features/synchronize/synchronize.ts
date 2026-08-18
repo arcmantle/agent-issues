@@ -20,6 +20,10 @@ export type SynchronizeSummary = {
 	issueCommentsUpdatedLocal: string[];
 	issueCommentsCreatedCloud: string[];
 	issueCommentsUpdatedCloud: string[];
+	planEntriesCreatedLocal: string[];
+	planEntriesUpdatedLocal: string[];
+	planEntriesCreatedCloud: string[];
+	planEntriesUpdatedCloud: string[];
 	usersAppliedToLocal: number;
 	usersAppliedToCloud: number;
 };
@@ -94,6 +98,10 @@ export async function synchronizeStores(local: StorageDriver, cloud: StorageDriv
 		issueCommentsUpdatedLocal: localImport.issueCommentsAdvanced,
 		issueCommentsCreatedCloud: cloudImport.issueCommentsCreated,
 		issueCommentsUpdatedCloud: cloudImport.issueCommentsAdvanced,
+		planEntriesCreatedLocal: localImport.planEntriesCreated,
+		planEntriesUpdatedLocal: localImport.planEntriesAdvanced,
+		planEntriesCreatedCloud: cloudImport.planEntriesCreated,
+		planEntriesUpdatedCloud: cloudImport.planEntriesAdvanced,
 		usersAppliedToLocal: localImport.usersCreated.length + localImport.usersUpdated.length,
 		usersAppliedToCloud: cloudImport.usersCreated.length + cloudImport.usersUpdated.length
 	};

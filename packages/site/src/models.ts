@@ -4,9 +4,13 @@ export type BodySource = "authored" | "generated";
 
 export type Entity = {
 	id: string;
+	shortReference?: string;
 	kind: string;
 	title: string;
 	status: string;
+	category?: string | null;
+	priority?: string | null;
+	type?: string | null;
 	body: string;
 	bodySource?: BodySource;
 	createdAt: string;
@@ -135,6 +139,20 @@ export type IssueCommentPage = {
 	nextBefore: string | null;
 };
 
+export type PlanEntry = {
+	id: string;
+	reference: string;
+	planId: string;
+	role: "question" | "decision" | "scope" | "constraint" | "preference" | "consideration";
+	body?: string;
+	scopeDirection: "included" | "excluded" | null;
+	referencedEntityIds: string[];
+	supersededEntryIds: string[];
+	tombstone: boolean;
+	createdAt: string;
+	updatedAt: string;
+};
+
 export type UserDirectoryEntry = {
 	id: string;
 	authenticationSubject: string;
@@ -146,6 +164,7 @@ export type Snapshot = {
 	generatedAt: string;
 	users: UserDirectoryEntry[];
 	issueComments: Record<string, IssueCommentPage>;
+	planEntries?: PlanEntry[];
 	entities: Entity[];
 	relations: Relation[];
 	initiatives: InitiativeBundle[];
@@ -187,7 +206,9 @@ export type RootTab = "initiatives" | "adrs";
 
 export type ContextPageTab = "all" | "global" | "initiatives";
 
-export type ConsoleSection = "initiatives" | "adrs" | "graph" | "context";
+export type ConsoleSection = "initiatives" | "adrs" | "debt" | "graph" | "context";
+
+export type DebtFilter = "lifecycle" | "category" | "priority";
 
 export type InitiativeTab = "overview" | "graph" | "context";
 
@@ -195,7 +216,7 @@ export type GraphStatus = "idle" | "loading" | "ready" | "error";
 
 export type CytoscapeFactory = (options: Record<string, unknown>) => Core;
 
-export const PROJECT_GRAPH_KINDS = ["project", "epic", "initiative", "prd", "adr", "story", "issue"] as const;
+export const PROJECT_GRAPH_KINDS = ["project", "epic", "initiative", "plan", "prd", "adr", "story", "issue", "debt"] as const;
 
 export type ProjectGraphKind = (typeof PROJECT_GRAPH_KINDS)[number];
 
@@ -212,6 +233,7 @@ export type GraphNode = {
 export type GraphEdge = {
 	from: string;
 	to: string;
+	label?: string;
 };
 
 export type RelationshipGraph = {

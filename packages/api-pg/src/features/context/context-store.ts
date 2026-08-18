@@ -18,10 +18,13 @@ import {
 	DEFAULT_CONTEXT_SUMMARY,
 	DEFAULT_CONTEXT_TITLE,
 	filterContextDirectory,
+	isEntityCategory,
+	isEntityPriority,
 	mergeContextDirectory,
 	materializeContextFromPatches,
 	materializeContextTermFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
+	shortEntityReference,
 	SYSTEM_AUTHENTICATION_SUBJECT,
 	type ContextDetails,
 	type ContextDirectory,
@@ -57,6 +60,7 @@ const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
 export type ContextRow = {
 	id: string;
 	reference: string;
+	short_reference: string;
 	created_by?: string | null;
 	updated_by?: string | null;
 	key: string;
@@ -71,6 +75,7 @@ export type ContextRow = {
 
 export type ContextTermRow = {
 	id: string;
+	short_reference: string;
 	created_by?: string | null;
 	updated_by?: string | null;
 	term: string;
@@ -157,6 +162,7 @@ function createContextRecord(scope: ResolvedContextScope): ContextRecord {
 	return {
 		id: null,
 		reference: null,
+		shortReference: null,
 		createdBy: null,
 		updatedBy: null,
 		key: scope.key,
@@ -177,6 +183,7 @@ function mapContextRow(row: ContextRow, scope: ResolvedContextScope): ContextRec
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.short_reference,
 		createdBy: row.created_by ?? null,
 		updatedBy: row.updated_by ?? null,
 		key: row.key,
@@ -197,6 +204,7 @@ function mapContextTermRow(row: ContextTermRow): ContextTermRecord {
 	return {
 		id: row.id,
 		reference: encodeCanonicalReference("contextTerm", row.id),
+		shortReference: row.short_reference,
 		createdBy: row.created_by ?? SYSTEM_USER_ID,
 		updatedBy: row.updated_by ?? SYSTEM_USER_ID,
 		term: row.term,
@@ -323,6 +331,7 @@ async function fetchContextRow(executor: TenantExecutor, key: string): Promise<C
 	return row && {
 		id: row.id,
 		reference: row.reference,
+		short_reference: row.shortReference,
 		created_by: row.createdBy,
 		updated_by: row.updatedBy,
 		key: row.key,
@@ -344,6 +353,7 @@ async function fetchContextTermRows(executor: TenantExecutor, key: string): Prom
 		.orderBy(sql`lower(${contextTerms.term})`, asc(contextTerms.term));
 	return rows.map((row) => ({
 		id: row.id,
+		short_reference: row.shortReference,
 		created_by: row.createdBy,
 		updated_by: row.updatedBy,
 		term: row.term,
@@ -415,6 +425,7 @@ async function queryListContexts(executor: TenantExecutor, projectIdentity: stri
 		const initiative = {
 			id: initiativeRow.id,
 			reference: initiativeRow.reference,
+			shortReference: initiativeRow.shortReference,
 			createdBy: initiativeRow.createdBy ?? RESERVED_SYSTEM_AUTHOR,
 			updatedBy: initiativeRow.updatedBy ?? RESERVED_SYSTEM_AUTHOR,
 			kind: "initiative" as const,
@@ -422,6 +433,9 @@ async function queryListContexts(executor: TenantExecutor, projectIdentity: stri
 			status: initiativeRow.status,
 			body: initiativeRow.body,
 			bodySource: initiativeRow.bodySource === "generated" ? ("generated" as const) : ("authored" as const),
+			category: initiativeRow.category && isEntityCategory(initiativeRow.category) ? initiativeRow.category : null,
+			priority: initiativeRow.priority && isEntityPriority(initiativeRow.priority) ? initiativeRow.priority : null,
+			type: null,
 			revision: initiativeRow.revision,
 			contentHash: initiativeRow.contentHash,
 			createdAt: initiativeRow.createdAt,
@@ -469,6 +483,7 @@ async function ensureContextExists(
 		tenantId: executor.tenantId,
 		id: identity.stableId,
 		reference: identity.reference,
+		shortReference: await allocateContextShortReference(executor, identity.stableId),
 		key: scope.key,
 		createdBy: actorId,
 		updatedBy: actorId,
@@ -495,6 +510,7 @@ async function getContextTermRecord(executor: TenantExecutor, contextKey: string
 		? {
 			...mapContextTermRow({
 			id: row.id,
+			short_reference: row.shortReference,
 			created_by: row.createdBy,
 			updated_by: row.updatedBy,
 			term: row.term,
@@ -606,6 +622,7 @@ export async function upsertContext(
 			tenantId: executor.tenantId,
 			id: identity.stableId,
 			reference: identity.reference,
+			shortReference: await allocateContextShortReference(executor, identity.stableId),
 			key: scope.key,
 			createdBy: actorId,
 			updatedBy: actorId,
@@ -692,9 +709,11 @@ export async function defineContextTerm(
 		await appendContextTermDeltaEntry(executor, scope.key, term, revision, existing, actorId, now);
 	} else {
 		const id = generateContextTermId();
+		const shortReference = await allocateContextTermShortReference(executor, id);
 		await executor.insert(contextTerms).values({
 			tenantId: executor.tenantId,
 			id,
+			shortReference,
 			contextKey: scope.key,
 			createdBy: actorId,
 			updatedBy: actorId,
@@ -707,7 +726,7 @@ export async function defineContextTerm(
 			createdAt: now,
 			updatedAt: now
 		});
-		await appendContextTermDeltaEntry(executor, scope.key, term, 1, { id, reference: encodeCanonicalReference("contextTerm", id), createdBy: actorId, updatedBy: actorId, term, definition, avoid: normalizedAvoid, revision: 1, contentHash, createdAt: now, updatedAt: now, tombstone: false }, actorId, now);
+		await appendContextTermDeltaEntry(executor, scope.key, term, 1, { id, reference: encodeCanonicalReference("contextTerm", id), shortReference, createdBy: actorId, updatedBy: actorId, term, definition, avoid: normalizedAvoid, revision: 1, contentHash, createdAt: now, updatedAt: now, tombstone: false }, actorId, now);
 	}
 
 	const storedTerm = await getContextTermRecord(executor, scope.key, term);
@@ -721,6 +740,36 @@ export async function defineContextTerm(
 		term: publicTerm,
 		created: existing === null
 	};
+}
+
+async function allocateContextShortReference(executor: TenantExecutor, id: string): Promise<string> {
+	return allocateShortReference(executor, contexts, "context", id);
+}
+
+async function allocateContextTermShortReference(executor: TenantExecutor, id: string): Promise<string> {
+	return allocateShortReference(executor, contextTerms, "contextTerm", id);
+}
+
+async function allocateShortReference(
+	executor: TenantExecutor,
+	table: typeof contexts | typeof contextTerms,
+	kind: "context" | "contextTerm",
+	id: string
+): Promise<string> {
+	const baseReference = shortEntityReference({ id, kind });
+	let shortReference = baseReference;
+	let suffix = 2;
+
+	while ((await executor
+		.select({ id: table.id })
+		.from(table)
+		.where(and(eq(table.tenantId, executor.tenantId), eq(table.shortReference, shortReference)))
+		.limit(1)).length > 0) {
+		shortReference = `${baseReference}-${suffix}`;
+		suffix += 1;
+	}
+
+	return shortReference;
 }
 
 export async function forgetContextTerm(

@@ -64,8 +64,8 @@ export async function migratePgDatabase(pool: Pool): Promise<void> {
 			await runMigrationsWithClient(client, migrations, { transactionIsManagedByCaller: true });
 		} else if (sourceProfile.profile === "legacy-postgres-v7") {
 			await transformLegacyPostgresV7(client);
-		} else if (sourceProfile.profile === "current-final"
-			&& !sourceProfile.evidence.ledgerIds.includes("legacy-v7-direct")) {
+			await runMigrationsWithClient(client, migrations, { transactionIsManagedByCaller: true });
+		} else if (sourceProfile.profile === "current-final") {
 			await runMigrationsWithClient(client, migrations, { transactionIsManagedByCaller: true });
 		}
 		await client.query("COMMIT");

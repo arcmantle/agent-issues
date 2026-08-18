@@ -30,6 +30,71 @@ afterEach(() => {
 });
 
 describe("markdown export", () => {
+	it("renders a Plan's generated current state and complete entry history", async () => {
+		const db = await openTestDatabase();
+		const store = new SqliteStore(db);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan export" });
+		const plan = await store.createEntity({
+			kind: "plan",
+			parentId: initiative.id,
+			title: "Plan record",
+			body: "## Goal\n\nExport planning state.\n\n## Context\n\nKeep the body stable."
+		});
+		const question = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which entries are current?" });
+		const decision = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Only active entries are current.", supersededEntryIds: [question.id] });
+		const deleted = await store.createPlanEntry({ planId: plan.id, role: "consideration", body: "Retain deleted history." });
+		await store.deletePlanEntry({ entryId: deleted.id, expectedRevision: deleted.revision, expectedContentHash: deleted.contentHash });
+		const snapshot = await store.getDatabaseSnapshot();
+		const context = snapshot.contexts.initiatives.find((details) => details.context.scopeEntityId === initiative.id)!;
+		const markdown = renderInitiativeMarkdownExport({
+			bundle: await store.getInitiativeBundle(initiative.id),
+			context,
+			planEntries: snapshot.planEntries,
+			relations: snapshot.relations
+		});
+
+		expect(markdown).toContain("## Current Plan");
+		expect(markdown).toContain("### Decisions");
+		expect(markdown).toContain(decision.reference);
+		expect(markdown).not.toContain("### Questions\n\n- ");
+		expect(markdown).toContain("## Plan Entry History");
+		expect(markdown).toContain(question.reference);
+		expect(markdown).toContain(deleted.reference);
+		expect(markdown).toContain("Deleted entry");
+		expect(markdown).toContain("Keep the body stable.");
+	});
+
+	it("renders debt metadata and links in initiative and project exports", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const debt = createEntity(db, {
+			kind: "debt",
+			parentId: initiative.id,
+			title: "Replace legacy storage",
+			category: "technical",
+			priority: "high"
+		});
+		linkEntities(db, { fromId: initiative.id, toId: debt.id, relationType: "records" });
+		linkEntities(db, { fromId: initiative.id, toId: debt.id, relationType: "resolves" });
+
+		const snapshot = getDatabaseSnapshot(db);
+		const context = snapshot.contexts.initiatives.find((details) => details.context.scopeEntityId === initiative.id)!;
+		const initiativeMarkdown = renderInitiativeMarkdownExport({
+			bundle: getInitiativeBundle(db, initiative.id),
+			context,
+			relations: snapshot.relations
+		});
+		const projectMarkdown = renderProjectMarkdownExport({ snapshot });
+
+		for (const markdown of [initiativeMarkdown, projectMarkdown]) {
+			expect(markdown).toContain(`### ${debt.id} Replace legacy storage`);
+			expect(markdown).toContain("Category: technical");
+			expect(markdown).toContain("Priority: high");
+			expect(markdown).toContain(`from: \"${initiative.id}\"`);
+			expect(markdown).toContain(`to: \"${debt.id}\"`);
+		}
+	});
+
 	it("renders initiative export with frontmatter connections and sections", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });

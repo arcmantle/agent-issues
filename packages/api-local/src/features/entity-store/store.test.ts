@@ -2,13 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { sql } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { deriveMigratedEntityIdentity } from "@agent-issues/core";
+import { deriveMigratedEntityIdentity, PlanEntryConflictError } from "@agent-issues/core";
 import { ensureDatabase } from "../../db/database.js";
 import type { SqliteInternalConnection } from "../../db/sqlite-executor.js";
 import { createIssueComment } from "../issue-comment/store.js";
-import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listAllRelations, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntityStatus } from "./store.js";
+import { createPlanEntry, deletePlanEntry, listPlanEntries, listPlanEntryHistory, updatePlanEntry } from "../plan-entry/store.js";
+import { createEntity, deleteEntity, getDatabaseSnapshot, getEntityDetails, getInitiativeBundle, linkEntities, listAllRelations, listEntities, listEntityHistory, listOrphans, materializeEntityRevision, moveEntity, restoreEntityRevision, setEntityBody, unlinkEntities, updateEntity, updateEntityStatus } from "./store.js";
 
 const CANONICAL_ID_SUFFIX = "_[0-7][0-9A-HJKMNP-TV-Z]{25}";
 const DEFAULT_PROJECT_STABLE_ID = deriveMigratedEntityIdentity("project", "PROJ0").stableId;
@@ -31,6 +32,32 @@ afterEach(() => {
 		rmSync(tempDir, { force: true, recursive: true });
 		tempDir = null;
 	}
+});
+
+describe("kind-specific entity types", () => {
+	it("stores typed Wayfinder issues and rejects invalid kinds and parents", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Wayfinder work" });
+		const ordinaryIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ordinary issue" });
+		const map = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Wayfinder map", type: "wayfinder-map" });
+		const ticket = createEntity(db, { kind: "issue", parentId: map.id, title: "Wayfinder ticket", type: "wayfinder-ticket" });
+
+		expect(ordinaryIssue.type).toBeNull();
+		expect(map.type).toBe("wayfinder-map");
+		expect(ticket.type).toBe("wayfinder-ticket");
+		expect(() => createEntity(db, { kind: "initiative", title: "Invalid specialized kind", type: "wayfinder-map" })).toThrow("Invalid entity type: wayfinder-map");
+		expect(() => createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ticket without map", type: "wayfinder-ticket" })).toThrow("wayfinder-ticket requires a wayfinder-map parent.");
+		expect(() => updateEntity(db, { entityId: ordinaryIssue.id, type: "wayfinder-ticket", expectedRevision: ordinaryIssue.revision, expectedContentHash: ordinaryIssue.contentHash })).toThrow("wayfinder-ticket requires a wayfinder-map parent.");
+		expect(() => updateEntity(db, { entityId: map.id, type: null, expectedRevision: map.revision, expectedContentHash: map.contentHash })).toThrow("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+		expect(() => moveEntity(db, { entityId: map.id, newParentId: ordinaryIssue.id })).toThrow("wayfinder-map requires an initiative parent.");
+		expect(() => moveEntity(db, { entityId: ticket.id, newParentId: ordinaryIssue.id })).toThrow("wayfinder-ticket requires a wayfinder-map parent.");
+
+		const restorableMap = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Restorable map", type: "wayfinder-map" });
+		const removedType = updateEntity(db, { entityId: restorableMap.id, type: null, expectedRevision: restorableMap.revision, expectedContentHash: restorableMap.contentHash });
+		const restored = restoreEntityRevision(db, { entityId: restorableMap.id, revision: 1, expectedRevision: removedType.revision, expectedContentHash: removedType.contentHash });
+		expect(restored.type).toBe("wayfinder-map");
+		expect(getEntityDetails(db, restorableMap.id).entity.type).toBe("wayfinder-map");
+	});
 });
 
 describe("project-scoped ADRs", () => {
@@ -95,6 +122,70 @@ describe("database snapshot issue conversations", () => {
 				}
 			}
 		});
+	});
+});
+
+describe("database snapshot Plan entries", () => {
+	it("does not append history when guarded Plan-entry writes affect no rows", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Plan owner" });
+		const plan = createEntity(db, { kind: "plan", parentId: initiative.id, title: "Concurrent Plan" });
+		const updatedEntry = createPlanEntry(db, { planId: plan.id, role: "question", body: "Initial question" }, "test-user");
+		const updateRun = vi.spyOn(db.drizzle, "run").mockReturnValueOnce({ changes: 0, lastInsertRowid: 0 });
+
+		expect(() => updatePlanEntry(db, {
+			entryId: updatedEntry.id,
+			body: "Updated question",
+			expectedRevision: updatedEntry.revision,
+			expectedContentHash: updatedEntry.contentHash
+		}, "test-user")).toThrow(PlanEntryConflictError);
+		updateRun.mockRestore();
+		expect(listPlanEntryHistory(db, { entryId: updatedEntry.id })).toHaveLength(1);
+
+		const deletedEntry = createPlanEntry(db, { planId: plan.id, role: "question", body: "Deleted question" }, "test-user");
+		const deleteRun = vi.spyOn(db.drizzle, "run").mockReturnValueOnce({ changes: 0, lastInsertRowid: 0 });
+
+		expect(() => deletePlanEntry(db, {
+			entryId: deletedEntry.id,
+			expectedRevision: deletedEntry.revision,
+			expectedContentHash: deletedEntry.contentHash
+		}, "test-user")).toThrow(PlanEntryConflictError);
+		deleteRun.mockRestore();
+		expect(listPlanEntryHistory(db, { entryId: deletedEntry.id })).toHaveLength(1);
+	});
+
+	it("preserves creation order when entries are created in the same clock tick", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-08-16T00:00:00.000Z"));
+		try {
+			const db = await openTestDatabase();
+			const initiative = createEntity(db, { kind: "initiative", title: "Plan owner" });
+			const plan = createEntity(db, { kind: "plan", parentId: initiative.id, title: "Ordered Plan" });
+			const first = createPlanEntry(db, { planId: plan.id, role: "question", body: "First entry" }, "test-user");
+			const second = createPlanEntry(db, { planId: plan.id, role: "question", body: "Second entry" }, "test-user");
+
+			expect(listPlanEntries(db, { planId: plan.id }).map((entry) => entry.id)).toEqual([first.id, second.id]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("includes active, superseded, and tombstoned entries for each scoped Plan", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Plan owner" });
+		const plan = createEntity(db, { kind: "plan", parentId: initiative.id, title: "Snapshot Plan" });
+		const question = createPlanEntry(db, { planId: plan.id, role: "question", body: "Which entries are visible?" }, "test-user");
+		const decision = createPlanEntry(db, { planId: plan.id, role: "decision", body: "All entries remain in history.", supersededEntryIds: [question.id] }, "test-user");
+		const deleted = createPlanEntry(db, { planId: plan.id, role: "consideration", body: "Keep tombstones.", }, "test-user");
+		deletePlanEntry(db, { entryId: deleted.id, expectedRevision: deleted.revision, expectedContentHash: deleted.contentHash }, "test-user");
+
+		const snapshot = getDatabaseSnapshot(db);
+
+		expect(snapshot.planEntries).toEqual(expect.arrayContaining([
+			expect.objectContaining({ id: question.id, supersededEntryIds: [] }),
+			expect.objectContaining({ id: decision.id, supersededEntryIds: [question.id] }),
+			expect.objectContaining({ id: deleted.id, tombstone: true })
+		]));
 	});
 });
 

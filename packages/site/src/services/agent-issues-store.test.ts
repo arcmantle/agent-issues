@@ -87,6 +87,31 @@ describe("short entity references", () => {
 	});
 });
 
+describe("debt records", () => {
+		it("defaults to open debt records", () => {
+			const openDebt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Replace legacy storage" });
+			const resolvedDebt = makeEntity({ id: "DEBT2", kind: "debt", status: "resolved", title: "Remove temporary endpoint" });
+			const store = new AgentIssuesStore();
+			store.snapshot.set(makeSnapshot({ entities: [openDebt, resolvedDebt] }));
+
+			expect(store.debtRecords.get()).toEqual([openDebt]);
+		});
+
+		it("combines lifecycle, category, and priority filters", () => {
+			const matchingDebt = makeEntity({ category: "technical", id: "DEBT1", kind: "debt", priority: "high", status: "open" });
+			const categoryMismatch = makeEntity({ category: "process", id: "DEBT2", kind: "debt", priority: "high", status: "open" });
+			const priorityMismatch = makeEntity({ category: "technical", id: "DEBT3", kind: "debt", priority: "low", status: "open" });
+			const lifecycleMismatch = makeEntity({ category: "technical", id: "DEBT4", kind: "debt", priority: "high", status: "resolved" });
+			const store = new AgentIssuesStore();
+			store.snapshot.set(makeSnapshot({ entities: [matchingDebt, categoryMismatch, priorityMismatch, lifecycleMismatch] }));
+
+			store.setDebtFilter("category", "technical");
+			store.setDebtFilter("priority", "high");
+
+			expect(store.debtRecords.get()).toEqual([matchingDebt]);
+		});
+});
+
 describe("initiative relationship graph model", () => {
 	it("uses in-force and archived tones for ADR lifecycle states", () => {
 		const store = new AgentIssuesStore();
@@ -114,7 +139,7 @@ describe("initiative relationship graph model", () => {
 
 		const graph = store.buildInitiativeGraph(bundle);
 
-		expect(graph.columns).toEqual(["Initiative", "PRDs & ADRs", "User stories", "Issues"]);
+		expect(graph.columns).toEqual(["Initiative", "Plans, PRDs & ADRs", "User stories", "Issues", "Debt records"]);
 		const nodeColumns = new Map(graph.nodes.map((node) => [node.id, node.col]));
 		expect(nodeColumns.get("INIT1")).toBe(0);
 		expect(nodeColumns.get("PRD1")).toBe(1);
@@ -151,12 +176,60 @@ describe("initiative relationship graph model", () => {
 
 		const graph = store.buildInitiativeGraph(bundle);
 
-		expect(graph.columns).toEqual(["Initiative", "PRDs & ADRs", "User stories", "Issues", "Sub-issues"]);
+		expect(graph.columns).toEqual(["Initiative", "Plans, PRDs & ADRs", "User stories", "Issues", "Sub-issues", "Debt records"]);
 		const nodeColumns = new Map(graph.nodes.map((node) => [node.id, node.col]));
 		expect(nodeColumns.get("ISS1")).toBe(3);
 		expect(nodeColumns.get("ISS2")).toBe(4);
 		expect(graph.edges).toContainEqual({ from: "INIT1", to: "ISS1" });
 		expect(graph.edges).toContainEqual({ from: "ISS1", to: "ISS2" });
+	});
+
+	it("renders initiative-owned debt with its ownership relation", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Replace legacy storage" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [initiative, debt],
+				initiatives: [makeBundle(initiative)],
+				relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: debt.id, type: "records" }]
+			})
+		);
+
+		const graph = store.buildInitiativeGraph(makeBundle(initiative));
+
+		expect(graph.columns).toEqual(["Initiative", "Plans, PRDs & ADRs", "User stories", "Issues", "Debt records"]);
+		expect(graph.nodes).toContainEqual(
+			expect.objectContaining({ col: 4, id: debt.id, kind: "debt", label: debt.title })
+		);
+		expect(graph.edges).toContainEqual({ from: initiative.id, label: "records", to: debt.id });
+	});
+
+	it("renders debt remediation and context links within the initiative graph", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Replace storage" });
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Retire legacy storage" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [initiative, issue, debt],
+				initiatives: [makeBundle(initiative, { issues: [issue] })],
+				relations: [
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: debt.id, type: "records" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: issue.id, toId: debt.id, type: "resolves" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: debt.id, toId: issue.id, type: "relatesTo" }
+				]
+			})
+		);
+
+		const graph = store.buildInitiativeGraph(makeBundle(initiative, { issues: [issue] }));
+
+		expect(graph.edges).toEqual(
+			expect.arrayContaining([
+				{ from: issue.id, label: "resolves", to: debt.id },
+				{ from: debt.id, label: "relatesTo", to: issue.id }
+			])
+		);
 	});
 });
 
@@ -164,12 +237,13 @@ describe("project relationship graph model", () => {
 	it("lays project decisions beneath the project and work beneath each epic", () => {
 		const epic = makeEntity({ id: "EPIC1", kind: "epic", status: "active", title: "Viewer experience" });
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "ready", title: "Viewer implementation plan" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
 		const initiativeAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Use SVG" });
 		const story = makeEntity({ id: "US1", kind: "userStory", title: "Explore the graph" });
 		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render graph nodes" });
 		const projectAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Use project snapshots" });
-		const bundle = makeBundle(initiative, { adrs: [initiativeAdr], fixLinks: [{ issue, userStory: story }], issues: [issue], prds: [prd], userStories: [story] });
+		const bundle = makeBundle(initiative, { adrs: [initiativeAdr], entities: [initiative, plan, prd, initiativeAdr, story, issue], fixLinks: [{ issue, userStory: story }], issues: [issue], prds: [prd], userStories: [story] });
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("content-hub");
 		store.selectedProjectId.set("PROJ1");
@@ -178,18 +252,22 @@ describe("project relationship graph model", () => {
 				entities: [epic],
 				initiatives: [bundle],
 				projectAdrs: [projectAdr],
-				relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: initiative.id, type: "contains" }]
+				relations: [
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: initiative.id, type: "contains" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: plan.id, toId: prd.id, type: "informs" }
+				]
 			})
 		);
 
 		const graph = store.buildProjectGraph();
 
-		expect(graph.columns).toEqual(["Project", "Epics", "Initiatives", "PRDs & ADRs", "User stories", "Issues"]);
+		expect(graph.columns).toEqual(["Project", "Epics", "Initiatives", "Plans, PRDs & ADRs", "User stories", "Issues"]);
 		const projectNode = graph.nodes.find((node) => node.kind === "project");
 		expect(projectNode?.col).toBe(0);
 		const nodeColumns = new Map(graph.nodes.map((node) => [node.id, node.col]));
 		expect(nodeColumns.get("EPIC1")).toBe(1);
 		expect(nodeColumns.get("INIT1")).toBe(2);
+		expect(nodeColumns.get("PLAN1")).toBe(3);
 		expect(nodeColumns.get("PRD1")).toBe(3);
 		expect(nodeColumns.get("ADR1")).toBe(3);
 		expect(nodeColumns.get("ADR2")).toBe(1);
@@ -197,12 +275,14 @@ describe("project relationship graph model", () => {
 		expect(nodeColumns.get("ISS1")).toBe(5);
 		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "EPIC1" });
 		expect(graph.edges).toContainEqual({ from: "EPIC1", to: "INIT1" });
+		expect(graph.edges).toContainEqual({ from: "INIT1", to: "INIT1:PLAN1" });
+		expect(graph.edges).toContainEqual({ from: "INIT1:PLAN1", label: "informs", to: "INIT1:PRD1" });
 		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "ADR2" });
 		expect(graph.edges).toContainEqual({ from: "INIT1:US1", to: "INIT1:ISS1" });
 
 		store.toggleProjectGraphKind("issue");
 		const graphWithoutIssues = store.buildProjectGraph();
-		expect(graphWithoutIssues.columns).toEqual(["Project", "Epics", "Initiatives", "PRDs & ADRs", "User stories"]);
+		expect(graphWithoutIssues.columns).toEqual(["Project", "Epics", "Initiatives", "Plans, PRDs & ADRs", "User stories"]);
 		expect(graphWithoutIssues.nodes.map((node) => node.id)).not.toContain("ISS1");
 		expect(graphWithoutIssues.edges).not.toContainEqual({ from: "INIT1:US1", to: "INIT1:ISS1" });
 	});
@@ -228,6 +308,59 @@ describe("project relationship graph model", () => {
 		expect(graph.edges).toContainEqual({ from: projectNode?.key, to: "EPIC1" });
 		expect(graph.edges).toContainEqual({ from: "EPIC1", to: "INIT1" });
 		expect(graph.edges).toContainEqual({ from: "INIT1", to: "INIT1:PRD1" });
+	});
+
+	it("renders debt ownership, remediation, and context links", () => {
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", status: "active", title: "Viewer experience" });
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Replace storage" });
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Retire legacy storage" });
+		const store = new AgentIssuesStore();
+		store.selectedProjectId.set("PROJ1");
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [epic, initiative, issue, debt],
+				initiatives: [makeBundle(initiative, { issues: [issue] })],
+				relations: [
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: epic.id, toId: initiative.id, type: "contains" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: debt.id, type: "records" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: issue.id, toId: debt.id, type: "resolves" },
+					{ createdAt: "2026-01-01T00:00:00.000Z", fromId: debt.id, toId: issue.id, type: "relatesTo" }
+				]
+			})
+		);
+
+		const graph = store.buildProjectGraph();
+
+		expect(graph.columns).toContain("Debt records");
+		expect(graph.nodes).toContainEqual(
+			expect.objectContaining({ col: graph.columns.indexOf("Debt records"), id: debt.id, kind: "debt", label: debt.title })
+		);
+		expect(graph.edges).toEqual(
+			expect.arrayContaining([
+				{ from: initiative.id, label: "records", to: debt.id },
+				{ from: `${initiative.id}:${issue.id}`, label: "resolves", to: debt.id },
+				{ from: debt.id, label: "relatesTo", to: `${initiative.id}:${issue.id}` }
+			])
+		);
+	});
+
+	it("filters debt and its edges from the project graph", () => {
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Retire legacy storage" });
+		const store = new AgentIssuesStore();
+		store.selectedProjectId.set("PROJ1");
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [debt],
+				relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: "PROJ1", toId: debt.id, type: "records" }]
+			})
+		);
+
+		store.toggleProjectGraphKind("debt");
+		const graph = store.buildProjectGraph();
+
+		expect(graph.nodes.map((node) => node.kind)).not.toContain("debt");
+		expect(graph.edges).not.toContainEqual(expect.objectContaining({ label: "records", to: debt.id }));
 	});
 });
 

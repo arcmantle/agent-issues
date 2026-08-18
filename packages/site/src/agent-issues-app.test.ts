@@ -430,14 +430,31 @@ describe("three-pane console shell", () => {
 		fetchMock.mockRestore();
 	});
 
-	it("offers Initiatives, ADRs, Context, and Graph navigation in the rail", async () => {
+	it("offers Initiatives, ADRs, Debt records, Context, and Graph navigation in the rail", async () => {
 		const store = makeStore(makeConfig(), makeSnapshot());
 		const app = await mountApp(store);
 
 		const sections = [...(app.shadowRoot?.querySelectorAll('[data-pane="rail"] [data-section]') ?? [])].map(
 			(element) => element.getAttribute("data-section")
 		);
-		expect(sections).toEqual(["initiatives", "adrs", "context", "graph"]);
+		expect(sections).toEqual(["initiatives", "adrs", "debt", "context", "graph"]);
+	});
+
+	it("lists open debt by default and combines its metadata filters", async () => {
+		const matchingDebt = makeEntity({ category: "technical", id: "DEBT1", kind: "debt", priority: "high", status: "open", title: "Replace legacy storage" });
+		const categoryMismatch = makeEntity({ category: "process", id: "DEBT2", kind: "debt", priority: "high", status: "open", title: "Automate the release checklist" });
+		const resolvedDebt = makeEntity({ category: "technical", id: "DEBT3", kind: "debt", priority: "high", status: "resolved", title: "Remove temporary endpoint" });
+		const store = makeStore(makeConfig(), makeSnapshot({ entities: [matchingDebt, categoryMismatch, resolvedDebt] }));
+		const app = await mountApp(store);
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-section="debt"]')?.click();
+		await app.updateComplete;
+
+		expect([...app.shadowRoot?.querySelectorAll('[data-pane="master"] [data-id]') ?? []].map((element) => element.getAttribute("data-id"))).toEqual(["DEBT1", "DEBT2"]);
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-debt-filter="category"][data-debt-value="technical"]')?.click();
+		await app.updateComplete;
+
+		expect([...app.shadowRoot?.querySelectorAll('[data-pane="master"] [data-id]') ?? []].map((element) => element.getAttribute("data-id"))).toEqual(["DEBT1"]);
 	});
 
 	it("lists architecture decisions in the master list when the ADRs section is active", async () => {
@@ -681,10 +698,12 @@ describe("project relationship graph section", () => {
 			"Project",
 			"Epic",
 			"Initiative",
+				"Plan",
 			"PRD",
 			"ADR",
 			"User story",
-			"Issue"
+			"Issue",
+			"Debt"
 		]);
 
 		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="issue"]')?.click();

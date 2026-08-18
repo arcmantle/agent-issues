@@ -4,6 +4,7 @@ import type { AuthIdentity, AuthProvider } from "../auth/auth-provider.js";
 import { EntityConflictError, EntityRevisionError } from "../features/entity-store/domain.js";
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../features/context/context-types.js";
 import { IssueCommentConflictError } from "../features/storage-driver/issue-comment-store.js";
+import { PlanEntryConflictError } from "../features/plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
 import { SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
 import { ChangeEventBroadcaster } from "./change-events.js";
@@ -221,6 +222,8 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 					? { entityId: error.entityId, reason: error.reason, ...(error.headRevision !== undefined && { headRevision: error.headRevision }) }
 					: error instanceof IssueCommentConflictError
 						? { commentId: error.commentId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
+						: error instanceof PlanEntryConflictError
+							? { entryId: error.entryId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
 					: error instanceof ContextRevisionError
 						? { contextKey: error.contextKey, reason: error.reason, ...(error.term !== undefined && { term: error.term }), ...(error.headRevision !== undefined && { headRevision: error.headRevision }) }
 					: error instanceof ContextConflictError

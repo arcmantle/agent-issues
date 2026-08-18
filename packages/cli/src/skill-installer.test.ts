@@ -46,6 +46,19 @@ describe("skill installer", () => {
 
 			expect(composer).toContain("`ai-domain-modeling` skill");
 		}
+		for (const skillName of ["ai-grill-with-docs", "ai-plan"]) {
+			const skill = readFileSync(path.join(targetDir, skillName, "SKILL.md"), "utf8");
+
+			expect(skill).toContain("`agent-issues show <initiative-reference> --view full --json`");
+			expect(skill).toContain("`agent-issues create plan --title \"<Plan title>\" --parent <initiative-reference> --body-file - --json`");
+			expect(skill).toContain("If the user gives an explicit Plan reference, resume that Plan instead.");
+			expect(skill).toContain("Do not infer a Plan to resume or create a duplicate Plan.");
+			expect(skill).toContain("`agent-issues plan-entry add`");
+			expect(skill).toContain("before asking it");
+			expect(skill).toContain("before continuing");
+			expect(skill).toContain("--supersedes <question-reference>");
+			expect(skill).toContain("durable fact from code or tool output");
+		}
 			for (const callerName of ["ai-implement", "ai-prepare", "ai-start-work", "ai-tdd"]) {
 			const caller = readFileSync(path.join(targetDir, callerName, "SKILL.md"), "utf8");
 
@@ -75,6 +88,58 @@ describe("skill installer", () => {
 
 		expect(installedMigration?.status).toBe("installed");
 		expect(existsSync(path.join(targetDir, "ai-recipe-migration", "SKILL.md"))).toBe(true);
+	});
+
+	it("installs the ready-Plan PRD conversion workflow", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+		const skill = readFileSync(path.join(targetDir, "ai-to-prd", "SKILL.md"), "utf8");
+
+		expect(skill).toContain("explicit ready Plan reference");
+		expect(skill).toContain("active Plan entries");
+		expect(skill).toContain("Plan informs PRD");
+		expect(skill).toContain("tombstone: true");
+		expect(skill).toContain("supersededEntryIds");
+		expect(skill).toContain("agent-issues link <plan-reference> informs <prd-reference> --json");
+	});
+
+	it("installs typed Wayfinder Plan workflow guidance", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+		const skill = readFileSync(path.join(targetDir, "ai-wayfinder-wip", "SKILL.md"), "utf8");
+
+		expect(skill).toContain("--type wayfinder-map");
+		expect(skill).toContain("--type wayfinder-ticket");
+		expect(skill).toContain("agent-issues create plan --parent <initiativeReference>");
+		expect(skill).toContain("resumes only an explicit Plan reference");
+		expect(skill).toContain("--reference <ticket-reference>");
+		expect(skill).toContain("canonical detailed resolution");
+		expect(skill).toContain("does not inform a Wayfinder map");
+		expect(skill).toContain("update only `## Resolution`");
+	});
+
+	it("installs a discoverable debt recipe", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+		const catalog = readFileSync(path.join(targetDir, "recipes", "README.md"), "utf8");
+		const recipe = readFileSync(path.join(targetDir, "recipes", "debt.md"), "utf8");
+
+		expect(catalog).toContain("[Debt](./debt.md)");
+		expect(recipe).toContain("# Debt Recipe");
+	});
+
+	it("installs debt model guidance", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+		const toolingGuide = readFileSync(path.join(targetDir, "ai-agent-issues", "SKILL.md"), "utf8");
+
+		expect(toolingGuide).toContain("Debt records are reference-only");
+		expect(toolingGuide).toContain("open, resolved, and archived");
+		expect(toolingGuide).toContain("project, epic, initiative, or issue");
 	});
 
 	it("installs Recipe migration guidance for preview approval and stale records", () => {
@@ -199,6 +264,7 @@ describe("skill installer", () => {
 		expect(installedGuidance).toContain("agent-issues list <kind> --json");
 		expect(installedGuidance).toContain("agent-issues relations <id> --json");
 		expect(installedGuidance).toContain("agent-issues show <id> --view full --json");
+		expect(nextWork).toContain("--status 'todo,in-progress,blocked'");
 		expect(installedGuidance).not.toContain("compatibility default");
 		expect(installedGuidance).toContain("Use `bundle` only for a planned initiative-wide read");
 		expect(installedGuidance).toContain("Routine `jq` filtering shows a missing CLI feature");

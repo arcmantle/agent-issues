@@ -14,6 +14,16 @@ Test observable behavior through public interfaces. Prefer integration-style tes
 
 See [tests.md](tests.md) for examples. See [mocking.md](mocking.md) for mocking rules.
 
+## Removed behavior
+
+When an issue removes a feature, constraint, or compatibility path, remove or update its obsolete tests. Do not add a new test whose only purpose is to confirm that deleted code or an obsolete restriction has not returned. That test has no current behavior contract and adds maintenance cost. Test a replacement or newly supported observable behavior when the change creates one. Add an absence test only when the active issue or a relevant ADR makes the absence an explicit, observable requirement.
+
+## Static declarations
+
+Do not add a test that reads a static declaration and restates its literal shape or values. Examples include object trees, route tables, dependency lists, manifests, schema entries, and constant maps. Such a test duplicates the implementation and fails on an intentional edit without protecting caller behavior.
+
+For a static declaration change, test the behavior that consumes the declaration through its public interface. If no distinct behavior can fail, do not force a red-green cycle. Use the existing behavioral suite, type-check, lint, build, or focused inspection as validation instead. Test the declaration directly only when its serialized shape is itself a supported external contract.
+
 ## Anti-pattern: horizontal slices
 
 Use vertical tracer bullets. Do not write all the tests first and all the implementation second.
@@ -79,6 +89,9 @@ If you need a paragraph-long comment to justify a workaround, the code is wrong.
 [ ] Test describes behavior, not implementation
 [ ] Test uses public interface only
 [ ] Test would survive internal refactor
+[ ] Test does not restate a static declaration unless that shape is an external contract
+[ ] Test covers current or newly supported behavior, not only the absence of removed behavior
+[ ] Obsolete tests were removed or updated
 [ ] Code is minimal for this test
 [ ] No speculative features added
 ```

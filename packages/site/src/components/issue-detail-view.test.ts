@@ -89,6 +89,64 @@ afterEach(() => {
 });
 
 describe("entity detail pane", () => {
+	it("renders a Plan's generated current groups and complete entry history", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Plan owner" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "in-progress", title: "Plan record" });
+		const question = {
+			body: "Which entries are current?",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			id: "ENTRY1",
+			planId: plan.id,
+			reference: "PLAN_ENTRY_QUESTION",
+			referencedEntityIds: [],
+			role: "question" as const,
+			scopeDirection: null,
+			supersededEntryIds: [],
+			tombstone: false,
+			updatedAt: "2026-01-01T00:00:00.000Z"
+		};
+		const decision = {
+			body: "Show active groups and history.",
+			createdAt: "2026-01-02T00:00:00.000Z",
+			id: "ENTRY2",
+			planId: plan.id,
+			reference: "PLAN_ENTRY_DECISION",
+			referencedEntityIds: [],
+			role: "decision" as const,
+			scopeDirection: null,
+			supersededEntryIds: [question.id],
+			tombstone: false,
+			updatedAt: "2026-01-02T00:00:00.000Z"
+		};
+		const deleted = {
+			body: undefined,
+			createdAt: "2026-01-03T00:00:00.000Z",
+			id: "ENTRY3",
+			planId: plan.id,
+			reference: "PLAN_ENTRY_DELETED",
+			referencedEntityIds: [],
+			role: "consideration" as const,
+			scopeDirection: null,
+			supersededEntryIds: [],
+			tombstone: true,
+			updatedAt: "2026-01-03T00:00:00.000Z"
+		};
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, plan],
+			initiatives: [makeBundle(initiative, { entities: [initiative, plan] })],
+			planEntries: [question, decision, deleted]
+		}));
+		store.selectEntity(plan.id);
+		const view = await mountDetail(store);
+
+		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).toContain("Decisions");
+		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).toContain(decision.body);
+		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).not.toContain(question.body);
+		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain(question.reference);
+		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain(deleted.reference);
+		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain("Deleted");
+	});
+
 	it("renders the kind label, title, id, and a status badge for the open record", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "todo", title: "Wire the detail pane" });
@@ -105,6 +163,98 @@ describe("entity detail pane", () => {
 		expect(root?.querySelector(".ai-d-title")?.textContent).toContain("Wire the detail pane");
 		expect(root?.querySelector(".ai-d-title .ai-id")?.textContent?.trim()).toBe(store.shortRef(issue));
 		expect(root?.querySelector(".ai-d-title .badge")?.textContent?.trim()).toBe("todo");
+	});
+
+	it("renders debt metadata and its owner, resolver, context, and handoff links", async () => {
+		const owner = makeEntity({ id: "PROJ1", kind: "project", status: "active", title: "Platform" });
+		const resolver = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Modernize storage" });
+		const relatedIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Retire legacy adapter" });
+		const handoff = makeEntity({ id: "HO1", kind: "handoff", status: "active", title: "Investigate storage debt" });
+		const debt = makeEntity({ category: "technical", id: "DEBT1", kind: "debt", priority: "high", status: "open", title: "Replace legacy storage" });
+		const store = makeStore(
+			makeSnapshot({
+				entities: [owner, resolver, relatedIssue, handoff, debt],
+				relations: [
+					makeRelation(owner.id, "records", debt.id),
+					makeRelation(resolver.id, "resolves", debt.id),
+					makeRelation(debt.id, "relatesTo", relatedIssue.id),
+					makeRelation(handoff.id, "handsOff", debt.id)
+				]
+			})
+		);
+		store.selectEntity(debt.id);
+		const view = await mountDetail(store);
+
+		const metadata = view.shadowRoot?.querySelector(".ai-meta")?.textContent;
+		expect(metadata).toContain("technical");
+		expect(metadata).toContain("high");
+		expect(metadata).toContain("Platform");
+		expect([...view.shadowRoot?.querySelectorAll(".ai-meta .k") ?? []].map((label) => label.textContent?.trim())).toEqual([
+			"Initiative",
+			"Category",
+			"Priority",
+			"Lifecycle",
+			"Owner",
+			"Created",
+			"Updated"
+		]);
+		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
+		expect(sectionTitles).toEqual(expect.arrayContaining(["Recorded by", "Resolved by", "Related records", "Incoming handoffs"]));
+	});
+
+	it("renders a specialized issue type", async () => {
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Choose architecture", type: "wayfinder-map" });
+		const store = makeStore(makeSnapshot({ entities: [issue] }));
+		store.selectEntity(issue.id);
+		const view = await mountDetail(store);
+
+		expect(view.shadowRoot?.querySelector(".ai-meta")?.textContent).toContain("wayfinder-map");
+	});
+
+	it("shows directly owned debt in a project detail without a resolver section", async () => {
+		const project = makeEntity({ id: "PROJ1", kind: "project", status: "active", title: "Platform" });
+		const debt = makeEntity({ category: "technical", id: "DEBT1", kind: "debt", priority: "high", status: "open", title: "Replace legacy storage" });
+		const store = makeStore(
+			makeSnapshot({
+				entities: [project, debt],
+				relations: [makeRelation(project.id, "records", debt.id)]
+			})
+		);
+		store.selectEntity(project.id);
+		const view = await mountDetail(store);
+
+		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
+		expect(sectionTitles).toContain("Owned debt");
+		expect(sectionTitles).not.toContain("Resolves debt");
+		expect(view.shadowRoot?.querySelector(".ai-sec")?.textContent).toContain("Replace legacy storage");
+		(view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-ref[data-id="DEBT1"]'))?.click();
+		expect(store.selectedId.get()).toBe(debt.id);
+	});
+
+	it("shows owned and resolved debt in separate epic and issue details", async () => {
+		for (const ownerKind of ["epic", "issue"] as const) {
+			const owner = makeEntity({ id: `${ownerKind.toUpperCase()}1`, kind: ownerKind, status: "active", title: `${ownerKind} owner` });
+			const ownedDebt = makeEntity({ category: "technical", id: `${ownerKind.toUpperCase()}-DEBT1`, kind: "debt", priority: "high", status: "open", title: `${ownerKind} owned debt` });
+			const resolvedDebt = makeEntity({ category: "process", id: `${ownerKind.toUpperCase()}-DEBT2`, kind: "debt", priority: "medium", status: "resolved", title: `${ownerKind} resolved debt` });
+			const store = makeStore(
+				makeSnapshot({
+					entities: [owner, ownedDebt, resolvedDebt],
+					relations: [
+						makeRelation(owner.id, "records", ownedDebt.id),
+						makeRelation(owner.id, "resolves", resolvedDebt.id)
+					]
+				})
+			);
+			store.selectEntity(owner.id);
+			const view = await mountDetail(store);
+			const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
+
+			expect(sectionTitles).toEqual(expect.arrayContaining(["Owned debt", "Resolves debt"]));
+			expect(sectionTitles).not.toContain("Records");
+			expect(view.shadowRoot?.textContent).toContain(ownedDebt.title);
+			expect(view.shadowRoot?.textContent).toContain(resolvedDebt.title);
+			document.body.replaceChildren();
+		}
 	});
 
 	it("renders an issue's newest comment page in chronological order", async () => {

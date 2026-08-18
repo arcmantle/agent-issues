@@ -6,19 +6,27 @@ import {
 	encodeEntityRecordKey,
 	encodeIssueCommentRecordKey,
 	encodeCanonicalReference,
+	encodePlanEntryRecordKey,
 	DEFAULT_PROJECT_ID,
 	deriveMigratedEntityIdentity,
 	getAllowedRelationType,
 	isBodySource,
+	isEntityCategory,
 	isEntityKind,
+	isEntityPriority,
+	isEntityType,
+	isPlanEntryRole,
+	isPlanEntryScopeDirection,
 	isStructuralRelationType,
 	mergeCanonicalChainBundles,
+	shortEntityReference,
 	type CanonicalChainBundle,
 	type CanonicalChainImportResult,
 	type CanonicalContextChain,
 	type CanonicalContextTermChain,
 	type CanonicalEntityChain,
 	type CanonicalIssueCommentChain,
+	type CanonicalPlanEntryChain,
 	type UserDirectoryRecord,
 	type SynchronizeStore
 } from "@agent-issues/core";
@@ -26,11 +34,14 @@ import {
 import type { SqliteExecutor } from "../../db/sqlite-executor.js";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 
-type EntityHeadRow = { id: string; reference: string; created_by: string; updated_by: string; kind: string; title: string; body: string; body_source: string; status: string; revision: number; content_hash: string; tombstone: number; project_id: string | null; created_at: string; updated_at: string; parent_id: string | null };
-type ContextHeadRow = { id: string; reference: string; created_by: string; updated_by: string; key: string; scope_entity_id: string | null; title: string; summary: string; revision: number; content_hash: string; created_at: string; updated_at: string };
-type ContextTermHeadRow = { id: string; created_by: string; updated_by: string; context_key: string; term: string; definition: string; avoid_terms: string; tombstone: number; revision: number; content_hash: string; created_at: string; updated_at: string };
-type IssueCommentHeadRow = { id: string; reference: string; issue_id: string; created_by: string; updated_by: string; body: string; tombstone: number; revision: number; content_hash: string; created_at: string; updated_at: string };
+type EntityHeadRow = { id: string; reference: string; short_reference: string; created_by: string; updated_by: string; kind: string; title: string; body: string; body_source: string; category: string | null; priority: string | null; type: string | null; status: string; revision: number; content_hash: string; tombstone: number; project_id: string | null; created_at: string; updated_at: string; parent_id: string | null };
+type ContextHeadRow = { id: string; reference: string; short_reference: string; created_by: string; updated_by: string; key: string; scope_entity_id: string | null; title: string; summary: string; revision: number; content_hash: string; created_at: string; updated_at: string };
+type ContextTermHeadRow = { id: string; short_reference: string; created_by: string; updated_by: string; context_key: string; term: string; definition: string; avoid_terms: string; tombstone: number; revision: number; content_hash: string; created_at: string; updated_at: string };
+type IssueCommentHeadRow = { id: string; reference: string; short_reference: string; issue_id: string; created_by: string; updated_by: string; body: string; tombstone: number; revision: number; content_hash: string; created_at: string; updated_at: string };
 type IssueCommentReferenceRow = { comment_id: string; issue_id: string; position: number };
+type PlanEntryHeadRow = { id: string; reference: string; short_reference: string; plan_id: string; created_by: string; updated_by: string; role: string; body: string; scope_direction: string | null; tombstone: number; revision: number; content_hash: string; created_at: string; updated_at: string };
+type PlanEntryReferenceRow = { plan_entry_id: string; entity_id: string; position: number };
+type PlanEntrySupersessionRow = { plan_entry_id: string; superseded_entry_id: string; position: number };
 type UserRow = { id: string; authentication_subject: string; display_name: string | null; updated_at: string };
 type LedgerRow = { id: string; project_id: string; record_kind: string; record_key: string; revision: number; author: string; patch_format: number; reverse_patch: Uint8Array; source_hash: Uint8Array; target_hash: Uint8Array; restored_from_revision: number | null; created_at: string };
 type SqliteQuerySurface = Pick<SqliteExecutor["drizzle"], "all" | "run">;
@@ -58,6 +69,9 @@ export function exportCanonicalChains(executor: SqliteExecutor): CanonicalChainB
 	const termRows = executor.drizzle.all(sql`SELECT * FROM context_terms WHERE tenant_id = ${executor.tenantId}`) as ContextTermHeadRow[];
 	const commentRows = executor.drizzle.all(sql`SELECT * FROM issue_comments WHERE tenant_id = ${executor.tenantId}`) as IssueCommentHeadRow[];
 	const commentReferenceRows = executor.drizzle.all(sql`SELECT comment_id, issue_id, position FROM issue_comment_references WHERE tenant_id = ${executor.tenantId} ORDER BY comment_id, position`) as IssueCommentReferenceRow[];
+	const planEntryRows = executor.drizzle.all(sql`SELECT * FROM plan_entries WHERE tenant_id = ${executor.tenantId}`) as PlanEntryHeadRow[];
+	const planEntryReferenceRows = executor.drizzle.all(sql`SELECT plan_entry_id, entity_id, position FROM plan_entry_references WHERE tenant_id = ${executor.tenantId} ORDER BY plan_entry_id, position`) as PlanEntryReferenceRow[];
+	const planEntrySupersessionRows = executor.drizzle.all(sql`SELECT plan_entry_id, superseded_entry_id, position FROM plan_entry_supersessions WHERE tenant_id = ${executor.tenantId} ORDER BY plan_entry_id, position`) as PlanEntrySupersessionRow[];
 	const userRows = executor.drizzle.all(sql`SELECT id, authentication_subject, display_name, updated_at FROM users WHERE tenant_id = ${executor.tenantId} ORDER BY id`) as UserRow[];
 	const ledgerRows = executor.drizzle.all(sql`SELECT * FROM revision_entries
 		WHERE tenant_id = ${executor.tenantId}
@@ -69,13 +83,22 @@ export function exportCanonicalChains(executor: SqliteExecutor): CanonicalChainB
 				throw new Error(`Cannot export invalid entity ${row.id}.`);
 			}
 			return {
-				head: { id: row.id, reference: row.reference, createdBy: row.created_by, updatedBy: row.updated_by, kind: row.kind, title: row.title, body: row.body, bodySource: row.body_source, status: row.status, parentId: row.parent_id, tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at },
+				head: { id: row.id, reference: row.reference, shortReference: row.short_reference, createdBy: row.created_by, updatedBy: row.updated_by, kind: row.kind, title: row.title, body: row.body, bodySource: row.body_source, category: row.category && isEntityCategory(row.category) ? row.category : null, priority: row.priority && isEntityPriority(row.priority) ? row.priority : null, type: row.type && isEntityType(row.kind, row.type) ? row.type : null, status: row.status, parentId: row.parent_id, tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at },
 				deltas: ledgerRows.filter((delta) => delta.project_id === row.project_id && delta.record_kind === "entity" && delta.record_key === encodeEntityRecordKey(row.id)).map(mapDelta)
 			};
 		}),
-		contexts: contextRows.map((row): CanonicalContextChain => ({ head: { id: row.id, reference: row.reference, createdBy: row.created_by, updatedBy: row.updated_by, key: row.key, scopeEntityId: row.scope_entity_id, title: row.title, summary: row.summary, revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at }, deltas: ledgerRows.filter((delta) => delta.record_kind === "context" && delta.record_key === encodeContextRecordKey(row.id)).map(mapDelta) })),
-		contextTerms: termRows.map((row): CanonicalContextTermChain => ({ head: { id: row.id, reference: encodeCanonicalReference("contextTerm", row.id), createdBy: row.created_by, updatedBy: row.updated_by, contextKey: row.context_key, term: row.term, definition: row.definition, avoid: parseStringArray(row.avoid_terms), tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at }, deltas: ledgerRows.filter((delta) => delta.record_kind === "context-term" && delta.record_key === encodeContextTermRecordKey(row.id)).map(mapDelta) })),
-		issueComments: commentRows.map((row): CanonicalIssueCommentChain => ({ head: { id: row.id, reference: row.reference, issueId: row.issue_id, createdBy: row.created_by, updatedBy: row.updated_by, body: row.body, referencedIssueIds: commentReferenceRows.filter((reference) => reference.comment_id === row.id).map((reference) => reference.issue_id), tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at }, deltas: ledgerRows.filter((delta) => delta.record_kind === "issue-comment" && delta.record_key === encodeIssueCommentRecordKey(row.id)).map(mapDelta) })),
+		contexts: contextRows.map((row): CanonicalContextChain => ({ head: { id: row.id, reference: row.reference, shortReference: row.short_reference, createdBy: row.created_by, updatedBy: row.updated_by, key: row.key, scopeEntityId: row.scope_entity_id, title: row.title, summary: row.summary, revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at }, deltas: ledgerRows.filter((delta) => delta.record_kind === "context" && delta.record_key === encodeContextRecordKey(row.id)).map(mapDelta) })),
+		contextTerms: termRows.map((row): CanonicalContextTermChain => ({ head: { id: row.id, reference: encodeCanonicalReference("contextTerm", row.id), shortReference: row.short_reference, createdBy: row.created_by, updatedBy: row.updated_by, contextKey: row.context_key, term: row.term, definition: row.definition, avoid: parseStringArray(row.avoid_terms), tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at }, deltas: ledgerRows.filter((delta) => delta.record_kind === "context-term" && delta.record_key === encodeContextTermRecordKey(row.id)).map(mapDelta) })),
+		issueComments: commentRows.map((row): CanonicalIssueCommentChain => ({ head: { id: row.id, reference: row.reference, shortReference: row.short_reference, issueId: row.issue_id, createdBy: row.created_by, updatedBy: row.updated_by, body: row.body, referencedIssueIds: commentReferenceRows.filter((reference) => reference.comment_id === row.id).map((reference) => reference.issue_id), tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at }, deltas: ledgerRows.filter((delta) => delta.record_kind === "issue-comment" && delta.record_key === encodeIssueCommentRecordKey(row.id)).map(mapDelta) })),
+		planEntries: planEntryRows.map((row): CanonicalPlanEntryChain => {
+			if (!isPlanEntryRole(row.role) || (row.scope_direction !== null && !isPlanEntryScopeDirection(row.scope_direction))) {
+				throw new Error(`Cannot export invalid Plan entry ${row.id}.`);
+			}
+			return {
+				head: { id: row.id, reference: row.reference, shortReference: row.short_reference, planId: row.plan_id, createdBy: row.created_by, updatedBy: row.updated_by, role: row.role, body: row.body, scopeDirection: row.scope_direction, referencedEntityIds: planEntryReferenceRows.filter((reference) => reference.plan_entry_id === row.id).map((reference) => reference.entity_id), supersededEntryIds: planEntrySupersessionRows.filter((supersession) => supersession.plan_entry_id === row.id).map((supersession) => supersession.superseded_entry_id), tombstone: Boolean(row.tombstone), revision: row.revision, contentHash: row.content_hash, createdAt: row.created_at, updatedAt: row.updated_at },
+				deltas: ledgerRows.filter((delta) => delta.record_kind === "plan-entry" && delta.record_key === encodePlanEntryRecordKey(row.id)).map(mapDelta)
+			};
+		}),
 		users: userRows.map(toUserDirectoryRecord)
 	};
 }
@@ -84,7 +107,7 @@ export function importCanonicalChains(executor: SqliteExecutor, incoming: Canoni
 	return executor.drizzle.transaction((tx) => {
 		const current = exportCanonicalChains(executor);
 		const merged = mergeCanonicalChainBundles(current, incoming);
-		const result: CanonicalChainImportResult = { entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], usersCreated: [], usersUpdated: [] };
+		const result: CanonicalChainImportResult = { entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], usersCreated: [], usersUpdated: [] };
 		const currentEntities = new Map(current.entities.map((chain) => [chain.head.id, chain]));
 		for (const chain of merged.entities) {
 			const existing = currentEntities.get(chain.head.id);
@@ -115,6 +138,14 @@ export function importCanonicalChains(executor: SqliteExecutor, incoming: Canoni
 			writeIssueComment(tx, executor, chain, existing === undefined);
 			(existing ? result.issueCommentsAdvanced : result.issueCommentsCreated).push(chain.head.id);
 		}
+		const currentPlanEntries = new Map(current.planEntries.map((chain) => [chain.head.id, chain]));
+		for (const chain of merged.planEntries) {
+			const existing = currentPlanEntries.get(chain.head.id);
+			if (existing?.head.revision === chain.head.revision) continue;
+			writePlanEntry(tx, executor, chain, existing === undefined);
+			(existing ? result.planEntriesAdvanced : result.planEntriesCreated).push(chain.head.id);
+		}
+		rebuildPlanEntryLinks(tx, executor, merged.planEntries);
 		const currentUsers = new Map(current.users.map((user) => [user.id, user]));
 		for (const user of merged.users) {
 			const existing = currentUsers.get(user.id);
@@ -128,8 +159,8 @@ export function importCanonicalChains(executor: SqliteExecutor, incoming: Canoni
 
 function writeEntity(query: SqliteQuerySurface, executor: SqliteExecutor, chain: CanonicalEntityChain, created: boolean): void {
 	const head = chain.head;
-	if (created) query.run(sql`INSERT INTO entities (tenant_id, id, reference, created_by, updated_by, kind, title, status, body, body_source, revision, content_hash, tombstone, project_id, created_at, updated_at) VALUES (${executor.tenantId}, ${head.id}, ${head.reference}, ${head.createdBy}, ${head.updatedBy}, ${head.kind}, ${head.title}, ${head.status}, ${head.body}, ${head.bodySource}, ${head.revision}, ${head.contentHash}, ${head.tombstone ? 1 : 0}, ${head.kind === "project" ? head.id : executor.currentProjectId}, ${head.createdAt}, ${head.updatedAt})`);
-	else query.run(sql`UPDATE entities SET updated_by=${head.updatedBy}, title=${head.title}, status=${head.status}, body=${head.body}, body_source=${head.bodySource}, revision=${head.revision}, content_hash=${head.contentHash}, tombstone=${head.tombstone ? 1 : 0}, updated_at=${head.updatedAt} WHERE tenant_id=${executor.tenantId} AND id=${head.id}`);
+	if (created) query.run(sql`INSERT INTO entities (tenant_id, id, reference, short_reference, created_by, updated_by, kind, title, status, body, body_source, category, priority, type, revision, content_hash, tombstone, project_id, created_at, updated_at) VALUES (${executor.tenantId}, ${head.id}, ${head.reference}, ${shortEntityReference(head)}, ${head.createdBy}, ${head.updatedBy}, ${head.kind}, ${head.title}, ${head.status}, ${head.body}, ${head.bodySource}, ${head.category}, ${head.priority}, ${head.type}, ${head.revision}, ${head.contentHash}, ${head.tombstone ? 1 : 0}, ${head.kind === "project" ? head.id : executor.currentProjectId}, ${head.createdAt}, ${head.updatedAt})`);
+	else query.run(sql`UPDATE entities SET updated_by=${head.updatedBy}, title=${head.title}, status=${head.status}, body=${head.body}, body_source=${head.bodySource}, category=${head.category}, priority=${head.priority}, type=${head.type}, revision=${head.revision}, content_hash=${head.contentHash}, tombstone=${head.tombstone ? 1 : 0}, updated_at=${head.updatedAt} WHERE tenant_id=${executor.tenantId} AND id=${head.id}`);
 	const projectId = getEntityProjectId(query, executor, head.id);
 	for (const delta of chain.deltas) query.run(sql`INSERT OR IGNORE INTO revision_entries (id, tenant_id, project_id, record_kind, record_key, revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at) VALUES (${delta.id}, ${executor.tenantId}, ${projectId}, 'entity', ${encodeEntityRecordKey(head.id)}, ${delta.revision}, ${delta.author}, ${delta.patchFormat}, ${Buffer.from(delta.reversePatch)}, ${encodeRevisionPatchHash(delta.sourceHash)}, ${encodeRevisionPatchHash(delta.targetHash)}, ${delta.restoredFromRevision ?? null}, ${delta.createdAt})`);
 }
@@ -150,7 +181,7 @@ function rebuildStructuralParents(query: SqliteQuerySurface, executor: SqliteExe
 
 function writeContext(query: SqliteQuerySurface, executor: SqliteExecutor, chain: CanonicalContextChain, created: boolean): void {
 	const head = chain.head;
-	if (created) query.run(sql`INSERT INTO contexts (tenant_id,id,reference,key,created_by,updated_by,scope_entity_id,title,summary,revision,content_hash,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${head.reference},${head.key},${head.createdBy},${head.updatedBy},${head.scopeEntityId},${head.title},${head.summary},${head.revision},${head.contentHash},${head.createdAt},${head.updatedAt})`);
+	if (created) query.run(sql`INSERT INTO contexts (tenant_id,id,reference,short_reference,key,created_by,updated_by,scope_entity_id,title,summary,revision,content_hash,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${head.reference},${shortEntityReference({ id: head.id, kind: "context", shortReference: head.shortReference })},${head.key},${head.createdBy},${head.updatedBy},${head.scopeEntityId},${head.title},${head.summary},${head.revision},${head.contentHash},${head.createdAt},${head.updatedAt})`);
 	else query.run(sql`UPDATE contexts SET updated_by=${head.updatedBy},scope_entity_id=${head.scopeEntityId},title=${head.title},summary=${head.summary},revision=${head.revision},content_hash=${head.contentHash},updated_at=${head.updatedAt} WHERE tenant_id=${executor.tenantId} AND key=${head.key}`);
 	const projectId = getContextProjectId(query, executor, head.key, head.scopeEntityId);
 	for (const delta of chain.deltas) query.run(sql`INSERT OR IGNORE INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${executor.tenantId},${projectId},'context',${encodeContextRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt})`);
@@ -158,7 +189,7 @@ function writeContext(query: SqliteQuerySurface, executor: SqliteExecutor, chain
 
 function writeContextTerm(query: SqliteQuerySurface, executor: SqliteExecutor, chain: CanonicalContextTermChain, created: boolean): void {
 	const head = chain.head;
-	if (created) query.run(sql`INSERT INTO context_terms (tenant_id,id,context_key,created_by,updated_by,term,definition,avoid_terms,revision,content_hash,tombstone,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${head.contextKey},${head.createdBy},${head.updatedBy},${head.term},${head.definition},${JSON.stringify(head.avoid)},${head.revision},${head.contentHash},${head.tombstone ? 1 : 0},${head.createdAt},${head.updatedAt})`);
+	if (created) query.run(sql`INSERT INTO context_terms (tenant_id,id,short_reference,context_key,created_by,updated_by,term,definition,avoid_terms,revision,content_hash,tombstone,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${shortEntityReference({ id: head.id, kind: "contextTerm", shortReference: head.shortReference })},${head.contextKey},${head.createdBy},${head.updatedBy},${head.term},${head.definition},${JSON.stringify(head.avoid)},${head.revision},${head.contentHash},${head.tombstone ? 1 : 0},${head.createdAt},${head.updatedAt})`);
 	else query.run(sql`UPDATE context_terms SET updated_by=${head.updatedBy},context_key=${head.contextKey},term=${head.term},definition=${head.definition},avoid_terms=${JSON.stringify(head.avoid)},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone ? 1 : 0},updated_at=${head.updatedAt} WHERE tenant_id=${executor.tenantId} AND id=${head.id}`);
 	const projectId = getContextProjectId(query, executor, head.contextKey);
 	for (const delta of chain.deltas) query.run(sql`INSERT OR IGNORE INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${executor.tenantId},${projectId},'context-term',${encodeContextTermRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt})`);
@@ -166,12 +197,29 @@ function writeContextTerm(query: SqliteQuerySurface, executor: SqliteExecutor, c
 
 function writeIssueComment(query: SqliteQuerySurface, executor: SqliteExecutor, chain: CanonicalIssueCommentChain, created: boolean): void {
 	const head = chain.head;
-	if (created) query.run(sql`INSERT INTO issue_comments (tenant_id,id,reference,issue_id,created_by,updated_by,body,revision,content_hash,tombstone,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${head.reference},${head.issueId},${head.createdBy},${head.updatedBy},${head.body},${head.revision},${head.contentHash},${head.tombstone ? 1 : 0},${head.createdAt},${head.updatedAt})`);
+	if (created) query.run(sql`INSERT INTO issue_comments (tenant_id,id,reference,short_reference,issue_id,created_by,updated_by,body,revision,content_hash,tombstone,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${head.reference},${shortEntityReference({ id: head.id, kind: "issueComment", shortReference: head.shortReference })},${head.issueId},${head.createdBy},${head.updatedBy},${head.body},${head.revision},${head.contentHash},${head.tombstone ? 1 : 0},${head.createdAt},${head.updatedAt})`);
 	else query.run(sql`UPDATE issue_comments SET updated_by=${head.updatedBy},body=${head.body},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone ? 1 : 0},updated_at=${head.updatedAt} WHERE tenant_id=${executor.tenantId} AND id=${head.id}`);
 	const projectId = getEntityProjectId(query, executor, head.issueId);
 	for (const delta of chain.deltas) query.run(sql`INSERT OR IGNORE INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${executor.tenantId},${projectId},'issue-comment',${encodeIssueCommentRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt})`);
 	query.run(sql`DELETE FROM issue_comment_references WHERE tenant_id=${executor.tenantId} AND comment_id=${head.id}`);
 	head.referencedIssueIds.forEach((issueId, position) => query.run(sql`INSERT INTO issue_comment_references (tenant_id,comment_id,issue_id,position) VALUES (${executor.tenantId},${head.id},${issueId},${position})`));
+}
+
+function writePlanEntry(query: SqliteQuerySurface, executor: SqliteExecutor, chain: CanonicalPlanEntryChain, created: boolean): void {
+	const head = chain.head;
+	if (created) query.run(sql`INSERT INTO plan_entries (tenant_id,id,reference,short_reference,plan_id,created_by,updated_by,role,body,scope_direction,revision,content_hash,tombstone,created_at,updated_at) VALUES (${executor.tenantId},${head.id},${head.reference},${shortEntityReference({ id: head.id, kind: "planEntry", shortReference: head.shortReference })},${head.planId},${head.createdBy},${head.updatedBy},${head.role},${head.body},${head.scopeDirection},${head.revision},${head.contentHash},${head.tombstone ? 1 : 0},${head.createdAt},${head.updatedAt})`);
+	else query.run(sql`UPDATE plan_entries SET updated_by=${head.updatedBy},role=${head.role},body=${head.body},scope_direction=${head.scopeDirection},revision=${head.revision},content_hash=${head.contentHash},tombstone=${head.tombstone ? 1 : 0},updated_at=${head.updatedAt} WHERE tenant_id=${executor.tenantId} AND id=${head.id}`);
+	const projectId = getEntityProjectId(query, executor, head.planId);
+	for (const delta of chain.deltas) query.run(sql`INSERT OR IGNORE INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${executor.tenantId},${projectId},'plan-entry',${encodePlanEntryRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt})`);
+}
+
+function rebuildPlanEntryLinks(query: SqliteQuerySurface, executor: SqliteExecutor, chains: CanonicalPlanEntryChain[]): void {
+	for (const chain of chains) {
+		query.run(sql`DELETE FROM plan_entry_references WHERE tenant_id=${executor.tenantId} AND plan_entry_id=${chain.head.id}`);
+		chain.head.referencedEntityIds.forEach((entityId, position) => query.run(sql`INSERT INTO plan_entry_references (tenant_id,plan_entry_id,entity_id,position) VALUES (${executor.tenantId},${chain.head.id},${entityId},${position})`));
+		query.run(sql`DELETE FROM plan_entry_supersessions WHERE tenant_id=${executor.tenantId} AND plan_entry_id=${chain.head.id}`);
+		chain.head.supersededEntryIds.forEach((entryId, position) => query.run(sql`INSERT INTO plan_entry_supersessions (tenant_id,plan_entry_id,superseded_entry_id,position) VALUES (${executor.tenantId},${chain.head.id},${entryId},${position})`));
+	}
 }
 
 function writeUser(query: SqliteQuerySurface, executor: SqliteExecutor, user: UserDirectoryRecord, created: boolean): void {

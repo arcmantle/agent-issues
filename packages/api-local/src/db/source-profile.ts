@@ -36,12 +36,25 @@ const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	"ee001534d58d8506c0011534cb82ae3a2d0c5a25958ed5bae01ca1ff828c9b1b",
 	"f8688deca5a9334021fb175da92be9281f6950be455608980a944f2694791804",
 	"66ff29b38bc923a660fc1bffd3b0cca96a649be331a62c596bd1d37c2f0c2244",
-	"e6a9d0864480ec5a69ab319a2e414a3bf5ab52021cb002e0f3bf1eb3ea8d25dd"
+	"e6a9d0864480ec5a69ab319a2e414a3bf5ab52021cb002e0f3bf1eb3ea8d25dd",
+	"bf99a2d79c2eb10993645ad57bedfdcae257b94944e2a74cdcf584eb43d40653",
+	"29f9fcfa7de7c3bd4dfbff6c8c946b27ff86f140e81066032ca75a4e3ea79422",
+	"7891cbdbbadab362a08d993b4bc0a17f33669510db8a114702e5a148ce495e70",
+	"16522f37d98d36de3ade800657bebbdaaa0ffba733326953e695b9d5f88c4171",
+	"9e7cc62c0dcf87198c8bcbe5dd1c91a141c978dcfb88d0d8af98628ef47bfbb6",
+	"dc0ab9d8b8e93223dd9fd87bc3416adbf5d9a814c0d3494979c6ab4244d823bb",
+	"56088fdda6180c9343496577f60e217fa53510c83b9b2fa3372b8d3d55e3e002",
+	"8d7d1a1254ac3e5737f2385c3fc30ee4fa195b63a6b951d8ec4274700afd02ff"
 ]);
 const DIRECT_FINAL_SCHEMA_SIGNATURE = "892a43c929f85fd4f71f334c02aa664bc7e8a5f2203929654a10e11229d541ff";
 const DIRECT_USER_DIRECTORY_SCHEMA_SIGNATURE = "8b16a9b6f6ed70905c50813482a2301d7dc9859775abba2c2dfc2300f8b225fe";
 const DIRECT_PROVENANCE_SCHEMA_SIGNATURE = "e33a97d943e0ec653e3cb77ccafd448f04043a89464045eb2ec670d5b4083d36";
 const DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE = "a6c2a8ff988200bc7c9022a0c45be645a573715134c986c9bbc3ccedbfbf905e";
+const DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE = "ab71a7ce651e889eba3fc47de47cd33afc0be5670d02fa8aa444c9f8aea69823";
+const DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE = "90281f8991142883e09fd636d18520cac18bf66125826e6a7c767375b391c50c";
+const DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE = "ab486dcf006ef3262da07bf2f2daf302701b970d1edbddadf1d97539ad2bd3e5";
+const DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE = "b72cabb9c3106db9f0713ebeab15e28580bc721cbb74addeb3a6f97ec54605c7";
+const DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE = "56088fdda6180c9343496577f60e217fa53510c83b9b2fa3372b8d3d55e3e002";
 
 export function inspectSqliteSourceProfile(database: SqliteInternalConnection, expectedLedgerIds: string[]): SourceProfileResult {
 	const schemaObjects = database.drizzle.all<SchemaObject>(
@@ -89,7 +102,7 @@ export function inspectSqliteSourceProfile(database: SqliteInternalConnection, e
 		&& ledgerIds[0] === "legacy-v7-direct") {
 		return { evidence, profile: "current-final", supported: true };
 	}
-	if (schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE
+	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE)
 		&& ledgerIds.length === expectedLedgerIds.length + 1
 		&& ledgerIds[0] === "legacy-v7-direct"
 		&& ledgerIds.slice(1).every((id, index) => id === expectedLedgerIds[index])) {

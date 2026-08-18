@@ -36,7 +36,7 @@ import type {
 	TenantSummary,
 	UnlinkResult
 } from "@agent-issues/core";
-import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, SYSTEM_AUTHENTICATION_SUBJECT } from "@agent-issues/core";
+import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
@@ -47,6 +47,7 @@ import { PgContextStore } from "./features/context/context-store.js";
 import { PgEntityStore, resolveCurrentProjectId } from "./features/entity-store/store.js";
 import { PgHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
 import { PgIssueCommentStore } from "./features/issue-comment/store.js";
+import { PgPlanEntryStore } from "./features/plan-entry/store.js";
 
 /**
  * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
@@ -250,6 +251,26 @@ export class PgStore implements StorageDriver {
 		return this.transaction((executor) => new PgIssueCommentStore(executor).listIssueCommentHistory(input));
 	}
 
+	public async createPlanEntry(input: Parameters<StorageDriver["createPlanEntry"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).createPlanEntry(input, actorId));
+	}
+
+	public async updatePlanEntry(input: Parameters<StorageDriver["updatePlanEntry"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).updatePlanEntry(input, actorId));
+	}
+
+	public async deletePlanEntry(input: Parameters<StorageDriver["deletePlanEntry"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).deletePlanEntry(input, actorId));
+	}
+
+	public async listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]) {
+		return this.transaction((executor) => new PgPlanEntryStore(executor).listPlanEntries(input));
+	}
+
+	public async listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]) {
+		return this.transaction((executor) => new PgPlanEntryStore(executor).listPlanEntryHistory(input));
+	}
+
 	public async listAllRelations(): Promise<RelationRecord[]> {
 		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listAllRelations());
 	}
@@ -270,7 +291,7 @@ export class PgStore implements StorageDriver {
 		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).updateEntityStatus(input, actorId));
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
 		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).updateEntity(input, actorId));
 	}
 
@@ -454,6 +475,7 @@ function toIssueCommentRecord(head: CanonicalIssueCommentChain["head"]): IssueCo
 	return {
 		id: head.id,
 		reference: head.reference,
+		shortReference: shortEntityReference({ id: head.id, kind: "issueComment", shortReference: head.shortReference }),
 		issueId: head.issueId,
 		createdBy: head.createdBy,
 		updatedBy: head.updatedBy,

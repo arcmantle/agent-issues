@@ -1,10 +1,11 @@
 import type { DatabaseSnapshot, InitiativeBundle, ContextDetails } from "@agent-issues/api-local";
-import type { EntityRecord, IssueCommentRecord, RelationRecord, UserDirectoryRecord } from "@agent-issues/core";
+import { projectPlanEntries, type EntityRecord, type IssueCommentRecord, type PlanEntryRecord, type RelationRecord, type UserDirectoryRecord } from "@agent-issues/core";
 
 export type InitiativeMarkdownExport = {
 	bundle: InitiativeBundle;
 	commentsByIssueId?: Record<string, IssueCommentRecord[]>;
 	context: ContextDetails;
+	planEntries?: PlanEntryRecord[];
 	relations: RelationRecord[];
 	users?: UserDirectoryRecord[];
 };
@@ -23,7 +24,7 @@ export function renderInitiativeMarkdownExport(
 	input: InitiativeMarkdownExport,
 	options: InitiativeRenderOptions = {}
 ): string {
-	const { bundle, commentsByIssueId = {}, context, relations, users = [] } = input;
+	const { bundle, commentsByIssueId = {}, context, planEntries = [], relations, users = [] } = input;
 	const includeFrontmatter = options.includeFrontmatter ?? true;
 	const headingLevel = options.headingLevel ?? 1;
 	const entityIds = collectBundleEntityIds(bundle);
@@ -54,7 +55,7 @@ export function renderInitiativeMarkdownExport(
 		renderEntityCollection("User Stories", bundle.userStories, headingLevel + 1),
 		renderEntityCollection("ADRs", bundle.adrs, headingLevel + 1),
 		renderEntityCollection("Issues", bundle.issues, headingLevel + 1, commentsByIssueId, users),
-		renderEntityCollection("Entities", bundle.entities.filter((entity) => entity.id !== bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), headingLevel + 1),
+		renderEntityCollection("Entities", bundle.entities.filter((entity) => entity.id !== bundle.initiative.id && !["prd", "userStory", "adr", "issue"].includes(entity.kind)), headingLevel + 1, commentsByIssueId, users, planEntries),
 		renderRelationsSection("Relations", bundleRelations, headingLevel + 1)
 	];
 
@@ -85,6 +86,7 @@ export function renderProjectMarkdownExport(input: ProjectMarkdownExport): strin
 			bundle,
 			commentsByIssueId,
 			context,
+			planEntries: snapshot.planEntries,
 			relations: snapshot.relations,
 			users: snapshot.users
 		}, {
@@ -98,7 +100,7 @@ export function renderProjectMarkdownExport(input: ProjectMarkdownExport): strin
 		"# Project Export",
 		renderProjectSummary(snapshot),
 		renderUserDirectorySection(snapshot),
-		renderEntityCollection("Entities", snapshot.entities, 2, commentsByIssueId, snapshot.users),
+		renderEntityCollection("Entities", snapshot.entities, 2, commentsByIssueId, snapshot.users, snapshot.planEntries),
 		renderRelationsSection("Relations", snapshot.relations, 2),
 		initiativeSections.join("\n\n")
 	]
@@ -154,12 +156,16 @@ function renderEntitySection(
 	entity: EntityRecord,
 	level: 1 | 2 | 3,
 	commentsByIssueId: Record<string, IssueCommentRecord[]> = {},
-	users: UserDirectoryRecord[] = []
+	users: UserDirectoryRecord[] = [],
+	planEntries: PlanEntryRecord[] = []
 ): string {
 	const header = `${"#".repeat(level)} ${entity.id} ${entity.title}`;
 	const metadata = [
 		`Kind: ${entity.kind}`,
 		`Status: ${entity.status}`,
+		...(entity.category ? [`Category: ${entity.category}`] : []),
+		...(entity.priority ? [`Priority: ${entity.priority}`] : []),
+		...(entity.type ? [`Type: ${entity.type}`] : []),
 		`Created by: ${entity.createdBy}`,
 		`Updated by: ${entity.updatedBy}`,
 		`Created: ${entity.createdAt}`,
@@ -171,8 +177,11 @@ function renderEntitySection(
 	const conversation = entity.kind === "issue"
 		? renderIssueConversationMarkdown(commentsByIssueId[entity.id] ?? [], users, level + 1)
 		: "";
+	const planProjection = entity.kind === "plan"
+		? renderPlanProjectionMarkdown(planEntries.filter((entry) => entry.planId === entity.id), level + 1)
+		: "";
 
-	return [header, metadata, body, conversation].filter((section) => section.length > 0).join("\n\n");
+	return [header, metadata, body, planProjection, conversation].filter((section) => section.length > 0).join("\n\n");
 }
 
 function renderEntityCollection(
@@ -180,13 +189,35 @@ function renderEntityCollection(
 	entities: EntityRecord[],
 	headingLevel: number,
 	commentsByIssueId: Record<string, IssueCommentRecord[]> = {},
-	users: UserDirectoryRecord[] = []
+	users: UserDirectoryRecord[] = [],
+	planEntries: PlanEntryRecord[] = []
 ): string {
 	if (entities.length === 0) {
 		return `${"#".repeat(headingLevel)} ${title}\n\nNone.`;
 	}
 
-	return [`${"#".repeat(headingLevel)} ${title}`, ...entities.map((entity) => renderEntitySection(entity, 3, commentsByIssueId, users))].join("\n\n");
+	return [`${"#".repeat(headingLevel)} ${title}`, ...entities.map((entity) => renderEntitySection(entity, 3, commentsByIssueId, users, planEntries))].join("\n\n");
+}
+
+export function renderPlanProjectionMarkdown(entries: PlanEntryRecord[], headingLevel: number): string {
+	const projection = projectPlanEntries(entries);
+	const referencesById = new Map(projection.history.map((entry) => [entry.id, entry.reference]));
+	const renderEntry = (entry: PlanEntryRecord) => {
+		const references = entry.referencedEntityIds.length > 0 ? ` References: ${entry.referencedEntityIds.join(", ")}.` : "";
+		const supersession = entry.supersededEntryIds.length > 0 ? ` Supersedes: ${entry.supersededEntryIds.map((id) => referencesById.get(id) ?? id).join(", ")}.` : "";
+		return `- ${entry.reference}: ${entry.tombstone ? "Deleted entry" : entry.body ?? ""}${references}${supersession}`;
+	};
+	const current = projection.current.map((group) => {
+		const content = group.entries.length === 0
+			? "None."
+			: group.entries.map(renderEntry).join("\n");
+		return [`${"#".repeat(headingLevel + 1)} ${group.title}`, content].join("\n\n");
+	}).join("\n\n");
+	const history = projection.history.length === 0
+		? "None."
+		: projection.history.map(renderEntry).join("\n");
+
+	return [`${"#".repeat(headingLevel)} Current Plan`, current, `${"#".repeat(headingLevel)} Plan Entry History`, history].join("\n\n");
 }
 
 export function renderIssueConversationMarkdown(comments: IssueCommentRecord[], users: UserDirectoryRecord[], headingLevel: number): string {
@@ -380,6 +411,7 @@ function emptyInitiativeContext(initiative: EntityRecord): ContextDetails {
 		context: {
 			id: null,
 			reference: null,
+			shortReference: null,
 			createdBy: null,
 			updatedBy: null,
 			key: initiative.id,

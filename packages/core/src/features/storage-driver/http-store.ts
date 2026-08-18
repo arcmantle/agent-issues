@@ -17,6 +17,7 @@ import type { BodySource, EntityRecord, HistoryEntryRecord, MaterializedEntityRe
 import { EntityConflictError, EntityRevisionError, type EntityRevisionErrorReason } from "../entity-store/domain.js";
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
+import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "./storage-driver.js";
 import type { AuthIdentity } from "../../auth/auth-provider.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
@@ -94,6 +95,7 @@ const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 type JsonRpcSuccessResponse = { jsonrpc: "2.0"; id: string; result: unknown };
 type JsonRpcErrorData = { entityId: string; currentRevision: number; currentContentHash: string };
 type JsonRpcIssueCommentConflictData = { commentId: string; currentRevision: number; currentContentHash: string };
+type JsonRpcPlanEntryConflictData = { entryId: string; currentRevision: number; currentContentHash: string };
 type JsonRpcContextConflictData = { contextKey: string; currentRevision: number; currentContentHash: string };
 type JsonRpcContextTermConflictData = JsonRpcContextConflictData & { term: string };
 type JsonRpcRevisionErrorData = { entityId: string; reason: EntityRevisionErrorReason; headRevision?: number };
@@ -167,7 +169,7 @@ function isEntityConflictData(data: unknown): data is JsonRpcErrorData {
 }
 
 function isSynchronizeConflictData(data: unknown): data is JsonRpcSynchronizeConflictData {
-	const validRecordKinds: SynchronizeRecordKind[] = ["entity", "context", "context-term", "issue-comment"];
+	const validRecordKinds: SynchronizeRecordKind[] = ["entity", "context", "context-term", "issue-comment", "plan-entry"];
 	return (
 		typeof data === "object" &&
 		data !== null &&
@@ -185,6 +187,16 @@ function isIssueCommentConflictData(data: unknown): data is JsonRpcIssueCommentC
 		typeof (data as JsonRpcIssueCommentConflictData).commentId === "string" &&
 		typeof (data as JsonRpcIssueCommentConflictData).currentRevision === "number" &&
 		typeof (data as JsonRpcIssueCommentConflictData).currentContentHash === "string"
+	);
+}
+
+function isPlanEntryConflictData(data: unknown): data is JsonRpcPlanEntryConflictData {
+	return (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as JsonRpcPlanEntryConflictData).entryId === "string" &&
+		typeof (data as JsonRpcPlanEntryConflictData).currentRevision === "number" &&
+		typeof (data as JsonRpcPlanEntryConflictData).currentContentHash === "string"
 	);
 }
 
@@ -327,6 +339,9 @@ export class HttpStore implements StorageDriver {
 			if (isIssueCommentConflictData(data)) {
 				throw new IssueCommentConflictError(data.commentId, data.currentRevision, data.currentContentHash);
 			}
+			if (isPlanEntryConflictData(data)) {
+				throw new PlanEntryConflictError(data.entryId, data.currentRevision, data.currentContentHash);
+			}
 			if (isEntityRevisionErrorData(data)) {
 				throw new EntityRevisionError(data.entityId, data.reason, message, data.headRevision);
 			}
@@ -346,15 +361,7 @@ export class HttpStore implements StorageDriver {
 	}
 
 	// Entities
-	public createEntity(input: {
-		kind: string;
-		title: string;
-		parentId?: string;
-		status?: string;
-		body?: string;
-		author?: string;
-		links?: Array<{ relationType: string; targetId: string }>;
-	}): Promise<EntityRecord> {
+	public createEntity(input: Parameters<StorageDriver["createEntity"]>[0]): ReturnType<StorageDriver["createEntity"]> {
 		return this.call("createEntity", input);
 	}
 
@@ -376,6 +383,26 @@ export class HttpStore implements StorageDriver {
 
 	public listIssueCommentHistory(input: Parameters<StorageDriver["listIssueCommentHistory"]>[0]): ReturnType<StorageDriver["listIssueCommentHistory"]> {
 		return this.call("listIssueCommentHistory", input);
+	}
+
+	public createPlanEntry(input: Parameters<StorageDriver["createPlanEntry"]>[0]): ReturnType<StorageDriver["createPlanEntry"]> {
+		return this.call("createPlanEntry", input);
+	}
+
+	public updatePlanEntry(input: Parameters<StorageDriver["updatePlanEntry"]>[0]): ReturnType<StorageDriver["updatePlanEntry"]> {
+		return this.call("updatePlanEntry", input);
+	}
+
+	public deletePlanEntry(input: Parameters<StorageDriver["deletePlanEntry"]>[0]): ReturnType<StorageDriver["deletePlanEntry"]> {
+		return this.call("deletePlanEntry", input);
+	}
+
+	public listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]): ReturnType<StorageDriver["listPlanEntries"]> {
+		return this.call("listPlanEntries", input);
+	}
+
+	public listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]): ReturnType<StorageDriver["listPlanEntryHistory"]> {
+		return this.call("listPlanEntryHistory", input);
 	}
 
 	public getEntityDetails(entityId: string): Promise<EntityDetails> {
@@ -418,7 +445,7 @@ export class HttpStore implements StorageDriver {
 		return this.call("updateEntityStatus", input);
 	}
 
-	public updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
+	public updateEntity(input: Parameters<StorageDriver["updateEntity"]>[0]): ReturnType<StorageDriver["updateEntity"]> {
 		return this.call("updateEntity", input);
 	}
 

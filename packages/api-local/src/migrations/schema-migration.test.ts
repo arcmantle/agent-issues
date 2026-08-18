@@ -110,7 +110,7 @@ afterEach(() => {
 
 describe("golden-fixture migration wall", () => {
 	it("registers the SQLite production migration plan", () => {
-		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments"]);
+		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position"]);
 	});
 
 	it("implements the SQLite legacy route without clone or historical migration replay", () => {
@@ -277,7 +277,7 @@ describe("golden-fixture migration wall", () => {
 		// counters gains one row per newly-recognized entity kind (project, epic,
 		// version - ISS38) that this pre-existing tenant didn't have before.
 		expect(after.counters).toEqual(expect.arrayContaining(before.counters));
-		expect(after.counters).toHaveLength(before.counters.length + 3);
+		expect(after.counters).toHaveLength(before.counters.length + 5);
 
 		const projectId = deriveMigratedEntityIdentity("project", "PROJ0").stableId;
 		const epicId = deriveMigratedEntityIdentity("epic", "EPIC0").stableId;
@@ -488,10 +488,16 @@ describe("fresh install schema parity", () => {
 			expect(applied).toEqual([
 				{ id: "adr-status-to-current" },
 				{ id: "context-term-provenance" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
 				{ id: "final-baseline" },
 				{ id: "issue-comments" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" },
 				{ id: "record-provenance" },
 				{ id: "relation-provenance" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
 				{ id: "user-directory" }
 			]);
 		} finally {

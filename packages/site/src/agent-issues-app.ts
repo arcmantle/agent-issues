@@ -11,7 +11,7 @@ import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
 import "./components/relationship-graph.js";
 import "./components/relationship-graph-filters.js";
-import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup } from "./models.js";
+import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, DebtFilter, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
@@ -119,6 +119,17 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		this.store.setMasterStatusFilter(section, status);
 	};
 
+	protected onSetDebtFilter = (event: Event) => {
+		const target = event.currentTarget as HTMLElement;
+		const filter = target.dataset.debtFilter as DebtFilter | undefined;
+		const value = target.dataset.debtValue;
+		if (!filter || !value) {
+			return;
+		}
+
+		this.store.setDebtFilter(filter, value);
+	};
+
 	protected onToggleProjectGraphKind = (event: Event) => {
 		const kind = (event as CustomEvent<{ kind: ProjectGraphKind }>).detail.kind;
 		if (!kind) {
@@ -205,6 +216,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const navItems: Array<{ count: string; icon: string; label: string; section: ConsoleSection }> = [
 			{ count: String(store.projectInitiatives.get().length), icon: "📁", label: "Initiatives", section: "initiatives" },
 			{ count: String(store.adrRailEntries.get().length), icon: "📐", label: "ADRs", section: "adrs" },
+			{ count: String(store.debtRecords.get().length), icon: "◒", label: "Debt records", section: "debt" },
 			{ count: String(store.projectContextTerms.get().length), icon: "📖", label: "Context", section: "context" },
 			{ count: "map", icon: "🕸️", label: "Graph", section: "graph" }
 		];
@@ -437,6 +449,56 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		`;
 	}
 
+	protected renderDebtCard(debt: Entity) {
+		const store = this.store;
+
+		return html`
+		<button
+			class=${classMap({ active: store.selectedId.get() === debt.id, "m-item": true })}
+			data-id=${debt.id}
+			@click=${this.onSelectEntity}
+		>
+			<div class="m-top">
+				<span class="m-title">${debt.title}</span>
+				<span class=${`badge ${store.badgeTone(debt.status)}`}>${debt.status}</span>
+			</div>
+			<div class="m-meta">
+				<span class="idtag">${store.shortRef(debt)}</span>
+				<span>${debt.category ?? "uncategorized"}</span>
+				<span>${debt.priority ?? "no priority"}</span>
+				<span>updated ${store.formatTimestamp(debt.updatedAt)}</span>
+			</div>
+		</button>
+		`;
+	}
+
+	protected renderDebtFilter(filter: DebtFilter, label: string, values: string[], selected: string) {
+		return html`
+		<div
+			aria-label=${`Filter debt by ${label.toLowerCase()}`}
+			class="master-status-filters"
+			role="group"
+		>
+			<span class="master-filter-label">${label}</span>
+			${repeat(
+				["all", ...values],
+				(value) => value,
+				(value) => html`
+				<button
+					aria-pressed=${this.toAriaBoolean(selected === value)}
+					class=${classMap({ active: selected === value, "master-status-chip": true })}
+					data-debt-filter=${filter}
+					data-debt-value=${value}
+					@click=${this.onSetDebtFilter}
+				>
+					${this.formatStatusFilter(value)}
+				</button>
+				`
+			)}
+		</div>
+		`;
+	}
+
 	protected renderProjectContextSource(source: ProjectContextTermSource) {
 		const scopeLabel = source.scopeKind === "default" ? "Shared context" : source.scopeLabel;
 
@@ -586,6 +648,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const section = store.activeSection.get();
 		const query = store.search.get().trim().toLowerCase();
 		const isAdrs = section === "adrs";
+		const isDebt = section === "debt";
 		const masterSection = isAdrs ? "adrs" : "initiatives";
 		const statusFilter = isAdrs ? store.adrStatusFilter.get() : store.initiativeStatusFilter.get();
 		const statusValues = isAdrs
@@ -612,6 +675,13 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			(statusFilter === "all" || entry.adr.status === statusFilter) &&
 			`${entry.adr.title} ${entry.adr.id}`.toLowerCase().includes(query)
 		);
+		const allDebtRecords = store.allDebtRecords.get();
+		const debtEntries = store.debtRecords.get().filter((debt) =>
+			`${debt.title} ${debt.id} ${debt.category ?? ""} ${debt.priority ?? ""}`.toLowerCase().includes(query)
+		);
+		const debtCategories = [...new Set(allDebtRecords.map((debt) => debt.category).filter((category): category is string => Boolean(category)))].sort();
+		const debtPriorities = [...new Set(allDebtRecords.map((debt) => debt.priority).filter((priority): priority is string => Boolean(priority)))].sort();
+		const debtLifecycles = [...new Set(allDebtRecords.map((debt) => debt.status))].sort();
 
 		return html`
 		<section class="master" data-pane="master">
@@ -624,11 +694,15 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				${store.masterCollapsed.get() ? "»" : "«"}
 			</button>
 			<div class="master-head">
-				<h1>${when(isAdrs, () => html`Architecture decisions`, () => html`Initiatives`)}</h1>
+				<h1>${choose(section, [["adrs", () => html`Architecture decisions`], ["debt", () => html`Debt records`]], () => html`Initiatives`)}</h1>
 				<p>${when(
-					isAdrs,
-					() => html`Open a decision to read its context, decision and consequences.`,
-					() => html`Select an initiative to explore its issues and user stories.`
+					isDebt,
+					() => html`Review accepted debt by lifecycle, category, and priority.`,
+					() => when(
+						isAdrs,
+						() => html`Open a decision to read its context, decision and consequences.`,
+						() => html`Select an initiative to explore its issues and user stories.`
+					)
 				)}</p>
 				<input
 					class="master-search"
@@ -636,34 +710,43 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					.value=${store.search.get()}
 					@input=${this.onSearchInput}
 				/>
-				<div
-					aria-label=${`Filter ${isAdrs ? "ADRs" : "initiatives"} by status`}
-					class="master-status-filters"
-					role="group"
-				>
-					${repeat(
-						statusOptions,
-						(status) => status,
-						(status) => html`
-						<button
-							aria-pressed=${this.toAriaBoolean(statusFilter === status)}
-							class=${classMap({ active: statusFilter === status, "master-status-chip": true })}
-							data-master-section=${masterSection}
-							data-master-status=${status}
-							@click=${this.onSetMasterStatusFilter}
-						>
-							${this.formatStatusFilter(status)}
-						</button>
-						`
-					)}
-				</div>
+				${when(
+					isDebt,
+					() => html`
+					${this.renderDebtFilter("lifecycle", "Lifecycle", debtLifecycles, store.debtLifecycleFilter.get())}
+					${this.renderDebtFilter("category", "Category", debtCategories, store.debtCategoryFilter.get())}
+					${this.renderDebtFilter("priority", "Priority", debtPriorities, store.debtPriorityFilter.get())}
+					`,
+					() => html`
+					<div
+						aria-label=${`Filter ${isAdrs ? "ADRs" : "initiatives"} by status`}
+						class="master-status-filters"
+						role="group"
+					>
+						${repeat(
+							statusOptions,
+							(status) => status,
+							(status) => html`
+							<button
+								aria-pressed=${this.toAriaBoolean(statusFilter === status)}
+								class=${classMap({ active: statusFilter === status, "master-status-chip": true })}
+								data-master-section=${masterSection}
+								data-master-status=${status}
+								@click=${this.onSetMasterStatusFilter}
+							>
+								${this.formatStatusFilter(status)}
+							</button>
+							`
+						)}
+					</div>
+					`
+				)}
 			</div>
 			<div class="master-list">
-				${when(
-					isAdrs,
-					() => html`${repeat(adrEntries, (entry) => entry.adr.id, (entry) => this.renderAdrCard(entry))}`,
-					() => html`${repeat(epicGroups, (group) => group.epic.id, (group) => this.renderEpicInitiativeGroup(group))}`
-				)}
+				${choose(section, [
+					["adrs", () => html`${repeat(adrEntries, (entry) => entry.adr.id, (entry) => this.renderAdrCard(entry))}`],
+					["debt", () => html`${repeat(debtEntries, (debt) => debt.id, (debt) => this.renderDebtCard(debt))}`]
+				], () => html`${repeat(epicGroups, (group) => group.epic.id, (group) => this.renderEpicInitiativeGroup(group))}`)}
 			</div>
 		</section>
 		`;

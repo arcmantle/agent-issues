@@ -2,7 +2,8 @@ import { Cli } from "clipanion";
 
 import { AuthListCommand, AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
 import { BackfillBodiesCommand } from "./commands/backfill.js";
-import { AddIssueCommentCommand, DeleteIssueCommentCommand, EditIssueCommentCommand, IssueCommentHistoryCommand, ListIssueCommentsCommand } from "./commands/comments.js";
+import { AddIssueCommentCommand, DeleteIssueCommentCommand, EditIssueCommentCommand, IssueCommentCommand, IssueCommentHistoryCommand, ListIssueCommentsCommand } from "./commands/comments.js";
+import { AddPlanEntryCommand, DeletePlanEntryCommand, EditPlanEntryCommand, ListPlanEntriesCommand, PlanEntryHistoryCommand } from "./commands/plan-entries.js";
 import { ContextCommand } from "./commands/context.js";
 import {
 	ArchiveCommand,
@@ -70,11 +71,17 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(RenameTenantCommand);
 	cli.register(BackfillBodiesCommand);
 	cli.register(ContextCommand);
+	cli.register(IssueCommentCommand);
 	cli.register(AddIssueCommentCommand);
 	cli.register(DeleteIssueCommentCommand);
 	cli.register(EditIssueCommentCommand);
 	cli.register(IssueCommentHistoryCommand);
 	cli.register(ListIssueCommentsCommand);
+	cli.register(AddPlanEntryCommand);
+	cli.register(EditPlanEntryCommand);
+	cli.register(DeletePlanEntryCommand);
+	cli.register(ListPlanEntriesCommand);
+	cli.register(PlanEntryHistoryCommand);
 	cli.register(CreateCommand);
 	cli.register(EditCommand);
 	cli.register(HistoryCommand);

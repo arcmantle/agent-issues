@@ -27,7 +27,10 @@ import {
 	isAllowedRelation,
 	isBodySource,
 	isDirectEntitySelector,
+	isEntityCategory,
 	isEntityKind,
+	isEntityPriority,
+	isEntityType,
 	isInitiativeComplete,
 	isStructuralRelationType,
 	isValidStatus,
@@ -53,6 +56,7 @@ import {
 	type LinkResult,
 	type MaterializedEntityRevision,
 	type MoveResult,
+	type PlanEntryRecord,
 	type ProjectDiscovery,
 	type ProjectSnapshot,
 	type QueryEntitiesResult,
@@ -65,6 +69,7 @@ import type { TenantExecutor } from "../../db/connection.js";
 import { counters, entities, relations, revisionEntries } from "../../schema.js";
 
 import { queryContextDetails, queryProjectContextDetails } from "../context/context-store.js";
+import { PgPlanEntryStore } from "../plan-entry/store.js";
 import { exportCanonicalChains } from "../synchronize/canonical-chain-store.js";
 
 const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
@@ -72,6 +77,7 @@ const SYSTEM_USER_ID = deriveUserIdentity(SYSTEM_AUTHENTICATION_SUBJECT).id;
 export type EntityRow = {
 	id: string;
 	reference: string;
+	short_reference: string;
 	created_by?: string | null;
 	updated_by?: string | null;
 	kind: string;
@@ -79,6 +85,9 @@ export type EntityRow = {
 	status: string;
 	body: string;
 	body_source: string | null;
+	category?: string | null;
+	priority?: string | null;
+	type?: string | null;
 	revision?: number | null;
 	content_hash?: string | null;
 	tombstone?: boolean | null;
@@ -118,6 +127,7 @@ export async function ensurePgTenant(executor: TenantExecutor): Promise<void> {
 			tenantId: executor.tenantId,
 			id: projectIdentity.stableId,
 			reference: projectIdentity.reference,
+			shortReference: shortEntityReference({ id: projectIdentity.stableId, kind: "project" }),
 			kind: "project",
 			title: DEFAULT_PROJECT_TITLE,
 			status: "active",
@@ -136,6 +146,7 @@ export async function ensurePgTenant(executor: TenantExecutor): Promise<void> {
 			tenantId: executor.tenantId,
 			id: epicIdentity.stableId,
 			reference: epicIdentity.reference,
+			shortReference: shortEntityReference({ id: epicIdentity.stableId, kind: "epic" }),
 			kind: "epic",
 			title: DEFAULT_EPIC_TITLE,
 			status: "active",
@@ -246,6 +257,7 @@ export async function getOrCreateProjectByIdentity(
 		tenantId: executor.tenantId,
 		id: project.stableId,
 		reference: project.reference,
+		shortReference: await allocateShortReference(executor, "project", project.stableId),
 		kind: "project",
 		title: projectIdentity,
 		status: "active",
@@ -263,6 +275,7 @@ export async function getOrCreateProjectByIdentity(
 		tenantId: executor.tenantId,
 		id: epic.stableId,
 		reference: epic.reference,
+		shortReference: await allocateShortReference(executor, "epic", epic.stableId),
 		kind: "epic",
 		title: DEFAULT_EPIC_TITLE,
 		status: "active",
@@ -292,6 +305,7 @@ export function mapEntityRow(row: EntityRow): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.short_reference,
 		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
 		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind,
@@ -299,6 +313,9 @@ export function mapEntityRow(row: EntityRow): EntityRecord {
 		status: row.status,
 		body: row.body ?? "",
 		bodySource: bodySource && isBodySource(bodySource) ? bodySource : "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind, row.type) ? row.type : null,
 		revision: row.revision ?? 1,
 		contentHash: row.content_hash ?? "",
 		createdAt: row.created_at,
@@ -310,6 +327,7 @@ function mapDrizzleEntityRow(row: typeof entities.$inferSelect): EntityRecord {
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.shortReference,
 		createdBy: row.createdBy ?? RESERVED_SYSTEM_AUTHOR,
 		updatedBy: row.updatedBy ?? RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind as EntityKind,
@@ -317,6 +335,9 @@ function mapDrizzleEntityRow(row: typeof entities.$inferSelect): EntityRecord {
 		status: row.status,
 		body: row.body,
 		bodySource: isBodySource(row.bodySource) ? row.bodySource : "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 		revision: row.revision ?? 1,
 		contentHash: row.contentHash ?? "",
 		createdAt: row.createdAt,
@@ -360,11 +381,27 @@ async function resolveEntities(executor: TenantExecutor, entityId: string, inclu
 		return [row];
 	}
 
-	const candidates = await executor
+	return executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), livePredicate));
-	return candidates.filter((candidate) => shortEntityReference(candidate) === entityId);
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.shortReference, entityId), livePredicate));
+}
+
+async function allocateShortReference(executor: TenantExecutor, kind: string, id: string): Promise<string> {
+	const baseReference = shortEntityReference({ id, kind });
+	let shortReference = baseReference;
+	let suffix = 2;
+
+	while ((await executor
+		.select({ id: entities.id })
+		.from(entities)
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.shortReference, shortReference)))
+		.limit(1)).length > 0) {
+		shortReference = `${baseReference}-${suffix}`;
+		suffix += 1;
+	}
+
+	return shortReference;
 }
 
 async function getStructuralParentRelations(executor: TenantExecutor, entityId: string): Promise<RelationRecord[]> {
@@ -439,13 +476,23 @@ async function appendDeltaEntry(
 	priorBodySource: string,
 	author: string | undefined,
 	createdAt: string,
-	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; restoredFromRevision?: number } = {}
+	lifecycle: { priorStatus?: string; priorParentId?: string | null; priorTombstone?: boolean | null; priorCategory?: EntityRecord["category"]; priorPriority?: EntityRecord["priority"]; priorType?: EntityRecord["type"]; restoredFromRevision?: number } = {}
 ): Promise<void> {
 	const [row] = await executor.select().from(entities).where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entityId)));
 	if (!row) {
 		throw new Error(`Cannot append reverse patch for missing entity ${entityId}.`);
 	}
-	const successor = { title: row.title, body: row.body, bodySource: row.bodySource, status: row.status, parentId: (await getStructuralParentRelations(executor, entityId))[0]?.fromId ?? null, tombstone: row.tombstone };
+	const successor = {
+		title: row.title,
+		body: row.body,
+		bodySource: row.bodySource,
+		category: row.category,
+		priority: row.priority,
+		type: row.type,
+		status: row.status,
+		parentId: (await getStructuralParentRelations(executor, entityId))[0]?.fromId ?? null,
+		tombstone: row.tombstone
+	};
 	const predecessor = {
 		...successor,
 		title: priorTitle,
@@ -453,6 +500,9 @@ async function appendDeltaEntry(
 		bodySource: priorBodySource,
 		...(lifecycle.priorStatus !== undefined && { status: lifecycle.priorStatus }),
 		...(Object.hasOwn(lifecycle, "priorParentId") && { parentId: lifecycle.priorParentId ?? null }),
+		...(Object.hasOwn(lifecycle, "priorCategory") && { category: lifecycle.priorCategory ?? null }),
+		...(Object.hasOwn(lifecycle, "priorPriority") && { priority: lifecycle.priorPriority ?? null }),
+		...(Object.hasOwn(lifecycle, "priorType") && { type: lifecycle.priorType ?? null }),
 		...(lifecycle.priorTombstone != null && { tombstone: lifecycle.priorTombstone })
 	};
 	const transition = createReverseFieldPatch(successor, predecessor, ENTITY_REVERSE_PATCH_REGISTRY);
@@ -597,6 +647,7 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 	const statusEntities = (result.rows as Array<{ id: string; kind: string; status: string }>).map((row) => ({
 		id: row.id,
 		reference: "",
+		shortReference: "",
 		createdBy: RESERVED_SYSTEM_AUTHOR,
 		updatedBy: RESERVED_SYSTEM_AUTHOR,
 		kind: row.kind as EntityKind,
@@ -604,6 +655,9 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 		status: row.status,
 		body: "",
 		bodySource: "authored" as const,
+		category: null,
+		priority: null,
+		type: null,
 		revision: 1,
 		contentHash: "",
 		createdAt: "",
@@ -866,6 +920,9 @@ export async function createEntity(
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
+		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	},
@@ -883,10 +940,26 @@ export async function createEntity(
 	}
 	const body = input.body ?? "";
 	const bodySource: BodySource = "authored";
-	const status = input.status ?? getInitialStatus(kind);
+	const requestedStatus = input.status ?? getInitialStatus(kind);
+	const status = kind === "plan" ? getInitialStatus(kind) : requestedStatus;
+	const category = input.category;
+	const priority = input.priority;
+	const entityType = input.type ?? null;
 
-	if (!isValidStatus(kind, status)) {
-		throw new Error(`Invalid status for ${kind}: ${status}`);
+	if (!isValidStatus(kind, requestedStatus)) {
+		throw new Error(`Invalid status for ${kind}: ${requestedStatus}`);
+	}
+	if (category !== undefined && !isEntityCategory(category)) {
+		throw new Error(`Invalid entity category: ${category}`);
+	}
+	if (priority !== undefined && !isEntityPriority(priority)) {
+		throw new Error(`Invalid entity priority: ${priority}`);
+	}
+	if (entityType !== null && !isEntityType(kind, entityType)) {
+		throw new Error(`Invalid entity type: ${entityType}`);
+	}
+	if (kind === "debt" && (category === undefined || priority === undefined)) {
+		throw new Error("Debt requires category and priority.");
 	}
 
 	// Idempotent (ON CONFLICT DO NOTHING); simplifies this slice by not
@@ -898,13 +971,26 @@ export async function createEntity(
 	const parentId = input.parentId ?? (kind === "initiative" ? await resolveDefaultEpicId(executor, projectIdentity) : undefined);
 	const parent = parentId ? await getEntityOrThrow(executor, parentId) : null;
 	const relationType = parent ? getAllowedRelationType(parent.kind, kind) : null;
+	if (kind === "debt" && !parent) {
+		throw new Error("Debt requires a project, epic, initiative, or issue owner.");
+	}
+	if (kind === "plan" && parent?.kind !== "initiative") {
+		throw new Error("Plan requires an initiative parent.");
+	}
 
 	if (parent && !relationType) {
 		throw new Error(`Cannot create ${kind} under ${parent.kind}.`);
 	}
+	if (entityType === "wayfinder-map" && parent?.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (entityType === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	}
 
 	const identity = generateCanonicalIdentity(kind);
 	const id = identity.stableId;
+	const shortReference = await allocateShortReference(executor, kind, id);
 	// Resolved lazily per branch rather than up front: a project owns itself,
 	// and asking `resolveProjectIdForWrite` for its owning project would mint a
 	// second project under the same identity before this one is even inserted.
@@ -921,6 +1007,7 @@ export async function createEntity(
 		tenantId: executor.tenantId,
 		id,
 		reference: identity.reference,
+		shortReference,
 		createdBy: actorId,
 		updatedBy: actorId,
 		kind,
@@ -928,6 +1015,9 @@ export async function createEntity(
 		status,
 		body,
 		bodySource,
+		category: category ?? null,
+		priority: priority ?? null,
+		type: entityType,
 		revision: 1,
 		contentHash,
 		projectId,
@@ -958,7 +1048,7 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 	const entity = await getEntityOrThrow(executor, entityId);
 
 	const incomingResult = await executor.execute(sql`
-		SELECT relations.type, entities.*
+		SELECT relations.type AS relation_type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
@@ -966,7 +1056,7 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		ORDER BY entities.id
 	`);
 	const outgoingResult = await executor.execute(sql`
-		SELECT relations.type, entities.*
+		SELECT relations.type AS relation_type, entities.*
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
@@ -978,12 +1068,12 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
-		incoming: (incomingResult.rows as Array<EntityRow & { type: string }>).map((row) => ({
-			relationType: row.type as RelationType,
+		incoming: (incomingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
+			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
 		})),
-		outgoing: (outgoingResult.rows as Array<EntityRow & { type: string }>).map((row) => ({
-			relationType: row.type as RelationType,
+		outgoing: (outgoingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
+			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
 		}))
 	};
@@ -999,7 +1089,7 @@ export async function queryEntityRelations(
 	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
 	const incomingResult = includeIncoming
 		? await executor.execute(sql`
-			SELECT relations.type, entities.*
+			SELECT relations.type AS relation_type, entities.*
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 			WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
@@ -1009,7 +1099,7 @@ export async function queryEntityRelations(
 		: { rows: [] };
 	const outgoingResult = includeOutgoing
 		? await executor.execute(sql`
-			SELECT relations.type, entities.*
+			SELECT relations.type AS relation_type, entities.*
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 			WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
@@ -1026,12 +1116,12 @@ export async function queryEntityRelations(
 
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
-		incoming: (incomingResult.rows as Array<EntityRow & { type: string }>).map((row) => ({
-			relationType: row.type as RelationType,
+		incoming: (incomingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
+			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
 		})),
-		outgoing: (outgoingResult.rows as Array<EntityRow & { type: string }>).map((row) => ({
-			relationType: row.type as RelationType,
+		outgoing: (outgoingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
+			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
 		}))
 	};
@@ -1204,12 +1294,15 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 		title: row.title,
 		body: row.body,
 		bodySource: isBodySource(row.bodySource) ? (row.bodySource as BodySource) : "authored",
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
 		status: row.status,
 		tombstone: row.tombstone
 	};
 	const currentParentId = resolveRevisionHeadParentId(row.id, headState, currentParentIds, newestPatch?.sourceHash);
 
-	let state: { title: string; body: string; bodySource: BodySource; status: string; parentId: string | null; tombstone: boolean | null } = {
+	let state: { title: string; body: string; bodySource: BodySource; category: EntityRecord["category"]; priority: EntityRecord["priority"]; type: EntityRecord["type"]; status: string; parentId: string | null; tombstone: boolean | null } = {
 		...headState,
 		parentId: currentParentId,
 	};
@@ -1229,6 +1322,7 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 			title: state.title,
 			body: state.body,
 			bodySource: state.bodySource,
+			type: state.type,
 			status: state.status,
 			parentId: state.parentId,
 			createdAt: patch.createdAt
@@ -1251,7 +1345,7 @@ export async function listEntityHistory(executor: TenantExecutor, entityId: stri
 
 function resolveRevisionHeadParentId(
 	entityId: string,
-	state: { title: string; body: string; bodySource: BodySource; status: string; tombstone: boolean | null },
+	state: { title: string; body: string; bodySource: BodySource; category: EntityRecord["category"]; priority: EntityRecord["priority"]; type: EntityRecord["type"]; status: string; tombstone: boolean | null },
 	parentIds: string[],
 	sourceHash: Uint8Array | undefined
 ): string | null {
@@ -1318,6 +1412,12 @@ export async function linkEntities(
 
 	if (!isAllowedRelation(from.kind, to.kind, input.relationType)) {
 		throw new Error(`Relation ${input.relationType} is not allowed from ${from.kind} to ${to.kind}.`);
+	}
+	if (to.kind === "debt" && isStructuralRelationType(input.relationType)) {
+		const structuralParents = await getStructuralParentRelations(executor, to.id);
+		if (structuralParents.some((relation) => relation.fromId !== from.id || relation.type !== input.relationType)) {
+			throw new Error(`Debt ${to.id} already has a structural owner.`);
+		}
 	}
 
 	if (
@@ -1489,12 +1589,18 @@ export async function setEntityBody(
 
 export async function updateEntity(
 	executor: TenantExecutor,
-	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string },
+	input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; type?: string | null; author?: string; expectedRevision: number; expectedContentHash: string },
 	actorId: string
 ): Promise<EntityRecord> {
 	const current = await getEntityOrThrow(executor, input.entityId);
-	if (input.title === undefined && input.body === undefined) {
-		throw new Error("Entity edit requires --title, --body, or both.");
+	if (input.title === undefined && input.body === undefined && input.category === undefined && input.priority === undefined && input.type === undefined) {
+		throw new Error("Entity edit requires --title, --body, --category, --priority, or --type.");
+	}
+	if (input.category !== undefined && !isEntityCategory(input.category)) {
+		throw new Error(`Invalid entity category: ${input.category}`);
+	}
+	if (input.priority !== undefined && !isEntityPriority(input.priority)) {
+		throw new Error(`Invalid entity priority: ${input.priority}`);
 	}
 
 	if (current.revision !== input.expectedRevision || current.contentHash !== input.expectedContentHash) {
@@ -1507,13 +1613,30 @@ export async function updateEntity(
 	}
 	const body = input.body ?? current.body;
 	const bodySource = input.body === undefined ? current.bodySource : input.bodySource ?? "authored";
+	const category = input.category ?? current.category;
+	const priority = input.priority ?? current.priority;
+	const entityType = input.type === undefined ? current.type : input.type;
+	if (entityType !== null && !isEntityType(current.kind, entityType)) {
+		throw new Error(`Invalid entity type: ${entityType}`);
+	}
+	const parentId = (await getStructuralParentRelations(executor, current.id))[0]?.fromId;
+	const parent = parentId ? await getEntityOrThrow(executor, parentId) : null;
+	if (current.type === "wayfinder-map" && entityType !== "wayfinder-map" && (await getEntityDetails(executor, current.id)).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "wayfinder-ticket")) {
+		throw new Error("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+	}
+	if (entityType === "wayfinder-map" && parent?.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (entityType === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	}
 	const newRevision = current.revision + 1;
 	const newContentHash = computeEntityContentHash(title, body);
 	const updatedAt = new Date().toISOString();
 
 	const [guard] = await executor
 		.update(entities)
-		.set({ title, body, bodySource, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
+		.set({ title, body, bodySource, category, priority, type: entityType, revision: newRevision, contentHash: newContentHash, updatedBy: actorId, updatedAt })
 		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, current.id), eq(entities.revision, input.expectedRevision), eq(entities.contentHash, input.expectedContentHash)))
 		.returning({ id: entities.id });
 
@@ -1522,7 +1645,11 @@ export async function updateEntity(
 		throw new EntityConflictError(input.entityId, fresh.revision, fresh.contentHash);
 	}
 
-	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
+	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt, {
+		...(input.category !== undefined && { priorCategory: current.category }),
+		...(input.priority !== undefined && { priorPriority: current.priority }),
+		...(input.type !== undefined && { priorType: current.type })
+	});
 	return getEntityOrThrow(executor, current.id);
 }
 
@@ -1558,6 +1685,9 @@ export async function materializeEntityRevision(
 			title: entity.title,
 			body: entity.body,
 			bodySource: entity.bodySource,
+			category: entity.category,
+			priority: entity.priority,
+			type: entity.type,
 			status: entity.status,
 			tombstone: row.tombstone
 		},
@@ -1572,6 +1702,9 @@ export async function materializeEntityRevision(
 			title: entity.title,
 			body: entity.body,
 			bodySource: entity.bodySource,
+			category: entity.category,
+			priority: entity.priority,
+			type: entity.type,
 			status: entity.status,
 			parentId,
 			revision: headRevision,
@@ -1610,6 +1743,15 @@ export async function restoreEntityRevision(
 			throw new Error(`Cannot restore ${current.id} under ${restoredParent.id} because that would create a cycle.`);
 		}
 	}
+	if (source.type === "wayfinder-map" && restoredParent?.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (source.type === "wayfinder-ticket" && (restoredParent?.kind !== "issue" || restoredParent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	}
+	if (current.type === "wayfinder-map" && source.type !== "wayfinder-map" && (await getEntityDetails(executor, current.id)).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "wayfinder-ticket")) {
+		throw new Error("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+	}
 
 	const updatedAt = new Date().toISOString();
 	const newRevision = current.revision + 1;
@@ -1617,6 +1759,7 @@ export async function restoreEntityRevision(
 		title: source.title,
 		body: source.body,
 		bodySource: source.bodySource,
+		type: source.type,
 		status: source.status,
 		revision: newRevision,
 		contentHash: computeEntityContentHash(source.title, source.body),
@@ -1640,6 +1783,7 @@ export async function restoreEntityRevision(
 
 	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt, {
 		priorStatus: current.status,
+		priorType: current.type,
 		priorParentId: currentParentId,
 		priorTombstone: row.tombstone,
 		restoredFromRevision: input.revision
@@ -1667,6 +1811,12 @@ export async function moveEntity(
 	const relationType = getAllowedRelationType(newParent.kind, entity.kind);
 	if (!relationType || !isStructuralRelationType(relationType)) {
 		throw new Error(`Cannot move ${entity.kind} under ${newParent.kind}.`);
+	}
+	if (entity.type === "wayfinder-map" && newParent.kind !== "initiative") {
+		throw new Error("wayfinder-map requires an initiative parent.");
+	}
+	if (entity.type === "wayfinder-ticket" && (newParent.kind !== "issue" || newParent.type !== "wayfinder-map")) {
+		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
 	}
 
 	const currentParentRelations = await getStructuralParentRelations(executor, entity.id);
@@ -1964,6 +2114,7 @@ export async function getDatabaseSnapshot(
 		generatedAt: new Date().toISOString(),
 		users: await getTenantUserDirectory(executor),
 		issueComments: await getIssueCommentPages(executor, entities),
+		planEntries: await listSnapshotPlanEntries(executor, entities),
 		entities,
 		relations,
 		orphans,
@@ -1991,6 +2142,7 @@ async function getProjectSnapshot(executor: TenantExecutor, project: EntityRecor
 		generatedAt: new Date().toISOString(),
 		users: await getTenantUserDirectory(executor),
 		issueComments: await getIssueCommentPages(executor, entities),
+		planEntries: await listSnapshotPlanEntries(executor, entities),
 		entities,
 		relations,
 		orphans: [],
@@ -2005,6 +2157,16 @@ async function getProjectSnapshot(executor: TenantExecutor, project: EntityRecor
 			initiatives: await Promise.all(initiatives.map((entity) => queryProjectContextDetails(executor, project, entity.id)))
 		}
 	};
+}
+
+async function listSnapshotPlanEntries(executor: TenantExecutor, entities: EntityRecord[]): Promise<PlanEntryRecord[]> {
+	const store = new PgPlanEntryStore(executor);
+	const entryLists = await Promise.all(
+		entities
+			.filter((entity) => entity.kind === "plan")
+			.map((plan) => store.listPlanEntries({ planId: plan.id }))
+	);
+	return entryLists.flat();
 }
 
 async function getTenantUserDirectory(executor: TenantExecutor) {
@@ -2032,6 +2194,7 @@ function getIssueCommentPage(chains: CanonicalIssueCommentChain[], issueId: stri
 		.map((chain) => ({
 			id: chain.head.id,
 			reference: chain.head.reference,
+			shortReference: shortEntityReference({ id: chain.head.id, kind: "issueComment", shortReference: chain.head.shortReference }),
 			issueId: chain.head.issueId,
 			createdBy: chain.head.createdBy,
 			updatedBy: chain.head.updatedBy,
@@ -2238,6 +2401,9 @@ export class PgEntityStore implements EntityStore {
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
+		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}, actorId?: string): Promise<EntityRecord> {
@@ -2284,7 +2450,7 @@ export class PgEntityStore implements EntityStore {
 		return updateEntityStatus(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 
-	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<EntityRecord> {
+	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; type?: string | null; author?: string; expectedRevision: number; expectedContentHash: string }, actorId?: string): Promise<EntityRecord> {
 		return updateEntity(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 

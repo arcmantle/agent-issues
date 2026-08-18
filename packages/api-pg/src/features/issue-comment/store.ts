@@ -10,6 +10,7 @@ import {
 	ISSUE_COMMENT_REVERSE_PATCH_REGISTRY,
 	IssueCommentConflictError,
 	materializeIssueCommentFromPatches,
+	shortEntityReference,
 	type IssueCommentHistoryEntry,
 	type IssueCommentPage,
 	type IssueCommentRecord,
@@ -25,6 +26,7 @@ const DEFAULT_PAGE_SIZE = 50;
 type IssueCommentRow = {
 	id: string;
 	reference: string;
+	short_reference: string;
 	issue_id: string;
 	created_by: string;
 	updated_by: string;
@@ -68,6 +70,7 @@ export class PgIssueCommentStore {
 		const referencedIssueIds = await validateReferencedIssueIds(this.executor, input.referencedIssueIds ?? []);
 		const id = randomUUID();
 		const reference = encodeCanonicalReference("issueComment", id);
+		const shortReference = await allocateShortReference(this.executor, id);
 		const createdAt = new Date().toISOString();
 		const state = { body: input.body, referencedIssueIds, tombstone: false };
 		const contentHash = computeIssueCommentContentHash(state.body, state.referencedIssueIds, state.tombstone);
@@ -75,6 +78,7 @@ export class PgIssueCommentStore {
 			tenantId: this.executor.tenantId,
 			id,
 			reference,
+			shortReference,
 			issueId,
 			createdBy: actorId,
 			updatedBy: actorId,
@@ -91,6 +95,7 @@ export class PgIssueCommentStore {
 		return toIssueCommentRecord({
 			id,
 			reference,
+			short_reference: shortReference,
 			issue_id: issueId,
 			created_by: actorId,
 			updated_by: actorId,
@@ -232,6 +237,7 @@ export class PgIssueCommentStore {
 		const comments = rows.map((row): IssueCommentRecord => ({
 			id: row.id,
 			reference: row.reference,
+			shortReference: row.short_reference,
 			issueId: row.issue_id,
 			createdBy: row.created_by,
 			updatedBy: row.updated_by,
@@ -421,7 +427,7 @@ async function findProjectIssueComment(executor: TenantExecutor, commentId: stri
 		JOIN entities AS issue ON issue.tenant_id = issue_comments.tenant_id AND issue.id = issue_comments.issue_id
 		WHERE issue_comments.tenant_id = ${executor.tenantId}
 			AND issue.project_id = ${executor.currentProjectId}::uuid
-			AND (issue_comments.id::text = ${commentId} OR issue_comments.reference = ${commentId})
+			AND (issue_comments.id::text = ${commentId} OR issue_comments.reference = ${commentId} OR issue_comments.short_reference = ${commentId})
 	`);
 	return result.rows[0] as IssueCommentRow | undefined;
 }
@@ -430,6 +436,7 @@ function toIssueCommentRecord(row: IssueCommentRow & { referencedIssueIds: strin
 	return {
 		id: row.id,
 		reference: row.reference,
+		shortReference: row.short_reference,
 		issueId: row.issue_id,
 		createdBy: row.created_by,
 		updatedBy: row.updated_by,
@@ -441,6 +448,23 @@ function toIssueCommentRecord(row: IssueCommentRow & { referencedIssueIds: strin
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
+}
+
+async function allocateShortReference(executor: TenantExecutor, id: string): Promise<string> {
+	const baseReference = shortEntityReference({ id, kind: "issueComment" });
+	let shortReference = baseReference;
+	let suffix = 2;
+
+	while ((await executor
+		.select({ id: issueComments.id })
+		.from(issueComments)
+		.where(and(eq(issueComments.tenantId, executor.tenantId), eq(issueComments.shortReference, shortReference)))
+		.limit(1)).length > 0) {
+		shortReference = `${baseReference}-${suffix}`;
+		suffix += 1;
+	}
+
+	return shortReference;
 }
 
 function encodeCursor(comment: Pick<IssueCommentRecord, "createdAt" | "reference">): string {

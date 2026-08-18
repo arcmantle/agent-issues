@@ -56,7 +56,6 @@ export function resolveSqliteEntities(executor: SqliteExecutor, entityId: string
 	return executor.drizzle
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), livePredicate))
-		.all()
-		.filter((candidate) => shortEntityReference(candidate) === entityId);
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.shortReference, entityId), livePredicate))
+		.all();
 }

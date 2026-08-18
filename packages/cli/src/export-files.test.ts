@@ -30,6 +30,61 @@ afterEach(() => {
 });
 
 describe("directory export", () => {
+	it("writes a Plan entity with generated current state and entry history", async () => {
+		const db = await openTestDatabase();
+		const store = new SqliteStore(db);
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan export" });
+		const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Plan record", body: "## Goal\n\nExport it." });
+		const question = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which data is current?" });
+		const decision = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Use active entries.", supersededEntryIds: [question.id] });
+		const snapshot = await store.getDatabaseSnapshot();
+		const context = snapshot.contexts.initiatives.find((details) => details.context.scopeEntityId === initiative.id)!;
+		const outputPath = path.join(tempDir!, "initiative-export");
+
+		writeInitiativeDirectoryExport({
+			bundle: await store.getInitiativeBundle(initiative.id),
+			context,
+			outputPath,
+			planEntries: snapshot.planEntries,
+			relations: snapshot.relations
+		});
+
+		const planExport = readFileSync(path.join(outputPath, "entities", `${plan.id}.md`), "utf8");
+		expect(planExport).toContain("## Current Plan");
+		expect(planExport).toContain(decision.reference);
+		expect(planExport).toContain("## Plan Entry History");
+		expect(planExport).toContain(question.reference);
+	});
+
+	it("writes debt metadata to an initiative entity export", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer" });
+		const debt = createEntity(db, {
+			kind: "debt",
+			parentId: initiative.id,
+			title: "Replace legacy storage",
+			category: "technical",
+			priority: "high"
+		});
+		linkEntities(db, { fromId: initiative.id, toId: debt.id, relationType: "records" });
+
+		const snapshot = getDatabaseSnapshot(db);
+		const context = snapshot.contexts.initiatives.find((details) => details.context.scopeEntityId === initiative.id)!;
+		const outputPath = path.join(tempDir!, "initiative-export");
+		writeInitiativeDirectoryExport({
+			bundle: getInitiativeBundle(db, initiative.id),
+			context,
+			outputPath,
+			relations: snapshot.relations
+		});
+
+		const debtExport = readFileSync(path.join(outputPath, "entities", `${debt.id}.md`), "utf8");
+		expect(debtExport).toContain('category: "technical"');
+		expect(debtExport).toContain('priority: "high"');
+		expect(debtExport).toContain(`from: "${initiative.id}"`);
+		expect(debtExport).toContain(`to: "${debt.id}"`);
+	});
+
 	it("writes an initiative folder grouped by entity kinds and relation types", async () => {
 		const db = await openTestDatabase();
 		const initiative = createEntity(db, { kind: "initiative", title: "Console Viewer", body: "Initiative body" });

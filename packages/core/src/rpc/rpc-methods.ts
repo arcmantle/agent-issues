@@ -25,6 +25,11 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	deleteIssueComment: async (store, params) => store.deleteIssueComment(params as Parameters<StorageDriver["deleteIssueComment"]>[0]),
 	listIssueComments: async (store, params) => store.listIssueComments(params as Parameters<StorageDriver["listIssueComments"]>[0]),
 	listIssueCommentHistory: async (store, params) => store.listIssueCommentHistory(params as Parameters<StorageDriver["listIssueCommentHistory"]>[0]),
+	createPlanEntry: async (store, params) => store.createPlanEntry(params as Parameters<StorageDriver["createPlanEntry"]>[0]),
+	updatePlanEntry: async (store, params) => store.updatePlanEntry(params as Parameters<StorageDriver["updatePlanEntry"]>[0]),
+	deletePlanEntry: async (store, params) => store.deletePlanEntry(params as Parameters<StorageDriver["deletePlanEntry"]>[0]),
+	listPlanEntries: async (store, params) => store.listPlanEntries(params as Parameters<StorageDriver["listPlanEntries"]>[0]),
+	listPlanEntryHistory: async (store, params) => store.listPlanEntryHistory(params as Parameters<StorageDriver["listPlanEntryHistory"]>[0]),
 
 	// Entity lifecycle (ISS50). Methods whose `StorageDriver` signature takes
 	// a bare string/no argument are wrapped in a named-field params object for
@@ -90,6 +95,9 @@ export const writeMethods = new Set<string>([
 	"createIssueComment",
 	"updateIssueComment",
 	"deleteIssueComment",
+	"createPlanEntry",
+	"updatePlanEntry",
+	"deletePlanEntry",
 	"updateEntityStatus",
 	"updateEntity",
 	"setEntityBody",

@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveEntityStatuses, derivePrdStatus, isAllowedRelation, isInitiativeComplete, isValidStatus } from "./domain.js";
+import { deriveEntityStatuses, derivePrdStatus, getInitialStatus, ID_PREFIX, isAllowedRelation, isEntityType, isInitiativeComplete, isValidStatus } from "./domain.js";
+
+describe("Plans", () => {
+	it("has a draft lifecycle, a PLAN reference, initiative ownership, and PRD provenance", () => {
+		expect(getInitialStatus("plan")).toBe("draft");
+		expect(isValidStatus("plan", "ready")).toBe(true);
+		expect(ID_PREFIX.plan).toBe("PLAN");
+		expect(isAllowedRelation("initiative", "plan", "owns")).toBe(true);
+		expect(isAllowedRelation("plan", "prd", "informs")).toBe(true);
+	});
+});
+
+describe("kind-specific entity types", () => {
+	it("allows only declared specialized types for an entity kind", () => {
+		expect(isEntityType("issue", "wayfinder-map")).toBe(true);
+		expect(isEntityType("issue", "wayfinder-ticket")).toBe(true);
+		expect(isEntityType("issue", "unknown")).toBe(false);
+		expect(isEntityType("initiative", "wayfinder-map")).toBe(false);
+	});
+});
 
 describe("superseded planning records", () => {
 	it("allows ADRs to be recorded by projects, epics, and initiatives", () => {
@@ -18,10 +37,10 @@ describe("superseded planning records", () => {
 
 	it("derives superseded only from an incoming supersedes relation", () => {
 		const entities = [
-			{ id: "PRD1", reference: "PRD1", createdBy: "user", updatedBy: "user", kind: "prd" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
-			{ id: "PRD2", reference: "PRD2", createdBy: "user", updatedBy: "user", kind: "prd" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
-			{ id: "US1", reference: "US1", createdBy: "user", updatedBy: "user", kind: "userStory" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
-			{ id: "US2", reference: "US2", createdBy: "user", updatedBy: "user", kind: "userStory" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, revision: 1, contentHash: "", createdAt: "", updatedAt: "" }
+			{ id: "PRD1", reference: "PRD1", shortReference: "PRD1", createdBy: "user", updatedBy: "user", kind: "prd" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, category: null, priority: null, type: null, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
+			{ id: "PRD2", reference: "PRD2", shortReference: "PRD2", createdBy: "user", updatedBy: "user", kind: "prd" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, category: null, priority: null, type: null, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
+			{ id: "US1", reference: "US1", shortReference: "US1", createdBy: "user", updatedBy: "user", kind: "userStory" as const, title: "Old", status: "draft", body: "", bodySource: "authored" as const, category: null, priority: null, type: null, revision: 1, contentHash: "", createdAt: "", updatedAt: "" },
+			{ id: "US2", reference: "US2", shortReference: "US2", createdBy: "user", updatedBy: "user", kind: "userStory" as const, title: "New", status: "draft", body: "", bodySource: "authored" as const, category: null, priority: null, type: null, revision: 1, contentHash: "", createdAt: "", updatedAt: "" }
 		];
 		const relations = [
 			{ fromId: "PRD2", toId: "PRD1", type: "supersedes" as const, createdBy: "user", createdAt: "" },

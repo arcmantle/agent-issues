@@ -25,7 +25,7 @@ describe("api migrations chain", () => {
 	});
 
 	it("registers the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments"]);
+		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -277,6 +277,9 @@ describe("api migrations chain", () => {
 				{ table_name: "entities" },
 				{ table_name: "issue_comment_references" },
 				{ table_name: "issue_comments" },
+				{ table_name: "plan_entries" },
+				{ table_name: "plan_entry_references" },
+				{ table_name: "plan_entry_supersessions" },
 				{ table_name: "relations" },
 				{ table_name: "revision_entries" },
 				{ table_name: "schema_migrations" },
@@ -289,7 +292,13 @@ describe("api migrations chain", () => {
 				{ id: "record-provenance" },
 				{ id: "context-term-provenance" },
 				{ id: "relation-provenance" },
-				{ id: "issue-comments" }
+				{ id: "issue-comments" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -313,7 +322,13 @@ describe("api migrations chain", () => {
 				{ id: "record-provenance" },
 				{ id: "context-term-provenance" },
 				{ id: "relation-provenance" },
-				{ id: "issue-comments" }
+				{ id: "issue-comments" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -364,13 +379,29 @@ describe("api migrations chain", () => {
 				{ table_name: "entities" },
 				{ table_name: "issue_comment_references" },
 				{ table_name: "issue_comments" },
+				{ table_name: "plan_entries" },
+				{ table_name: "plan_entry_references" },
+				{ table_name: "plan_entry_supersessions" },
 				{ table_name: "relations" },
 				{ table_name: "revision_entries" },
 				{ table_name: "schema_migrations" },
 				{ table_name: "users" }
 			]);
-			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows).toEqual([
-				{ id: "legacy-v7-direct" }
+			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY id")).rows).toEqual([
+				{ id: "adr-status-to-current" },
+				{ id: "context-term-provenance" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
+				{ id: "final-baseline" },
+				{ id: "issue-comments" },
+				{ id: "legacy-v7-direct" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" },
+				{ id: "record-provenance" },
+				{ id: "relation-provenance" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
+				{ id: "user-directory" }
 			]);
 			const issueIdentity = deriveMigratedEntityIdentity("issue", "ISS1");
 			const issueId = issueIdentity.stableId;
@@ -380,7 +411,12 @@ describe("api migrations chain", () => {
 				{ from_id: projectId, to_id: initiativeIdentity.stableId, type: "contains" },
 				{ from_id: initiativeIdentity.stableId, to_id: issueId, type: "tracks" }
 			]);
-			const store = new PgStore(schemaPool, "tenant-a");
+			const store = new PgStore(schemaPool, "tenant-a", "Agent Issues");
+			const plan = await store.createEntity({ kind: "plan", title: "Migrated Plan", parentId: initiativeIdentity.stableId });
+			const entry = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Can this Plan synchronize?" });
+			expect((await store.exportCanonicalChains()).planEntries).toContainEqual(expect.objectContaining({
+				head: expect.objectContaining({ id: entry.id, planId: plan.id })
+			}));
 			await expect(store.materializeEntityRevision({ entityId: issueId, revision: 1 })).resolves.toMatchObject({
 				author: "creator",
 				body: "first body",
@@ -950,7 +986,11 @@ describe("api migrations chain", () => {
 		try {
 			await createLegacyV7Fixture(setupPool, 1);
 			await Promise.all([migratePgDatabase(firstPool), migratePgDatabase(secondPool)]);
-			expect((await setupPool.query("SELECT id FROM schema_migrations")).rows).toEqual([{ id: "legacy-v7-direct" }]);
+			expect((await setupPool.query("SELECT id FROM schema_migrations ORDER BY id")).rows).toEqual(
+			["legacy-v7-direct", ...productionMigrations.map(({ id }) => id)]
+				.sort()
+				.map((id) => ({ id }))
+		);
 			expect((await setupPool.query("SELECT count(*)::integer AS count FROM entities")).rows).toEqual([{ count: 3 }]);
 		} finally {
 			await Promise.all([setupPool.end(), firstPool.end(), secondPool.end()]);
@@ -1036,6 +1076,7 @@ describe("api migrations chain", () => {
 
 	it.each([
 		["missing ID", async (pool: Pool) => pool.query("DELETE FROM schema_migrations WHERE id = 'final-baseline'")],
+		["missing Plan-entry position ID", async (pool: Pool) => pool.query("DELETE FROM schema_migrations WHERE id = 'plan-entry-supersession-position'")],
 		["unknown ID", async (pool: Pool) => pool.query("UPDATE schema_migrations SET id = '9999-unknown' WHERE id = 'final-baseline'")],
 		["dialect-inappropriate ID", async (pool: Pool) => pool.query("UPDATE schema_migrations SET id = '0004-backfill-tenant-bootstrap' WHERE id = 'final-baseline'")],
 		["nominal-final ledger with a non-final schema", async (pool: Pool) => pool.query("ALTER TABLE entities ADD COLUMN metadata JSONB")],
@@ -1106,9 +1147,21 @@ describe("api migrations chain", () => {
 				`SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name`,
 				[schemaName]
 			);
-			expect(tableRows.map((row) => row.table_name)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries", "schema_migrations", "users"].sort()
-			);
+			expect(tableRows.map((row) => row.table_name)).toEqual([
+				"context_terms",
+				"contexts",
+				"counters",
+				"entities",
+				"issue_comment_references",
+				"issue_comments",
+				"plan_entries",
+				"plan_entry_references",
+				"plan_entry_supersessions",
+				"relations",
+				"revision_entries",
+				"schema_migrations",
+				"users"
+			]);
 
 			const { rows: indexRows } = await schemaPool.query(
 				`SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND indexname NOT LIKE '%_pkey' AND indexname NOT LIKE '%_pk' ORDER BY indexname`,
@@ -1117,13 +1170,20 @@ describe("api migrations chain", () => {
 			expect(indexRows.map((row) => row.indexname)).toEqual([
 				"context_terms_tenant_context_key_idx",
 				"context_terms_tenant_id_idx",
+				"context_terms_tenant_short_reference_idx",
 				"contexts_tenant_id_idx",
 				"contexts_tenant_reference_idx",
 				"contexts_tenant_scope_entity_id_idx",
+				"contexts_tenant_short_reference_idx",
 				"entities_tenant_reference_idx",
+				"entities_tenant_short_reference_idx",
 				"issue_comment_references_tenant_issue_idx",
 				"issue_comments_tenant_id_reference_key",
 				"issue_comments_tenant_issue_idx",
+				"issue_comments_tenant_short_reference_idx",
+				"plan_entries_tenant_id_reference_key",
+				"plan_entries_tenant_id_short_reference_key",
+				"plan_entries_tenant_plan_idx",
 				"relations_tenant_to_id_idx",
 				"revision_entries_chain_idx",
 				"revision_entries_project_idx",
@@ -1136,14 +1196,14 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(policyRows.map((row) => row.tablename)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries", "users"].sort()
+				["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"].sort()
 			);
 			expect(policyRows.every((row) => row.qual === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			expect(policyRows.every((row) => row.with_check === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			const { rows: securityRows } = await schemaPool.query(
 				`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
 				 WHERE relnamespace = $1::regnamespace AND relname = ANY($2) ORDER BY relname`,
-				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "relations", "revision_entries", "users"]]
+				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"]]
 			);
 			expect(securityRows).toEqual(securityRows.map((row) => ({ ...row, relforcerowsecurity: true, relrowsecurity: true })));
 
@@ -1162,7 +1222,7 @@ describe("api migrations chain", () => {
 			);
 			expect(constraintRows).toEqual([
 				{ definition: "CHECK ((patch_format > 0))", name: "revision_entries_patch_format_positive" },
-				{ definition: "CHECK ((record_kind = ANY (ARRAY['entity'::text, 'context'::text, 'context-term'::text, 'issue-comment'::text])))", name: "revision_entries_record_kind" },
+				{ definition: "CHECK ((record_kind = ANY (ARRAY['entity'::text, 'context'::text, 'context-term'::text, 'issue-comment'::text, 'plan-entry'::text])))", name: "revision_entries_record_kind" },
 				{ definition: "CHECK ((revision > 0))", name: "revision_entries_revision_positive" },
 				{ definition: "CHECK ((octet_length(source_hash) = 32))", name: "revision_entries_source_hash_length" },
 				{ definition: "CHECK ((octet_length(target_hash) = 32))", name: "revision_entries_target_hash_length" }
@@ -1191,7 +1251,13 @@ describe("api migrations chain", () => {
 				{ id: "record-provenance" },
 				{ id: "context-term-provenance" },
 				{ id: "relation-provenance" },
-				{ id: "issue-comments" }
+				{ id: "issue-comments" },
+				{ id: "debt-metadata" },
+				{ id: "entity-type" },
+				{ id: "short-entity-reference" },
+				{ id: "short-record-reference" },
+				{ id: "plan-entries" },
+				{ id: "plan-entry-supersession-position" }
 			]);
 
 			const { rows: identityColumns } = await schemaPool.query(
@@ -1202,6 +1268,7 @@ describe("api migrations chain", () => {
 			const columnType = (tableName: string, columnName: string) => identityColumns.find((column) => column.table_name === tableName && column.column_name === columnName)?.data_type;
 			expect(columnType("entities", "id")).toBe("uuid");
 			expect(columnType("entities", "reference")).toBe("text");
+			expect(columnType("entities", "short_reference")).toBe("text");
 			expect(columnType("relations", "from_id")).toBe("uuid");
 			expect(columnType("contexts", "id")).toBe("uuid");
 			expect(columnType("contexts", "reference")).toBe("text");

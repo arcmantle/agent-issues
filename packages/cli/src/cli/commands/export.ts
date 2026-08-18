@@ -57,7 +57,7 @@ export class ExportCommand extends MutableTenantCommand {
 			const commentsByIssueId = await collectIssueComments(store, bundle.issues);
 			const relations = snapshot.relations;
 			const context = await store.getContextDetails({ scopeRef: target });
-			const markdown = renderInitiativeMarkdownExport({ bundle, commentsByIssueId, context, relations, users: snapshot.users });
+			const markdown = renderInitiativeMarkdownExport({ bundle, commentsByIssueId, context, planEntries: snapshot.planEntries, relations, users: snapshot.users });
 
 			if (this.singleFile) {
 				return this.emitSingleFileExport({
@@ -77,6 +77,7 @@ export class ExportCommand extends MutableTenantCommand {
 				commentsByIssueId,
 				context,
 				outputPath: this.resolveOutputPath(target),
+				planEntries: snapshot.planEntries,
 				relations,
 				users: snapshot.users,
 				force: this.force

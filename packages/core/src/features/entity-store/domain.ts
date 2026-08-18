@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import type { ReverseFieldPatchTransition } from "../reverse-field-patch/reverse-field-patch.js";
 
-export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue", "handoff"] as const;
+export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue", "debt", "handoff", "plan"] as const;
+
+export const ENTITY_CATEGORIES = ["technical", "product", "operational", "security", "process", "other"] as const;
+
+export const ENTITY_PRIORITIES = ["low", "medium", "high", "critical"] as const;
+
+export const ENTITY_TYPES = {
+	issue: ["wayfinder-map", "wayfinder-ticket"]
+} as const;
 
 export const BODY_SOURCES = ["authored", "generated"] as const;
 
@@ -14,7 +22,9 @@ export const STATUS_FLOW = {
 	userStory: ["draft", "ready", "in-progress", "done", "superseded"],
 	adr: ["current", "superseded", "archived"],
 	issue: ["todo", "in-progress", "blocked", "done"],
-	handoff: ["active", "done"]
+	debt: ["open", "resolved", "archived"],
+	handoff: ["active", "done"],
+	plan: ["draft", "in-progress", "ready", "superseded"]
 } as const;
 
 export const ID_PREFIX = {
@@ -26,7 +36,9 @@ export const ID_PREFIX = {
 	userStory: "US",
 	adr: "ADR",
 	issue: "ISS",
-	handoff: "HO"
+	debt: "DEBT",
+	handoff: "HO",
+	plan: "PLAN"
 } as const;
 
 export const ALLOWED_RELATIONS = [
@@ -37,23 +49,42 @@ export const ALLOWED_RELATIONS = [
 	{ fromKind: "issue", toKind: "version", type: "taggedWith" },
 	{ fromKind: "initiative", toKind: "initiative", type: "supersedes" },
 	{ fromKind: "initiative", toKind: "prd", type: "owns" },
+	{ fromKind: "initiative", toKind: "plan", type: "owns" },
 	{ fromKind: "prd", toKind: "prd", type: "supersedes" },
+	{ fromKind: "plan", toKind: "prd", type: "informs" },
 	{ fromKind: "project", toKind: "adr", type: "records" },
 	{ fromKind: "epic", toKind: "adr", type: "records" },
 	{ fromKind: "initiative", toKind: "adr", type: "records" },
+	{ fromKind: "project", toKind: "debt", type: "records" },
+	{ fromKind: "epic", toKind: "debt", type: "records" },
+	{ fromKind: "initiative", toKind: "debt", type: "records" },
+	{ fromKind: "issue", toKind: "debt", type: "records" },
 	{ fromKind: "initiative", toKind: "issue", type: "tracks" },
 	{ fromKind: "prd", toKind: "userStory", type: "creates" },
 	{ fromKind: "userStory", toKind: "userStory", type: "supersedes" },
 	{ fromKind: "issue", toKind: "issue", type: "decomposes" },
 	{ fromKind: "issue", toKind: "userStory", type: "fixes" },
 	{ fromKind: "adr", toKind: "issue", type: "constrains" },
+	{ fromKind: "epic", toKind: "debt", type: "resolves" },
+	{ fromKind: "initiative", toKind: "debt", type: "resolves" },
+	{ fromKind: "issue", toKind: "debt", type: "resolves" },
 	{ fromKind: "adr", toKind: "adr", type: "supersedes" },
 	{ fromKind: "issue", toKind: "issue", type: "blocks" },
+	{ fromKind: "debt", toKind: "project", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "epic", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "version", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "initiative", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "prd", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "userStory", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "adr", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "issue", type: "relatesTo" },
+	{ fromKind: "debt", toKind: "debt", type: "relatesTo" },
 	{ fromKind: "handoff", toKind: "initiative", type: "handsOff" },
 	{ fromKind: "handoff", toKind: "prd", type: "handsOff" },
 	{ fromKind: "handoff", toKind: "userStory", type: "handsOff" },
 	{ fromKind: "handoff", toKind: "adr", type: "handsOff" },
-	{ fromKind: "handoff", toKind: "issue", type: "handsOff" }
+	{ fromKind: "handoff", toKind: "issue", type: "handsOff" },
+	{ fromKind: "handoff", toKind: "debt", type: "handsOff" },
 ] as const;
 
 export const STRUCTURAL_RELATION_TYPES = ["contains", "owns", "records", "tracks", "creates", "decomposes"] as const;
@@ -89,6 +120,9 @@ export function formatTenantDisplayName(tenantId: string): string {
 }
 
 export type EntityKind = (typeof ENTITY_KINDS)[number];
+export type EntityCategory = (typeof ENTITY_CATEGORIES)[number];
+export type EntityPriority = (typeof ENTITY_PRIORITIES)[number];
+export type EntityType = (typeof ENTITY_TYPES)[keyof typeof ENTITY_TYPES][number];
 export type BodySource = (typeof BODY_SOURCES)[number];
 export type EntityStatus<K extends EntityKind = EntityKind> = (typeof STATUS_FLOW)[K][number];
 export type RelationType = (typeof ALLOWED_RELATIONS)[number]["type"];
@@ -97,6 +131,7 @@ export type StructuralRelationType = (typeof STRUCTURAL_RELATION_TYPES)[number];
 export type EntityRecord = {
 	id: string;
 	reference: string;
+	shortReference: string;
 	createdBy: string;
 	updatedBy: string;
 	kind: EntityKind;
@@ -104,6 +139,9 @@ export type EntityRecord = {
 	status: string;
 	body: string;
 	bodySource: BodySource;
+	category: EntityCategory | null;
+	priority: EntityPriority | null;
+	type: EntityType | null;
 	revision: number;
 	contentHash: string;
 	createdAt: string;
@@ -148,6 +186,9 @@ export type MaterializedEntityRevision = {
 	title: string;
 	body: string;
 	bodySource: BodySource;
+	category: EntityCategory | null;
+	priority: EntityPriority | null;
+	type: EntityType | null;
 	status: string;
 	parentId: string | null;
 	tombstone: boolean | null;
@@ -225,6 +266,7 @@ export type HistoryEntryRecord = {
 	title: string;
 	body: string;
 	bodySource: BodySource;
+	type: EntityType | null;
 	status: string;
 	parentId: string | null;
 	createdAt: string;
@@ -232,6 +274,19 @@ export type HistoryEntryRecord = {
 
 export function isEntityKind(value: string): value is EntityKind {
 	return ENTITY_KINDS.includes(value as EntityKind);
+}
+
+export function isEntityCategory(value: string): value is EntityCategory {
+	return ENTITY_CATEGORIES.includes(value as EntityCategory);
+}
+
+export function isEntityPriority(value: string): value is EntityPriority {
+	return ENTITY_PRIORITIES.includes(value as EntityPriority);
+}
+
+export function isEntityType(kind: EntityKind, value: string): value is EntityType {
+	const allowedTypes = ENTITY_TYPES[kind as keyof typeof ENTITY_TYPES] as readonly string[] | undefined;
+	return allowedTypes?.includes(value) ?? false;
 }
 
 export function isBodySource(value: string): value is BodySource {
@@ -280,8 +335,12 @@ export function getArchiveStatus(kind: EntityKind): EntityStatus {
 			return "archived";
 		case "issue":
 			return "done";
+		case "debt":
+			return "archived";
 		case "handoff":
 			return "done";
+		case "plan":
+			return "superseded";
 	}
 }
 
