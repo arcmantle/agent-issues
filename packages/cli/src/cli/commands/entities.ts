@@ -53,7 +53,7 @@ export class CreateCommand extends BodyTenantCommand {
 
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entity = await store.createEntity({
-				body: this.resolveBody(),
+				body: await this.resolveBody(),
 				category: this.category,
 				kind,
 				links: this.links?.map(([relationType, targetId]) => ({ relationType, targetId })),
@@ -84,7 +84,7 @@ export class EditCommand extends BodyTenantCommand {
 		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "edit <id> (--title <text> | --body-file <path|->)");
-			const body = this.resolveBody();
+			const body = await this.resolveBody();
 			if (this.title === undefined && body === undefined && this.category === undefined && this.priority === undefined && this.entityType === undefined) {
 				throw new Error("--title, --body-file, --category, --priority, or --type is required for edit.");
 			}

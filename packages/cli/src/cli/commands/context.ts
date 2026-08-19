@@ -114,7 +114,7 @@ export class ContextCommand extends TenantCommand {
 				const result = await store.upsertContext({
 					scopeRef: this.scope,
 					title: requireOption(this.title, "--title is required for context set."),
-					summary: requireOption(resolveMarkdownFileOption(this.bodyFile, "--body-file"), "--body-file is required for context set."),
+					summary: requireOption(await resolveMarkdownFileOption(this.bodyFile, "--body-file"), "--body-file is required for context set."),
 					...(current.context.exists && {
 						expectedRevision: current.context.revision,
 						expectedContentHash: current.context.contentHash
@@ -131,7 +131,7 @@ export class ContextCommand extends TenantCommand {
 				const input = {
 					scopeRef: this.scope,
 					term,
-					definition: requireOption(resolveMarkdownFileOption(this.bodyFile, "--body-file"), "--body-file is required for context define."),
+					definition: requireOption(await resolveMarkdownFileOption(this.bodyFile, "--body-file"), "--body-file is required for context define."),
 					avoid: parseCsvOption(this.avoid),
 					...(current && { expectedRevision: current.revision, expectedContentHash: current.contentHash })
 				};

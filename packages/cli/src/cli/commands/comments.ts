@@ -25,7 +25,7 @@ export class AddIssueCommentCommand extends BodyTenantCommand {
 			const referencedIssueIds = await resolveReferencedIssueIds(store, this.references ?? []);
 			const comment = await store.createIssueComment({
 				issueId: requirePositional(this.positionals, 0, "comment add <issueId> --body-file <path|-> [--reference <issueId>]"),
-				body: requireOption(this.resolveBody(), "--body-file is required for comment add."),
+				body: requireOption(await this.resolveBody(), "--body-file is required for comment add."),
 				referencedIssueIds
 			});
 			this.print(comment, renderIssueComment(comment));
@@ -50,7 +50,7 @@ export class EditIssueCommentCommand extends BodyTenantCommand {
 				: await resolveReferencedIssueIds(store, this.references);
 			const updated = await store.updateIssueComment({
 				commentId,
-				body: requireOption(this.resolveBody(), "--body-file is required for comment edit."),
+				body: requireOption(await this.resolveBody(), "--body-file is required for comment edit."),
 				referencedIssueIds,
 				expectedRevision: comment.revision,
 				expectedContentHash: comment.contentHash

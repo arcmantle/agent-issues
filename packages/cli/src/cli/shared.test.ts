@@ -1,4 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ readFile: vi.fn() }));
+
+vi.mock("node:fs/promises", () => ({ readFile: mocks.readFile }));
+
+afterEach(() => {
+	mocks.readFile.mockReset();
+});
+
+describe("resolveMarkdownFileOption", () => {
+	it("retries a body-file read after EAGAIN", async () => {
+		const error = Object.assign(new Error("resource temporarily unavailable"), { code: "EAGAIN" });
+		mocks.readFile.mockRejectedValueOnce(error).mockResolvedValueOnce("Body text");
+
+		expect(await resolveMarkdownFileOption("body.md", "--body-file")).toBe("Body text");
+		expect(mocks.readFile).toHaveBeenCalledTimes(2);
+	});
+});
 
 const openStorageDriverMock = vi.hoisted(() => vi.fn());
 vi.mock("../open-storage-driver.js", () => ({ openStorageDriver: openStorageDriverMock }));
@@ -6,7 +24,7 @@ vi.mock("../open-storage-driver.js", () => ({ openStorageDriver: openStorageDriv
 const readBuildContentHashMock = vi.hoisted(() => vi.fn(() => "test-build-hash"));
 vi.mock("@agent-issues/api-local", () => ({ readBuildContentHash: readBuildContentHashMock }));
 
-const { withStore } = await import("./shared.js");
+const { resolveMarkdownFileOption, withStore } = await import("./shared.js");
 
 function fakeStore() {
 	return { close: vi.fn(async () => {}) } as never;

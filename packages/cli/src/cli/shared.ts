@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { Writable } from "node:stream";
 
 import { Command, Option, type BaseContext } from "clipanion";
@@ -39,6 +40,7 @@ export type AgentIssuesContext = BaseContext & {
 export type EntityView = "compact" | "full";
 
 export const CONTEXT_SUBCOMMANDS = new Set(["list", "show", "search", "conflicts", "set", "define", "forget"]);
+const BODY_FILE_READ_ATTEMPTS = 3;
 
 export abstract class BaseCommand extends Command<AgentIssuesContext> {
 	public asJson = Option.Boolean("--json", false);
@@ -73,7 +75,7 @@ export abstract class MutableTenantCommand extends TenantCommand {
 export abstract class BodyTenantCommand extends TenantCommand {
 	public bodyFile = Option.String("--body-file");
 
-	protected resolveBody(): string | undefined {
+	protected async resolveBody(): Promise<string | undefined> {
 		return resolveMarkdownFileOption(this.bodyFile, "--body-file");
 	}
 }
@@ -216,7 +218,7 @@ export function requireOption(value: string | undefined, message: string): strin
  * flag - never an inline flag value - since inline multiline markdown breaks
  * shell quoting and lands in shell history and process listings.
  */
-export function resolveMarkdownFileOption(filePath: string | undefined, flagName: string): string | undefined {
+export async function resolveMarkdownFileOption(filePath: string | undefined, flagName: string): Promise<string | undefined> {
 	if (filePath === undefined) {
 		return undefined;
 	}
@@ -226,9 +228,27 @@ export function resolveMarkdownFileOption(filePath: string | undefined, flagName
 	}
 
 	try {
-		return readFileSync(filePath, "utf8");
+		return await readMarkdownFile(filePath);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`Could not read ${flagName} ${filePath}: ${message}`);
 	}
+}
+
+async function readMarkdownFile(filePath: string): Promise<string> {
+	for (let attempt = 1; attempt <= BODY_FILE_READ_ATTEMPTS; attempt += 1) {
+		try {
+			return await readFile(filePath, "utf8");
+		} catch (error) {
+			if (!isEagainError(error) || attempt === BODY_FILE_READ_ATTEMPTS) {
+				throw error;
+			}
+		}
+	}
+
+	throw new Error(`Could not read body file: ${filePath}`);
+}
+
+function isEagainError(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && error.code === "EAGAIN";
 }

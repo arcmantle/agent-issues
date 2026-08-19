@@ -16,7 +16,7 @@ export class AddPlanEntryCommand extends BodyTenantCommand {
 			const entry = await store.createPlanEntry({
 				planId: requirePositional(this.positionals, 0, "plan-entry add <planId> --role <role> --body-file <path|->"),
 				role: requireOption(this.role, "--role is required for plan-entry add.") as "question",
-				body: requireOption(this.resolveBody(), "--body-file is required for plan-entry add."),
+				body: requireOption(await this.resolveBody(), "--body-file is required for plan-entry add."),
 				...(this.scopeDirection === undefined ? {} : { scopeDirection: this.scopeDirection as "included" }),
 				referencedEntityIds: await resolveEntityIds(store, this.references ?? []),
 				supersededEntryIds: this.supersedes ?? []
@@ -38,7 +38,7 @@ export class EditPlanEntryCommand extends BodyTenantCommand {
 			const entry = await getPlanEntry(store, planId, requirePositional(this.positionals, 1, "plan-entry edit <planId> <entryId> --body-file <path|->"));
 			const updated = await store.updatePlanEntry({
 				entryId: entry.id,
-				body: requireOption(this.resolveBody(), "--body-file is required for plan-entry edit."),
+				body: requireOption(await this.resolveBody(), "--body-file is required for plan-entry edit."),
 				expectedRevision: entry.revision,
 				expectedContentHash: entry.contentHash
 			});
