@@ -16,6 +16,15 @@ describe("resolveMarkdownFileOption", () => {
 		expect(await resolveMarkdownFileOption("body.md", "--body-file")).toBe("Body text");
 		expect(mocks.readFile).toHaveBeenCalledTimes(2);
 	});
+
+	it("reads all piped stdin chunks", async () => {
+		async function* pipe(): AsyncGenerator<string> {
+			yield "## Purpose\n\n";
+			yield "Piped body text\n";
+		}
+
+		expect(await resolveMarkdownFileOption("-", "--body-file", pipe())).toBe("## Purpose\n\nPiped body text\n");
+	});
 });
 
 const openStorageDriverMock = vi.hoisted(() => vi.fn());

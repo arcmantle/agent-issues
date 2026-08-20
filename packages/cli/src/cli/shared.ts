@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { Writable } from "node:stream";
 
@@ -218,13 +217,22 @@ export function requireOption(value: string | undefined, message: string): strin
  * flag - never an inline flag value - since inline multiline markdown breaks
  * shell quoting and lands in shell history and process listings.
  */
-export async function resolveMarkdownFileOption(filePath: string | undefined, flagName: string): Promise<string | undefined> {
+export async function resolveMarkdownFileOption(
+	filePath: string | undefined,
+	flagName: string,
+	stdin: AsyncIterable<string | Uint8Array> = process.stdin
+): Promise<string | undefined> {
 	if (filePath === undefined) {
 		return undefined;
 	}
 
 	if (filePath === "-") {
-		return readFileSync(0, "utf8");
+		try {
+			return await readMarkdownStdin(stdin);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Could not read ${flagName} from stdin: ${message}`);
+		}
 	}
 
 	try {
@@ -236,9 +244,21 @@ export async function resolveMarkdownFileOption(filePath: string | undefined, fl
 }
 
 async function readMarkdownFile(filePath: string): Promise<string> {
+	return retryBodyRead(async () => await readFile(filePath, "utf8"));
+}
+
+async function readMarkdownStdin(stdin: AsyncIterable<string | Uint8Array>): Promise<string> {
+	const chunks: string[] = [];
+	for await (const chunk of stdin) {
+		chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+	}
+	return chunks.join("");
+}
+
+async function retryBodyRead(read: () => string | Promise<string>): Promise<string> {
 	for (let attempt = 1; attempt <= BODY_FILE_READ_ATTEMPTS; attempt += 1) {
 		try {
-			return await readFile(filePath, "utf8");
+			return await read();
 		} catch (error) {
 			if (!isEagainError(error) || attempt === BODY_FILE_READ_ATTEMPTS) {
 				throw error;
@@ -246,7 +266,7 @@ async function readMarkdownFile(filePath: string): Promise<string> {
 		}
 	}
 
-	throw new Error(`Could not read body file: ${filePath}`);
+	throw new Error("Could not read body input.");
 }
 
 function isEagainError(error: unknown): boolean {
