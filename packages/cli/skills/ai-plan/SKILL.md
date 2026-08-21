@@ -17,7 +17,7 @@ Use `agent-issues plan-entry add` to record planning state as it changes:
 - Record each design question as a `question` entry before asking it.
 - Record each durable user answer before continuing to the next round. When an answer resolves a design question, add a `decision` entry with `--supersedes <question-reference>`.
 - Record each durable fact from code or tool output before it affects later planning. Use the approved role that describes the fact.
-- When an answer changes the meaning of an active entry, add a new entry with explicit `--supersedes` references. Use entry edit only for a correction that preserves meaning.
+- Changed entry -> replacement with `--supersedes`. Decision targets question or decision. Edit only corrections.
 - Add no entry for transient conversation that does not change planning state.
 
 Mark the Plan ready with `agent-issues status <plan-reference> ready --json` only after the planning frontier is empty and the user confirms shared understanding. A ready Plan can retain only explicit implementation-discovery questions.

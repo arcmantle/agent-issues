@@ -323,8 +323,8 @@ function validateSupersededEntryIds(executor: SqliteExecutor, planId: string, ro
 		if (entry.planId !== planId || entry.tombstone) {
 			throw new Error(`Plan entry not found: ${supersededEntryId}`);
 		}
-		if (role === "decision" && entry.role !== "question") {
-			throw new Error("A decision can supersede only question Plan entries.");
+		if (role === "decision" && entry.role !== "question" && entry.role !== "decision") {
+			throw new Error("A decision can supersede only question or decision Plan entries.");
 		}
 		if (seenEntryIds.has(entry.id)) {
 			throw new Error(`Plan entry supersessions contain duplicate entry: ${entry.id}`);

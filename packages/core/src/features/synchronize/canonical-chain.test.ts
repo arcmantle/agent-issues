@@ -235,6 +235,43 @@ describe("mergeCanonicalChainBundles", () => {
 		).planEntries).toEqual([updated]);
 	});
 
+	it("accepts a decision that supersedes a prior decision", () => {
+		const initiative = initiativeChain();
+		const plan = entityChain("Plan", 1);
+		plan.head.id = PLAN_STABLE_ID;
+		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);
+		plan.head.kind = "plan";
+		plan.head.parentId = initiative.head.id;
+		const initialDecision = planEntryChain("Initial decision", [], 1);
+		initialDecision.head.role = "decision";
+		initialDecision.head.contentHash = computePlanEntryContentHash({
+			role: initialDecision.head.role,
+			body: initialDecision.head.body,
+			scopeDirection: initialDecision.head.scopeDirection,
+			referencedEntityIds: initialDecision.head.referencedEntityIds,
+			supersededEntryIds: initialDecision.head.supersededEntryIds,
+			tombstone: initialDecision.head.tombstone
+		});
+		const replacement = planEntryChain("Replacement decision", [], 1);
+		replacement.head.id = "00000000-0000-4000-8000-000000000006";
+		replacement.head.reference = encodeCanonicalReference("planEntry", replacement.head.id);
+		replacement.head.role = "decision";
+		replacement.head.supersededEntryIds = [initialDecision.head.id];
+		replacement.head.contentHash = computePlanEntryContentHash({
+			role: replacement.head.role,
+			body: replacement.head.body,
+			scopeDirection: replacement.head.scopeDirection,
+			referencedEntityIds: replacement.head.referencedEntityIds,
+			supersededEntryIds: replacement.head.supersededEntryIds,
+			tombstone: replacement.head.tombstone
+		});
+
+		expect(mergeCanonicalChainBundles(
+			emptyBundle(),
+			{ ...emptyBundle(), entities: [initiative, plan], planEntries: [initialDecision, replacement] }
+		).planEntries).toEqual([initialDecision, replacement]);
+	});
+
 	it("rejects divergent Plan entry heads with Plan-entry conflict metadata", () => {
 		const initiative = initiativeChain();
 		const plan = entityChain("Plan", 1);

@@ -1,5 +1,5 @@
 ---
-name: ai-wayfinder-wip
+name: ai-wayfinder
 description: Plan a huge chunk of work — more than one agent session can hold — as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.
 disable-model-invocation: true
 ---
@@ -45,9 +45,9 @@ Blocking uses the native `blocks` relation. A ticket is **unblocked** when every
 
 Record the answer in `## Resolution` when the ticket is complete, then set the ticket status to `done`. Link assets created while resolving a ticket from the issue body; do not paste them into the map.
 
-### Plan-backed ticket grilling
+### Plan-backed ticket planning
 
-For a grilling ticket, give `ai-grill-with-docs` the complete ticket reference. It creates an initiative-owned Plan with `agent-issues create plan --parent <initiativeReference>` for a new effort, or resumes only an explicit Plan reference. Every Plan entry from that session includes `--reference <ticket-reference>`.
+For a grilling ticket, give `ai-plan` the complete ticket reference. It creates an initiative-owned Plan with `agent-issues create plan --parent <initiativeReference>` for a new effort, or resumes only an explicit Plan reference. Every Plan entry from that session includes `--reference <ticket-reference>`.
 
 The Plan is the canonical detailed resolution. When the ticket is done, retain its Question and status, and use a concise Resolution link to the Plan. Do not copy the detailed reasoning into the ticket. A Plan does not inform a Wayfinder map.
 
@@ -56,8 +56,8 @@ The Plan is the canonical detailed resolution. When the ticket is done, retain i
 Every ticket is either **HITL** — human in the loop, worked _with_ a human who speaks for themselves — or **AFK**, driven by the agent alone. A HITL ticket only resolves through that live exchange; the agent never stands in for the human's side of it (a grilling agent that answers its own questions has broken this).
 
 - **Research** (AFK): Read documentation, third-party APIs, or local resources to find a fact that a decision needs. Resolve it with a read-only research subagent. Use this type when knowledge outside the current working directory is required.
-- **Prototype** (HITL): Raise the fidelity of the discussion with a cheap, rough, concrete artifact to react to — an outline, a rough take, a stub, or UI or logic code through `ai-prototype-wip`. Link the prototype as an asset. Use this type when "how should it look" or "how should it behave" is the key question.
-- **Grilling** (HITL): Conversation. This is the default type. Always use `ai-grill-with-docs` with `ai-domain-modeling` active.
+- **Prototype** (HITL): Raise the fidelity of the discussion with a cheap, rough, concrete artifact to react to — an outline, a rough take, a stub, or UI or logic code through `ai-prototype`. Link the prototype as an asset. Use this type when "how should it look" or "how should it behave" is the key question.
+- **Grilling** (HITL): Conversation. This is the default type. Always use `ai-plan` with `ai-domain-modeling` active.
 - **Task** (HITL or AFK): Manual work that must happen before a _decision_ can be made — nothing to decide, prototype, or research, but the discussion is blocked until it's done. Signing up for a service so its API can be judged, provisioning access, moving data so its shape can be seen. This is the one type that _does_ rather than decides — and it earns its place by unblocking a decision, not by delivering the destination. The agent drives it alone where it can (AFK); otherwise it hands the human a precise checklist (HITL). Resolved when the work is done; the answer records what was done and any resulting facts (credentials location, new URLs, row counts) later tickets depend on.
 
 ## Fog of war
@@ -90,7 +90,7 @@ Two modes. Either way, **never resolve more than one ticket per session** — wi
 User invokes with a loose idea.
 
 1. **Resolve the tracked scope.** Find the active initiative and read its context. For a new feature, create a new initiative by default. Do not create a map outside an initiative.
-2. **Name the destination.** Run `ai-grill-with-docs` with `ai-domain-modeling` active to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so settle it first.
+2. **Name the destination.** Run `ai-plan` with `ai-domain-modeling` active to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so settle it first.
 3. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surface the open decisions and the first steps that are possible now. **If this finds no fog** — the way to the destination is already clear and small enough for one session — do not create a map. Ask the user how to proceed.
 4. **Create the map** as a `wayfinder-map` child issue of the initiative: Destination and Notes filled in, Decisions-so-far empty, and the fog recorded in **Not yet specified**.
 5. **Create the tickets you can specify now** as `wayfinder-ticket` child issues of the map. Then wire `blocks` relations in a second pass, because issues need references before they can link to each other. This separates the frontier from blocked tickets. Keep everything you cannot yet specify in **Not yet specified**.
@@ -103,7 +103,7 @@ User invokes with a map (URL or number). A ticket is **optional** — without on
 
 1. Load the **map** with `agent-issues show <mapReference> --view full --json`, then read its scoped context. Do not load every ticket body.
 2. Choose the ticket. If the user named one, use it. Otherwise select the first frontier ticket. **Claim it** by setting it to `in-progress` before work.
-3. Resolve it — **zoom as needed**: load the full body of related or closed tickets only when needed. Use the skills named in `## Notes`. For a grilling ticket, use `ai-grill-with-docs` with `ai-domain-modeling` active and follow Plan-backed ticket grilling.
+3. Resolve it — **zoom as needed**: load the full body of related or closed tickets only when needed. Use the skills named in `## Notes`. For a grilling ticket, use `ai-plan` with `ai-domain-modeling` active and follow Plan-backed ticket planning.
 4. Record the resolution: for a Plan-backed grilling ticket, retain its Ticket type and Question and update only `## Resolution` with the concise Plan link. For other tickets, replace the ticket body with its completed `## Resolution`. Set the ticket status to `done`, and append a title-and-reference link with a one-line gist to the map's Decisions-so-far.
 5. Add newly surfaced tickets (create, then link); graduate any fog that the answer made specific. Remove each graduated patch from **Not yet specified** so it exists only in its new ticket. If the answer shows that a ticket sits beyond the destination, **rule it out of scope** instead of resolving it on the route. If the decision invalidates other map parts, update or delete those tickets. When no open tickets or in-scope fog remain, set the map status to `done`.
 

@@ -298,8 +298,8 @@ function assertCanonicalBundle(bundle: CanonicalChainBundle): void {
 			if (!supersededEntry || supersededEntry.planId !== chain.head.planId || supersededEntry.tombstone) {
 				throw new Error(`Missing canonical superseded Plan entry ${supersededEntryId} for Plan entry ${chain.head.id}.`);
 			}
-			if (chain.head.role === "decision" && supersededEntry.role !== "question") {
-				throw new Error(`Decision Plan entry ${chain.head.id} can supersede only question Plan entries.`);
+			if (chain.head.role === "decision" && supersededEntry.role !== "question" && supersededEntry.role !== "decision") {
+				throw new Error(`Decision Plan entry ${chain.head.id} can supersede only question or decision Plan entries.`);
 			}
 		}
 	}

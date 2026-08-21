@@ -208,8 +208,8 @@ async function validateSupersededEntryIds(executor: TenantExecutor, planId: stri
 		if (entry.planId !== planId || entry.tombstone) {
 			throw new Error(`Plan entry not found: ${entryId}`);
 		}
-		if (role === "decision" && entry.role !== "question") {
-			throw new Error("A decision can supersede only question Plan entries.");
+		if (role === "decision" && entry.role !== "question" && entry.role !== "decision") {
+			throw new Error("A decision can supersede only question or decision Plan entries.");
 		}
 		return entry.id;
 	}));

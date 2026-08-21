@@ -24,9 +24,13 @@ describe("skill installer", () => {
 		);
 		const installedPlan = installResult.installed.find(({ installedName }) => installedName === "ai-plan");
 		const installedNextWork = installResult.installed.find(({ installedName }) => installedName === "ai-next-work");
+		const installedPrototype = installResult.installed.find(({ installedName }) => installedName === "ai-prototype");
+		const installedWayfinder = installResult.installed.find(({ installedName }) => installedName === "ai-wayfinder");
 		expect(installedDomainModeling?.status).toBe("installed");
 		expect(installedPlan?.status).toBe("installed");
 		expect(installedNextWork?.status).toBe("installed");
+		expect(installedPrototype?.status).toBe("installed");
+		expect(installedWayfinder?.status).toBe("installed");
 
 		const languageFile = path.join(targetDir, "agent-issues-language.md");
 		const operatingContractFile = path.join(targetDir, "agent-issues-operating-contract.md");
@@ -108,7 +112,7 @@ describe("skill installer", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
 
 		installSkills({ targetDir });
-		const skill = readFileSync(path.join(targetDir, "ai-wayfinder-wip", "SKILL.md"), "utf8");
+		const skill = readFileSync(path.join(targetDir, "ai-wayfinder", "SKILL.md"), "utf8");
 
 		expect(skill).toContain("--type wayfinder-map");
 		expect(skill).toContain("--type wayfinder-ticket");

@@ -251,10 +251,10 @@ it("links each body-writing skill to only its applicable recipes", () => {
 		["ai-domain-modeling/CONTEXT-FORMAT.md", ["context-summary.md", "context-term.md"]],
 		["ai-handoff/SKILL.md", ["handoff.md"]],
 		["ai-migrate-docs/SKILL.md", ["adr.md", "context-summary.md", "context-term.md", "initiative.md", "issue.md", "prd.md", "user-story.md"]],
-		["ai-prototype-wip/SKILL.md", ["issue.md"]],
+			["ai-prototype/SKILL.md", ["issue.md"]],
 		["ai-to-issues/SKILL.md", ["issue.md"]],
 		["ai-to-prd/SKILL.md", ["prd.md", "user-story.md"]],
-		["ai-wayfinder-wip/SKILL.md", ["wayfinder-map.md", "wayfinder-ticket.md"]]
+			["ai-wayfinder/SKILL.md", ["wayfinder-map.md", "wayfinder-ticket.md"]]
 	]);
 
 	for (const [skillFile, expectedRecipes] of expectedRecipesByFile) {

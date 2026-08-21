@@ -398,6 +398,30 @@ describe("cli", () => {
 		}));
 	});
 
+	it("documents Plan creation and Plan-entry operations", async () => {
+		const createStdout = createCapture();
+		const createExitCode = await runCli(["help", "create", "--json"], {
+			stderr: createCapture().stream,
+			stdout: createStdout.stream
+		});
+		const createHelp = JSON.parse(createStdout.read()).command;
+
+		expect(createExitCode).toBe(0);
+		expect(createHelp.examples).toContain('agent-issues create plan --title "Routing decision" --parent INIT1 --body-file -');
+		expect(createHelp.notes).toContain("A Plan requires an initiative parent. Use `plan-entry` to record its questions and decisions.");
+
+		const planEntryStdout = createCapture();
+		const planEntryExitCode = await runCli(["help", "plan-entry", "--json"], {
+			stderr: createCapture().stream,
+			stdout: planEntryStdout.stream
+		});
+		const planEntryHelp = JSON.parse(planEntryStdout.read()).command;
+
+		expect(planEntryExitCode).toBe(0);
+		expect(planEntryHelp.usage).toContain("agent-issues plan-entry add <planId> --role <question|decision|scope|constraint|preference|consideration> --body-file <path|-> [--scope-direction <included|excluded>] [--reference <entityId>] [--supersedes <entryId>]");
+		expect(planEntryHelp.notes).toContain("A decision can supersede question or decision entries.");
+	});
+
 	it("resolves help for a multi-word command like 'auth login' by its full name, not just its first word", async () => {
 		const stdout = createCapture();
 		const stderr = createCapture();

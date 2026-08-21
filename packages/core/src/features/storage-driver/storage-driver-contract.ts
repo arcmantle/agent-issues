@@ -161,7 +161,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 	});
 
 	describe(`storage-driver seam: Plan entry supersession (${label})`, () => {
-		it("lets decisions explicitly supersede questions only", async () => {
+		it("lets decisions explicitly supersede questions and decisions", async () => {
 			const store = await openStore();
 
 			try {
@@ -175,14 +175,21 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 					body: "Both stores own entries.",
 					supersededEntryIds: [question.id]
 				});
+				const replacement = await store.createPlanEntry({
+					planId: plan.id,
+					role: "decision",
+					body: "The local store owns entries.",
+					supersededEntryIds: [decision.id]
+				});
 
 				expect(decision.supersededEntryIds).toEqual([question.id]);
+				expect(replacement.supersededEntryIds).toEqual([decision.id]);
 				await expect(store.createPlanEntry({
 					planId: plan.id,
 					role: "decision",
 					body: "Invalid resolution.",
 					supersededEntryIds: [consideration.id]
-				})).rejects.toThrow(/question/i);
+				})).rejects.toThrow(/question or decision/i);
 			} finally {
 				await store.close();
 			}

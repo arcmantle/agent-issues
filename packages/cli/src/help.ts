@@ -272,6 +272,64 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
+		name: "plan-entry",
+		summary: "Add, list, edit, delete, and inspect revision history for Plan entries.",
+		usage: [
+			"agent-issues plan-entry add <planId> --role <question|decision|scope|constraint|preference|consideration> --body-file <path|-> [--scope-direction <included|excluded>] [--reference <entityId>] [--supersedes <entryId>]",
+			"agent-issues plan-entry list <planId>",
+			"agent-issues plan-entry edit <planId> <entryId> --body-file <path|->",
+			"agent-issues plan-entry delete <planId> <entryId>",
+			"agent-issues plan-entry history <entryId>"
+		],
+		positionals: [
+			{
+				name: "subcommand",
+				description: "Plan-entry action.",
+				allowedValues: ["add", "list", "edit", "delete", "history"]
+			},
+			{ name: "planId", description: "Owning Plan ID or reference." },
+			{ name: "entryId", description: "Plan-entry ID or reference for edit and delete." }
+		],
+		options: [
+			{
+				name: "--role <question|decision|scope|constraint|preference|consideration>",
+				description: "Role for a new Plan entry.",
+				allowedValues: ["question", "decision", "scope", "constraint", "preference", "consideration"]
+			},
+			{
+				name: "--scope-direction <included|excluded>",
+				description: "Required direction for a scope entry.",
+				allowedValues: ["included", "excluded"]
+			},
+			{
+				name: "--reference <entityId>",
+				description: "Reference an entity from a new Plan entry. Repeat for each entity."
+			},
+			{
+				name: "--supersedes <entryId>",
+				description: "Replace a question or decision entry with a decision entry. Repeat for each entry."
+			},
+			{
+				name: "--body-file <path|->",
+				description: "Read the entry body from a file, or from stdin when the value is `-`."
+			}
+		],
+		examples: [
+			"agent-issues plan-entry add PLAN1 --role question --body-file - --reference ISS1",
+			"agent-issues plan-entry add PLAN1 --role decision --body-file - --supersedes PLAN_ENTRY1",
+			"agent-issues plan-entry list PLAN1 --json"
+		],
+		notes: [
+			"Plans are initiative-owned entities created with `agent-issues create plan --parent <initiativeId>`.",
+			"A decision can supersede question or decision entries.",
+			"Delete retains the entry in revision history."
+		],
+		output: {
+			human: ["One Plan entry, a Plan-entry list, or Plan-entry revision history"],
+			json: ["id", "reference", "planId", "role", "body", "referencedEntityIds", "supersededEntryIds", "revision", "contentHash"]
+		}
+	},
+	{
 		name: "init",
 		summary: "Initialize the local data store.",
 		usage: ["agent-issues init"],
@@ -531,6 +589,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		examples: [
 			'agent-issues create initiative --title "Workflow tooling"',
+			'agent-issues create plan --title "Routing decision" --parent INIT1 --body-file -',
 			'agent-issues create prd --title "Handoff support" --parent INIT1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1',
 			'agent-issues create handoff --title "Resume export work" --body-file - --link handsOff ISS1',
@@ -539,6 +598,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		notes: [
 			"Valid structural parent-child pairs are exposed by `agent-issues schema --json`.",
+			"A Plan requires an initiative parent. Use `plan-entry` to record its questions and decisions.",
 			"Issues can be created under initiatives as tracked work, or under other issues as structural sub-issues.",
 			"If no status is supplied, the CLI uses the first status in the workflow for that kind.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems.",
@@ -1237,6 +1297,7 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			"Use `agent-issues context search <query> --view initiatives --json` to find initiative-local terminology without reading the full project directory.",
 			"Use `agent-issues context conflicts --json` to detect duplicate labels across scopes before you rely on a term.",
 			"Use `agent-issues context define <term> --scope <entityOrProjectOrInitiativeId> --body-file <path|-> [--avoid <comma-separated>] --json` to update the scoped glossary when a term is resolved.",
+			"Use `agent-issues create plan --parent <initiativeId> --title <title> --body-file <path|-> --json` to create an initiative-owned Plan, then use `agent-issues plan-entry add` to record its planning state.",
 			"Use `agent-issues help <command> --json` for command-specific guidance.",
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
 			"Use `agent-issues serve-site --json` to start a local live browser view with snapshot and event endpoints.",
