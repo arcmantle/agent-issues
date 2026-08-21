@@ -530,7 +530,7 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues auth login --name <name> --url <url>");
 	});
 
-	it("documents debt metadata in help and capabilities", async () => {
+	it("documents debt workflow help and capabilities", async () => {
 		const createStdout = createCapture();
 		const createExitCode = await runCli(["help", "create", "--json"], { stdout: createStdout.stream, stderr: createCapture().stream });
 
@@ -538,6 +538,12 @@ describe("cli", () => {
 		const createHelp = JSON.parse(createStdout.read()).command;
 		expect(createHelp.examples).toContain(
 			'agent-issues create handoff --title "Resume export work" --body-file - --link handsOff ISS1'
+		);
+		expect(createHelp.examples).toContain(
+			'agent-issues create debt --title "Replace legacy worker" --parent INIT1 --category technical --priority high'
+		);
+		expect(createHelp.notes).toContain(
+			"Debt requires one project, epic, initiative, or issue parent, plus category and priority."
 		);
 		expect(createHelp.options).toEqual(expect.arrayContaining([
 			expect.objectContaining({ name: "--category <category>" }),
@@ -553,6 +559,30 @@ describe("cli", () => {
 			expect.objectContaining({ name: "--category <category>" }),
 			expect.objectContaining({ name: "--priority <priority>" })
 		]));
+
+		for (const [command, expectedText] of [
+			["move", "Debt can move only to a project, epic, initiative, or issue owner."],
+			["status", "Debt uses open, resolved, and archived states. Its lifecycle changes are manual; a resolves link does not change its state."],
+			["archive", "Archiving debt sets its lifecycle to archived. Use `status <debtId> open` to restore it."],
+			["link", "Only epics, initiatives, and issues can resolve debt. A resolves link does not change debt lifecycle state."]
+		]) {
+			const stdout = createCapture();
+			const exitCode = await runCli(["help", command, "--json"], { stdout: stdout.stream, stderr: createCapture().stream });
+
+			expect(exitCode).toBe(0);
+			expect(JSON.parse(stdout.read()).command.notes).toContain(expectedText);
+		}
+
+		for (const [command, expectedExample] of [
+			["relations", "agent-issues relations DEBT1 --direction incoming --type records,resolves --json"],
+			["list", "agent-issues list debt --status open --json"]
+		]) {
+			const stdout = createCapture();
+			const exitCode = await runCli(["help", command, "--json"], { stdout: stdout.stream, stderr: createCapture().stream });
+
+			expect(exitCode).toBe(0);
+			expect(JSON.parse(stdout.read()).command.examples).toContain(expectedExample);
+		}
 
 		const capabilitiesStdout = createCapture();
 		const capabilitiesExitCode = await runCli(["capabilities", "--target", createTempDir(), "--json"], { stdout: capabilitiesStdout.stream, stderr: createCapture().stream });

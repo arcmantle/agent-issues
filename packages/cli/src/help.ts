@@ -592,6 +592,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			'agent-issues create plan --title "Routing decision" --parent INIT1 --body-file -',
 			'agent-issues create prd --title "Handoff support" --parent INIT1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1',
+			'agent-issues create debt --title "Replace legacy worker" --parent INIT1 --category technical --priority high',
 			'agent-issues create handoff --title "Resume export work" --body-file - --link handsOff ISS1',
 			'agent-issues create issue --title "Split parser edge cases" --parent ISS1',
 			'agent-issues create issue --title "Add help schema" --parent INIT1 --body-file /tmp/iss1.md'
@@ -603,6 +604,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"If no status is supplied, the CLI uses the first status in the workflow for that kind.",
 			"Use `--body-file` for multiline markdown to avoid shell quoting problems.",
 			"Use `--link` to create graph relations atomically with the entity.",
+			"Debt requires one project, epic, initiative, or issue parent, plus category and priority.",
 			"Create a handoff with `--title`, `--body-file`, and `--link handsOff <focusId>`."
 		],
 		output: {
@@ -616,9 +618,10 @@ const COMMAND_SPECS: CommandSpec[] = [
 		usage: ["agent-issues archive <id> [--view <compact|full>]"],
 		positionals: [{ name: "id", description: "Entity ID.", required: true }],
 		options: [ENTITY_VIEW_OPTION],
-		examples: ["agent-issues archive ISS1"],
+		examples: ["agent-issues archive ISS1", "agent-issues archive DEBT1"],
 		notes: [
 			"Archive status depends on entity kind and is exposed by `agent-issues schema --json`.",
+			"Archiving debt sets its lifecycle to archived. Use `status <debtId> open` to restore it.",
 			"For an ADR, archive is refused while a supersedes edge points at it."
 		],
 		output: {
@@ -722,10 +725,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			{ name: "newParentId", description: "New structural parent ID.", required: true }
 		],
 		options: [ENTITY_VIEW_OPTION],
-		examples: ["agent-issues move US1 PRD2", "agent-issues move ISS7 ISS1"],
+		examples: ["agent-issues move US1 PRD2", "agent-issues move ISS7 ISS1", "agent-issues move DEBT1 INIT2"],
 		notes: [
 			"Move rejects incompatible parent kinds, cycles, and initiatives.",
-			"Use move to reparent a sub-issue under a different parent issue without rebuilding its other relations."
+			"Use move to reparent a sub-issue under a different parent issue without rebuilding its other relations.",
+			"Debt can move only to a project, epic, initiative, or issue owner."
 		],
 		output: {
 			human: ["Moved <id> from <previousParentId|none> to <newParentId> as <relationType>"],
@@ -750,7 +754,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			},
 			ENTITY_VIEW_OPTION
 		],
-		examples: ["agent-issues relations <id>", "agent-issues relations <id> --direction incoming --type blocks,decomposes --json"],
+		examples: [
+			"agent-issues relations <id>",
+			"agent-issues relations <id> --direction incoming --type blocks,decomposes --json",
+			"agent-issues relations DEBT1 --direction incoming --type records,resolves --json"
+		],
 		notes: [
 			"Compact JSON is the default and returns the focused entity and selected edges with id, kind, status, and title only.",
 			"Use --view full when complete entity records or authored content are required.",
@@ -796,10 +804,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			}
 		],
 		options: [ENTITY_VIEW_OPTION],
-		examples: ["agent-issues status ISS1 in-progress", "agent-issues status US1 done"],
+		examples: ["agent-issues status ISS1 in-progress", "agent-issues status US1 done", "agent-issues status DEBT1 resolved"],
 		notes: [
 			"Each entity kind only accepts its own status flow.",
 			"An ADR is current unless it is superseded or archived.",
+			"Debt uses open, resolved, and archived states. Its lifecycle changes are manual; a resolves link does not change its state.",
 			"Issues cannot move to in-progress or done while blocked by a non-done issue.",
 			"Parent issues also cannot move to in-progress or done while any sub-issue remains open."
 		],
@@ -859,11 +868,14 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues link ISS1 fixes US1",
 			"agent-issues link ADR1 constrains ISS1",
 			"agent-issues link ISS2 blocks ISS1",
-			"agent-issues link ISS1 decomposes ISS7"
+			"agent-issues link ISS1 decomposes ISS7",
+			"agent-issues link ISS1 resolves DEBT1",
+			"agent-issues link DEBT1 relatesTo ADR1"
 		],
 		notes: [
 			"Allowed relation pairs are exposed by `agent-issues schema --json`.",
 			"For structural parent-child work, prefer `create --parent` or `move` over `link` so the intent stays explicit.",
+			"Only epics, initiatives, and issues can resolve debt. A resolves link does not change debt lifecycle state.",
 			"The CLI rejects self-links and cycle-forming `blocks` or `supersedes` links."
 		],
 		output: {
@@ -946,7 +958,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			},
 			ENTITY_VIEW_OPTION
 		],
-		examples: ["agent-issues list issue", "agent-issues list issue --status todo,in-progress --parent <initiativeId> --limit 20 --json"],
+		examples: [
+			"agent-issues list issue",
+			"agent-issues list issue --status todo,in-progress --parent <initiativeId> --limit 20 --json",
+			"agent-issues list debt --status open --json"
+		],
 		notes: [
 			"Compact JSON is the default and returns { items, total }; total is the filtered count before --limit is applied.",
 			"Use --view full when complete entity records or authored content are required.",
