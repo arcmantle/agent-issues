@@ -1,0 +1,8 @@
+kanban-graph-node-draft { display: block; }
+.graph-node { display: grid; gap: var(--size-2); min-height: var(--size-36); padding: var(--size-5); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); outline: none; }
+.graph-node span { color: var(--color-text-secondary); font-family: var(--font-family-mono); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.graph-node strong { color: var(--color-text-primary); font-size: var(--font-size-ui); line-height: var(--line-height-ui); }
+.graph-node.is-root { border-color: var(--color-status-success); background: var(--color-comment-surface); }
+.graph-node.is-accent { border-color: var(--color-accent-secondary); }
+.graph-node.is-warning { border-color: var(--color-status-blocked-border); background: var(--color-status-blocked-surface); }
+.graph-node:focus-visible { outline: var(--size-1) solid var(--color-accent-secondary); outline-offset: var(--size-1); }

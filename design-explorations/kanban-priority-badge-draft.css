@@ -1,0 +1,6 @@
+kanban-priority-badge-draft { display: inline-flex; }
+.priority-badge { display: inline-flex; justify-content: center; border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); padding: var(--size-2) var(--size-3); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); line-height: var(--line-height-ui); white-space: nowrap; }
+.priority-badge.is-high { border-color: var(--color-status-blocked-border); background: var(--color-status-blocked-surface); color: var(--color-status-blocked-text); }
+.priority-badge.is-medium { border-color: var(--color-accent-secondary); background: var(--color-comment-surface); color: var(--color-status-success-text); }
+.priority-badge.is-low { color: var(--color-text-tertiary); }
+.component-stage.priority-badge { display: flex; width: min(var(--size-560), 100%); min-height: var(--size-150); flex-wrap: wrap; align-content: center; gap: var(--size-5); padding: var(--size-12); background: var(--color-surface-preview-panel); }

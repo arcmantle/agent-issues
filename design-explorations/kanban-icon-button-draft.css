@@ -1,0 +1,19 @@
+kanban-icon-button-draft { display: inline-block; }
+.icon-button { display: inline-grid; width: var(--size-16); height: var(--size-16); place-items: center; border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); color: var(--color-text-primary); cursor: pointer; }
+.icon-button:hover { border-color: var(--color-text-primary); background: var(--color-surface-subtle); }
+.icon-button:focus-visible { outline: var(--size-1) solid var(--color-accent-secondary); outline-offset: var(--size-1); }
+.icon-button:disabled { border-color: var(--color-border-subtle); background: var(--color-surface-subtle); color: var(--color-text-tertiary); cursor: not-allowed; }
+.icon-button > span { font-size: var(--font-size-icon-large); font-weight: var(--font-weight-medium); line-height: 1; }
+.icon-button.is-loading > span { width: var(--size-7); height: var(--size-7); border: var(--size-1) solid var(--color-text-tertiary); border-right-color: transparent; border-radius: 50%; font-size: var(--size-0); animation: icon-button-spin .7s linear infinite; }
+.component-stage.icon-button { display: grid; width: 100%; max-width: var(--size-560); min-height: var(--size-150); grid-template-columns: repeat(2, minmax(var(--size-0), 1fr)); gap: var(--size-8); padding: var(--size-12); background: var(--color-surface-preview-panel); }
+.icon-button-state { display: grid; align-content: start; gap: var(--size-5); padding: var(--size-8); border: var(--border-width) solid var(--color-border-preview); border-radius: var(--radius-panel); background: var(--color-surface-canvas); }
+.icon-button-state > span { color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.icon-button-state > div { display: flex; flex-wrap: wrap; gap: var(--size-4); }
+
+@keyframes icon-button-spin { to { transform: rotate(1turn); } }
+
+@media (max-width: 31.25rem) {
+	.component-stage.icon-button { grid-template-columns: 1fr; padding: var(--size-5); }
+	.icon-button-state { min-width: var(--size-0); padding: var(--size-4); }
+	.icon-button-state > span { overflow-wrap: anywhere; }
+}

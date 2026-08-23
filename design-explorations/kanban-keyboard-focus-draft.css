@@ -1,0 +1,22 @@
+kanban-keyboard-focus-draft { display: block; }
+.keyboard-focus-preview { display: grid; gap: var(--size-7); padding: var(--size-12); border: var(--border-width) solid var(--color-border-preview); border-radius: var(--radius-panel); background: var(--color-surface-canvas); }
+.keyboard-focus-preview header { display: grid; gap: var(--size-2); }
+.keyboard-focus-preview h2 { margin: var(--size-0); color: var(--color-text-primary); font-family: var(--font-family-display); font-size: var(--font-size-title); font-weight: var(--font-weight-display); line-height: var(--line-height-tight); }
+.keyboard-focus-preview p { margin: var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-body); line-height: var(--line-height-body); }
+.keyboard-focus-controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--size-5); }
+.keyboard-focus-control { min-height: var(--size-19); border: var(--border-width) solid var(--color-text-primary); border-radius: var(--radius-control); padding: var(--size-5) var(--size-7); background: var(--color-surface-panel); color: var(--color-text-primary); font-family: var(--font-family-ui); font-size: var(--font-size-control); font-weight: var(--font-weight-heavy); line-height: var(--line-height-ui); text-decoration: none; cursor: pointer; }
+.keyboard-focus-control:hover:not(:disabled) { background: var(--color-surface-subtle); }
+.keyboard-focus-control:focus-visible { outline: var(--size-2) solid var(--color-accent-secondary); outline-offset: var(--size-2); }
+.keyboard-focus-link { display: inline-flex; align-items: center; }
+.keyboard-focus-field { display: grid; gap: var(--size-2); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.keyboard-focus-field select { width: 100%; font-weight: var(--font-weight-strong); }
+.keyboard-focus-control:disabled { border-color: var(--color-border-subtle); background: var(--color-surface-subtle); color: var(--color-text-tertiary); cursor: not-allowed; }
+.component-stage.keyboard-focus { display: grid; width: min(var(--size-560), 100%); min-height: var(--size-150); place-items: center; padding: var(--size-12); background: var(--color-surface-preview-panel); }
+.component-stage.keyboard-focus kanban-keyboard-focus-draft { width: min(var(--size-310), 100%); }
+
+@media (max-width: 31.25rem) {
+	.component-stage.keyboard-focus { padding: var(--size-5); }
+	.keyboard-focus-preview { padding: var(--size-8); }
+	.keyboard-focus-controls { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+	.keyboard-focus-control { width: 100%; }
+}

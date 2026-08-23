@@ -1,0 +1,12 @@
+kanban-unsaved-changes-draft { display: inline-flex; }
+kanban-unsaved-changes-draft[hidden] { display: none; }
+.unsaved-changes-indicator { display: inline-flex; align-items: center; gap: var(--size-3); border: var(--border-width) solid var(--color-status-blocked-border); border-radius: var(--radius-control); padding: var(--size-2) var(--size-3); background: var(--color-status-blocked-surface); color: var(--color-status-blocked-text); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); line-height: var(--line-height-ui); white-space: nowrap; }
+.unsaved-changes-marker { width: var(--size-3); height: var(--size-3); border-radius: 50%; background: var(--color-accent-warning); }
+.component-stage.unsaved-changes { display: grid; width: min(var(--size-560), 100%); min-height: var(--size-150); grid-template-columns: repeat(2, minmax(var(--size-0), 1fr)); gap: var(--size-7); padding: var(--size-12); background: var(--color-surface-preview-panel); }
+.unsaved-changes-state { display: grid; align-content: center; gap: var(--size-5); min-height: var(--size-76); padding: var(--size-7); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-panel); background: var(--color-surface-panel); }
+.unsaved-changes-state h2 { margin: var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.unsaved-changes-state p { margin: var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-ui); line-height: var(--line-height-body); }
+
+@media (max-width: 32rem) {
+	.component-stage.unsaved-changes { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,67 @@
+kanban-relationship-list-draft {
+	display: block;
+}
+
+.relationship-list {
+	display: grid;
+	gap: var(--size-5);
+}
+
+.relationship-list ol {
+	display: grid;
+	gap: var(--size-5);
+	margin: var(--size-0);
+	padding: var(--size-0);
+	list-style: none;
+}
+
+.relationship-list-empty {
+	margin: var(--size-0);
+	padding: var(--size-12) var(--size-6);
+	border: var(--border-width) dashed var(--color-border-subtle);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-body);
+	line-height: var(--line-height-body);
+	text-align: center;
+}
+
+.component-stage.relationship-list {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(var(--size-0), 1fr));
+	align-items: start;
+	gap: var(--size-8);
+	padding: var(--size-10);
+	background: var(--color-surface-preview-panel);
+}
+
+.relationship-list-preview-state {
+	display: grid;
+	gap: var(--size-5);
+}
+
+.relationship-list-preview-state + .relationship-list-preview-state {
+	border-left: var(--border-width) solid var(--color-border-preview);
+	padding-left: var(--size-8);
+}
+
+.relationship-list-preview-state h2 {
+	margin: var(--size-0);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-label);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+@media (max-width: 47.5rem) {
+	.component-stage.relationship-list {
+		grid-template-columns: minmax(var(--size-0), 1fr);
+	}
+
+	.relationship-list-preview-state + .relationship-list-preview-state {
+		border-top: var(--border-width) solid var(--color-border-preview);
+		border-left: var(--size-0);
+		padding-top: var(--size-8);
+		padding-left: var(--size-0);
+	}
+}

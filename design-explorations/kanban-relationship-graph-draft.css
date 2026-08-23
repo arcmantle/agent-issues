@@ -1,0 +1,29 @@
+kanban-relationship-graph-draft { display: block; }
+
+.relationship-graph { display: grid; gap: var(--size-5); padding: var(--size-10); background: var(--color-surface-subtle); }
+.relationship-graph-header { display: flex; align-items: center; justify-content: space-between; gap: var(--size-6); }
+.relationship-graph-legend, .relationship-graph-controls { display: flex; flex-wrap: wrap; gap: var(--size-4); align-items: center; }
+.relationship-graph-legend span { display: inline-flex; gap: var(--size-2); align-items: center; color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.relationship-graph-legend i { width: var(--size-4); height: var(--size-4); border: var(--border-width) solid var(--color-border-subtle); border-radius: 50%; background: var(--color-surface-panel); }
+.relationship-graph-legend .is-root { border-color: var(--color-status-success); background: var(--color-comment-surface); }
+.relationship-graph-legend .is-accent { border-color: var(--color-accent-secondary); }
+.relationship-graph-legend .is-warning { border-color: var(--color-status-blocked-border); background: var(--color-status-blocked-surface); }
+.relationship-graph-controls button { border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); padding: var(--size-4) var(--size-5); background: var(--color-surface-panel); color: var(--color-text-primary); font-size: var(--font-size-control); font-weight: var(--font-weight-strong); cursor: pointer; }
+.relationship-graph-controls button:hover { background: var(--color-surface-subtle); }
+.relationship-graph-controls button:focus-visible { outline: var(--size-1) solid var(--color-accent-secondary); outline-offset: var(--size-1); }
+.relationship-graph-controls button:disabled { color: var(--color-text-tertiary); cursor: not-allowed; }
+.relationship-graph-status { margin: var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-ui); }
+.relationship-graph-viewport { display: grid; gap: var(--size-5); outline: none; }
+.relationship-graph-viewport:focus-visible { outline: var(--size-1) solid var(--color-accent-secondary); outline-offset: var(--size-2); }
+.relationship-graph-row { display: grid; grid-template-columns: minmax(var(--size-76), 1fr) var(--size-30) minmax(var(--size-76), 1fr); gap: var(--size-5); align-items: center; }
+.relationship-graph kanban-graph-node-draft[data-focused] .graph-node { outline: var(--size-1) solid var(--color-accent-secondary); outline-offset: var(--size-1); }
+.relationship-graph-viewport > p { margin: var(--size-0); padding: var(--size-12) var(--size-6); border: var(--border-width) dashed var(--color-border-subtle); color: var(--color-text-secondary); font-size: var(--font-size-body); line-height: var(--line-height-body); text-align: center; }
+.component-stage.relationship-graph { display: grid; gap: var(--size-8); padding: var(--size-10); background: var(--color-surface-preview-panel); }
+.relationship-graph-preview-state { display: grid; gap: var(--size-5); min-width: var(--size-0); }
+.relationship-graph-preview-state + .relationship-graph-preview-state { border-top: var(--border-width) solid var(--color-border-preview); padding-top: var(--size-8); }
+.relationship-graph-preview-state h2 { margin: var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+
+@media (max-width: 47.5rem) {
+	.relationship-graph-header { display: grid; }
+	.relationship-graph-row { grid-template-columns: minmax(var(--size-0), 1fr); }
+}

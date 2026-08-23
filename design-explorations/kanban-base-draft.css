@@ -1,0 +1,39 @@
+:root { color: var(--color-text-primary); background: var(--color-surface-canvas); font-family: var(--font-family-ui); }
+
+* { box-sizing: border-box; }
+body { margin: var(--size-0); min-width: var(--size-160); background: var(--color-surface-canvas); }
+button { font: inherit; }
+code { font-family: var(--font-family-mono); }
+kanban-sidebar-draft, kanban-header-draft, kanban-tab-bar-draft, kanban-board-draft, kanban-initiative-overlay { display: block; }
+
+.component-workspace { min-width: var(--size-0); }
+.component-draft { display: grid; min-height: 100vh; place-items: center; padding: var(--size-26) var(--size-12); background: var(--color-surface-preview); }
+.draft-caption { width: min(var(--size-560), 100%); margin-bottom: var(--size-9); color: var(--color-text-secondary); }
+.draft-caption span { color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.draft-caption h1 { margin: var(--size-2) var(--size-0); color: var(--color-text-primary); font-family: var(--font-family-display); font-size: var(--font-size-display); font-weight: var(--font-weight-display); line-height: var(--line-height-tight); }
+.draft-caption p { max-width: 68ch; margin: var(--size-0); font-size: var(--font-size-body); line-height: var(--line-height-body); }
+.component-stage { width: min(var(--size-560), 100%); min-height: var(--size-150); overflow: hidden; border: var(--border-width) solid var(--color-border-preview); border-radius: var(--radius-panel); background: var(--color-surface-canvas); box-shadow: var(--shadow-preview); }
+.component-stage.header { padding-top: var(--size-60); background: var(--color-surface-subtle); }
+.component-stage.tabs { padding-top: var(--size-72); background: var(--color-surface-subtle); }
+.component-draft:has(.component-stage.board) { align-items: start; }
+.component-stage.board { min-height: var(--size-260); }
+.component-stage.board .kanban-board { min-height: var(--size-260); align-content: start; }
+.component-stage.column { width: min(var(--size-140), 100%); min-height: var(--size-230); padding: var(--size-10); overflow: visible; }
+.component-stage.card { width: min(var(--size-150), 100%); min-height: var(--size-125); padding: var(--size-10); overflow: visible; }
+.component-stage.graph-edge-stage { display: grid; width: min(var(--size-140), 100%); min-height: var(--size-60); place-items: center; padding: var(--size-10); overflow: visible; }
+.component-stage.graph-node-stage { width: min(var(--size-150), 100%); min-height: var(--size-125); padding: var(--size-10); overflow: visible; }
+
+.component-rail { position: fixed; z-index: 30; inset: var(--size-0) auto var(--size-0) var(--size-0); width: var(--size-104); overflow-y: auto; padding: var(--size-12) var(--size-7); background: var(--color-surface-sidebar); color: var(--color-text-inverse); }
+.rail-title { padding: var(--size-0) var(--size-4) var(--size-11); color: var(--color-accent); font-size: var(--font-size-ui); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-brand); text-transform: uppercase; }
+.rail-group { display: grid; gap: var(--size-2); margin-bottom: var(--size-11); }
+.rail-group h2 { margin: var(--size-0) var(--size-0) var(--size-2); padding: var(--size-0) var(--size-4); color: var(--color-text-tertiary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.rail-group button { border: var(--size-0); border-radius: var(--radius-control); padding: var(--size-5) var(--size-4); background: transparent; color: var(--color-text-inverse-muted); font-size: var(--font-size-control); font-weight: var(--font-weight-strong); text-align: left; cursor: pointer; }
+.rail-group button:hover { background: var(--color-surface-sidebar-hover); color: var(--color-surface-panel); }
+.rail-group button.is-active { background: var(--color-surface-sidebar-selected); color: var(--color-surface-panel); }
+.component-workspace { margin-left: var(--size-104); }
+
+@media (max-width: 47.5rem) {
+	.component-rail { position: static; width: auto; padding: var(--size-7); }
+	.component-workspace { margin-left: var(--size-0); }
+	.component-draft { padding-left: var(--size-9); padding-right: var(--size-9); }
+}

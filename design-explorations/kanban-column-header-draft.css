@@ -1,0 +1,11 @@
+kanban-column-header-draft { display: block; }
+.kanban-column-header { display: grid; grid-template-columns: minmax(var(--size-0), 1fr) auto auto; gap: var(--size-4); align-items: center; padding: var(--size-0) var(--size-1) var(--size-6); border-bottom: var(--size-1) solid var(--color-text-primary); }
+.column-title { overflow-wrap: anywhere; color: var(--color-text-primary); font-size: var(--font-size-ui); font-weight: var(--font-weight-heavy); }
+.column-count { color: var(--color-text-secondary); font-size: var(--font-size-meta); }
+.column-header-actions { display: flex; gap: var(--size-2); align-items: center; }
+
+.component-stage.column-header { width: min(var(--size-150), 100%); min-height: var(--size-60); padding: var(--size-10); overflow: visible; }
+
+@media (max-width: 31.25rem) {
+	.component-stage.column-header { padding: var(--size-7); }
+}

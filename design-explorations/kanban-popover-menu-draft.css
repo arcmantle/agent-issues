@@ -1,0 +1,87 @@
+kanban-popover-menu-draft {
+	display: inline-block;
+}
+
+.popover-menu {
+	position: relative;
+	display: inline-block;
+}
+
+.popover-menu-trigger {
+	display: inline-flex;
+	min-height: var(--size-19);
+	align-items: center;
+	gap: var(--size-4);
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-5) var(--size-6);
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-control);
+	font-weight: var(--font-weight-heavy);
+	line-height: var(--line-height-ui);
+	cursor: pointer;
+}
+
+.popover-menu-trigger:hover,
+.popover-menu.is-open .popover-menu-trigger {
+	border-color: var(--color-text-primary);
+	background: var(--color-surface-subtle);
+}
+
+.popover-menu-trigger:focus-visible,
+.popover-menu-list button:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+.popover-menu-list {
+	position: absolute;
+	z-index: 10;
+	top: calc(100% + var(--size-3));
+	right: var(--size-0);
+	display: grid;
+	min-width: var(--size-80);
+	padding: var(--size-3);
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-panel);
+	background: var(--color-surface-panel);
+	box-shadow: var(--shadow-card-hover);
+}
+
+.popover-menu-list[hidden] {
+	display: none;
+}
+
+.popover-menu-list button {
+	border: var(--size-0);
+	border-radius: var(--radius-control);
+	padding: var(--size-5) var(--size-6);
+	background: transparent;
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-control);
+	font-weight: var(--font-weight-strong);
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.popover-menu-list button:hover {
+	background: var(--color-surface-subtle);
+}
+
+.popover-menu-list button[data-action="archive"] {
+	color: var(--color-status-blocked-text);
+}
+
+.component-stage.popover-menu {
+	display: grid;
+	width: min(var(--size-260), 100%);
+	min-height: var(--size-125);
+	place-items: center;
+	padding: var(--size-12);
+	overflow: visible;
+	background: var(--color-surface-preview-panel);
+}

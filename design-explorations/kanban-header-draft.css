@@ -1,0 +1,22 @@
+.kanban-header { display: flex; align-items: center; justify-content: space-between; min-height: var(--size-41); gap: var(--size-10); padding: var(--size-10) var(--size-16); border-bottom: var(--border-width) solid var(--color-border-subtle); background: var(--color-surface-canvas); }
+.breadcrumbs { display: flex; flex-wrap: wrap; gap: var(--size-3); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.breadcrumbs span::after { content: "/"; margin-left: var(--size-3); color: var(--color-text-tertiary); }
+.breadcrumbs span:last-child::after { display: none; }
+.kanban-header h1 { margin: var(--size-2) var(--size-0); font-family: var(--font-family-display); font-size: var(--font-size-title); font-weight: var(--font-weight-display); line-height: var(--line-height-tight); }
+.header-actions { display: flex; align-items: center; gap: var(--size-5); }
+.mobile-navigation-toggle { display: none; }
+.soft-button { border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); padding: var(--size-5) var(--size-6); background: var(--color-surface-panel); color: var(--color-text-primary); font-size: var(--font-size-control); font-weight: var(--font-weight-strong); cursor: pointer; }
+.soft-button b { display: inline-grid; place-items: center; width: var(--size-9); height: var(--size-9); margin-left: var(--size-2); border-radius: 50%; background: var(--color-surface-subtle); font-size: var(--font-size-label); }
+.soft-button span { color: var(--color-text-secondary); margin-left: var(--size-2); }
+.create-issue-action { display: flex; align-items: center; gap: var(--size-3); }
+.create-button { width: var(--size-19); height: var(--size-19); border: var(--size-0); border-radius: var(--radius-control); background: var(--color-accent); color: var(--color-surface-sidebar); font-size: var(--font-size-icon-xlarge); font-weight: var(--font-weight-strong); cursor: pointer; }
+.record-strip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--size-6); margin: var(--size-9) var(--size-16) var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.record-strip code { font-size: var(--font-size-label); }
+
+@media (max-width: 47.5rem) {
+	.kanban-header { padding: var(--size-9); }
+	.mobile-navigation-toggle { display: inline-block; }
+	.header-actions .soft-button { display: none; }
+	.create-issue-action kanban-shortcut-hint-draft { display: none; }
+	.record-strip { margin-left: var(--size-9); margin-right: var(--size-9); }
+}

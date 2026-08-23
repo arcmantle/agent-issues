@@ -1,0 +1,6 @@
+kanban-field-display-draft { display: block; }
+.field-display { margin: var(--size-0); }
+.field-display dt { margin-bottom: var(--size-4); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.field-display dd { margin: var(--size-0); padding: var(--size-5) var(--size-6); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); color: var(--color-text-primary); font-family: var(--font-family-display); font-size: var(--font-size-field); font-weight: var(--font-weight-display); line-height: var(--line-height-body); overflow-wrap: anywhere; }
+.field-display.is-multiline dd { min-height: var(--size-50); font-family: var(--font-family-ui); font-size: var(--font-size-body); font-weight: var(--font-weight-regular); white-space: pre-wrap; }
+.component-stage.field-display { display: grid; width: min(var(--size-560), 100%); min-height: var(--size-150); gap: var(--size-9); align-content: center; padding: var(--size-12); background: var(--color-surface-preview-panel); }

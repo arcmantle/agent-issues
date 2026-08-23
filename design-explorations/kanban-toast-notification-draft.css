@@ -1,0 +1,97 @@
+kanban-toast-notification-draft {
+	display: block;
+}
+
+kanban-toast-notification-draft[hidden] {
+	display: none;
+}
+
+.toast-notification {
+	display: grid;
+	grid-template-columns: var(--size-6) minmax(var(--size-0), 1fr) var(--size-12);
+	gap: var(--size-5);
+	align-items: center;
+	width: min(var(--size-230), 100%);
+	padding: var(--size-6) var(--size-7);
+	border: var(--border-width) solid var(--toast-notification-border);
+	border-radius: var(--radius-panel);
+	background: var(--toast-notification-surface);
+	box-shadow: var(--shadow-card-hover);
+}
+
+.toast-notification-success {
+	--toast-notification-border: var(--color-status-success);
+	--toast-notification-surface: var(--color-comment-surface);
+	--toast-notification-mark: var(--color-status-success);
+}
+
+.toast-notification-warning {
+	--toast-notification-border: var(--color-status-blocked-border);
+	--toast-notification-surface: var(--color-status-blocked-surface);
+	--toast-notification-mark: var(--color-accent-warning);
+}
+
+.toast-notification-failure {
+	--toast-notification-border: var(--color-status-blocked-border);
+	--toast-notification-surface: var(--color-status-blocked-surface);
+	--toast-notification-mark: var(--color-status-blocked-text);
+}
+
+.toast-notification-icon {
+	width: var(--size-5);
+	height: var(--size-5);
+	border-radius: 50%;
+	background: var(--toast-notification-mark);
+}
+
+.toast-notification p {
+	margin: var(--size-0);
+	color: var(--color-text-primary);
+	font-size: var(--font-size-body);
+	font-weight: var(--font-weight-strong);
+	line-height: var(--line-height-ui);
+}
+
+.toast-notification-dismiss {
+	width: var(--size-12);
+	height: var(--size-12);
+	border: var(--size-0);
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-icon);
+	line-height: 1;
+	cursor: pointer;
+}
+
+.toast-notification-dismiss:hover {
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+}
+
+.toast-notification-dismiss:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+.component-stage.toast-notification {
+	display: grid;
+	width: min(var(--size-560), 100%);
+	min-height: var(--size-150);
+	grid-template-columns: minmax(var(--size-0), 1fr);
+	place-items: center;
+	align-content: center;
+	gap: var(--size-5);
+	padding: var(--size-12);
+	background: var(--color-surface-preview-panel);
+}
+
+@media (max-width: 31.25rem) {
+	.component-stage.toast-notification {
+		padding: var(--size-7);
+	}
+
+	.toast-notification {
+		width: 100%;
+	}
+}

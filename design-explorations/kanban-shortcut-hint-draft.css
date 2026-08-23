@@ -1,0 +1,5 @@
+kanban-shortcut-hint-draft { display: inline-flex; }
+.shortcut-hint { display: inline-flex; align-items: center; gap: var(--size-1); color: var(--color-text-secondary); font-family: var(--font-family-mono); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); line-height: var(--line-height-ui); white-space: nowrap; }
+.shortcut-hint kbd { min-width: var(--size-10); border: var(--border-width) solid var(--color-border-subtle); border-bottom-width: var(--size-1); border-radius: var(--radius-control); padding: var(--size-2) var(--size-3); background: var(--color-surface-panel); color: var(--color-text-primary); font: inherit; text-align: center; box-shadow: var(--shadow-card); }
+.shortcut-separator { color: var(--color-text-tertiary); }
+.component-stage.shortcut-hint { display: flex; width: min(var(--size-560), 100%); min-height: var(--size-150); flex-wrap: wrap; align-content: center; gap: var(--size-7); padding: var(--size-12); background: var(--color-surface-preview-panel); }

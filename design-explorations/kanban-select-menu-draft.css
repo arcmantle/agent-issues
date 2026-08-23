@@ -1,0 +1,56 @@
+kanban-select-menu-draft {
+	display: block;
+}
+
+.select-menu {
+	display: grid;
+	gap: var(--size-4);
+}
+
+.select-menu label {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-label);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+.select-menu select {
+	width: 100%;
+	min-height: var(--size-19);
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-5) var(--size-7);
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-control);
+	font-weight: var(--font-weight-strong);
+	line-height: var(--line-height-ui);
+	cursor: pointer;
+}
+
+.select-menu select:hover {
+	border-color: var(--color-text-primary);
+}
+
+.select-menu select:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+.select-menu select:disabled {
+	border-color: var(--color-border-subtle);
+	background: var(--color-surface-subtle);
+	color: var(--color-text-tertiary);
+	cursor: not-allowed;
+}
+
+.component-stage.select-menu {
+	display: grid;
+	width: min(var(--size-150), 100%);
+	min-height: var(--size-125);
+	place-items: center;
+	padding: var(--size-12);
+	background: var(--color-surface-preview-panel);
+}

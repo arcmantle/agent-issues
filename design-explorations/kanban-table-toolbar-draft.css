@@ -1,0 +1,19 @@
+kanban-table-toolbar-draft { display: block; }
+
+.table-toolbar { display: grid; grid-template-columns: minmax(var(--size-104), 1fr) auto auto auto; gap: var(--size-5); align-items: end; padding: var(--size-8); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-panel); background: var(--color-surface-panel); }
+.table-toolbar-search { min-width: var(--size-0); }
+.table-toolbar-search label, .table-toolbar-controls label { display: grid; gap: var(--size-2); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.table-toolbar input, .table-toolbar select { width: 100%; min-height: var(--size-18); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); padding: var(--size-3) var(--size-4); background: var(--color-surface-panel); color: var(--color-text-primary); font: inherit; font-size: var(--font-size-ui); }
+.table-toolbar input:focus-visible, .table-toolbar select:focus-visible, .table-toolbar-action:focus-visible { outline: var(--border-width) solid var(--color-status-success); outline-offset: var(--size-1); }
+.table-toolbar-controls { display: contents; }
+.table-toolbar-count { padding-bottom: var(--size-4); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); white-space: nowrap; }
+.table-toolbar-action { min-height: var(--size-18); border: var(--border-width) solid var(--color-text-primary); border-radius: var(--radius-control); padding: var(--size-3) var(--size-5); background: var(--color-text-primary); color: var(--color-surface-panel); font: inherit; font-size: var(--font-size-ui); font-weight: var(--font-weight-strong); white-space: nowrap; cursor: pointer; }
+.table-toolbar-action:hover { background: var(--color-surface-sidebar); }
+.table-toolbar-sr-only { position: absolute; width: var(--size-1); height: var(--size-1); overflow: hidden; clip: rect(var(--size-0), var(--size-0), var(--size-0), var(--size-0)); white-space: nowrap; }
+
+@media (max-width: 47.5rem) {
+	.table-toolbar { grid-template-columns: 1fr 1fr; align-items: end; }
+	.table-toolbar-search { grid-column: 1 / -1; }
+	.table-toolbar-count { grid-column: 1; padding-bottom: var(--size-0); }
+	.table-toolbar-action { grid-column: 2; }
+}

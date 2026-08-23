@@ -1,0 +1,97 @@
+kanban-comment-composer-draft {
+	display: block;
+}
+
+.comment-composer {
+	display: grid;
+	gap: var(--size-5);
+	padding: var(--size-6);
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-panel);
+	background: var(--color-surface-panel);
+}
+
+.comment-composer-label {
+	position: absolute;
+	width: var(--size-1);
+	height: var(--size-1);
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+
+.comment-composer textarea {
+	width: 100%;
+	min-height: var(--size-38);
+	resize: vertical;
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-5);
+	background: var(--color-surface-canvas);
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-body);
+	line-height: var(--line-height-body);
+}
+
+.comment-composer textarea::placeholder {
+	color: var(--color-text-tertiary);
+}
+
+.comment-composer textarea:focus-visible,
+.comment-composer button:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+.comment-composer-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-5);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-strong);
+}
+
+.comment-composer button {
+	min-height: var(--size-19);
+	border: var(--border-width) solid var(--color-text-primary);
+	border-radius: var(--radius-control);
+	padding: var(--size-5) var(--size-7);
+	background: var(--color-text-primary);
+	color: var(--color-surface-panel);
+	font: inherit;
+	font-size: var(--font-size-control);
+	font-weight: var(--font-weight-heavy);
+	cursor: pointer;
+}
+
+.comment-composer button:hover:not(:disabled) {
+	background: var(--color-surface-sidebar);
+}
+
+.comment-composer button:disabled {
+	border-color: var(--color-border-subtle);
+	background: var(--color-surface-subtle);
+	color: var(--color-text-tertiary);
+	cursor: not-allowed;
+}
+
+.component-stage.comment-composer {
+	width: min(var(--size-230), 100%);
+	min-height: var(--size-125);
+	padding: var(--size-10);
+	background: var(--color-surface-preview-panel);
+}
+
+@media (max-width: 31.25rem) {
+	.comment-composer-actions {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.comment-composer button {
+		width: 100%;
+	}
+}

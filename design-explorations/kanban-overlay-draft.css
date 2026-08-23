@@ -1,0 +1,11 @@
+.overlay-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--size-8); }
+.overlay-header h2 { margin: var(--size-2) var(--size-0); font-family: var(--font-family-display); font-size: var(--font-size-title); font-weight: var(--font-weight-display); line-height: var(--line-height-tight); }
+.overlay-header button { width: var(--size-16); height: var(--size-16); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); color: var(--color-text-primary); font-size: var(--font-size-icon-large); line-height: 1; cursor: pointer; }
+.overlay-meta { display: flex; flex-wrap: wrap; gap: var(--size-6); padding: var(--size-7) var(--size-12); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.overlay-content { padding-bottom: var(--size-13); color: var(--color-text-secondary); font-size: var(--font-size-overlay-body); line-height: var(--line-height-body); }
+.overlay-content h3 { margin: var(--size-13) var(--size-0) var(--size-4); color: var(--color-text-primary); font-size: var(--font-size-control); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-section); text-transform: uppercase; }
+.overlay-content h3:first-child { margin-top: var(--size-0); }
+.overlay-content p, .overlay-content ul { margin: var(--size-0); }
+.related-records { display: grid; gap: var(--size-4); }
+.related-records div { display: flex; justify-content: space-between; gap: var(--size-4); padding: var(--size-5) var(--size-6); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); color: var(--color-text-primary); font-size: var(--font-size-ui); font-weight: var(--font-weight-strong); }
+.related-records small { color: var(--color-text-secondary); }

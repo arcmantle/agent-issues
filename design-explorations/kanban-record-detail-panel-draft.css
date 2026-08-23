@@ -1,0 +1,135 @@
+kanban-record-detail-panel-draft {
+	display: block;
+}
+
+.record-detail-panel-scrim {
+	display: none;
+	position: fixed;
+	z-index: 22;
+	inset: var(--size-0);
+	background: var(--color-overlay-scrim);
+}
+
+kanban-record-detail-panel-draft[open] .record-detail-panel-scrim {
+	display: block;
+}
+
+.record-detail-panel {
+	position: fixed;
+	z-index: 23;
+	top: var(--size-0);
+	right: var(--size-0);
+	display: flex;
+	flex-direction: column;
+	width: min(var(--size-310), 100vw);
+	height: 100vh;
+	border-left: var(--border-width) solid var(--color-border-subtle);
+	background: var(--color-surface-canvas);
+	box-shadow: var(--shadow-overlay);
+	transform: translateX(102%);
+	transition: transform .18s ease-out;
+}
+
+kanban-record-detail-panel-draft[open] .record-detail-panel {
+	transform: translateX(0);
+}
+
+.record-detail-panel-header {
+	padding: var(--size-11) var(--size-12) var(--size-9);
+	border-bottom: var(--border-width) solid var(--color-border-subtle);
+}
+
+.record-detail-panel-meta {
+	border-bottom: var(--border-width) solid var(--color-border-subtle);
+}
+
+.record-detail-panel-content {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: var(--size-12);
+}
+
+.component-stage.record-detail-panel-preview {
+	position: relative;
+	min-height: var(--size-335);
+	background: var(--color-surface-preview-panel);
+}
+
+.component-stage.issue-overlay-preview {
+	position: relative;
+	min-height: var(--size-335);
+	background: var(--color-surface-preview-panel);
+}
+
+.component-stage.overlay {
+	position: relative;
+	min-height: var(--size-310);
+	background: var(--color-surface-preview-panel);
+}
+
+.component-stage.overlay .record-detail-panel-scrim,
+.component-stage.issue-overlay-preview .record-detail-panel-scrim,
+.component-stage.record-detail-panel-preview .record-detail-panel-scrim {
+	position: absolute;
+	background: var(--color-overlay-preview-scrim);
+}
+
+.component-stage.overlay .record-detail-panel,
+.component-stage.issue-overlay-preview .record-detail-panel,
+.component-stage.record-detail-panel-preview .record-detail-panel {
+	position: absolute;
+	width: min(var(--size-310), 92%);
+	height: 100%;
+}
+
+.record-detail-panel-preview-header {
+	display: grid;
+	gap: var(--size-2);
+}
+
+.record-detail-panel-preview-header span {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-strong);
+}
+
+.record-detail-panel-preview-header h2,
+.record-detail-panel-preview-content h3,
+.record-detail-panel-preview-content p {
+	margin: var(--size-0);
+}
+
+.record-detail-panel-preview-header h2 {
+	color: var(--color-text-primary);
+	font-family: var(--font-family-display);
+	font-size: var(--font-size-title);
+	font-weight: var(--font-weight-display);
+	line-height: var(--line-height-tight);
+}
+
+.record-detail-panel-preview-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4);
+	padding: var(--size-7) var(--size-12);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-strong);
+}
+
+.record-detail-panel-preview-content {
+	display: grid;
+	gap: var(--size-5);
+}
+
+.record-detail-panel-preview-content h3 {
+	font-size: var(--font-size-control);
+	letter-spacing: var(--letter-spacing-section);
+	text-transform: uppercase;
+}
+
+.record-detail-panel-preview-content p {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-body);
+	line-height: var(--line-height-body);
+}

@@ -1,0 +1,13 @@
+kanban-activity-event-draft { display: block; }
+.activity-event { display: grid; grid-template-columns: var(--size-50) var(--size-4) minmax(var(--size-0), 1fr); gap: var(--size-6); padding: var(--size-7) var(--size-0); border-bottom: var(--border-width) solid var(--color-border-subtle); }
+kanban-activity-event-draft:last-child .activity-event { border-bottom: var(--size-0); }
+.activity-event time { color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); line-height: var(--line-height-ui); }
+.activity-event h3 { margin: var(--size-0); color: var(--color-text-primary); font-size: var(--font-size-body); font-weight: var(--font-weight-strong); line-height: var(--line-height-ui); }
+.activity-event p { margin: var(--size-2) var(--size-0) var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-ui); line-height: var(--line-height-body); }
+.activity-event-marker { width: var(--size-4); height: var(--size-4); margin-top: var(--size-2); border-radius: 50%; background: var(--color-text-tertiary); }
+.activity-event-marker.is-accent { background: var(--color-status-success); }
+.activity-event-marker.is-warning { background: var(--color-accent-warning); }
+
+@media (max-width: 47.5rem) {
+	.activity-event { grid-template-columns: var(--size-36) var(--size-4) minmax(var(--size-0), 1fr); }
+}

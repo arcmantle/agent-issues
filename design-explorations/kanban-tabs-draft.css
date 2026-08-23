@@ -1,0 +1,7 @@
+.entity-tabs { display: flex; gap: var(--size-1); overflow-x: auto; margin: var(--size-5) var(--size-16) var(--size-0); border-bottom: var(--border-width) solid var(--color-border-subtle); }
+.entity-tab { flex: 0 0 auto; border: var(--size-0); border-bottom: var(--size-1) solid transparent; padding: var(--size-5) var(--size-6) var(--size-5); background: transparent; color: var(--color-text-secondary); font-size: var(--font-size-control); font-weight: var(--font-weight-heavy); cursor: pointer; }
+.entity-tab.is-active { border-bottom-color: var(--color-text-primary); color: var(--color-text-primary); }
+
+@media (max-width: 47.5rem) {
+	.entity-tabs { margin-left: var(--size-9); margin-right: var(--size-9); }
+}

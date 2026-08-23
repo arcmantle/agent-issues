@@ -1,0 +1,12 @@
+kanban-activity-timeline-draft { display: block; }
+.activity-timeline { position: relative; padding: var(--size-2) var(--size-8); }
+.activity-timeline::before { position: absolute; top: var(--size-10); bottom: var(--size-10); left: calc(var(--size-8) + var(--size-50) + var(--size-8)); width: var(--border-width); background: var(--color-border-subtle); content: ""; }
+.activity-timeline kanban-activity-event-draft { position: relative; z-index: 1; }
+.activity-timeline-empty { margin: var(--size-0); padding: var(--size-12) var(--size-0); color: var(--color-text-secondary); font-size: var(--font-size-body); line-height: var(--line-height-body); text-align: center; }
+.activity-timeline-preview-state { padding: var(--size-8); }
+.activity-timeline-preview-state + .activity-timeline-preview-state { border-top: var(--border-width) solid var(--color-border-preview); }
+.activity-timeline-preview-state h2 { margin: var(--size-0) var(--size-0) var(--size-5); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+
+@media (max-width: 47.5rem) {
+	.activity-timeline::before { left: calc(var(--size-8) + var(--size-36) + var(--size-8)); }
+}

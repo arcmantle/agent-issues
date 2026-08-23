@@ -1,0 +1,5 @@
+.kanban-board { display: grid; grid-template-columns: repeat(4, minmax(var(--size-112), 1fr)); gap: var(--size-8); overflow-x: auto; padding: var(--size-9) var(--size-16) var(--size-39); }
+
+@media (max-width: 47.5rem) {
+	.kanban-board { padding-left: var(--size-9); padding-right: var(--size-9); }
+}

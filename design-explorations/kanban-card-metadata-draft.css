@@ -1,0 +1,101 @@
+kanban-card-metadata-draft {
+	display: block;
+	min-width: var(--size-0);
+}
+
+.kanban-card-metadata {
+	display: grid;
+	gap: var(--size-5);
+	min-width: var(--size-0);
+}
+
+.kanban-card-metadata-header {
+	display: flex;
+	align-items: start;
+	justify-content: space-between;
+	gap: var(--size-5);
+}
+
+.kanban-card-metadata-reference {
+	color: var(--color-text-secondary);
+	font-family: var(--font-family-mono);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-strong);
+}
+
+.kanban-card-metadata-badges {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: end;
+	gap: var(--size-2);
+}
+
+.kanban-card-metadata-details {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(var(--size-0), 1fr));
+	gap: var(--size-4) var(--size-6);
+	margin: var(--size-0);
+	padding-top: var(--size-5);
+	border-top: var(--border-width) solid var(--color-border-subtle);
+}
+
+.kanban-card-metadata-details div {
+	display: grid;
+	gap: var(--size-1);
+	min-width: var(--size-0);
+}
+
+.kanban-card-metadata-details dt {
+	color: var(--color-text-tertiary);
+	font-size: var(--font-size-compact);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+.kanban-card-metadata-details dd {
+	overflow: hidden;
+	margin: var(--size-0);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-strong);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.kanban-card-metadata-details dd.is-overdue,
+.kanban-card-metadata-details dd.is-blocked {
+	color: var(--color-status-blocked-text);
+}
+
+.component-stage.card-metadata {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(var(--size-0), 1fr));
+	gap: var(--size-6);
+	width: min(var(--size-275), 100%);
+	min-height: var(--size-125);
+	padding: var(--size-10);
+	background: var(--color-surface-preview-panel);
+}
+
+.component-stage.card-metadata > section {
+	padding: var(--size-6);
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-panel);
+	background: var(--color-surface-panel);
+}
+
+.component-stage.card-metadata h2 {
+	margin: var(--size-0) var(--size-0) var(--size-5);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+@media (max-width: 40rem) {
+	.component-stage.card-metadata {
+		grid-template-columns: 1fr;
+	}
+}

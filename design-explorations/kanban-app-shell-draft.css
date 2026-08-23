@@ -1,0 +1,10 @@
+kanban-app-shell-draft { display: block; min-height: 100vh; }
+
+.app-shell { display: grid; grid-template-columns: var(--size-150) minmax(var(--size-0), 1fr); min-height: 100vh; transition: grid-template-columns .18s ease-out; }
+.app-shell.is-sidebar-collapsed { grid-template-columns: var(--size-38) minmax(var(--size-0), 1fr); }
+.app-shell-main { min-width: var(--size-0); }
+
+@media (max-width: 47.5rem) {
+	.app-shell { grid-template-columns: 1fr; }
+	.app-shell kanban-sidebar-draft { display: none; }
+}

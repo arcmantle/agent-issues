@@ -1,0 +1,84 @@
+kanban-relationship-item-draft {
+	display: block;
+}
+
+.relationship-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-6);
+	padding: var(--size-6);
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	background: var(--color-surface-panel);
+}
+
+.relationship-item-summary {
+	display: grid;
+	min-width: var(--size-0);
+	gap: var(--size-2);
+}
+
+.relationship-item-summary span,
+.relationship-item-action small {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-strong);
+}
+
+.relationship-item-summary strong {
+	overflow: hidden;
+	color: var(--color-text-primary);
+	font-size: var(--font-size-ui);
+	font-weight: var(--font-weight-strong);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.relationship-item-action {
+	display: grid;
+	flex: 0 0 auto;
+	justify-items: end;
+	gap: var(--size-3);
+}
+
+.relationship-item-action button {
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-3) var(--size-4);
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-control);
+	font-weight: var(--font-weight-heavy);
+	cursor: pointer;
+}
+
+.relationship-item-action button:hover {
+	background: var(--color-surface-subtle);
+}
+
+.relationship-item-action button:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+.component-stage.relationship-item {
+	width: min(var(--size-230), 100%);
+	min-height: var(--size-104);
+	padding: var(--size-10);
+	background: var(--color-surface-preview-panel);
+}
+
+@media (max-width: 31.25rem) {
+	.relationship-item {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+
+	.relationship-item-action {
+		width: 100%;
+		grid-template-columns: 1fr auto;
+		align-items: center;
+	}
+}

@@ -1,0 +1,24 @@
+kanban-button-draft { display: inline-block; }
+.command-button { display: inline-flex; min-height: var(--size-19); align-items: center; justify-content: center; gap: var(--size-3); border: var(--border-width) solid transparent; border-radius: var(--radius-control); padding: var(--size-5) var(--size-7); font-family: var(--font-family-ui); font-size: var(--font-size-control); font-weight: var(--font-weight-heavy); line-height: var(--line-height-ui); cursor: pointer; }
+.command-button:focus-visible { outline: var(--size-1) solid var(--color-accent-secondary); outline-offset: var(--size-1); }
+.command-button.is-primary { background: var(--color-accent); color: var(--color-surface-sidebar); }
+.command-button.is-primary:hover { background: var(--color-accent-secondary); }
+.command-button.is-secondary { border-color: var(--color-text-primary); background: var(--color-surface-panel); color: var(--color-text-primary); }
+.command-button.is-secondary:hover { background: var(--color-surface-subtle); }
+.command-button.is-quiet { background: transparent; color: var(--color-text-primary); }
+.command-button.is-quiet:hover { background: var(--color-surface-subtle); }
+.command-button.is-destructive { border-color: var(--color-status-blocked-border); background: var(--color-status-blocked-surface); color: var(--color-status-blocked-text); }
+.command-button.is-destructive:hover { background: var(--color-status-blocked-label); }
+.command-button:disabled { border-color: var(--color-border-subtle); background: var(--color-surface-subtle); color: var(--color-text-tertiary); cursor: not-allowed; }
+.button-spinner { width: var(--size-6); height: var(--size-6); border: var(--size-1) solid currentColor; border-right-color: transparent; border-radius: 50%; animation: command-button-spin .7s linear infinite; }
+.component-stage.button { display: grid; width: 100%; max-width: var(--size-560); min-height: var(--size-150); grid-template-columns: repeat(2, minmax(var(--size-0), 1fr)); gap: var(--size-8); padding: var(--size-12); background: var(--color-surface-preview-panel); }
+.button-state { display: grid; align-content: start; gap: var(--size-5); min-width: var(--size-0); padding: var(--size-8); border: var(--border-width) solid var(--color-border-preview); border-radius: var(--radius-panel); background: var(--color-surface-canvas); }
+.button-state > span { color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.button-state > div { display: flex; flex-wrap: wrap; gap: var(--size-4); }
+
+@keyframes command-button-spin { to { transform: rotate(1turn); } }
+
+@media (max-width: 31.25rem) {
+	.component-stage.button { grid-template-columns: 1fr; padding: var(--size-5); }
+	.button-state { padding: var(--size-4); }
+}

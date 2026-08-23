@@ -1,0 +1,73 @@
+kanban-record-summary-draft {
+	display: block;
+	min-width: var(--size-0);
+}
+
+.record-summary {
+	display: grid;
+	gap: var(--size-6);
+	min-width: var(--size-0);
+}
+
+.record-summary-primary {
+	display: grid;
+	gap: var(--size-2);
+	min-width: var(--size-0);
+}
+
+.record-summary-primary span,
+.record-summary-details dt {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+.record-summary-primary h2 {
+	overflow: hidden;
+	margin: var(--size-0);
+	color: var(--color-text-primary);
+	font-family: var(--font-family-display);
+	font-size: var(--font-size-title);
+	font-weight: var(--font-weight-display);
+	line-height: var(--line-height-tight);
+	text-overflow: ellipsis;
+}
+
+.record-summary-details {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-6) var(--size-10);
+	margin: var(--size-0);
+}
+
+.record-summary-details div {
+	display: grid;
+	gap: var(--size-2);
+}
+
+.record-summary-details dd {
+	margin: var(--size-0);
+	color: var(--color-text-primary);
+	font-size: var(--font-size-ui);
+	font-weight: var(--font-weight-strong);
+}
+
+.component-stage.record-summary {
+	width: min(var(--size-230), 100%);
+	min-height: var(--size-104);
+	padding: var(--size-12);
+	background: var(--color-surface-preview-panel);
+}
+
+@media (max-width: 31.25rem) {
+	.record-summary-primary h2 {
+		font-size: var(--font-size-card-title);
+	}
+
+	.record-summary-details {
+		display: grid;
+		gap: var(--size-4);
+	}
+}

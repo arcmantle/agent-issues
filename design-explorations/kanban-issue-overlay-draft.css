@@ -1,0 +1,17 @@
+kanban-issue-overlay-draft { display: block; }
+.issue-overlay-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--size-8); }
+.issue-overlay-header kanban-record-summary-draft { flex: 1 1 auto; }
+.issue-overlay-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--size-3); }
+.issue-breadcrumbs { display: flex; gap: var(--size-3); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.issue-breadcrumbs span::after { content: "/"; margin-left: var(--size-3); color: var(--color-text-tertiary); }
+.issue-breadcrumbs span:last-child::after { display: none; }
+.issue-overlay-header h2 { max-width: 19ch; margin: var(--size-2) var(--size-0); color: var(--color-text-primary); font-family: var(--font-family-display); font-size: var(--font-size-title); font-weight: var(--font-weight-display); line-height: var(--line-height-tight); }
+.issue-overlay-meta { display: flex; flex-wrap: wrap; gap: var(--size-4); padding: var(--size-7) var(--size-12); color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-strong); }
+.issue-field-group { margin-bottom: var(--size-11); }
+.issue-field-group label { display: block; margin-bottom: var(--size-4); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.issue-select { display: flex; align-items: center; justify-content: space-between; width: var(--size-80); padding: var(--size-5); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); color: var(--color-text-primary); font-size: var(--font-size-control); font-weight: var(--font-weight-strong); }
+.issue-section { margin-top: var(--size-14); }
+.issue-section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--size-5); }
+.issue-section-heading h3 { margin: var(--size-0); color: var(--color-text-primary); font-size: var(--font-size-control); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-section); text-transform: uppercase; }
+.issue-section-heading button { width: var(--size-14); height: var(--size-14); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); color: var(--color-text-primary); font-size: var(--font-size-icon); cursor: pointer; }
+kanban-comment-item-draft { display: block; margin-bottom: var(--size-5); }

@@ -1,0 +1,6 @@
+kanban-card-draft { display: block; }
+.kanban-card { padding: var(--size-7); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); box-shadow: var(--shadow-card); cursor: pointer; }
+.kanban-card:hover, .kanban-card:focus-visible { border-color: var(--color-text-primary); outline: none; box-shadow: var(--shadow-card-hover); }
+.kanban-card.is-blocked { border-color: var(--color-status-blocked-border); background: var(--color-status-blocked-surface); }
+.blocked-label { display: inline-block; padding: var(--size-2) var(--size-3); background: var(--color-status-blocked-label); color: var(--color-status-blocked-text); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); text-transform: uppercase; }
+.kanban-card h3 { margin: var(--size-4) var(--size-0) var(--size-6); font-family: var(--font-family-display); font-size: var(--font-size-card-title); font-weight: var(--font-weight-display); line-height: var(--line-height-ui); }

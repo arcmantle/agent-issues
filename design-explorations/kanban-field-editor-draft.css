@@ -1,0 +1,80 @@
+kanban-field-editor-draft {
+	display: block;
+}
+
+.field-editor {
+	display: grid;
+	gap: var(--size-4);
+}
+
+.field-editor label {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-label);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+.field-editor input,
+.field-editor select,
+.field-editor textarea {
+	width: 100%;
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-5) var(--size-6);
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+	font: inherit;
+	line-height: var(--line-height-body);
+}
+
+.field-editor input {
+	font-family: var(--font-family-display);
+	font-size: var(--font-size-field);
+	font-weight: var(--font-weight-display);
+}
+
+.field-editor select {
+	min-height: var(--size-19);
+	font-size: var(--font-size-control);
+	font-weight: var(--font-weight-strong);
+	line-height: var(--line-height-ui);
+	cursor: pointer;
+}
+
+.field-editor textarea {
+	min-height: var(--size-60);
+	resize: vertical;
+	font-size: var(--font-size-body);
+}
+
+.field-editor input:hover,
+.field-editor select:hover,
+.field-editor textarea:hover {
+	border-color: var(--color-text-primary);
+}
+
+.field-editor input:focus-visible,
+.field-editor select:focus-visible,
+.field-editor textarea:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+.field-editor input:disabled,
+.field-editor select:disabled,
+.field-editor textarea:disabled {
+	background: var(--color-surface-subtle);
+	color: var(--color-text-tertiary);
+	cursor: not-allowed;
+}
+
+.component-stage.field-editor {
+	display: grid;
+	width: min(var(--size-230), 100%);
+	min-height: var(--size-230);
+	gap: var(--size-9);
+	align-content: center;
+	padding: var(--size-12);
+	background: var(--color-surface-preview-panel);
+}

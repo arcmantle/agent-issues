@@ -1,0 +1,111 @@
+kanban-comment-item-draft {
+	display: block;
+}
+
+.comment-item {
+	padding: var(--size-6);
+	border-left: var(--size-1) solid var(--color-accent-secondary);
+	background: var(--color-comment-surface);
+}
+
+.comment-item header {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--size-4);
+	color: var(--color-text-primary);
+	font-size: var(--font-size-control);
+}
+
+.comment-item-meta,
+.comment-item-actions,
+.comment-item-editor > div {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4);
+}
+
+.comment-item time {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-meta);
+	white-space: nowrap;
+}
+
+.comment-item p {
+	margin: var(--size-4) var(--size-0) var(--size-0);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-ui);
+	line-height: var(--line-height-body);
+	overflow-wrap: anywhere;
+}
+
+.comment-item-actions button,
+.comment-item-editor button {
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-2) var(--size-4);
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-meta);
+	font-weight: var(--font-weight-heavy);
+	cursor: pointer;
+}
+
+.comment-item-actions button:last-child {
+	border-color: var(--color-status-blocked-border);
+	color: var(--color-status-blocked-text);
+}
+
+.comment-item-actions button:hover,
+.comment-item-editor button:hover {
+	background: var(--color-surface-subtle);
+}
+
+.comment-item-editor {
+	display: grid;
+	gap: var(--size-4);
+	margin-top: var(--size-4);
+}
+
+.comment-item-editor label {
+	position: absolute;
+	width: var(--size-1);
+	height: var(--size-1);
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+
+.comment-item-editor textarea {
+	width: 100%;
+	min-height: var(--size-38);
+	resize: vertical;
+	border: var(--border-width) solid var(--color-border-subtle);
+	border-radius: var(--radius-control);
+	padding: var(--size-5);
+	background: var(--color-surface-panel);
+	color: var(--color-text-primary);
+	font: inherit;
+	font-size: var(--font-size-ui);
+	line-height: var(--line-height-body);
+}
+
+.comment-item-actions button:focus-visible,
+.comment-item-editor button:focus-visible,
+.comment-item-editor textarea:focus-visible {
+	outline: var(--size-2) solid var(--color-accent-secondary);
+	outline-offset: var(--size-1);
+}
+
+@media (max-width: 31.25rem) {
+	.comment-item header {
+		align-items: start;
+		flex-direction: column;
+		gap: var(--size-2);
+	}
+
+	.comment-item-meta {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+}

@@ -1,0 +1,51 @@
+.sidebar-shell { min-height: 100%; padding: var(--size-14) var(--size-10); background: var(--color-surface-sidebar); color: var(--color-text-inverse); }
+.sidebar-shell.is-collapsed { padding: var(--size-14) var(--size-6); }
+.brand { display: flex; align-items: center; gap: var(--size-5); font-size: var(--font-size-brand); font-weight: var(--font-weight-heavy); }
+.brand-mark { display: grid; place-items: center; width: var(--size-13); height: var(--size-13); border-radius: var(--radius-control); background: var(--color-accent); color: var(--color-surface-sidebar); }
+.sidebar-wide { display: inline; }
+.sidebar-compact { display: none; }
+
+.sidebar-collapse { display: grid; place-items: center; width: var(--size-15); height: var(--size-15); margin-left: auto; border: var(--border-width) solid var(--color-border-sidebar-control); border-radius: var(--radius-control); padding: var(--size-0); background: transparent; color: var(--color-text-inverse); font-size: var(--font-size-icon-large); font-weight: var(--font-weight-heavy); line-height: 1; cursor: pointer; }
+.sidebar-collapse .sidebar-wide { display: none; }
+
+.project-section { margin: var(--size-14) var(--size-0); }
+.project-section .sidebar-label { margin-bottom: var(--size-4); }
+.project-switcher { display: flex; align-items: center; justify-content: space-between; width: 100%; height: var(--size-18); padding: var(--size-0) var(--size-5); border: var(--border-width) solid var(--color-border-sidebar-strong); border-radius: var(--radius-control); background: transparent; color: var(--color-surface-panel); text-align: left; cursor: pointer; }
+.project-switcher strong { font-size: var(--font-size-control); line-height: 1; }
+.project-expanded-chevron { display: inline-grid; place-items: center; width: var(--size-7); height: var(--size-7); }
+.project-expanded-chevron svg { display: block; width: var(--size-7); height: var(--size-7); fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--size-half); }
+.project-compact-mark { display: none; }
+
+.sidebar-label { color: var(--color-text-tertiary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.epic-group { margin-top: var(--size-7); padding-top: var(--size-6); border-top: var(--border-width) solid var(--color-border-sidebar); }
+.epic-title { color: var(--color-surface-panel); font-size: var(--font-size-ui); font-weight: var(--font-weight-strong); }
+.initiative-list { display: grid; gap: var(--size-2); margin: var(--size-4) var(--size-0) var(--size-0) var(--size-5); padding-left: var(--size-5); border-left: var(--border-width) solid var(--color-border-sidebar-strong); }
+.initiative { display: flex; justify-content: space-between; gap: var(--size-4); border: var(--size-0); border-radius: var(--radius-control); padding: var(--size-4) var(--size-4); background: transparent; color: var(--color-text-inverse-muted); font-size: var(--font-size-control); text-align: left; cursor: pointer; }
+.initiative code { font-size: var(--font-size-label); }
+.initiative.is-active { background: var(--color-surface-sidebar-selected); color: var(--color-surface-panel); }
+
+.sidebar-shell.is-collapsed .sidebar-wide { display: none; }
+.sidebar-shell.is-collapsed .brand { justify-content: center; }
+.sidebar-shell.is-collapsed .brand-mark { display: none; }
+.sidebar-shell.is-collapsed .sidebar-collapse { width: var(--size-16); height: var(--size-16); margin: var(--size-0); border-color: var(--color-text-tertiary); color: var(--color-accent); }
+.sidebar-shell.is-collapsed .project-section { margin: var(--size-15) var(--size-0) var(--size-11); }
+.sidebar-shell.is-collapsed .project-switcher { display: block; position: relative; width: var(--size-17); height: var(--size-17); margin: var(--size-0) auto; padding: var(--size-0); border-radius: 50%; }
+.sidebar-shell.is-collapsed .project-expanded-chevron { display: none; }
+.sidebar-shell.is-collapsed .project-compact-mark { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--color-text-inverse); font-size: var(--font-size-meta); font-weight: var(--font-weight-heavy); text-align: center; }
+.sidebar-shell.is-collapsed .sidebar-label { display: none; }
+.sidebar-shell.is-collapsed .epic-group { padding-top: var(--size-5); }
+.sidebar-shell.is-collapsed .epic-title { display: grid; place-items: center; color: var(--color-text-tertiary); font-size: 0; }
+.sidebar-shell.is-collapsed .epic-title::after { content: attr(data-short); font-size: var(--font-size-compact); font-weight: var(--font-weight-heavy); }
+.sidebar-shell.is-collapsed .initiative-list { margin-left: 0; padding-left: 0; border-left: 0; }
+.sidebar-shell.is-collapsed .initiative { display: grid; grid-template-columns: 1fr; justify-items: center; gap: var(--size-1); padding: var(--size-4) var(--size-1); }
+.sidebar-shell.is-collapsed .initiative .sidebar-compact { display: inline; color: inherit; font-size: var(--font-size-compact); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-compact); }
+
+.sidebar-state-comparison { display: flex; align-items: stretch; gap: var(--size-14); width: min(var(--size-560), 100%); min-height: var(--size-310); padding: var(--size-10); border: var(--border-width) solid var(--color-border-preview); border-radius: var(--radius-panel); background: var(--color-surface-subtle); box-shadow: var(--shadow-preview); }
+.sidebar-state-comparison section { display: flex; flex-direction: column; gap: var(--size-4); }
+.sidebar-state-comparison h2 { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-brand); text-transform: uppercase; }
+.sidebar-state-comparison kanban-sidebar-draft { width: var(--size-150); min-height: var(--size-275); }
+.sidebar-state-comparison kanban-sidebar-draft[collapsed] { width: var(--size-38); }
+
+@media (max-width: 47.5rem) {
+	.sidebar-state-comparison { gap: var(--size-7); overflow-x: auto; }
+}

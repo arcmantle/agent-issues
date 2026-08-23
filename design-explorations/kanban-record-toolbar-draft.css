@@ -1,0 +1,29 @@
+kanban-record-toolbar-draft { display: block; }
+
+.record-toolbar { display: grid; gap: var(--size-7); padding: var(--size-9) var(--size-16); border-bottom: var(--border-width) solid var(--color-border-subtle); background: var(--color-surface-canvas); }
+.record-toolbar-header, .record-toolbar-controls, .record-toolbar-title-actions, .record-toolbar-views { display: flex; align-items: center; }
+.record-toolbar-header { justify-content: space-between; gap: var(--size-8); }
+.record-toolbar-title { min-width: var(--size-0); }
+.record-toolbar-title code { color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); }
+.record-toolbar-title h2 { margin: var(--size-2) var(--size-0) var(--size-0); overflow-wrap: anywhere; font-family: var(--font-family-display); font-size: var(--font-size-title); font-weight: var(--font-weight-display); line-height: var(--line-height-tight); }
+.record-toolbar-title-actions { flex: 0 0 auto; gap: var(--size-4); }
+.record-toolbar-controls { gap: var(--size-5); }
+.record-toolbar-search { flex: 1 1 var(--size-104); min-width: var(--size-0); }
+.record-toolbar-search input, .record-toolbar-filter select { width: 100%; min-height: var(--size-18); border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); padding: var(--size-3) var(--size-4); background: var(--color-surface-panel); color: var(--color-text-primary); font: inherit; font-size: var(--font-size-ui); }
+.record-toolbar-filter { display: grid; flex: 0 1 var(--size-80); gap: var(--size-2); color: var(--color-text-secondary); font-size: var(--font-size-label); font-weight: var(--font-weight-heavy); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
+.record-toolbar-views { flex: 0 0 auto; overflow: hidden; border: var(--border-width) solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface-panel); }
+.record-toolbar-views button { min-height: var(--size-18); border: var(--size-0); border-left: var(--border-width) solid var(--color-border-subtle); padding: var(--size-3) var(--size-5); background: transparent; color: var(--color-text-secondary); font: inherit; font-size: var(--font-size-ui); font-weight: var(--font-weight-strong); cursor: pointer; }
+.record-toolbar-views button:first-child { border-left: var(--size-0); }
+.record-toolbar-views button.is-selected { background: var(--color-surface-subtle); color: var(--color-text-primary); }
+.record-toolbar-search input:focus-visible, .record-toolbar-filter select:focus-visible, .record-toolbar-views button:focus-visible { outline: var(--border-width) solid var(--color-status-success); outline-offset: calc(var(--size-1) * -1); }
+.record-toolbar-sr-only { position: absolute; width: var(--size-1); height: var(--size-1); overflow: hidden; clip: rect(var(--size-0), var(--size-0), var(--size-0), var(--size-0)); white-space: nowrap; }
+
+@media (max-width: 47.5rem) {
+	.record-toolbar { padding: var(--size-9); }
+	.record-toolbar-header { align-items: flex-start; }
+	.record-toolbar-title-actions kanban-button-draft { display: none; }
+	.record-toolbar-controls { display: grid; grid-template-columns: minmax(var(--size-0), 1fr) minmax(var(--size-0), 1fr); }
+	.record-toolbar-search { grid-column: 1 / -1; }
+	.record-toolbar-filter { max-width: none; }
+	.record-toolbar-views { justify-self: end; }
+}

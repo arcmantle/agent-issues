@@ -1,0 +1,64 @@
+kanban-loading-state-draft {
+	display: block;
+}
+
+.loading-state {
+	display: grid;
+	gap: var(--size-10);
+	padding: var(--size-12);
+	background: var(--color-surface-preview-panel);
+}
+
+.loading-state-header {
+	display: grid;
+	gap: var(--size-2);
+}
+
+.loading-state-label {
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-label);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+.loading-state-header p {
+	margin: var(--size-0);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-body);
+	line-height: var(--line-height-body);
+}
+
+.loading-state-layouts {
+	display: grid;
+	grid-template-columns: minmax(var(--size-0), 1fr) minmax(var(--size-0), 1.45fr);
+	gap: var(--size-8);
+}
+
+.loading-state-layout {
+	display: grid;
+	gap: var(--size-5);
+}
+
+.loading-state-layout:last-child {
+	grid-column: 1 / -1;
+}
+
+.loading-state-layout h2 {
+	margin: var(--size-0);
+	color: var(--color-text-secondary);
+	font-size: var(--font-size-label);
+	font-weight: var(--font-weight-heavy);
+	letter-spacing: var(--letter-spacing-label);
+	text-transform: uppercase;
+}
+
+@media (max-width: 40rem) {
+	.loading-state-layouts {
+		grid-template-columns: 1fr;
+	}
+
+	.loading-state-layout:last-child {
+		grid-column: auto;
+	}
+}

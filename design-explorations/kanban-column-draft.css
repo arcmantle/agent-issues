@@ -1,0 +1,4 @@
+:host { display: block; min-width: var(--size-112); }
+.kanban-column { min-width: var(--size-112); }
+.column-cards { padding-top: var(--size-6); }
+.column-cards > slot::slotted(kanban-card-draft) { margin-bottom: var(--size-5); }
