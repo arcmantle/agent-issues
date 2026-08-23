@@ -20,6 +20,7 @@ Use the active initiative and its records to find:
 
 - the parent initiative that must structurally own the new issues
 - the PRD and user stories the issues must satisfy
+- the active Plan entries that each new issue implements, when the work comes from a Plan
 - any existing issues or blockers you must reuse instead of duplicate
 
 ### 2. Explore the codebase
@@ -61,8 +62,9 @@ For each approved slice:
 3. Create the issue under the correct structural parent: `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json` for top-level initiative work, or `agent-issues create issue --title ... --parent ISSx --body-file "$issueBodyFile" --json` for a sub-issue.
 4. If you reuse an existing issue whose body is missing or old, refresh it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json` before you link anything else.
 5. Link each leaf issue to every user story it satisfies with `agent-issues link ISSx fixes USy`.
-6. Record dependencies with `agent-issues link BLOCKER_ISS blocks BLOCKED_ISS`.
+6. For Plan-based work, link each issue to every active Plan entry it implements with `agent-issues link PLAN_ENTRYx informs ISSx --json`. Issue creation owns these links.
+7. Record dependencies with `agent-issues link BLOCKER_ISS blocks BLOCKED_ISS`.
 
 Publish blockers first, so later issues can link to real issue IDs.
 
-Return a short summary that shows each created issue ID, its linked user stories, and its blockers.
+Return a short summary that shows each created issue ID, its linked Plan entries and user stories, and its blockers.

@@ -34,6 +34,8 @@ Use vertical tracer bullets. Do not write all the tests first and all the implem
 
 Read the active issue, its relations, and its scoped context. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you code. See [deep modules](deep-modules.md) and [interface design](interface-design.md) when these concerns matter.
 
+Read the issue with `agent-issues show <issue-reference> --json` before implementation. Treat its `planEntries` as planning inputs to inspect. Do not create or change Plan-entry links. Report missing Plan-entry provenance to the issue creator.
+
 ### 2. Tracer bullet
 
 Write one test that confirms one thing about the system.

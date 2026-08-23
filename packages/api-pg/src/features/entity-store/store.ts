@@ -21,6 +21,7 @@ import {
 	ENTITY_KINDS,
 	generateCanonicalIdentity,
 	getAllowedRelationType,
+	getAllowedRelationTypes,
 	getArchiveStatus,
 	deriveMigratedEntityIdentity,
 	getInitialStatus,
@@ -458,6 +459,50 @@ async function resolveOwningInitiativeId(executor: TenantExecutor, focus: Entity
 
 	const structuralPath = await getStructuralPath(executor, focus.id);
 	return structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
+}
+
+async function getRelatedPlanEntries(executor: TenantExecutor, issueId: string): Promise<PlanEntryRecord[]> {
+	const result = await executor.execute(sql`SELECT DISTINCT plan_entries.plan_id
+		FROM plan_entries
+		JOIN plan_entry_references ON plan_entry_references.tenant_id = plan_entries.tenant_id AND plan_entry_references.plan_entry_id = plan_entries.id
+		JOIN entities AS plans ON plans.tenant_id = plan_entries.tenant_id AND plans.id = plan_entries.plan_id
+		WHERE plan_entries.tenant_id = ${executor.tenantId}
+			AND plan_entry_references.entity_id = ${issueId}::uuid
+			AND plans.project_id = ${executor.currentProjectId}::uuid
+			AND plans.kind = 'plan'
+			AND plans.tombstone = FALSE
+		ORDER BY plan_entries.plan_id`);
+	const planStore = new PgPlanEntryStore(executor);
+	const entries = await Promise.all((result.rows as Array<{ plan_id: string }>).map(({ plan_id }) => planStore.listPlanEntries({ planId: plan_id })));
+
+	return entries.flat().filter((entry) => entry.referencedEntityIds.includes(issueId));
+}
+
+async function hasReadyPlan(executor: TenantExecutor, initiativeId: string): Promise<boolean> {
+	const result = await executor.execute(sql`SELECT plans.id
+		FROM relations
+		JOIN entities AS plans ON plans.tenant_id = relations.tenant_id AND plans.id = relations.to_id
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND relations.from_id = ${initiativeId}::uuid
+			AND relations.type = 'owns'
+			AND plans.kind = 'plan'
+			AND plans.status = 'ready'
+			AND plans.tombstone = FALSE
+		LIMIT 1`);
+
+	return result.rows.length > 0;
+}
+
+async function hasRelatedReadyPlanEntry(executor: TenantExecutor, issueId: string, initiativeId: string): Promise<boolean> {
+	const entries = await getRelatedPlanEntries(executor, issueId);
+	for (const entry of entries) {
+		const plan = await getEntityOrThrow(executor, entry.planId);
+		if (plan.status === "ready" && await resolveOwningInitiativeId(executor, plan) === initiativeId) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 export async function nextEntityId(_client: TenantExecutor, kind: EntityKind): Promise<string> {
@@ -1075,7 +1120,8 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		outgoing: (outgoingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
 			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
-		}))
+		})),
+		planEntries: entity.kind === "issue" ? await getRelatedPlanEntries(executor, entity.id) : []
 	};
 }
 
@@ -1123,7 +1169,8 @@ export async function queryEntityRelations(
 		outgoing: (outgoingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
 			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
-		}))
+		})),
+		planEntries: entity.kind === "issue" ? await getRelatedPlanEntries(executor, entity.id) : []
 	};
 }
 
@@ -1411,7 +1458,7 @@ export async function linkEntities(
 	const to = await getEntityOrThrow(executor, input.toId);
 
 	if (!isAllowedRelation(from.kind, to.kind, input.relationType)) {
-		throw new Error(`Relation ${input.relationType} is not allowed from ${from.kind} to ${to.kind}.`);
+		throw new Error(`Relation ${input.relationType} is not allowed from ${from.kind} to ${to.kind}. Valid relation types: ${getAllowedRelationTypes(from.kind, to.kind).join(", ") || "none"}.`);
 	}
 	if (to.kind === "debt" && isStructuralRelationType(input.relationType)) {
 		const structuralParents = await getStructuralParentRelations(executor, to.id);
@@ -1533,6 +1580,13 @@ export async function updateEntityStatus(
 			throw new Error(
 				`Cannot set ${entity.id} to ${input.status} while blocked by ${blockingIssues.map((issue) => issue.id).join(", ")}.`
 			);
+		}
+
+		if (input.status === "done") {
+			const owningInitiativeId = await resolveOwningInitiativeId(executor, entity);
+			if (owningInitiativeId && await hasReadyPlan(executor, owningInitiativeId) && !await hasRelatedReadyPlanEntry(executor, entity.id, owningInitiativeId)) {
+				throw new Error(`Cannot set ${entity.id} to done while its initiative has a ready Plan: link the issue to a related Plan entry first.`);
+			}
 		}
 	}
 

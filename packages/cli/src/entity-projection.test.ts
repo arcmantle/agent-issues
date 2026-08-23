@@ -23,6 +23,25 @@ const entity: EntityRecord = {
 	updatedAt: "2026-07-24T11:00:00.000Z"
 };
 
+const planEntry = {
+	id: "PLAN_ENTRY_01",
+	reference: "PLAN_ENTRY1",
+	shortReference: "PLAN_ENTRY1",
+	planId: "PLAN_01",
+	createdBy: "user-1",
+	updatedBy: "user-1",
+	role: "decision" as const,
+	body: "Use compact issue details.",
+	scopeDirection: null,
+	referencedEntityIds: [entity.id],
+	supersededEntryIds: [],
+	tombstone: false,
+	revision: 1,
+	contentHash: "plan-entry-hash",
+	createdAt: "2026-07-24T10:00:00.000Z",
+	updatedAt: "2026-07-24T10:00:00.000Z"
+};
+
 describe("compact CLI entity projections", () => {
 	it("projects an entity record to exactly its compact fields", () => {
 		const compact = toCompactEntity(entity);
@@ -57,7 +76,8 @@ describe("compact CLI entity projections", () => {
 		const details: EntityDetails = {
 			entity,
 			incoming: [{ relationType: "blocks", entity: incomingEntity }],
-			outgoing: [{ relationType: "fixes", entity: outgoingEntity }]
+			outgoing: [{ relationType: "fixes", entity: outgoingEntity }],
+			planEntries: [planEntry]
 		};
 
 		const compact = toCompactEntityDetails(details);
@@ -89,7 +109,8 @@ describe("compact CLI entity projections", () => {
 					status: "ready",
 					title: "Outgoing story"
 				}
-			}]
+			}],
+			planEntries: [planEntry]
 		});
 		expect(compact.incoming[0]).not.toHaveProperty("relationType");
 		expect(compact.incoming[0]?.entity).not.toHaveProperty("body");

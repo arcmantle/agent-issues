@@ -23,6 +23,8 @@ When an issue removes a feature, constraint, or compatibility path, remove or up
 
 Read the active issue, its relations, and its scoped context. If `ai-prepare` reported a briefing at the fork, use that instead. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you write code. Send it to `/ai-grill-with-docs` instead of deciding it yourself.
 
+Read the issue with `agent-issues show <issue-reference> --json` before implementation. Treat its `planEntries` as planning inputs to inspect. Do not create or change Plan-entry links. Report missing Plan-entry provenance to the issue creator.
+
 Break the approach into vertical slices before you start:
 
 - **Vertical (preferred):** each slice is a complete path through the stack. The slice gives the user or caller new, working capability. Do not build one layer at a time across every slice, for example all models, then all endpoints, then all UI.

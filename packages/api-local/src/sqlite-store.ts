@@ -142,6 +142,10 @@ export class SqliteStore implements StorageDriver {
 		return this.mutate((actorId) => this.planEntryStore.createPlanEntry(input, actorId));
 	}
 
+	public async getPlanEntry(input: Parameters<StorageDriver["getPlanEntry"]>[0]) {
+		return this.planEntryStore.getPlanEntry(input);
+	}
+
 	public async listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]) {
 		return this.planEntryStore.listPlanEntries(input);
 	}
@@ -152,6 +156,14 @@ export class SqliteStore implements StorageDriver {
 
 	public async deletePlanEntry(input: Parameters<StorageDriver["deletePlanEntry"]>[0]) {
 		return this.mutate((actorId) => this.planEntryStore.deletePlanEntry(input, actorId));
+	}
+
+	public async linkPlanEntryIssue(input: Parameters<StorageDriver["linkPlanEntryIssue"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.linkPlanEntryIssue(input, actorId));
+	}
+
+	public async unlinkPlanEntryIssue(input: Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.unlinkPlanEntryIssue(input, actorId));
 	}
 
 	public async listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]) {

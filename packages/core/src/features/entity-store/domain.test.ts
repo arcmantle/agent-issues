@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveEntityStatuses, derivePrdStatus, getInitialStatus, ID_PREFIX, isAllowedRelation, isEntityType, isInitiativeComplete, isValidStatus } from "./domain.js";
+import { deriveEntityStatuses, derivePrdStatus, getAllowedRelationTypes, getInitialStatus, ID_PREFIX, isAllowedRelation, isEntityType, isInitiativeComplete, isValidStatus } from "./domain.js";
 
 describe("Plans", () => {
 	it("has a draft lifecycle, a PLAN reference, initiative ownership, and PRD provenance", () => {
@@ -9,6 +9,7 @@ describe("Plans", () => {
 		expect(ID_PREFIX.plan).toBe("PLAN");
 		expect(isAllowedRelation("initiative", "plan", "owns")).toBe(true);
 		expect(isAllowedRelation("plan", "prd", "informs")).toBe(true);
+		expect(getAllowedRelationTypes("initiative", "issue")).toEqual(["tracks"]);
 	});
 });
 

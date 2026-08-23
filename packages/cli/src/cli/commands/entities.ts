@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type RelationDirection, type RelationType } from "@agent-issues/core";
+import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type EntityRecord, type RelationDirection, type RelationType } from "@agent-issues/core";
 
 import {
 	toCompactCreateAcknowledgement,
@@ -14,6 +14,7 @@ import {
 	toCompactInitiativeBundle,
 	toCompactLinkAcknowledgement,
 	toCompactMoveAcknowledgement,
+	toCompactNextWork,
 	toCompactStatusAcknowledgement
 } from "../../entity-projection.js";
 import { renderEntityDetails, renderEntityList, renderInitiativeBundle, renderOptionalEntityList, renderPlanDetails } from "../renderers.js";
@@ -259,6 +260,22 @@ export class LinkCommand extends PositionalsTenantCommand {
 			const fromId = requirePositional(this.positionals, 0, "link <fromId> <relationType> <toId>");
 			const relationType = requirePositional(this.positionals, 1, "link <fromId> <relationType> <toId>");
 			const toId = requirePositional(this.positionals, 2, "link <fromId> <relationType> <toId>");
+			const planEntry = await findPlanEntry(store, fromId);
+			if (planEntry) {
+				if (relationType !== "informs") {
+					throw new Error("Plan entries can link to issues only as informs. Valid relation types: informs.");
+				}
+
+				const result = await store.linkPlanEntryIssue({ entryId: planEntry.id, issueId: toId });
+				this.print(
+					this.asJson && view === "compact" ? toCompactLinkAcknowledgement("link", result) : result,
+					result.created
+						? `Linked ${fromId} -> ${toId} as ${relationType}`
+						: `Relation already existed: ${fromId} -> ${toId} as ${relationType}`
+				);
+				return 0;
+			}
+
 			const result = await store.linkEntities({ fromId, relationType, toId });
 
 			this.print(
@@ -282,6 +299,22 @@ export class UnlinkCommand extends PositionalsTenantCommand {
 			const fromId = requirePositional(this.positionals, 0, "unlink <fromId> <relationType> <toId>");
 			const relationType = requirePositional(this.positionals, 1, "unlink <fromId> <relationType> <toId>");
 			const toId = requirePositional(this.positionals, 2, "unlink <fromId> <relationType> <toId>");
+			const planEntry = await findPlanEntry(store, fromId);
+			if (planEntry) {
+				if (relationType !== "informs") {
+					throw new Error("Plan entries can link to issues only as informs. Valid relation types: informs.");
+				}
+
+				const result = await store.unlinkPlanEntryIssue({ entryId: planEntry.id, issueId: toId });
+				this.print(
+					this.asJson && view === "compact" ? toCompactLinkAcknowledgement("unlink", result) : result,
+					result.removed
+						? `Unlinked ${fromId} -> ${toId} as ${relationType}`
+						: `Relation did not exist: ${fromId} -> ${toId} as ${relationType}`
+				);
+				return 0;
+			}
+
 			const result = await store.unlinkEntities({ fromId, relationType, toId });
 
 			this.print(
@@ -292,6 +325,17 @@ export class UnlinkCommand extends PositionalsTenantCommand {
 			);
 			return 0;
 		});
+	}
+}
+
+async function findPlanEntry(store: { getPlanEntry(input: { entryId: string }): Promise<{ id: string }> }, entryId: string): Promise<{ id: string } | null> {
+	try {
+		return await store.getPlanEntry({ entryId });
+	} catch (error) {
+		if (error instanceof Error && error.message === `Plan entry not found: ${entryId}`) {
+			return null;
+		}
+		throw error;
 	}
 }
 
@@ -326,6 +370,101 @@ export class BundleCommand extends PositionalsTenantCommand {
 			return 0;
 		});
 	}
+}
+
+type NextWorkItem = {
+	issue: EntityRecord;
+	blockers: string[];
+	unblocks: string[];
+};
+
+type NextWorkResult = {
+	initiative: EntityRecord;
+	available: NextWorkItem[];
+	blocked: NextWorkItem[];
+};
+
+const STRUCTURAL_PARENT_RELATION_TYPES: RelationType[] = ["contains", "owns", "records", "tracks", "creates", "decomposes"];
+
+export class NextWorkCommand extends PositionalsTenantCommand {
+	public static paths = [["next-work"]];
+
+	public async execute(): Promise<number> {
+		const scopeId = requirePositional(this.positionals, 0, "next-work <initiativeOrDescendantId>");
+		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
+			const initiative = await resolveContainingInitiative(store, scopeId);
+			const bundle = await store.getInitiativeBundle(initiative.id);
+			const allIssues = await store.queryEntities({ kind: "issue" });
+			const result = deriveNextWork(bundle, allIssues.openBlockers ?? {});
+
+			this.print(this.asJson ? toCompactNextWork(result) : result, renderNextWork(result));
+			return 0;
+		});
+	}
+}
+
+async function resolveContainingInitiative(
+	store: { queryEntityRelations(input: { entityId: string; direction: RelationDirection; types: RelationType[] }): Promise<{ entity: EntityRecord; incoming: Array<{ relationType: RelationType; entity: EntityRecord }> }> },
+	scopeId: string
+): Promise<EntityRecord> {
+	let details = await store.queryEntityRelations({ entityId: scopeId, direction: "incoming", types: STRUCTURAL_PARENT_RELATION_TYPES });
+	const visited = new Set<string>();
+	while (details.entity.kind !== "initiative") {
+		if (visited.has(details.entity.id)) {
+			throw new Error(`Structural parent cycle found while resolving initiative: ${scopeId}`);
+		}
+		visited.add(details.entity.id);
+		const parent = details.incoming[0]?.entity;
+		if (!parent) {
+			throw new Error(`No initiative contains: ${scopeId}`);
+		}
+		details = await store.queryEntityRelations({ entityId: parent.id, direction: "incoming", types: STRUCTURAL_PARENT_RELATION_TYPES });
+	}
+
+	return details.entity;
+}
+
+function deriveNextWork(
+	bundle: { initiative: EntityRecord; issues: EntityRecord[]; subIssueLinks: Array<{ parent: EntityRecord; issue: EntityRecord }> },
+	openBlockers: Record<string, string[]>
+): NextWorkResult {
+	const unfinishedIssues = bundle.issues.filter((issue) => issue.status !== "done");
+	const blockersByReference = new Map(unfinishedIssues.map((issue) => [issue.reference, new Set(openBlockers[issue.reference] ?? [])]));
+	for (const { parent, issue } of bundle.subIssueLinks) {
+		if (parent.status !== "done" && issue.status !== "done") {
+			blockersByReference.get(parent.reference)?.add(issue.reference);
+		}
+	}
+
+	const unblocksByReference = new Map(unfinishedIssues.map((issue) => [issue.reference, new Set<string>()]));
+	for (const issue of unfinishedIssues) {
+		for (const blocker of blockersByReference.get(issue.reference) ?? []) {
+			unblocksByReference.get(blocker)?.add(issue.reference);
+		}
+	}
+
+	const toItem = (issue: EntityRecord): NextWorkItem => ({
+		issue,
+		blockers: Array.from(blockersByReference.get(issue.reference) ?? []).sort(),
+		unblocks: Array.from(unblocksByReference.get(issue.reference) ?? []).sort()
+	});
+	const items = unfinishedIssues.map(toItem);
+	return {
+		initiative: bundle.initiative,
+		available: items.filter((item) => item.blockers.length === 0),
+		blocked: items.filter((item) => item.blockers.length > 0)
+	};
+}
+
+function renderNextWork(result: NextWorkResult): string {
+	const renderItem = (item: NextWorkItem) => `${item.issue.reference} ${item.issue.status} ${item.issue.title}${item.blockers.length > 0 ? ` (blocked by ${item.blockers.join(", ")})` : ""}${item.unblocks.length > 0 ? ` (unblocks ${item.unblocks.join(", ")})` : ""}`;
+	return [
+		`${result.initiative.reference} next work`,
+		"Available",
+		...result.available.map(renderItem),
+		"Blocked",
+		...result.blocked.map(renderItem)
+	].join("\n");
 }
 
 export class RelationsCommand extends PositionalsTenantCommand {

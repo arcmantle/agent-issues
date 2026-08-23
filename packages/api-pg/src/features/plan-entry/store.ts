@@ -13,11 +13,13 @@ import {
 	PLAN_ENTRY_REVERSE_PATCH_REGISTRY,
 	PlanEntryConflictError,
 	shortEntityReference,
+	type LinkResult,
 	type PlanEntryHistoryEntry,
 	type PlanEntryRecord,
 	type PlanEntryRevisionPatch,
 	type PlanEntryScopeDirection,
-	type PlanEntryState
+	type PlanEntryState,
+	type UnlinkResult
 } from "@agent-issues/core";
 
 import type { TenantExecutor } from "../../db/connection.js";
@@ -85,6 +87,10 @@ export class PgPlanEntryStore {
 		return toPlanEntryRecord({ id, reference, short_reference: shortReference, plan_id: plan.id, created_by: actorId, updated_by: actorId, role: input.role, body: input.body, scope_direction: state.scopeDirection, tombstone: false, revision: 1, content_hash: contentHash, created_at: createdAt, updated_at: createdAt, referencedEntityIds, supersededEntryIds });
 	}
 
+	public async getPlanEntry(input: { entryId: string }): Promise<PlanEntryRecord> {
+		return getPlanEntryOrThrow(this.executor, input.entryId);
+	}
+
 	public async updatePlanEntry(input: { entryId: string; body: string; expectedRevision: number; expectedContentHash: string }, actorId: string): Promise<PlanEntryRecord> {
 		const existing = await getPlanEntryOrThrow(this.executor, input.entryId);
 		assertPlanEntryHead(existing, input);
@@ -120,6 +126,30 @@ export class PgPlanEntryStore {
 		}
 		await appendPlanEntryDelta(this.executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
 		return getPlanEntryOrThrow(this.executor, existing.id);
+	}
+
+	public async linkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): Promise<LinkResult> {
+		const entry = await getPlanEntryOrThrow(this.executor, input.entryId);
+		assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
+		const issueId = await getProjectIssueIdOrThrow(this.executor, input.issueId);
+		if (entry.referencedEntityIds.includes(issueId)) {
+			return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, created: false };
+		}
+
+		const updated = await revisePlanEntryReferences(this.executor, entry, [...entry.referencedEntityIds, issueId], actorId);
+		return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, created: true };
+	}
+
+	public async unlinkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): Promise<UnlinkResult> {
+		const entry = await getPlanEntryOrThrow(this.executor, input.entryId);
+		assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
+		const issueId = await getProjectIssueIdOrThrow(this.executor, input.issueId);
+		if (!entry.referencedEntityIds.includes(issueId)) {
+			return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, removed: false };
+		}
+
+		const updated = await revisePlanEntryReferences(this.executor, entry, entry.referencedEntityIds.filter((referencedEntityId) => referencedEntityId !== issueId), actorId);
+		return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, removed: true };
 	}
 
 	public async listPlanEntries(input: { planId: string }): Promise<PlanEntryRecord[]> {
@@ -202,6 +232,16 @@ async function validateReferencedEntityIds(executor: TenantExecutor, referencedE
 	return resolved;
 }
 
+async function getProjectIssueIdOrThrow(executor: TenantExecutor, issueId: string): Promise<string> {
+	const result = await executor.execute(sql`SELECT id FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId}::uuid AND kind = 'issue' AND tombstone = FALSE
+		AND (id::text = ${issueId} OR reference = ${issueId} OR short_reference = ${issueId})`);
+	const issue = result.rows[0] as { id: string } | undefined;
+	if (!issue) {
+		throw new Error(`Issue not found: ${issueId}`);
+	}
+	return issue.id;
+}
+
 async function validateSupersededEntryIds(executor: TenantExecutor, planId: string, role: PlanEntryRecord["role"], supersededEntryIds: string[]): Promise<string[]> {
 	const resolved = await Promise.all(supersededEntryIds.map(async (entryId) => {
 		const entry = await getPlanEntryOrThrow(executor, entryId);
@@ -220,9 +260,27 @@ async function validateSupersededEntryIds(executor: TenantExecutor, planId: stri
 }
 
 async function replaceReferences(executor: TenantExecutor, entryId: string, entityIds: string[]): Promise<void> {
+	await executor.execute(sql`DELETE FROM plan_entry_references WHERE tenant_id = ${executor.tenantId} AND plan_entry_id = ${entryId}::uuid`);
 	for (const [position, entityId] of entityIds.entries()) {
 		await executor.execute(sql`INSERT INTO plan_entry_references (tenant_id, plan_entry_id, entity_id, position) VALUES (${executor.tenantId}, ${entryId}::uuid, ${entityId}::uuid, ${position})`);
 	}
+}
+
+async function revisePlanEntryReferences(executor: TenantExecutor, entry: PlanEntryRecord, referencedEntityIds: string[], actorId: string): Promise<PlanEntryRecord> {
+	const predecessor = toPlanEntryState(entry);
+	const successor = { ...predecessor, referencedEntityIds };
+	const revision = entry.revision + 1;
+	const updatedAt = new Date().toISOString();
+	const contentHash = computePlanEntryContentHash(successor);
+	const result = await executor.execute(sql`UPDATE plan_entries SET updated_by = ${actorId}::uuid, revision = ${revision}, content_hash = ${contentHash}, updated_at = ${updatedAt}
+		WHERE tenant_id = ${executor.tenantId} AND id = ${entry.id}::uuid AND revision = ${entry.revision} AND content_hash = ${entry.contentHash} AND tombstone = FALSE`);
+	if ((result.rowCount ?? 0) === 0) {
+		throw await getPlanEntryConflict(executor, entry.id);
+	}
+
+	await replaceReferences(executor, entry.id, referencedEntityIds);
+	await appendPlanEntryDelta(executor, entry.id, revision, successor, predecessor, actorId, updatedAt);
+	return getPlanEntryOrThrow(executor, entry.id);
 }
 
 async function replaceSupersessions(executor: TenantExecutor, entryId: string, supersededEntryIds: string[]): Promise<void> {

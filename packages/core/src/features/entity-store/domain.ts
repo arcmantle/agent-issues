@@ -306,6 +306,12 @@ export function getAllowedRelationType(fromKind: EntityKind, toKind: EntityKind)
 	return match?.type ?? null;
 }
 
+export function getAllowedRelationTypes(fromKind: EntityKind, toKind: EntityKind): RelationType[] {
+	return ALLOWED_RELATIONS
+		.filter((relation) => relation.fromKind === fromKind && relation.toKind === toKind)
+		.map((relation) => relation.type);
+}
+
 export function isAllowedRelation(fromKind: EntityKind, toKind: EntityKind, relationType: string): relationType is RelationType {
 	return ALLOWED_RELATIONS.some(
 		(relation) =>

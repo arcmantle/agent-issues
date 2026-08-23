@@ -101,6 +101,17 @@ export type SchemaPayload = {
 		historyCommand: string;
 		fields: string[];
 	};
+	planEntries: {
+		storage: "database";
+		parentKind: "plan";
+		recordPrefix: "PLAN_ENTRY";
+		linkRelationType: "informs";
+		linkTargetKind: "issue";
+		addCommand: string;
+		linkCommand: string;
+		unlinkCommand: string;
+		fields: string[];
+	};
 };
 
 const GLOBAL_OPTIONS: GlobalOptionSpec[] = [
@@ -316,11 +327,13 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		examples: [
 			"agent-issues plan-entry add PLAN1 --role question --body-file - --reference ISS1",
+			"agent-issues link PLAN_ENTRY1 informs ISS1",
 			"agent-issues plan-entry add PLAN1 --role decision --body-file - --supersedes PLAN_ENTRY1",
 			"agent-issues plan-entry list PLAN1 --json"
 		],
 		notes: [
 			"Plans are initiative-owned entities created with `agent-issues create plan --parent <initiativeId>`.",
+			"Link an existing Plan entry to an issue with `agent-issues link <planEntryId> informs <issueId>`.",
 			"A decision can supersede question or decision entries.",
 			"Delete retains the entry in revision history."
 		],
@@ -770,7 +783,23 @@ const COMMAND_SPECS: CommandSpec[] = [
 				"Incoming section",
 				"Outgoing section"
 			],
-			json: ["Full: EntityDetails with complete records", "Compact: { entity: CompactEntity, incoming: CompactRelation[], outgoing: CompactRelation[] }"]
+			json: ["Full: EntityDetails with complete records", "Compact: { entity: CompactEntity, incoming: CompactRelation[], outgoing: CompactRelation[], planEntries: PlanEntryRecord[] }"]
+		}
+	},
+	{
+		name: "next-work",
+		summary: "List ready and blocked unfinished issues for an initiative scope.",
+		usage: ["agent-issues next-work <initiativeOrDescendantId>"],
+		positionals: [{ name: "initiativeOrDescendantId", description: "An initiative, PRD, user story, or issue in the initiative.", required: true }],
+		examples: ["agent-issues next-work INIT1 --json", "agent-issues next-work ISS7 --json"],
+		notes: [
+			"The result resolves an initiative from the supplied entity and includes all unfinished issues below it, including nested decomposed issues.",
+			"Available issues have no open blocks source and no unfinished sub-issue. Blocked issues name the issue references that must finish first.",
+			"Each issue also lists the unfinished issues it unblocks, including its decomposed parent when applicable."
+		],
+		output: {
+			human: ["Initiative reference", "Available issues", "Blocked issues with blocker and unblock references"],
+			json: ["{ initiative: CompactEntity, available: CompactNextWorkItem[], blocked: CompactNextWorkItem[] }"]
 		}
 	},
 	{
@@ -851,10 +880,10 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "link",
-		summary: "Create a relation between entities.",
+		summary: "Create a relation between entities, or from a Plan entry to an issue.",
 		usage: ["agent-issues link <fromId> <relationType> <toId> [--view <compact|full>]"],
 		positionals: [
-			{ name: "fromId", description: "Source entity ID.", required: true },
+			{ name: "fromId", description: "Source entity or Plan-entry ID.", required: true },
 			{
 				name: "relationType",
 				description: "Relation type.",
@@ -870,10 +899,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues link ISS2 blocks ISS1",
 			"agent-issues link ISS1 decomposes ISS7",
 			"agent-issues link ISS1 resolves DEBT1",
-			"agent-issues link DEBT1 relatesTo ADR1"
+			"agent-issues link DEBT1 relatesTo ADR1",
+			"agent-issues link PLAN_ENTRY1 informs ISS1"
 		],
 		notes: [
 			"Allowed relation pairs are exposed by `agent-issues schema --json`.",
+			"A Plan entry can link only to an issue and only as `informs`.",
 			"For structural parent-child work, prefer `create --parent` or `move` over `link` so the intent stays explicit.",
 			"Only epics, initiatives, and issues can resolve debt. A resolves link does not change debt lifecycle state.",
 			"The CLI rejects self-links and cycle-forming `blocks` or `supersedes` links."
@@ -888,10 +919,10 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "unlink",
-		summary: "Remove one relation between entities.",
+		summary: "Remove one relation between entities, or from a Plan entry to an issue.",
 		usage: ["agent-issues unlink <fromId> <relationType> <toId> [--view <compact|full>]"],
 		positionals: [
-			{ name: "fromId", description: "Source entity ID.", required: true },
+			{ name: "fromId", description: "Source entity or Plan-entry ID.", required: true },
 			{
 				name: "relationType",
 				description: "Relation type.",
@@ -901,8 +932,11 @@ const COMMAND_SPECS: CommandSpec[] = [
 			{ name: "toId", description: "Target entity ID.", required: true }
 		],
 		options: [ENTITY_VIEW_OPTION],
-		examples: ["agent-issues unlink ISS1 fixes US1"],
-		notes: ["Unlink rejects structural removals that would orphan a subtree."],
+		examples: ["agent-issues unlink ISS1 fixes US1", "agent-issues unlink PLAN_ENTRY1 informs ISS1"],
+		notes: [
+			"A Plan entry can unlink only from an issue and only as `informs`.",
+			"Unlink rejects structural removals that would orphan a subtree."
+		],
 		output: {
 			human: [
 				"Unlinked <fromId> -> <toId> as <relationType>",
@@ -1313,7 +1347,7 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			"Use `agent-issues context search <query> --view initiatives --json` to find initiative-local terminology without reading the full project directory.",
 			"Use `agent-issues context conflicts --json` to detect duplicate labels across scopes before you rely on a term.",
 			"Use `agent-issues context define <term> --scope <entityOrProjectOrInitiativeId> --body-file <path|-> [--avoid <comma-separated>] --json` to update the scoped glossary when a term is resolved.",
-			"Use `agent-issues create plan --parent <initiativeId> --title <title> --body-file <path|-> --json` to create an initiative-owned Plan, then use `agent-issues plan-entry add` to record its planning state.",
+			"Use `agent-issues create plan --parent <initiativeId> --title <title> --body-file <path|-> --json` to create an initiative-owned Plan, then use `agent-issues plan-entry add` to record its planning state and `agent-issues link <planEntryId> informs <issueId>` to connect implementation work.",
 			"Use `agent-issues help <command> --json` for command-specific guidance.",
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
 			"Use `agent-issues serve-site --json` to start a local live browser view with snapshot and event endpoints.",
@@ -1408,6 +1442,17 @@ export function getSchemaPayload(): SchemaPayload {
 			deleteCommand: "agent-issues comment delete <issueId> <commentId> --json",
 			historyCommand: "agent-issues comment history <commentId> --json",
 			fields: ["id", "reference", "issueId", "body", "referencedIssueIds", "revision", "contentHash", "tombstone", "createdAt", "updatedAt"]
+		},
+		planEntries: {
+			storage: "database",
+			parentKind: "plan",
+			recordPrefix: "PLAN_ENTRY",
+			linkRelationType: "informs",
+			linkTargetKind: "issue",
+			addCommand: "agent-issues plan-entry add <planId> --role <role> --body-file <path|-> [--reference <entityId>] --json",
+			linkCommand: "agent-issues link <planEntryId> informs <issueId> --json",
+			unlinkCommand: "agent-issues unlink <planEntryId> informs <issueId> --json",
+			fields: ["id", "reference", "planId", "role", "body", "referencedEntityIds", "supersededEntryIds", "revision", "contentHash", "tombstone", "createdAt", "updatedAt"]
 		}
 	};
 }
@@ -1453,6 +1498,13 @@ export function renderSchema(payload: SchemaPayload): string {
 	lines.push(`  delete: ${payload.issueComments.deleteCommand}`);
 	lines.push(`  history: ${payload.issueComments.historyCommand}`);
 	lines.push(`  fields: ${payload.issueComments.fields.join(", ")}`);
+
+	lines.push("", "Plan entries:");
+	lines.push(`  storage=${payload.planEntries.storage} parent=${payload.planEntries.parentKind} prefix=${payload.planEntries.recordPrefix}`);
+	lines.push(`  add: ${payload.planEntries.addCommand}`);
+	lines.push(`  link: ${payload.planEntries.linkCommand}`);
+	lines.push(`  unlink: ${payload.planEntries.unlinkCommand}`);
+	lines.push(`  fields: ${payload.planEntries.fields.join(", ")}`);
 
 	return lines.join("\n");
 }

@@ -15,6 +15,7 @@ import {
 	LinkCommand,
 	ListCommand,
 	MoveCommand,
+	NextWorkCommand,
 	OrphansCommand,
 	RelationsCommand,
 	RestoreCommand,
@@ -93,6 +94,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(UnlinkCommand);
 	cli.register(StatusCommand);
 	cli.register(BundleCommand);
+	cli.register(NextWorkCommand);
 	cli.register(ExportCommand);
 	cli.register(RelationsCommand);
 	cli.register(OrphansCommand);

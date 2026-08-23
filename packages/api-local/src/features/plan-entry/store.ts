@@ -13,11 +13,13 @@ import {
 	PLAN_ENTRY_REVERSE_PATCH_REGISTRY,
 	PlanEntryConflictError,
 	shortEntityReference,
+	type LinkResult,
 	type PlanEntryHistoryEntry,
 	type PlanEntryRecord,
 	type PlanEntryRevisionPatch,
 	type PlanEntryState,
-	type PlanEntryScopeDirection
+	type PlanEntryScopeDirection,
+	type UnlinkResult
 } from "@agent-issues/core";
 import { getSqliteEntityOrThrow, type SqliteExecutor } from "../../db/sqlite-executor.js";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
@@ -160,6 +162,30 @@ export function updatePlanEntry(
 	return getPlanEntry(executor, existing.id);
 }
 
+export function linkPlanEntryIssue(executor: SqliteExecutor, input: { entryId: string; issueId: string }, actorId: string): LinkResult {
+	const entry = getPlanEntry(executor, input.entryId);
+	assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
+	const issueId = getProjectIssueIdOrThrow(executor, input.issueId);
+	if (entry.referencedEntityIds.includes(issueId)) {
+		return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, created: false };
+	}
+
+	const updated = revisePlanEntryReferences(executor, entry, [...entry.referencedEntityIds, issueId], actorId);
+	return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, created: true };
+}
+
+export function unlinkPlanEntryIssue(executor: SqliteExecutor, input: { entryId: string; issueId: string }, actorId: string): UnlinkResult {
+	const entry = getPlanEntry(executor, input.entryId);
+	assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
+	const issueId = getProjectIssueIdOrThrow(executor, input.issueId);
+	if (!entry.referencedEntityIds.includes(issueId)) {
+		return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, removed: false };
+	}
+
+	const updated = revisePlanEntryReferences(executor, entry, entry.referencedEntityIds.filter((referencedEntityId) => referencedEntityId !== issueId), actorId);
+	return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, removed: true };
+}
+
 export function deletePlanEntry(
 	executor: SqliteExecutor,
 	input: { entryId: string; expectedRevision: number; expectedContentHash: string },
@@ -224,6 +250,10 @@ export class LocalPlanEntryStore {
 		return createPlanEntry(this.executor, input, actorId);
 	}
 
+	public getPlanEntry(input: { entryId: string }): PlanEntryRecord {
+		return getPlanEntry(this.executor, input.entryId);
+	}
+
 	public listPlanEntries(input: { planId: string }): PlanEntryRecord[] {
 		return listPlanEntries(this.executor, input);
 	}
@@ -236,6 +266,14 @@ export class LocalPlanEntryStore {
 		return deletePlanEntry(this.executor, input, actorId);
 	}
 
+	public linkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): LinkResult {
+		return linkPlanEntryIssue(this.executor, input, actorId);
+	}
+
+	public unlinkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): UnlinkResult {
+		return unlinkPlanEntryIssue(this.executor, input, actorId);
+	}
+
 	public listPlanEntryHistory(input: { entryId: string }): PlanEntryHistoryEntry[] {
 		return listPlanEntryHistory(this.executor, input);
 	}
@@ -245,6 +283,31 @@ function appendPlanEntryDelta(executor: SqliteExecutor, entryId: string, revisio
 	const transition = createReverseFieldPatch(successor, predecessor, PLAN_ENTRY_REVERSE_PATCH_REGISTRY);
 	executor.drizzle.run(sql`INSERT INTO revision_entries (id, tenant_id, project_id, record_kind, record_key, revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
 		VALUES (${randomUUID()}, ${executor.tenantId}, ${executor.currentProjectId}, 'plan-entry', ${encodePlanEntryRecordKey(entryId)}, ${revision}, ${author}, ${transition.patchFormat}, ${Buffer.from(transition.reversePatch)}, ${encodeRevisionPatchHash(transition.sourceHash)}, ${encodeRevisionPatchHash(transition.targetHash)}, NULL, ${createdAt})`);
+}
+
+function revisePlanEntryReferences(executor: SqliteExecutor, entry: PlanEntryRecord, referencedEntityIds: string[], actorId: string): PlanEntryRecord {
+	const predecessor = toPlanEntryState(entry);
+	const successor = { ...predecessor, referencedEntityIds };
+	const revision = entry.revision + 1;
+	const updatedAt = new Date().toISOString();
+	const contentHash = computePlanEntryContentHash(successor);
+	const result = executor.drizzle.run(sql`UPDATE plan_entries SET updated_by = ${actorId}, revision = ${revision}, content_hash = ${contentHash}, updated_at = ${updatedAt}
+		WHERE tenant_id = ${executor.tenantId} AND id = ${entry.id} AND revision = ${entry.revision} AND content_hash = ${entry.contentHash} AND tombstone = 0`);
+	if (result.changes === 0) {
+		const current = getPlanEntry(executor, entry.id);
+		throw new PlanEntryConflictError(current.id, current.revision, current.contentHash);
+	}
+
+	replaceReferences(executor, entry.id, referencedEntityIds);
+	appendPlanEntryDelta(executor, entry.id, revision, successor, predecessor, actorId, updatedAt);
+	return getPlanEntry(executor, entry.id);
+}
+
+function replaceReferences(executor: SqliteExecutor, entryId: string, referencedEntityIds: string[]): void {
+	executor.drizzle.run(sql`DELETE FROM plan_entry_references WHERE tenant_id = ${executor.tenantId} AND plan_entry_id = ${entryId}`);
+	for (const [position, entityId] of referencedEntityIds.entries()) {
+		executor.drizzle.run(sql`INSERT INTO plan_entry_references (tenant_id, plan_entry_id, entity_id, position) VALUES (${executor.tenantId}, ${entryId}, ${entityId}, ${position})`);
+	}
 }
 
 function getPlanEntry(executor: SqliteExecutor, entryId: string): PlanEntryRecord {
@@ -313,6 +376,14 @@ function validateReferencedEntityIds(executor: SqliteExecutor, referencedEntityI
 		resolvedEntityIds.push(entity.id);
 	}
 	return resolvedEntityIds;
+}
+
+function getProjectIssueIdOrThrow(executor: SqliteExecutor, issueId: string): string {
+	const issue = getSqliteEntityOrThrow(executor, issueId);
+	if (issue.kind !== "issue" || issue.projectId !== executor.currentProjectId) {
+		throw new Error(`Issue not found: ${issueId}`);
+	}
+	return issue.id;
 }
 
 function validateSupersededEntryIds(executor: SqliteExecutor, planId: string, role: PlanEntryRecord["role"], supersededEntryIds: string[]): string[] {

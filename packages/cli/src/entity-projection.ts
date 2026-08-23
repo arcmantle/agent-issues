@@ -35,6 +35,7 @@ export type CompactEntityDetails = {
 	entity: CompactEntity;
 	incoming: CompactRelation[];
 	outgoing: CompactRelation[];
+	planEntries: EntityDetails["planEntries"];
 };
 
 export type CompactEntityList = {
@@ -56,6 +57,18 @@ export type CompactInitiativeBundle = {
 	subIssueLinks: Array<{ parent: CompactEntity; issue: CompactEntity }>;
 	blockerLinks: Array<{ source: CompactEntity; target: CompactEntity }>;
 	constrainsLinks: Array<{ adr: CompactEntity; issue: CompactEntity }>;
+};
+
+export type CompactNextWorkItem = {
+	issue: CompactEntity;
+	blockers: string[];
+	unblocks: string[];
+};
+
+export type CompactNextWork = {
+	initiative: CompactEntity;
+	available: CompactNextWorkItem[];
+	blocked: CompactNextWorkItem[];
 };
 
 export type CompactCreateAcknowledgement = {
@@ -205,7 +218,8 @@ export function toCompactEntityDetails(details: EntityDetails): CompactEntityDet
 		outgoing: details.outgoing.map(({ relationType, entity }) => ({
 			type: relationType,
 			entity: toCompactEntity(entity)
-		}))
+		})),
+		planEntries: details.planEntries ?? []
 	};
 }
 
@@ -235,5 +249,23 @@ export function toCompactInitiativeBundle(bundle: InitiativeBundle): CompactInit
 		subIssueLinks: bundle.subIssueLinks.map(({ parent, issue }) => ({ parent: toCompactEntity(parent), issue: toCompactEntity(issue) })),
 		blockerLinks: bundle.blockerLinks.map(({ source, target }) => ({ source: toCompactEntity(source), target: toCompactEntity(target) })),
 		constrainsLinks: bundle.constrainsLinks.map(({ adr, issue }) => ({ adr: toCompactEntity(adr), issue: toCompactEntity(issue) }))
+	};
+}
+
+export function toCompactNextWork(result: {
+	initiative: EntityRecord;
+	available: Array<{ issue: EntityRecord; blockers: string[]; unblocks: string[] }>;
+	blocked: Array<{ issue: EntityRecord; blockers: string[]; unblocks: string[] }>;
+}): CompactNextWork {
+	const toCompactNextWorkItem = (item: { issue: EntityRecord; blockers: string[]; unblocks: string[] }): CompactNextWorkItem => ({
+		issue: toCompactEntity(item.issue),
+		blockers: item.blockers,
+		unblocks: item.unblocks
+	});
+
+	return {
+		initiative: toCompactEntity(result.initiative),
+		available: result.available.map(toCompactNextWorkItem),
+		blocked: result.blocked.map(toCompactNextWorkItem)
 	};
 }

@@ -49,6 +49,7 @@ export function renderEntityDetails(details: {
 	entity: { id: string; reference: string; kind: string; status: string; title: string; type?: string | null };
 	incoming: Array<{ relationType: string; entity: { id: string; reference: string; kind: string; status: string } }>;
 	outgoing: Array<{ relationType: string; entity: { id: string; reference: string; kind: string; status: string } }>;
+	planEntries?: Array<{ reference: string; role: string; body?: string }>;
 }): string {
 	const incoming = details.incoming.length
 		? details.incoming.map((link) => `${link.entity.reference} ${link.entity.kind} --${link.relationType}--> ${details.entity.reference}`).join("\n")

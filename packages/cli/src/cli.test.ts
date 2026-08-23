@@ -419,7 +419,33 @@ describe("cli", () => {
 
 		expect(planEntryExitCode).toBe(0);
 		expect(planEntryHelp.usage).toContain("agent-issues plan-entry add <planId> --role <question|decision|scope|constraint|preference|consideration> --body-file <path|-> [--scope-direction <included|excluded>] [--reference <entityId>] [--supersedes <entryId>]");
+		expect(planEntryHelp.examples).toContain("agent-issues link PLAN_ENTRY1 informs ISS1");
+		expect(planEntryHelp.notes).toContain("Link an existing Plan entry to an issue with `agent-issues link <planEntryId> informs <issueId>`." );
 		expect(planEntryHelp.notes).toContain("A decision can supersede question or decision entries.");
+
+		const linkStdout = createCapture();
+		const linkExitCode = await runCli(["help", "link", "--json"], {
+			stderr: createCapture().stream,
+			stdout: linkStdout.stream
+		});
+		const linkHelp = JSON.parse(linkStdout.read()).command;
+
+		expect(linkExitCode).toBe(0);
+		expect(linkHelp.examples).toContain("agent-issues link PLAN_ENTRY1 informs ISS1");
+		expect(linkHelp.notes).toContain("A Plan entry can link only to an issue and only as `informs`.");
+
+		const schemaStdout = createCapture();
+		const schemaExitCode = await runCli(["schema", "--json"], {
+			stderr: createCapture().stream,
+			stdout: schemaStdout.stream
+		});
+
+		expect(schemaExitCode).toBe(0);
+		expect(JSON.parse(schemaStdout.read()).planEntries).toEqual(expect.objectContaining({
+			linkCommand: "agent-issues link <planEntryId> informs <issueId> --json",
+			linkRelationType: "informs",
+			linkTargetKind: "issue"
+		}));
 	});
 
 	it("resolves help for a multi-word command like 'auth login' by its full name, not just its first word", async () => {
@@ -1209,6 +1235,48 @@ describe("cli", () => {
 		expect(result.openBlockers[doneBlocker.reference]).toEqual([]);
 	});
 
+	it("lists next work with available leaf issues before decomposition and block dependencies", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const create = async (kind: string, title: string, parent?: string): Promise<{ id: string; reference: string }> => {
+			const stdout = createCapture();
+			await runCli(
+				["create", kind, "--title", title, ...(parent ? ["--parent", parent] : []), "--view", "full", "--db", dbPath, "--json"],
+				{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+			);
+			return JSON.parse(stdout.read()) as { id: string; reference: string };
+		};
+		const initiative = await create("initiative", "Next work scope");
+		const parent = await create("issue", "Release validation", initiative.reference);
+		const prerequisite = await create("issue", "Publish results", initiative.reference);
+		const child = await create("issue", "Approve limits", parent.reference);
+		const independent = await create("issue", "Write release notes", initiative.reference);
+		await runCli(["link", prerequisite.reference, "blocks", child.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: createCapture().stream
+		});
+		const stdout = createCapture();
+
+		const exitCode = await runCli(
+			["next-work", parent.reference, "--db", dbPath, "--json"],
+			{ cwd: root, stderr: createCapture().stream, stdout: stdout.stream }
+		);
+
+		expect(exitCode).toBe(0);
+		expect(JSON.parse(stdout.read())).toEqual({
+			initiative: expect.objectContaining({ reference: initiative.reference }),
+			available: expect.arrayContaining([
+				expect.objectContaining({ issue: expect.objectContaining({ reference: prerequisite.reference }), blockers: [], unblocks: [child.reference] }),
+				expect.objectContaining({ issue: expect.objectContaining({ reference: independent.reference }), blockers: [], unblocks: [] })
+			]),
+			blocked: expect.arrayContaining([
+				expect.objectContaining({ issue: expect.objectContaining({ reference: child.reference }), blockers: [prerequisite.reference], unblocks: [parent.reference] }),
+				expect.objectContaining({ issue: expect.objectContaining({ reference: parent.reference }), blockers: [child.reference], unblocks: [] })
+			])
+		});
+	});
+
 	it("combines list filters and preserves the filtered total when results are limited", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
@@ -1336,7 +1404,8 @@ describe("cli", () => {
 		expect(JSON.parse(stdout.read())).toEqual({
 			entity: { id: issue.id, reference: issue.reference, kind: "issue", status: "todo", title: "Focused issue" },
 			incoming: [{ type: "blocks", entity: { id: blocker.id, reference: blocker.reference, kind: "issue", status: "todo", title: "Blocking issue" } }],
-			outgoing: [{ type: "fixes", entity: { id: story.id, reference: story.reference, kind: "userStory", status: "ready", title: "Fixed story" } }]
+			outgoing: [{ type: "fixes", entity: { id: story.id, reference: story.reference, kind: "userStory", status: "ready", title: "Fixed story" } }],
+			planEntries: []
 		});
 	});
 
@@ -1380,12 +1449,14 @@ describe("cli", () => {
 		expect(JSON.parse(outgoingStdout.read())).toEqual({
 			entity: { id: issue.id, reference: issue.reference, kind: "issue", status: "todo", title: "Focused issue" },
 			incoming: [],
-			outgoing: [{ type: "fixes", entity: { id: story.id, reference: story.reference, kind: "userStory", status: "ready", title: "Fixed story" } }]
+			outgoing: [{ type: "fixes", entity: { id: story.id, reference: story.reference, kind: "userStory", status: "ready", title: "Fixed story" } }],
+			planEntries: []
 		});
 		expect(JSON.parse(emptyStdout.read())).toEqual({
 			entity: { id: issue.id, reference: issue.reference, kind: "issue", status: "todo", title: "Focused issue" },
 			incoming: [],
-			outgoing: []
+			outgoing: [],
+			planEntries: []
 		});
 	});
 
@@ -1403,6 +1474,21 @@ describe("cli", () => {
 			{ cwd: root, stderr: createCapture().stream, stdout: createCapture().stream }
 		)).rejects.toThrow(message);
 		expect(existsSync(dbPath)).toBe(false);
+	});
+
+	it("reports valid relation types when a link uses an invalid type", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "invalid-link.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const initiative = await store.createEntity({ kind: "initiative", title: "Link owner" });
+		const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Tracked issue" });
+		await store.close();
+
+		await expect(runCli(["link", initiative.reference, "informs", issue.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: createCapture().stream
+		})).rejects.toThrow("Relation informs is not allowed from initiative to issue. Valid relation types: tracks.");
 	});
 
 	it("renders a compact non-initiative show as compact details", async () => {
@@ -1425,7 +1511,8 @@ describe("cli", () => {
 		expect(JSON.parse(stdout.read())).toEqual({
 			entity: { id: issue.id, reference: issue.reference, kind: "issue", status: "todo", title: "Ordinary compact show" },
 			incoming: [],
-			outgoing: []
+			outgoing: [],
+			planEntries: []
 		});
 	});
 
@@ -1514,6 +1601,34 @@ describe("cli", () => {
 		})).toBe(0);
 		expect(text.read()).toContain(`supersedes ${question.reference}`);
 		expect(text.read()).toContain(`references ${referencedIssue.id}`);
+	});
+
+	it("links a Plan entry to an issue as informs", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry link owner" });
+		const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Linked Plan" });
+		const entry = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which issue implements this decision?" });
+		const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Implement the decision" });
+		await store.close();
+		const stdout = createCapture();
+
+		expect(await runCli(["link", entry.reference, "informs", issue.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: stdout.stream
+		})).toBe(0);
+		expect(JSON.parse(stdout.read())).toMatchObject({ created: true });
+
+		const { store: linkedStore } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		try {
+			expect((await linkedStore.listPlanEntries({ planId: plan.id })).find((candidate) => candidate.id === entry.id)).toMatchObject({
+				referencedEntityIds: [issue.id]
+			});
+		} finally {
+			await linkedStore.close();
+		}
 	});
 
 	it("renders a compact initiative show as a compact bundle", async () => {

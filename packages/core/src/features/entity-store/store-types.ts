@@ -21,6 +21,7 @@ export type EntityDetails = {
 	entity: EntityRecord;
 	incoming: Array<{ relationType: RelationType; entity: EntityRecord }>;
 	outgoing: Array<{ relationType: RelationType; entity: EntityRecord }>;
+	planEntries: PlanEntryRecord[];
 	comments?: IssueCommentPage;
 };
 

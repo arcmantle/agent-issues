@@ -255,12 +255,24 @@ export class PgStore implements StorageDriver {
 		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).createPlanEntry(input, actorId));
 	}
 
+	public async getPlanEntry(input: Parameters<StorageDriver["getPlanEntry"]>[0]) {
+		return this.transaction((executor) => new PgPlanEntryStore(executor).getPlanEntry(input));
+	}
+
 	public async updatePlanEntry(input: Parameters<StorageDriver["updatePlanEntry"]>[0]) {
 		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).updatePlanEntry(input, actorId));
 	}
 
 	public async deletePlanEntry(input: Parameters<StorageDriver["deletePlanEntry"]>[0]) {
 		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).deletePlanEntry(input, actorId));
+	}
+
+	public async linkPlanEntryIssue(input: Parameters<StorageDriver["linkPlanEntryIssue"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).linkPlanEntryIssue(input, actorId));
+	}
+
+	public async unlinkPlanEntryIssue(input: Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).unlinkPlanEntryIssue(input, actorId));
 	}
 
 	public async listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]) {

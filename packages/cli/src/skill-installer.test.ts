@@ -268,7 +268,7 @@ describe("skill installer", () => {
 		expect(installedGuidance).toContain("agent-issues list <kind> --json");
 		expect(installedGuidance).toContain("agent-issues relations <id> --json");
 		expect(installedGuidance).toContain("agent-issues show <id> --view full --json");
-		expect(nextWork).toContain("--status 'todo,in-progress,blocked'");
+		expect(nextWork).toContain("agent-issues next-work <initiativeOrDescendantId> --json");
 		expect(installedGuidance).not.toContain("compatibility default");
 		expect(installedGuidance).toContain("Use `bundle` only for a planned initiative-wide read");
 		expect(installedGuidance).toContain("Routine `jq` filtering shows a missing CLI feature");

@@ -142,6 +142,55 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
+		it("links a Plan entry to an issue as an idempotent informs relation", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry relation owner" });
+				const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Plan entry relation Plan" });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Use the issue relation." });
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Implement the decision" });
+
+				expect(await store.linkPlanEntryIssue({ entryId: entry.reference, issueId: issue.reference })).toMatchObject({
+					created: true,
+					relation: { fromId: entry.id, toId: issue.id, type: "informs" }
+				});
+				expect(await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id })).toMatchObject({ created: false });
+				expect(await store.getPlanEntry({ entryId: entry.id })).toMatchObject({
+					referencedEntityIds: [issue.id],
+					revision: entry.revision + 1
+				});
+				expect(await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id })).toMatchObject({ removed: true });
+				expect(await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id })).toMatchObject({ removed: false });
+				expect(await store.getPlanEntry({ entryId: entry.id })).toMatchObject({
+					referencedEntityIds: [],
+					revision: entry.revision + 2
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("requires a ready Plan's issues to link an entry before completion", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry completion owner" });
+				const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Ready Plan" });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Record the implementation decision." });
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Implement the decision" });
+
+				await store.updateEntityStatus({ entityId: plan.id, status: "ready" });
+				await expect(store.updateEntityStatus({ entityId: issue.id, status: "done" })).rejects.toThrow(/ready Plan.*Plan entry/i);
+
+				await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+				expect((await store.getEntityDetails(issue.id)).planEntries).toMatchObject([{ id: entry.id }]);
+				await expect(store.updateEntityStatus({ entityId: issue.id, status: "done" })).resolves.toMatchObject({ entity: { status: "done" } });
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("advances a Plan only when its first entry is created", async () => {
 			const store = await openStore();
 
@@ -1041,7 +1090,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 						expect.objectContaining({ relation: expect.objectContaining({ fromId: resolver.id, toId: debt.id, type: "resolves" }) })
 					);
 				}
-				await expect(store.linkEntities({ fromId: project.id, toId: debt.id, relationType: "resolves" })).rejects.toThrow("not allowed");
+				await expect(store.linkEntities({ fromId: project.id, toId: debt.id, relationType: "resolves" })).rejects.toThrow("Relation resolves is not allowed from project to debt. Valid relation types: records.");
 				expect((await store.getEntityDetails(debt.id)).entity.status).toBe("open");
 			} finally {
 				await store.close();
