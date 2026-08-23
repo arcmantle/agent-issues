@@ -186,8 +186,8 @@ function deny(reason, additionalContext) {
 
 async function main() {
 	const payload = safeJsonParse(await readStdin());
-	const eventName = payload.hookEventName;
-	const sessionId = payload.sessionId;
+	const eventName = payload.hookEventName ?? payload.hook_event_name;
+	const sessionId = payload.sessionId ?? payload.session_id;
 
 	if (eventName === 'UserPromptSubmit') {
 		const issueId = extractIssueId(payload.prompt);

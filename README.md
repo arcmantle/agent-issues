@@ -176,9 +176,9 @@ agent-issues auth logout work
 - `serve-site` starts a local live browser view backed by HTTP, live DB reads, and server-sent events.
 - `open-site` starts the same live server and asks the OS to open it in the default browser.
 - `stop-site` asks the local live server on the selected port to stop.
-- `install-agent` installs the packaged Agent Issues custom agent and hook into a VS Code prompts directory.
-- `list-agent` reports whether the packaged Agent Issues custom agent is present in a prompts directory.
-- `uninstall-agent` removes the packaged Agent Issues custom agent and hook from a prompts directory.
+- `install-agent` installs the packaged Agent Issues custom agent and hook for VS Code, Copilot, and Claude.
+- `list-agent` reports whether the packaged Agent Issues custom agent is present for VS Code, Copilot, and Claude.
+- `uninstall-agent` removes the packaged Agent Issues custom agent and hook for VS Code, Copilot, and Claude.
 - `capabilities --target /path/to/skills` also includes the packaged skill installation state for that target.
 - `install-skills` installs the packaged `ai-*` skills into an agent skills directory.
 - `list-skills` reports whether the packaged `ai-*` skills are installed in an agent skills directory.
@@ -213,14 +213,18 @@ agent-issues auth logout work
 ## Custom agent
 
 - Install into the default VS Code prompts directory: `agent-issues install-agent`
+- Install into the default user directories: `agent-issues install-agent`
 - Inspect the installed state: `agent-issues list-agent`
 - Remove it again: `agent-issues uninstall-agent`
-- Override the prompts directory: `agent-issues install-agent --target /path/to/prompts`
+- Override the VS Code-compatible destination directory: `agent-issues install-agent --target /path/to/prompts`
 - Force-refresh an existing installed copy: `agent-issues install-agent --force`
 - Workspace source agent: `packages/cli/.github/agents/agent-issues.agent.md`
+- Workspace source Claude agent: `packages/cli/.github/agents/agent-issues.claude.md`
 - Workspace source hook: `packages/cli/.github/hooks/agent-issues-enforcer.mjs`
-- Installed user agent path (default): the VS Code user prompts directory for your OS, e.g. `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md` (macOS), `%APPDATA%\Code\User\prompts\agent-issues.agent.md` (Windows), `~/.config/Code/User/prompts/agent-issues.agent.md` (Linux)
-- Installed user hook path (default): the same prompts directory, e.g. `.../Code/User/prompts/agent-issues-enforcer.mjs`
+- Default VS Code agent path: `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md` (macOS), `%APPDATA%\Code\User\prompts\agent-issues.agent.md` (Windows), or `~/.config/Code/User/prompts/agent-issues.agent.md` (Linux)
+- Default Copilot agent path: `~/.copilot/agents/agent-issues.agent.md`
+- Default Claude agent path: `~/.claude/agents/agent-issues.md`
+- Each default directory includes an `agent-issues-enforcer.mjs` hook file and the Agent Issues language and recipe files.
 - Enable `chat.useCustomAgentHooks` in VS Code so the inline hooks run only while the Agent Issues custom agent is active.
 - When the active prompt includes an `ISS` id, the hook blocks edits and unrelated terminal commands until these preload commands have run:
 	- `agent-issues show <ISS-ID> --json`

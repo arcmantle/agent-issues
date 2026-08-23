@@ -1127,12 +1127,12 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "install-agent",
-		summary: "Install the packaged Agent Issues custom agent into a VS Code prompts directory.",
+		summary: "Install the packaged Agent Issues custom agent for VS Code, Copilot, and Claude.",
 		usage: ["agent-issues install-agent [--target <path>] [--force]", "agent-issues install-agent --json"],
 		options: [
 			{
 				name: "--target <path>",
-				description: "Destination prompts directory for the custom agent. Defaults to the VS Code user prompts directory for the current OS."
+				description: "Destination directory for one VS Code-compatible custom agent. When set, the command does not also install the default Copilot and Claude agents."
 			},
 			{
 				name: "--force",
@@ -1145,16 +1145,16 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues install-agent --force"
 		],
 		notes: [
-			"This installs both the custom agent markdown file and its hook script.",
-			"The installed agent rewrites its hook command to point at the installed hook file in the target prompts directory.",
+			"Without --target, this installs user-level agents in the VS Code prompts directory, ~/.copilot/agents, and ~/.claude/agents.",
+			"Each installed agent rewrites its hook command to point at its installed hook file.",
 			"Enable `chat.useCustomAgentHooks` in VS Code so the custom agent can enforce issue-context preloading when it is active."
 		],
 		output: {
 			human: [
 				"Installed agent to <targetDir>",
-				"Status line plus the installed agent file and hook file paths"
+				"Status lines plus the installed agent file and hook file paths"
 			],
-			json: ["targetDir", "installed"]
+			json: ["targetDir", "installed", "additionalInstalled"]
 		}
 	},
 	{
@@ -1185,25 +1185,25 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "list-agent",
-		summary: "Report whether the packaged Agent Issues custom agent is installed in a VS Code prompts directory.",
+		summary: "Report whether the packaged Agent Issues custom agent is installed for VS Code, Copilot, and Claude.",
 		usage: ["agent-issues list-agent [--target <path>]", "agent-issues list-agent --json"],
 		options: [
 			{
 				name: "--target <path>",
-				description: "Prompts directory to inspect. Defaults to the VS Code user prompts directory for the current OS."
+				description: "One VS Code-compatible directory to inspect. When omitted, the command inspects the default VS Code, Copilot, and Claude directories."
 			}
 		],
 		examples: ["agent-issues list-agent", "agent-issues list-agent --target ./tmp/prompts --json"],
 		notes: [
-			"The command reports whether both the custom agent file and its hook file are present.",
+			"The command reports whether each custom agent file and its hook file are present.",
 			"A partial status means one file exists without the other."
 		],
 		output: {
 			human: [
 				"Packaged agent in <targetDir>",
-				"Status line plus the expected installed agent file and hook file paths"
+				"Status lines plus the expected installed agent file and hook file paths"
 			],
-			json: ["targetDir", "agent"]
+			json: ["targetDir", "agent", "additionalAgents"]
 		}
 	},
 	{
@@ -1234,25 +1234,25 @@ const COMMAND_SPECS: CommandSpec[] = [
 	},
 	{
 		name: "uninstall-agent",
-		summary: "Remove the packaged Agent Issues custom agent from a VS Code prompts directory.",
+		summary: "Remove the packaged Agent Issues custom agent for VS Code, Copilot, and Claude.",
 		usage: ["agent-issues uninstall-agent [--target <path>]", "agent-issues uninstall-agent --json"],
 		options: [
 			{
 				name: "--target <path>",
-				description: "Prompts directory from which the custom agent and hook should be removed. Defaults to the VS Code user prompts directory for the current OS."
+				description: "One VS Code-compatible directory from which the custom agent should be removed. When omitted, the command removes the default VS Code, Copilot, and Claude agents."
 			}
 		],
 		examples: ["agent-issues uninstall-agent", "agent-issues uninstall-agent --target ./tmp/prompts --json"],
 		notes: [
-			"Both the custom agent file and its hook file are removed.",
+			"Each custom agent file and its hook file are removed.",
 			"Missing files are reported but do not cause the command to fail."
 		],
 		output: {
 			human: [
 				"Removed agent from <targetDir>",
-				"Status line plus the removed agent file and hook file paths"
+				"Status lines plus the removed agent file and hook file paths"
 			],
-			json: ["targetDir", "removed"]
+			json: ["targetDir", "removed", "additionalRemoved"]
 		}
 	},
 	{

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { installAgent, listAgent, uninstallAgent } from "./agent-installer.js";
+import { getDefaultAgentInstallDir, getDefaultAgentInstallDirs, installAgent, listAgent, uninstallAgent } from "./agent-installer.js";
 
 let tempDir: string | null = null;
 
@@ -20,6 +20,57 @@ afterEach(() => {
 });
 
 describe("agent installer", () => {
+	it("uses the conventional user directories for VS Code, Copilot, and Claude", () => {
+		expect(getDefaultAgentInstallDirs()).toEqual({
+			claude: path.join(homedir(), ".claude", "agents"),
+			copilot: path.join(homedir(), ".copilot", "agents"),
+			vscode: getDefaultAgentInstallDir()
+		});
+	});
+
+	it("installs default agents for Copilot and Claude", () => {
+		const previousHome = process.env.HOME;
+		const homeDirectory = createTargetDir();
+		process.env.HOME = homeDirectory;
+
+		try {
+			const result = installAgent({});
+			const copilotAgentFile = path.join(homeDirectory, ".copilot", "agents", "agent-issues.agent.md");
+			const claudeAgentFile = path.join(homeDirectory, ".claude", "agents", "agent-issues.md");
+			const refreshed = installAgent({ force: true });
+			const installed = listAgent({});
+
+			expect(result.additionalInstalled.map((item) => item.host)).toEqual(["copilot", "claude"]);
+			expect(existsSync(copilotAgentFile)).toBe(true);
+			expect(existsSync(claudeAgentFile)).toBe(true);
+			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
+			`command: ${JSON.stringify(`node \"${path.join(homeDirectory, ".claude", "agents", "agent-issues-enforcer.mjs")}\"`)}`
+		);
+			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
+				"Follow the shared [language standard](./agent-issues-language.md)."
+			);
+			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
+				"Do not preserve obsolete code, features, compatibility paths, or public APIs solely because an old test expects them."
+			);
+			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
+				"- any remaining gap between the current code and the issue scope"
+			);
+			expect(refreshed.additionalInstalled.map((item) => item.status)).toEqual(["updated", "updated"]);
+			expect(installed.agent.status).toBe("installed");
+			expect(installed.additionalAgents.map((item) => item.status)).toEqual(["installed", "installed"]);
+			const removed = uninstallAgent({});
+			expect(removed.additionalRemoved.map((item) => item.status)).toEqual(["removed", "removed"]);
+			expect(existsSync(copilotAgentFile)).toBe(false);
+			expect(existsSync(claudeAgentFile)).toBe(false);
+		} finally {
+			if (previousHome === undefined) {
+				delete process.env.HOME;
+			} else {
+				process.env.HOME = previousHome;
+			}
+		}
+	});
+
 	it("installs the packaged custom agent and rewrites the hook path for the target directory", () => {
 		const targetDir = createTargetDir();
 		const result = installAgent({ targetDir });

@@ -57,13 +57,19 @@ export function renderEntityDetails(details: {
 	const outgoing = details.outgoing.length
 		? details.outgoing.map((link) => `${details.entity.reference} --${link.relationType}--> ${link.entity.reference} ${link.entity.kind}`).join("\n")
 		: "none";
+	const relatedPlanEntries = details.planEntries ?? [];
+	const planEntryText = relatedPlanEntries.length
+		? relatedPlanEntries.map((entry) => `${entry.reference} ${entry.role}${entry.body === undefined ? "" : ` ${entry.body}`}`).join("\n")
+		: "none";
 
 	return [
 		`${details.entity.reference} ${details.entity.kind}${details.entity.type === null || details.entity.type === undefined ? "" : ` ${details.entity.type}`} ${details.entity.status} ${details.entity.title}`,
 		"Incoming:",
 		incoming,
 		"Outgoing:",
-		outgoing
+		outgoing,
+		"Related Plan entries:",
+		planEntryText
 	].join("\n");
 }
 
@@ -125,7 +131,11 @@ export function renderInstallAgent(result: ReturnType<typeof installAgent>): str
 	return [
 		`Installed agent to ${result.targetDir}`,
 		`${result.installed.installedName} ${result.installed.status} ${result.installed.agentFile}`,
-		`hook ${result.installed.hookFile}`
+		`hook ${result.installed.hookFile}`,
+		...result.additionalInstalled.flatMap((item) => [
+			`${item.host} ${item.installedName} ${item.status} ${item.agentFile}`,
+			`${item.host} hook ${item.hookFile}`
+		])
 	].join("\n");
 }
 
@@ -143,7 +153,11 @@ export function renderListAgent(result: ReturnType<typeof listAgent>): string {
 	return [
 		`Packaged agent in ${result.targetDir}`,
 		`${result.agent.installedName} ${result.agent.status} ${result.agent.agentFile}`,
-		`hook ${result.agent.hookFile}`
+		`hook ${result.agent.hookFile}`,
+		...result.additionalAgents.flatMap((item) => [
+			`${item.host} ${item.installedName} ${item.status} ${item.agentFile}`,
+			`${item.host} hook ${item.hookFile}`
+		])
 	].join("\n");
 }
 
@@ -161,7 +175,11 @@ export function renderUninstallAgent(result: ReturnType<typeof uninstallAgent>):
 	return [
 		`Removed agent from ${result.targetDir}`,
 		`${result.removed.installedName} ${result.removed.status} ${result.removed.agentFile}`,
-		`hook ${result.removed.hookFile}`
+		`hook ${result.removed.hookFile}`,
+		...result.additionalRemoved.flatMap((item) => [
+			`${item.host} ${item.installedName} ${item.status} ${item.agentFile}`,
+			`${item.host} hook ${item.hookFile}`
+		])
 	].join("\n");
 }
 
