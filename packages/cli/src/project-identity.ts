@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { resolveTenantRootPath, sanitizePathSegment } from "@agent-issues/api-local";
@@ -90,7 +90,7 @@ function parseJsonStringField(contents: string, field: string): string | undefin
 }
 
 function resolveFromGitRepository(root: string): ProjectIdentityResolution | undefined {
-	const gitConfigPath = path.join(root, ".git", "config");
+	const gitConfigPath = resolveGitConfigPath(root);
 	if (!existsSync(gitConfigPath)) return undefined;
 
 	const repositoryName = extractOriginRepositoryName(readFileSync(gitConfigPath, "utf8"));
@@ -100,6 +100,27 @@ function resolveFromGitRepository(root: string): ProjectIdentityResolution | und
 	if (!identity) return undefined;
 
 	return { identity, source: "git-repository" };
+}
+
+function resolveGitConfigPath(root: string): string {
+	const gitPath = path.join(root, ".git");
+	if (!existsSync(gitPath) || statSync(gitPath).isDirectory()) {
+		return path.join(gitPath, "config");
+	}
+
+	const gitDirectory = readFileSync(gitPath, "utf8").match(/^gitdir:\s*(.+)\s*$/m)?.[1];
+	const resolvedGitDirectory = gitDirectory ? path.resolve(root, gitDirectory) : gitPath;
+	const worktreeConfigPath = path.join(resolvedGitDirectory, "config");
+	if (existsSync(worktreeConfigPath)) {
+		return worktreeConfigPath;
+	}
+
+	const commonDirectoryPath = path.join(resolvedGitDirectory, "commondir");
+	if (!existsSync(commonDirectoryPath)) {
+		return worktreeConfigPath;
+	}
+
+	return path.join(path.resolve(resolvedGitDirectory, readFileSync(commonDirectoryPath, "utf8").trim()), "config");
 }
 
 function extractOriginRepositoryName(gitConfigContents: string): string | undefined {
