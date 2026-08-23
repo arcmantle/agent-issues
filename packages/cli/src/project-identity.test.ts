@@ -30,6 +30,18 @@ function writeGitRemote(workspaceRoot: string, url: string): void {
 	);
 }
 
+function writeGitWorktreeRemote(workspaceRoot: string, url: string): void {
+	const gitDirectory = path.join(workspaceRoot, "git-directory", "worktrees", "checkout");
+	const commonGitDirectory = path.join(workspaceRoot, "git-directory");
+	mkdirSync(gitDirectory, { recursive: true });
+	writeFileSync(path.join(workspaceRoot, ".git"), "gitdir: git-directory/worktrees/checkout\n");
+	writeFileSync(path.join(gitDirectory, "commondir"), "../..\n");
+	writeFileSync(
+		path.join(commonGitDirectory, "config"),
+		`[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`
+	);
+}
+
 describe("project identity resolution", () => {
 	it("falls back to the sanitized folder name for a non-git, override-free workspace", () => {
 		const workspaceRoot = createWorkspace("My Cool App");
@@ -53,6 +65,16 @@ describe("project identity resolution", () => {
 	it("parses an SSH-style git remote origin url the same way as an HTTPS one", () => {
 		const workspaceRoot = createWorkspace("another-checkout-name");
 		writeGitRemote(workspaceRoot, "git@github.com:arcmantle/agent-issues.git");
+
+		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
+			identity: "agent-issues",
+			source: "git-repository"
+		});
+	});
+
+	it("derives the identity from a worktree Git directory", () => {
+		const workspaceRoot = createWorkspace("worktree-checkout");
+		writeGitWorktreeRemote(workspaceRoot, "https://github.com/arcmantle/agent-issues.git");
 
 		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
 			identity: "agent-issues",
