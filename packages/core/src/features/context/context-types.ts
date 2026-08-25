@@ -32,6 +32,13 @@ export type ContextRecord = {
 	exists: boolean;
 };
 
+export type ContextSummary = Omit<ContextRecord, "summary">;
+
+export function toContextSummary(context: ContextRecord): ContextSummary {
+	const { summary: _summary, ...result } = context;
+	return result;
+}
+
 /**
  * Computes the canonical content hash for a context's mutable title and
  * summary (ADR55/ISS259). Used to populate `ContextRecord.contentHash` on
@@ -155,6 +162,13 @@ export type ContextTermRecord = {
 	updatedAt: string;
 };
 
+export type ContextTermSummary = Omit<ContextTermRecord, "definition">;
+
+export function toContextTermSummary(term: ContextTermRecord): ContextTermSummary {
+	const { definition: _definition, ...result } = term;
+	return result;
+}
+
 export type ContextDetails = {
 	context: ContextRecord;
 	terms: ContextTermRecord[];
@@ -218,6 +232,28 @@ export type DefineContextTermResult = {
 	term: ContextTermRecord;
 	created: boolean;
 };
+
+export type ContextWriteResult = {
+	context: ContextSummary;
+};
+
+export type DefineContextTermAcknowledgement = {
+	context: ContextSummary;
+	term: ContextTermSummary;
+	created: boolean;
+};
+
+export function toContextWriteResult(result: ContextDetails): ContextWriteResult {
+	return { context: toContextSummary(result.context) };
+}
+
+export function toDefineContextTermAcknowledgement(result: DefineContextTermResult): DefineContextTermAcknowledgement {
+	return {
+		context: toContextSummary(result.context),
+		term: toContextTermSummary(result.term),
+		created: result.created
+	};
+}
 
 export type ForgetContextTermResult = {
 	context: ContextRecord;

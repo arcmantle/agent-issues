@@ -15,6 +15,8 @@ import type {
 	RelationType,
 	StatusUpdateResult,
 	ContextDetails,
+	ContextWriteResult,
+	DefineContextTermAcknowledgement,
 	ForgetContextTermResult,
 	UnlinkResult
 } from "@agent-issues/core";
@@ -83,7 +85,7 @@ export function toCompactEntity(entity: EntitySummary): CompactEntity {
 	};
 }
 
-export function toCompactCreateAcknowledgement(entity: EntityRecord): CompactCreateAcknowledgement {
+export function toCompactCreateAcknowledgement(entity: EntitySummary): CompactCreateAcknowledgement {
 	return {
 		operation: "create",
 		id: entity.id,
@@ -149,7 +151,7 @@ export function toCompactEntityRestoreAcknowledgement(result: MaterializedEntity
 	};
 }
 
-export function toCompactContextSetAcknowledgement(result: ContextDetails) {
+export function toCompactContextSetAcknowledgement(result: ContextWriteResult) {
 	return {
 		operation: "context-set" as const,
 		reference: result.context.reference ?? result.context.key,
@@ -157,7 +159,7 @@ export function toCompactContextSetAcknowledgement(result: ContextDetails) {
 	};
 }
 
-export function toCompactContextDefineAcknowledgement(result: DefineContextTermResult) {
+export function toCompactContextDefineAcknowledgement(result: DefineContextTermAcknowledgement) {
 	return {
 		operation: "context-define" as const,
 		reference: result.term.reference,

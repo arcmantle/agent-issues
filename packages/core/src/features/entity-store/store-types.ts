@@ -134,12 +134,12 @@ export type UnlinkResult = {
 };
 
 export type DeleteResult = {
-	entity: EntityRecord;
+	entity: EntitySummary;
 	removed: boolean;
 };
 
 export type MoveResult = {
-	entity: EntityRecord;
+	entity: EntitySummary;
 	previousParentId: string | null;
 	newParentId: string;
 	relationType: RelationType;

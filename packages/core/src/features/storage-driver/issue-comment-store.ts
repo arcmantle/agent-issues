@@ -14,6 +14,13 @@ export type IssueCommentRecord = {
 	updatedAt: string;
 };
 
+export type IssueCommentSummary = Omit<IssueCommentRecord, "body">;
+
+export function toIssueCommentSummary(comment: IssueCommentRecord): IssueCommentSummary {
+	const { body: _body, ...summary } = comment;
+	return summary;
+}
+
 export type IssueCommentPage = {
 	comments: IssueCommentRecord[];
 	total: number;
@@ -47,7 +54,7 @@ export class IssueCommentConflictError extends Error {
 }
 
 export interface IssueCommentStore {
-	createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }): Promise<IssueCommentRecord>;
+	createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }): Promise<IssueCommentSummary>;
 	updateIssueComment(input: { commentId: string; body: string; referencedIssueIds?: string[]; expectedRevision: number; expectedContentHash: string }): Promise<IssueCommentRecord>;
 	deleteIssueComment(input: { commentId: string; expectedRevision: number; expectedContentHash: string }): Promise<IssueCommentRecord>;
 	listIssueComments(input: { issueId: string; before?: string; all?: boolean }): Promise<IssueCommentPage>;

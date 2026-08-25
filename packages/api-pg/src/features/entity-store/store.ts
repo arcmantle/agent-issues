@@ -1925,7 +1925,7 @@ export async function moveEntity(
 
 	const previousParentId = currentParentRelations[0]?.fromId ?? null;
 	if (previousParentId === newParent.id && currentParentRelations[0]?.type === relationType) {
-		return { entity, previousParentId, newParentId: newParent.id, relationType };
+		return { entity: toEntitySummary(entity), previousParentId, newParentId: newParent.id, relationType };
 	}
 
 	const updatedAt = new Date().toISOString();
@@ -1962,7 +1962,7 @@ export async function moveEntity(
 	});
 
 	return {
-		entity: await getEntityOrThrow(executor, entity.id),
+		entity: toEntitySummary({ ...entity, revision: newRevision, updatedBy: actorId, updatedAt }),
 		previousParentId,
 		newParentId: newParent.id,
 		relationType
@@ -2035,7 +2035,10 @@ export async function deleteEntity(executor: TenantExecutor, input: { entityId: 
 		priorTombstone: false
 	});
 
-	return { entity, removed: removed.length > 0 };
+	return {
+		entity: toEntitySummary({ ...entity, revision: newRevision, updatedBy: actorId, updatedAt }),
+		removed: removed.length > 0
+	};
 }
 
 export async function listOrphans(executor: TenantExecutor, kind?: string): Promise<EntityRecord[]> {
@@ -2501,8 +2504,8 @@ export class PgEntityStore implements EntityStore {
 		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
-	}, actorId?: string): Promise<EntityRecord> {
-		return createEntity(this.executor, input, this.projectIdentity, actorId);
+	}, actorId?: string): Promise<EntitySummary> {
+		return toEntitySummary(await createEntity(this.executor, input, this.projectIdentity, actorId));
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {

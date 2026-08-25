@@ -10,9 +10,11 @@ import {
 	IssueCommentConflictError,
 	materializeIssueCommentFromPatches,
 	shortEntityReference,
+	toIssueCommentSummary,
 	type IssueCommentHistoryEntry,
 	type IssueCommentPage,
-	type IssueCommentRecord
+	type IssueCommentRecord,
+	type IssueCommentSummary
 } from "@agent-issues/core";
 import { getSqliteEntityOrThrow, type SqliteExecutor } from "../../db/sqlite-executor.js";
 import { exportCanonicalChains, importCanonicalChains } from "../synchronize/canonical-chain-store.js";
@@ -270,8 +272,8 @@ export class LocalIssueCommentStore {
 
 	protected readonly executor: SqliteExecutor;
 
-	public createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }, actorId: string): IssueCommentRecord {
-		return createIssueComment(this.executor, input, actorId);
+	public createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }, actorId: string): IssueCommentSummary {
+		return toIssueCommentSummary(createIssueComment(this.executor, input, actorId));
 	}
 
 	public updateIssueComment(input: { commentId: string; body: string; referencedIssueIds?: string[]; expectedRevision: number; expectedContentHash: string }, actorId: string): IssueCommentRecord {

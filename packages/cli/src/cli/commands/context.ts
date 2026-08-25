@@ -121,7 +121,8 @@ export class ContextCommand extends TenantCommand {
 					})
 				});
 
-				this.print(this.asJson && mutationView === "compact" ? toCompactContextSetAcknowledgement(result) : result, renderContextDetails(result));
+				const details = await store.getContextDetails({ scopeRef: this.scope });
+				this.print(this.asJson && mutationView === "compact" ? toCompactContextSetAcknowledgement(result) : details, renderContextDetails(details));
 				return 0;
 			}
 
@@ -153,7 +154,13 @@ export class ContextCommand extends TenantCommand {
 					});
 				}
 
-				this.print(this.asJson && mutationView === "compact" ? toCompactContextDefineAcknowledgement(result) : result, renderContextTermResult(result));
+				const details = await store.getContextDetails({ scopeRef: this.scope });
+				const storedTerm = details.terms.find((candidate) => candidate.id === result.term.id);
+				if (!storedTerm) {
+					throw new Error(`Context term not found after definition: ${result.term.id}`);
+				}
+				const fullResult = { context: details.context, term: storedTerm, created: result.created };
+				this.print(this.asJson && mutationView === "compact" ? toCompactContextDefineAcknowledgement(result) : fullResult, renderContextTermResult(fullResult));
 				return 0;
 			}
 

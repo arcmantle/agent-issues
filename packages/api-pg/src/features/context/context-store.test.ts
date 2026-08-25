@@ -45,9 +45,9 @@ describe("context and glossary", () => {
 		const updated = await store.upsertContext({ scopeRef: initiative.id, title: "Custom title", summary: "Custom summary" });
 		expect(updated.context.exists).toBe(true);
 		expect(updated.context.title).toBe("Custom title");
-		expect(updated.context.summary).toBe("Custom summary");
 		expect(updated.context.scopeKind).toBe("initiative");
 		expect(updated.context.scopeEntityId).toBe(initiative.id);
+		expect((await store.getContextDetails({ scopeRef: initiative.id })).context.summary).toBe("Custom summary");
 	});
 
 	it("updates initiative contexts that retain a legacy key", async () => {
@@ -136,8 +136,9 @@ describe("context and glossary", () => {
 		expect(created.term.reference).toMatch(/^TERM_[0-9A-HJKMNP-TV-Z]{26}$/);
 		expect(updated.term.id).toBe(created.term.id);
 		expect(updated.created).toBe(false);
-		expect(updated.term.definition).toBe("Updated definition.");
 		expect(updated.term.avoid).toEqual(["seam", "duplicate"]);
+		const storedTerm = (await store.getContextDetails({ scopeRef: initiative.id })).terms.find((term) => term.id === updated.term.id);
+		expect(storedTerm?.definition).toBe("Updated definition.");
 
 		const deltas = await withTenantTransaction(appPool, store.tenantId, async (client) => {
 			const [term] = await client.select({ stableId: contextTerms.id }).from(contextTerms).where(and(eq(contextTerms.tenantId, store.tenantId), eq(contextTerms.contextKey, created.context.key), eq(contextTerms.term, created.term.term)));
@@ -149,7 +150,7 @@ describe("context and glossary", () => {
 			expect.objectContaining({ revision: 1, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) }),
 			expect.objectContaining({ revision: 2, author: SYSTEM_USER_ID, patchFormat: 1, reversePatch: expect.any(Buffer), sourceHash: expect.any(Buffer), targetHash: expect.any(Buffer) })
 		]);
-		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "storage-driver seam", revision: 1 })).resolves.toMatchObject({ definition: created.term.definition, tombstone: false, author: SYSTEM_USER_ID });
+		await expect(store.materializeContextTermRevision({ scopeRef: initiative.id, term: "storage-driver seam", revision: 1 })).resolves.toMatchObject({ definition: "The engine-agnostic boundary the domain layer talks to.", tombstone: false, author: SYSTEM_USER_ID });
 	});
 
 	it("rejects an empty term or definition", async () => {

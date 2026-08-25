@@ -11,9 +11,11 @@ import {
 	IssueCommentConflictError,
 	materializeIssueCommentFromPatches,
 	shortEntityReference,
+	toIssueCommentSummary,
 	type IssueCommentHistoryEntry,
 	type IssueCommentPage,
 	type IssueCommentRecord,
+	type IssueCommentSummary,
 	type IssueCommentRevisionPatch
 } from "@agent-issues/core";
 
@@ -61,7 +63,7 @@ export class PgIssueCommentStore {
 
 	protected readonly executor: TenantExecutor;
 
-	public async createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }, actorId: string): Promise<IssueCommentRecord> {
+	public async createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }, actorId: string): Promise<IssueCommentSummary> {
 		const issueId = await getProjectIssueIdOrThrow(this.executor, input.issueId);
 		if (input.body.trim().length === 0) {
 			throw new Error("Issue comment body must not be empty.");
@@ -92,7 +94,7 @@ export class PgIssueCommentStore {
 		await replaceIssueCommentReferences(this.executor, id, referencedIssueIds);
 		await appendIssueCommentDelta(this.executor, id, 1, state, state, actorId, createdAt);
 
-		return toIssueCommentRecord({
+		return toIssueCommentSummary(toIssueCommentRecord({
 			id,
 			reference,
 			short_reference: shortReference,
@@ -106,7 +108,7 @@ export class PgIssueCommentStore {
 			created_at: createdAt,
 			updated_at: createdAt,
 			referencedIssueIds
-		});
+		}));
 	}
 
 	public async updateIssueComment(input: { commentId: string; body: string; referencedIssueIds?: string[]; expectedRevision: number; expectedContentHash: string }, actorId: string): Promise<IssueCommentRecord> {

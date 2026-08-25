@@ -1,4 +1,4 @@
-import { measureHistory, resolveLocalUsername, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSnapshot, type RelationRecord, type StorageDriver } from "@agent-issues/core";
+import { measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSnapshot, type RelationRecord, type StorageDriver } from "@agent-issues/core";
 import type { CanonicalChainBundle } from "@agent-issues/core";
 import { LocalSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import * as localSynchronizeStore from "./features/synchronize/canonical-chain-store.js";
@@ -92,7 +92,7 @@ export class SqliteStore implements StorageDriver {
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}) {
-		return this.mutate((actorId) => localEntityStore.createEntity(this.executor, input, actorId));
+		return toEntitySummary(await this.mutate((actorId) => localEntityStore.createEntity(this.executor, input, actorId)));
 	}
 
 	public async getEntityDetails(entityId: string) {
@@ -260,12 +260,12 @@ export class SqliteStore implements StorageDriver {
 		return this.contextStore.queryContextDirectory(input);
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
-		return this.mutate((actorId) => localContextStore.upsertContext(this.executor, input, actorId));
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
+		return toContextWriteResult(await this.mutate((actorId) => localContextStore.upsertContext(this.executor, input, actorId)));
 	}
 
 	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
-		return this.mutate((actorId) => localContextStore.defineContextTerm(this.executor, input, actorId));
+		return toDefineContextTermAcknowledgement(await this.mutate((actorId) => localContextStore.defineContextTerm(this.executor, input, actorId)));
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }) {

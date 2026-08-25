@@ -28,6 +28,13 @@ export type PlanEntryRecord = {
 	updatedAt: string;
 };
 
+export type PlanEntrySummary = Omit<PlanEntryRecord, "body">;
+
+export function toPlanEntrySummary(entry: PlanEntryRecord): PlanEntrySummary {
+	const { body: _body, ...summary } = entry;
+	return summary;
+}
+
 export const PLAN_CURRENT_GROUPS = [
 	{ key: "questions", title: "Questions" },
 	{ key: "decisions", title: "Decisions" },

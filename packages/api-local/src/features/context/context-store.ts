@@ -27,6 +27,8 @@ import {
 	materializeContextTermFromPatches,
 	RESERVED_SYSTEM_AUTHOR,
 	shortEntityReference,
+	toContextWriteResult,
+	toDefineContextTermAcknowledgement,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextDirectoryTerm,
@@ -903,12 +905,12 @@ export class LocalContextStore implements ContextStore {
 		return queryContextDirectory(this.executor, input);
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
-		return upsertContext(this.executor, input);
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): ReturnType<ContextStore["upsertContext"]> {
+		return toContextWriteResult(upsertContext(this.executor, input));
 	}
 
-	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<DefineContextTermResult> {
-		return defineContextTerm(this.executor, input);
+	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }): ReturnType<ContextStore["defineContextTerm"]> {
+		return toDefineContextTermAcknowledgement(defineContextTerm(this.executor, input));
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ForgetContextTermResult> {

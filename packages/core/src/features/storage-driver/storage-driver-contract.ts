@@ -63,6 +63,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const prd = await store.createEntity({ kind: "prd", title: "Feature PRD", parentId: initiative.id });
 
 				expect(plan).toMatchObject({ kind: "plan", status: "draft", reference: expect.stringMatching(/^PLAN_/) });
+				expect(plan).not.toHaveProperty("body");
+				expect(plan).not.toHaveProperty("bodySource");
+				expect((await store.getEntityDetails(plan.id)).entity).toMatchObject({ body: "## Goal\n\nBuild the feature.\n\n## Context\n\nTrack the work.", bodySource: "authored" });
 				expect((await store.getEntityDetails(plan.id)).incoming).toEqual(expect.arrayContaining([
 					expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: initiative.id }) })
 				]));
@@ -134,11 +137,12 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(entry).toMatchObject({
 					planId: plan.id,
 					role: "question",
-					body: "Which storage contract applies?",
 					tombstone: false,
 					revision: 1,
 					reference: expect.stringMatching(/^PLAN_ENTRY_/)
 				});
+				expect(entry).not.toHaveProperty("body");
+				expect((await store.getPlanEntry({ entryId: entry.id })).body).toBe("Which storage contract applies?");
 				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
 			} finally {
 				await store.close();
@@ -893,7 +897,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const created = await store.createEntity({ kind: "initiative", title: "Dual-mode platform" });
 				const details = await store.getEntityDetails(created.id);
 
-				expect(details.entity).toEqual(created);
+				expect(details.entity).toMatchObject(created);
 			} finally {
 				await store.close();
 			}
@@ -1265,6 +1269,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative" });
 				const moved = await store.moveEntity({ entityId: issue.id, newParentId: otherInitiative.id });
 				expect(moved.newParentId).toBe(otherInitiative.id);
+				expect(moved.entity).not.toHaveProperty("body");
+				expect(moved.entity).not.toHaveProperty("bodySource");
 
 				const bodyUpdated = await store.setEntityBody({ entityId: issue.id, body: "Detailed plan.", expectedRevision: moved.entity.revision, expectedContentHash: moved.entity.contentHash });
 				expect(bodyUpdated.body).toBe("Detailed plan.");
@@ -1274,6 +1280,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				const deleted = await store.deleteEntity({ entityId: issue.id });
 				expect(deleted.entity.id).toBe(issue.id);
+				expect(deleted.entity).not.toHaveProperty("body");
+				expect(deleted.entity).not.toHaveProperty("bodySource");
 			} finally {
 				await store.close();
 			}
@@ -1363,12 +1371,13 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const initiative = await source.createEntity({ kind: "initiative", title: "Plan owner" });
 				const plan = await source.createEntity({ kind: "plan", title: "Imported plan", body: "## Goal\n\nBuild it.\n\n## Context\n\nTrack it.", parentId: initiative.id });
 				await source.updateEntityStatus({ entityId: plan.id, status: "ready" });
+				const sourcePlan = (await source.getEntityDetails(plan.id)).entity;
 				const bundle = await source.exportCanonicalChains();
 
 				await target.importCanonicalChains(bundle);
 
 				expect((await target.getEntityDetails(plan.id)).entity).toMatchObject({
-					body: plan.body,
+					body: sourcePlan.body,
 					kind: "plan",
 					reference: plan.reference,
 					status: "ready"
@@ -1470,6 +1479,8 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(created.term.contentHash).toBe(
 					computeContextTermContentHash("Order", "A confirmed purchase.", ["request"], false)
 				);
+				expect(created.term).not.toHaveProperty("definition");
+				expect((await store.getContextDetails()).terms.find((term) => term.id === created.term.id)?.definition).toBe("A confirmed purchase.");
 			} finally {
 				await store.close();
 			}
@@ -1508,7 +1519,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				});
 
 				const head = (await store.getContextDetails()).terms.find((candidate) => candidate.term === "Order");
-				expect(head).toEqual(updated.term);
+				expect(head).toMatchObject(updated.term);
 			} finally {
 				await store.close();
 			}
@@ -1545,8 +1556,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 					expectedRevision: tombstoneHead!.currentRevision,
 					expectedContentHash: tombstoneHead!.currentContentHash
 				});
-				expect(restored).toMatchObject({ created: false, term: { revision: 3, definition: "Restored definition." } });
-				expect((await store.getContextDetails()).terms).toEqual([restored.term]);
+				expect(restored).toMatchObject({ created: false, term: { revision: 3 } });
+				const restoredTerm = (await store.getContextDetails()).terms.find((candidate) => candidate.id === restored.term.id);
+				expect(restoredTerm).toMatchObject({ ...restored.term, definition: "Restored definition." });
 			} finally {
 				await store.close();
 			}
@@ -2152,7 +2164,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			await expect(store.moveEntity({ entityId: issue.id, newParentId: issue.id })).rejects.toThrow();
 
 			const unchanged = await store.getEntityDetails(issue.id);
-			expect(unchanged.entity).toEqual(issue);
+			expect(unchanged.entity).toMatchObject(issue);
 			expect(await store.listEntityHistory(issue.id)).toEqual(historyBefore);
 			await expect(store.materializeEntityRevision({ entityId: issue.id, revision: 2 })).rejects.toMatchObject({
 				reason: "revision-out-of-range",
@@ -2320,6 +2332,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				expect(created.context.revision).toBe(1);
 				expect(created.context.contentHash).toMatch(/^[0-9a-f]{64}$/);
 				expect(created.context.exists).toBe(true);
+				expect(created.context).not.toHaveProperty("summary");
 
 				const direct = await store.getContextDetails();
 				expect(direct.context.revision).toBe(1);
@@ -2346,8 +2359,9 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				expect(updated.context.revision).toBe(2);
 				expect(updated.context.contentHash).not.toBe(created.context.contentHash);
 				expect(updated.context.title).toBe("Updated title");
-				expect(updated.context.summary).toBe("Updated summary");
+				expect(updated.context).not.toHaveProperty("summary");
 				expect(updated.context.exists).toBe(true);
+				expect((await store.getContextDetails()).context.summary).toBe("Updated summary");
 			} finally {
 				await store.close();
 			}
@@ -2405,7 +2419,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 					currentContentHash: created.context.contentHash
 				});
 
-				await expect(store.getContextDetails()).resolves.toEqual(created);
+				expect((await store.getContextDetails()).context).toMatchObject(created.context);
 			} finally {
 				await store.close();
 			}
@@ -2639,6 +2653,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
 				const comment = await store.createIssueComment({ issueId: issue.id, body: "First comment." });
 				expect(comment.shortReference).toMatch(/^COM_[0-9A-HJKMNP-TV-Z]{6}$/);
+				expect(comment).not.toHaveProperty("body");
 
 				expect(await store.listIssueComments({ issueId: issue.id })).toEqual(
 					expect.objectContaining({

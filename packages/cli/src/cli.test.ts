@@ -226,10 +226,10 @@ describe("cli", () => {
 			const added = JSON.parse(output.read());
 			expect(added).toMatchObject({
 				issueId: issue.id,
-				body: "A comment from the CLI.",
 				referencedIssueIds: [referencedIssue.id],
 				tombstone: false
 			});
+			expect(added).not.toHaveProperty("body");
 
 			const listed = createCapture();
 			expect(await runCli(["comment", "list", issue.reference, "--db", dbPath, "--json"], {

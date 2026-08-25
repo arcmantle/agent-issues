@@ -8,7 +8,9 @@ import type {
 	ContextDetails,
 	ContextDirectory,
 	ContextListResult,
+	ContextWriteResult,
 	DatabaseSnapshot,
+	DefineContextTermAcknowledgement,
 	DefineContextTermResult,
 	DeleteResult,
 	DeleteTenantResult,
@@ -196,7 +198,7 @@ export class PgStore implements StorageDriver {
 		body?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
-	}): Promise<EntityRecord> {
+	}): Promise<EntitySummary> {
 		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).createEntity(input, actorId));
 	}
 
@@ -383,7 +385,7 @@ export class PgStore implements StorageDriver {
 		return this.transaction((executor) => new PgContextStore(executor, this.projectIdentity).queryContextDirectory(input));
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextDetails> {
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }): Promise<ContextWriteResult> {
 		return this.mutation((executor, actorId) => new PgContextStore(executor, this.projectIdentity).upsertContext(input, actorId));
 	}
 
@@ -395,7 +397,7 @@ export class PgStore implements StorageDriver {
 		author?: string;
 		expectedRevision?: number;
 		expectedContentHash?: string;
-	}): Promise<DefineContextTermResult> {
+	}): Promise<DefineContextTermAcknowledgement> {
 		return this.mutation((executor, actorId) => new PgContextStore(executor, this.projectIdentity).defineContextTerm(input, actorId));
 	}
 

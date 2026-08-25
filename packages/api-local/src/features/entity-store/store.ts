@@ -251,8 +251,7 @@ export function createEntity(
 		// for every revision in the chain, including the initial one.
 		appendDeltaEntry(executor, id, 1, title, body, bodySource, actorId, now);
 
-		const entity = getEntityOrThrow(executor, id);
-		return entity;
+		return getEntityOrThrow(executor, id);
 	});
 }
 
@@ -733,7 +732,7 @@ export function moveEntity(
 	const previousParentId = currentParentRelations[0]?.fromId ?? null;
 	if (previousParentId === newParent.id && currentParentRelations[0]?.type === relationType) {
 		return {
-			entity,
+			entity: toEntitySummary(entity),
 			previousParentId,
 			newParentId: newParent.id,
 			relationType
@@ -787,7 +786,7 @@ export function moveEntity(
 	});
 
 	return {
-		entity: getEntityOrThrow(executor, entity.id),
+		entity: toEntitySummary({ ...entity, revision: newRevision, updatedBy: actorId, updatedAt }),
 		previousParentId,
 		newParentId: newParent.id,
 		relationType
@@ -875,7 +874,7 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 			});
 
 			return {
-				entity,
+				entity: toEntitySummary({ ...entity, revision: newRevision, updatedBy: actorId, updatedAt }),
 				removed: result.changes > 0
 			};
 		});
@@ -1963,8 +1962,8 @@ export class LocalEntityStore implements EntityStore {
 		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
-	}): Promise<EntityRecord> {
-		return createEntity(this.executor, input);
+	}): Promise<EntitySummary> {
+		return toEntitySummary(createEntity(this.executor, input));
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {

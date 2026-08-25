@@ -71,7 +71,9 @@ describe("agent-issues MCP server", () => {
 		await client.connect(clientTransport);
 		const result = await client.callTool({ name: "entity_create", arguments: { kind: "issue", title: "Create through MCP", body: "Authored body" } });
 
-		expect(result).toMatchObject({ structuredContent: { entity: { kind: "issue", title: "Create through MCP", body: "Authored body" } } });
+		expect(result).toMatchObject({ structuredContent: { entity: { kind: "issue", title: "Create through MCP" } } });
+		expect((result.structuredContent as { entity: object }).entity).not.toHaveProperty("body");
+		expect((result.structuredContent as { entity: object }).entity).not.toHaveProperty("bodySource");
 
 		await client.close();
 		await server.close();
@@ -169,6 +171,8 @@ describe("agent-issues MCP server", () => {
 		expect((status.structuredContent as { entity: object }).entity).not.toHaveProperty("body");
 		expect((status.structuredContent as { entity: object }).entity).not.toHaveProperty("bodySource");
 		expect(move).toMatchObject({ structuredContent: { entity: { reference: issue.reference }, newParentId: secondParent.id } });
+		expect((move.structuredContent as { entity: object }).entity).not.toHaveProperty("body");
+		expect((move.structuredContent as { entity: object }).entity).not.toHaveProperty("bodySource");
 		expect(history).toMatchObject({ structuredContent: { entityId: issue.reference, targetRevision: 1 } });
 		expect(list).toMatchObject({ structuredContent: { entities: [expect.objectContaining({ reference: issue.reference })] } });
 		expect((list.structuredContent as { entities: object[] }).entities[0]).not.toHaveProperty("body");
@@ -202,6 +206,8 @@ describe("agent-issues MCP server", () => {
 
 		expect(inspection).toMatchObject({ structuredContent: { impact: { entity: { reference: issue.reference } }, confirmationToken: expect.any(String) } });
 		expect(result).toMatchObject({ structuredContent: { entity: { reference: issue.reference }, removed: true } });
+		expect((result.structuredContent as { entity: object }).entity).not.toHaveProperty("body");
+		expect((result.structuredContent as { entity: object }).entity).not.toHaveProperty("bodySource");
 		await expect(store.getEntityDetails(issue.reference)).rejects.toThrow();
 
 		await client.close();
@@ -308,7 +314,8 @@ describe("agent-issues MCP server", () => {
 			name: "plan_entry_create",
 			arguments: { planId: plan.reference, role: "question", body: "What must the tool return?", referencedEntityIds: [relatedIssue.reference] }
 		});
-		expect(created).toMatchObject({ structuredContent: { entry: { body: "What must the tool return?", referencedEntityIds: [relatedIssue.id] } } });
+		expect(created).toMatchObject({ structuredContent: { entry: { referencedEntityIds: [relatedIssue.id] } } });
+		expect((created.structuredContent as { entry: object }).entry).not.toHaveProperty("body");
 		const entry = (created.structuredContent as { entry: { reference: string; revision: number; contentHash: string } }).entry;
 		const list = await client.callTool({ name: "plan_entry_list", arguments: { planId: plan.reference } });
 		const edited = await client.callTool({
@@ -355,7 +362,8 @@ describe("agent-issues MCP server", () => {
 			name: "comment_create",
 			arguments: { issueId: issue.reference, body: "Authored comment", referencedIssueIds: [relatedIssue.reference] }
 		});
-		expect(created).toMatchObject({ structuredContent: { comment: { body: "Authored comment", referencedIssueIds: [relatedIssue.id] } } });
+		expect(created).toMatchObject({ structuredContent: { comment: { referencedIssueIds: [relatedIssue.id] } } });
+		expect((created.structuredContent as { comment: object }).comment).not.toHaveProperty("body");
 		const comment = (created.structuredContent as { comment: { reference: string; revision: number; contentHash: string } }).comment;
 		const list = await client.callTool({ name: "comment_list", arguments: { issueId: issue.reference, all: true } });
 		const edited = await client.callTool({
@@ -464,8 +472,10 @@ describe("agent-issues MCP server", () => {
 		});
 		expect(search).toMatchObject({ structuredContent: { query: "parity", view: "initiatives", terms: [expect.objectContaining({ term: "parity" })] } });
 		expect(conflicts).toMatchObject({ structuredContent: { conflictsOnly: true, terms: [expect.objectContaining({ term: "parity", hasConflictingDefinitions: true })] } });
-		expect(set).toMatchObject({ structuredContent: { context: { title: "First context revised", summary: "Revised summary." } } });
-		expect(define).toMatchObject({ structuredContent: { term: { term: "token", definition: "A temporary confirmation value." }, created: true } });
+		expect(set).toMatchObject({ structuredContent: { context: { title: "First context revised" } } });
+		expect((set.structuredContent as { context: object }).context).not.toHaveProperty("summary");
+		expect(define).toMatchObject({ structuredContent: { term: { term: "token" }, created: true } });
+		expect((define.structuredContent as { term: object }).term).not.toHaveProperty("definition");
 		expect(contextRevision).toMatchObject({ structuredContent: { targetRevision: 1, title: "First context" } });
 		expect(termRevision).toMatchObject({ structuredContent: { targetRevision: 1, term: "parity", definition: "Equivalent behavior." } });
 		expect(forget).toMatchObject({ structuredContent: { term: "token", removed: true } });
@@ -769,8 +779,10 @@ describe("agent-issues MCP server", () => {
 		const comment = await client.callTool({ name: "comment_create", arguments: { issueId: issue.reference, body: "Authored daemon comment" } });
 		const entry = await client.callTool({ name: "plan_entry_create", arguments: { planId: plan.reference, role: "decision", body: "Authored daemon decision" } });
 
-		expect(comment).toMatchObject({ structuredContent: { comment: { issueId: issue.id, body: "Authored daemon comment" } } });
-		expect(entry).toMatchObject({ structuredContent: { entry: { planId: plan.id, body: "Authored daemon decision" } } });
+		expect(comment).toMatchObject({ structuredContent: { comment: { issueId: issue.id } } });
+		expect((comment.structuredContent as { comment: object }).comment).not.toHaveProperty("body");
+		expect(entry).toMatchObject({ structuredContent: { entry: { planId: plan.id } } });
+		expect((entry.structuredContent as { entry: object }).entry).not.toHaveProperty("body");
 		expect(spawnCount).toBe(1);
 
 		await client.close();

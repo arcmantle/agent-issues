@@ -13,9 +13,11 @@ import {
 	PLAN_ENTRY_REVERSE_PATCH_REGISTRY,
 	PlanEntryConflictError,
 	shortEntityReference,
+	toPlanEntrySummary,
 	type LinkResult,
 	type PlanEntryHistoryEntry,
 	type PlanEntryRecord,
+	type PlanEntrySummary,
 	type PlanEntryRevisionPatch,
 	type PlanEntryScopeDirection,
 	type PlanEntryState,
@@ -63,7 +65,7 @@ export class PgPlanEntryStore {
 
 	protected readonly executor: TenantExecutor;
 
-	public async createPlanEntry(input: { planId: string; role: string; body: string; scopeDirection?: PlanEntryScopeDirection; referencedEntityIds?: string[]; supersededEntryIds?: string[] }, actorId: string): Promise<PlanEntryRecord> {
+	public async createPlanEntry(input: { planId: string; role: string; body: string; scopeDirection?: PlanEntryScopeDirection; referencedEntityIds?: string[]; supersededEntryIds?: string[] }, actorId: string): Promise<PlanEntrySummary> {
 		const plan = await getProjectPlanOrThrow(this.executor, input.planId);
 		validateCreateInput(input);
 		const referencedEntityIds = await validateReferencedEntityIds(this.executor, input.referencedEntityIds ?? []);
@@ -84,7 +86,7 @@ export class PgPlanEntryStore {
 		if (plan.status === "draft" && !hasExistingEntries) {
 			await new PgEntityStore(this.executor).updateEntityStatus({ entityId: plan.id, status: "in-progress" }, actorId);
 		}
-		return toPlanEntryRecord({ id, reference, short_reference: shortReference, plan_id: plan.id, created_by: actorId, updated_by: actorId, role: input.role, body: input.body, scope_direction: state.scopeDirection, tombstone: false, revision: 1, content_hash: contentHash, created_at: createdAt, updated_at: createdAt, referencedEntityIds, supersededEntryIds });
+		return toPlanEntrySummary(toPlanEntryRecord({ id, reference, short_reference: shortReference, plan_id: plan.id, created_by: actorId, updated_by: actorId, role: input.role, body: input.body, scope_direction: state.scopeDirection, tombstone: false, revision: 1, content_hash: contentHash, created_at: createdAt, updated_at: createdAt, referencedEntityIds, supersededEntryIds }));
 	}
 
 	public async getPlanEntry(input: { entryId: string }): Promise<PlanEntryRecord> {

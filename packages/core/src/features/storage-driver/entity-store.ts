@@ -36,7 +36,7 @@ export interface EntityStore {
 		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
-	}): Promise<EntityRecord>;
+	}): Promise<EntitySummary>;
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
 	queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityRelations>;
 	listEntities(kind: string): Promise<EntitySummary[]>;

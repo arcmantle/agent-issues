@@ -13,9 +13,11 @@ import {
 	PLAN_ENTRY_REVERSE_PATCH_REGISTRY,
 	PlanEntryConflictError,
 	shortEntityReference,
+	toPlanEntrySummary,
 	type LinkResult,
 	type PlanEntryHistoryEntry,
 	type PlanEntryRecord,
+	type PlanEntrySummary,
 	type PlanEntryRevisionPatch,
 	type PlanEntryState,
 	type PlanEntryScopeDirection,
@@ -246,8 +248,8 @@ export class LocalPlanEntryStore {
 
 	protected readonly executor: SqliteExecutor;
 
-	public createPlanEntry(input: { planId: string; role: string; body: string; scopeDirection?: PlanEntryScopeDirection; referencedEntityIds?: string[]; supersededEntryIds?: string[] }, actorId: string): PlanEntryRecord {
-		return createPlanEntry(this.executor, input, actorId);
+	public createPlanEntry(input: { planId: string; role: string; body: string; scopeDirection?: PlanEntryScopeDirection; referencedEntityIds?: string[]; supersededEntryIds?: string[] }, actorId: string): PlanEntrySummary {
+		return toPlanEntrySummary(createPlanEntry(this.executor, input, actorId));
 	}
 
 	public getPlanEntry(input: { entryId: string }): PlanEntryRecord {

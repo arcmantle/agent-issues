@@ -26,6 +26,8 @@ import {
 	RESERVED_SYSTEM_AUTHOR,
 	shortEntityReference,
 	SYSTEM_AUTHENTICATION_SUBJECT,
+	toContextWriteResult,
+	toDefineContextTermAcknowledgement,
 	type ContextDetails,
 	type ContextDirectory,
 	type ContextListResult,
@@ -988,12 +990,12 @@ export class PgContextStore implements ContextStore {
 		return queryContextDirectory(this.executor, this.projectIdentity, input);
 	}
 
-	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): Promise<ContextDetails> {
-		return upsertContext(this.executor, this.projectIdentity, input, actorId ?? RESERVED_SYSTEM_AUTHOR);
+	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): ReturnType<ContextStore["upsertContext"]> {
+		return toContextWriteResult(await upsertContext(this.executor, this.projectIdentity, input, actorId ?? RESERVED_SYSTEM_AUTHOR));
 	}
 
-	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): Promise<DefineContextTermResult> {
-		return defineContextTerm(this.executor, this.projectIdentity, input, actorId ?? SYSTEM_USER_ID);
+	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): ReturnType<ContextStore["defineContextTerm"]> {
+		return toDefineContextTermAcknowledgement(await defineContextTerm(this.executor, this.projectIdentity, input, actorId ?? SYSTEM_USER_ID));
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }, actorId?: string): Promise<ForgetContextTermResult> {
