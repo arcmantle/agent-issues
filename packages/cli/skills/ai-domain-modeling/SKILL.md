@@ -14,7 +14,7 @@ Actively build and sharpen the project's domain model while you design. This ski
 
 ### Challenge against the glossary
 
-The user can use a term that conflicts with the language returned by `agent-issues context show <entityOrInitiativeId> --json` or `agent-issues context conflicts --json`. When this happens, point it out right away.
+The user can use a term that conflicts with the relevant glossary or the **Context Read** recipe with conflict input. When this happens, point it out right away.
 
 ### Sharpen fuzzy language
 
@@ -30,7 +30,7 @@ When the user states how something works, check whether the code agrees. If you 
 
 ### Update context inline
 
-When you resolve a term, update the database-backed context right away. Do not batch glossary updates. Use the rules in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
+When you resolve a term, run the **Context Write** recipe to update the database-backed context right away. Do not batch glossary updates. Use the rules in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
 
 ### Offer ADRs only when needed
 
@@ -42,4 +42,4 @@ Offer to create an ADR only when all three of these are true:
 
 If any of the three is not true, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
 
-When an ADR is needed, create or update the `adr` entity in `agent-issues` under the relevant initiative. Do not create a markdown ADR file unless the user asks for one directly. If the ADR limits implementation work, link it to the affected issues with `agent-issues link ADR1 constrains ISS1`.
+When an ADR is needed, run the **Entity Create And Edit** recipe to create or update the `adr` entity under the relevant initiative. Do not create a markdown ADR file unless the user asks for one directly. If the ADR limits implementation work, run the **Entity Relations** recipe to link it to the affected issues with `constrains`.

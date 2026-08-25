@@ -204,7 +204,7 @@ describe("login-driven routing end to end", () => {
 			const firstStatus = JSON.parse(await invoke(["auth", "status", "--json"]));
 			expect(firstStatus.login).toMatchObject({ name: "first", tenantId: `credential-${first.tenantId}` });
 			const firstResult = JSON.parse(await invoke([
-				"create", "initiative", "--title", "Route to first", "--view", "full", "--json"
+				"create", "initiative", "--title", "Route to first", "--json"
 			]));
 			expect(firstResult.id).toBe("first-entity-1");
 
@@ -212,7 +212,7 @@ describe("login-driven routing end to end", () => {
 			expect(await invoke(["auth", "switch"])).toContain("Switched to saved login local.");
 			expect(await invoke(["auth", "switch", "second"])).toContain("Switched to saved login second.");
 			const secondResult = JSON.parse(await invoke([
-				"create", "initiative", "--title", "Route to second", "--view", "full", "--json"
+				"create", "initiative", "--title", "Route to second", "--json"
 			]));
 			expect(secondResult.id).toBe("second-entity-1");
 

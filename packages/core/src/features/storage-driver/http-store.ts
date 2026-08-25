@@ -13,7 +13,7 @@ import type {
 	QueryContextDirectoryResult
 } from "../context/context-types.js";
 import type { DeleteTenantResult, RenameTenantResult, TenantSummary } from "../entity-store/tenant-types.js";
-import type { BodySource, EntityRecord, HistoryEntryRecord, MaterializedEntityRevision, RelationRecord } from "../entity-store/domain.js";
+import type { BodySource, EntityRecord, EntitySummary, HistoryEntryRecord, MaterializedEntityRevision, RelationRecord } from "../entity-store/domain.js";
 import { EntityConflictError, EntityRevisionError, type EntityRevisionErrorReason } from "../entity-store/domain.js";
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
@@ -33,6 +33,7 @@ import type {
 	DatabaseSnapshot,
 	DeleteResult,
 	EntityDetails,
+	EntityRelations,
 	InitiativeBundle,
 	LinkResult,
 	MoveResult,
@@ -421,11 +422,11 @@ export class HttpStore implements StorageDriver {
 		return this.call("getEntityDetails", { entityId });
 	}
 
-	public queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]): ReturnType<StorageDriver["queryEntityRelations"]> {
+	public queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]): Promise<EntityRelations> {
 		return this.call("queryEntityRelations", input);
 	}
 
-	public listEntities(kind: string): Promise<EntityRecord[]> {
+	public listEntities(kind: string): Promise<EntitySummary[]> {
 		return this.call("listEntities", { kind });
 	}
 

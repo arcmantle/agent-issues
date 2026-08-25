@@ -66,10 +66,13 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect((await store.getEntityDetails(plan.id)).incoming).toEqual(expect.arrayContaining([
 					expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: initiative.id }) })
 				]));
-				await expect(store.updateEntityStatus({ entityId: plan.id, status: "ready" })).resolves.toMatchObject({
+				const statusUpdate = await store.updateEntityStatus({ entityId: plan.id, status: "ready" });
+				expect(statusUpdate).toMatchObject({
 					previousStatus: "draft",
 					entity: expect.objectContaining({ status: "ready" })
 				});
+				expect(statusUpdate.entity).not.toHaveProperty("body");
+				expect(statusUpdate.entity).not.toHaveProperty("bodySource");
 				await expect(store.linkEntities({ fromId: plan.id, toId: prd.id, relationType: "informs" })).resolves.toMatchObject({ created: true });
 				expect((await store.getEntityDetails(prd.id)).incoming).toEqual(expect.arrayContaining([
 					expect.objectContaining({ relationType: "informs", entity: expect.objectContaining({ id: plan.id }) }),
@@ -1606,7 +1609,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			try {
 				const selectedParent = await store.createEntity({ kind: "initiative", title: "Selected parent" });
 				const otherParent = await store.createEntity({ kind: "initiative", title: "Other parent" });
-				const first = await store.createEntity({ kind: "issue", title: "First", parentId: selectedParent.id });
+				const first = await store.createEntity({ kind: "issue", title: "First", body: "First body", parentId: selectedParent.id });
 				const second = await store.createEntity({ kind: "issue", title: "Second", parentId: selectedParent.id, status: "in-progress" });
 				await store.createEntity({ kind: "issue", title: "Other", parentId: otherParent.id });
 				await store.linkEntities({ fromId: first.id, toId: second.id, relationType: "blocks" });
@@ -1620,10 +1623,15 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(queried.entities).toHaveLength(1);
 				expect([first.id, second.id]).toContain(queried.entities[0]?.id);
 				expect(queried.total).toBe(2);
+				expect(queried.entities[0]).not.toHaveProperty("body");
+				expect(queried.entities[0]).not.toHaveProperty("bodySource");
 
 				const relations = await store.queryEntityRelations({ entityId: second.id, direction: "incoming", types: ["blocks"] });
 				expect(relations.incoming).toEqual([expect.objectContaining({ relationType: "blocks", entity: expect.objectContaining({ id: first.id }) })]);
 				expect(relations.outgoing).toEqual([]);
+				expect(relations.entity).not.toHaveProperty("body");
+				expect(relations.incoming[0]?.entity).not.toHaveProperty("body");
+				expect((await store.getEntityDetails(first.id)).entity).toMatchObject({ body: "First body", bodySource: "authored" });
 			} finally {
 				await store.close();
 			}

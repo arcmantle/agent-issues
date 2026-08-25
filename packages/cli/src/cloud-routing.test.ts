@@ -140,7 +140,7 @@ describe("CLI commands route through the active remote saved login", () => {
 
 			const stdout = createCapture();
 			const stderr = createCapture();
-			const exitCode = await runCli(["create", "initiative", "--title", "Ship it", "--json", "--view", "full"], {
+			const exitCode = await runCli(["create", "initiative", "--title", "Ship it", "--json"], {
 				credentialStoreOptions,
 				cwd: projectDirectory,
 				stderr: stderr.stream,
@@ -149,7 +149,7 @@ describe("CLI commands route through the active remote saved login", () => {
 
 			expect(stderr.read()).toBe("");
 			expect(exitCode).toBe(0);
-			expect(JSON.parse(stdout.read())).toMatchObject({ id: "iss-1", kind: "initiative", title: "Ship it" });
+			expect(JSON.parse(stdout.read())).toMatchObject({ id: "iss-1" });
 			expect(gate.requests).toHaveLength(1);
 			expect(gate.requests[0]?.authorization).toBe("Bearer token-a");
 			expect(gate.requests[0]?.projectIdentity).toBe(path.basename(projectDirectory).toLowerCase());

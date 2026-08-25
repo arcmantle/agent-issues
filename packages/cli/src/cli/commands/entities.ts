@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type EntityRecord, type RelationDirection, type RelationType } from "@agent-issues/core";
+import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type EntityRecord, type EntitySummary, type RelationDirection, type RelationType } from "@agent-issues/core";
 
 import {
 	toCompactCreateAcknowledgement,
@@ -11,7 +11,6 @@ import {
 	toCompactEntityDetails,
 	toCompactEntityList,
 	toCompactEntityRestoreAcknowledgement,
-	toCompactInitiativeBundle,
 	toCompactLinkAcknowledgement,
 	toCompactMoveAcknowledgement,
 	toCompactNextWork,
@@ -43,10 +42,8 @@ export class CreateCommand extends BodyTenantCommand {
 	public statusValue = Option.String("--status");
 	public title = Option.String("--title");
 	public entityType = Option.String("--type");
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		const kind = requirePositional(this.positionals, 0, "create <kind>");
 		if (!isEntityKind(kind)) {
 			throw new Error(`Unknown entity kind: ${kind}`);
@@ -65,7 +62,7 @@ export class CreateCommand extends BodyTenantCommand {
 				type: this.entityType
 			});
 
-			this.print(this.asJson && view === "compact" ? toCompactCreateAcknowledgement(entity) : entity, `${entity.reference} ${entity.kind} ${entity.status} ${entity.title}`);
+			this.print(this.asJson ? toCompactCreateAcknowledgement(entity) : entity, `${entity.reference} ${entity.kind} ${entity.status} ${entity.title}`);
 			return 0;
 		});
 	}
@@ -79,10 +76,8 @@ export class EditCommand extends BodyTenantCommand {
 	public priority = Option.String("--priority");
 	public title = Option.String("--title");
 	public entityType = Option.String("--type");
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "edit <id> (--title <text> | --body-file <path|->)");
 			const body = await this.resolveBody();
@@ -92,7 +87,7 @@ export class EditCommand extends BodyTenantCommand {
 			const { entity: current } = await store.getEntityDetails(entityId);
 			const entity = await store.updateEntity({ body, category: this.category, entityId, priority: this.priority, title: this.title, type: this.entityType, expectedRevision: current.revision, expectedContentHash: current.contentHash });
 
-			this.print(this.asJson && view === "compact" ? toCompactEditAcknowledgement(entity) : entity, `Updated ${entity.id} ${entity.kind} ${entity.title}`);
+			this.print(this.asJson ? toCompactEditAcknowledgement(entity) : entity, `Updated ${entity.id} ${entity.kind} ${entity.title}`);
 			return 0;
 		});
 	}
@@ -147,10 +142,13 @@ export class RestoreCommand extends PositionalsTenantCommand {
 	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
+		if (!this.contextScope && this.view !== undefined) {
+			throw new Error("--view is only valid for context restore.");
+		}
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const revision = parseRevision(this.revisionValue);
 			if (this.contextScope) {
+				const view = parseEntityView(this.view);
 				if (this.positionals.length > 0) {
 					throw new Error("Restore accepts either an entity id or --context, not both.");
 				}
@@ -192,7 +190,7 @@ export class RestoreCommand extends PositionalsTenantCommand {
 				expectedRevision: head.headRevision,
 				expectedContentHash: computeEntityContentHash(head.title, head.body)
 			});
-			this.print(this.asJson && view === "compact" ? toCompactEntityRestoreAcknowledgement(restored) : restored, `Restored ${entityId} revision ${revision} as revision ${restored.headRevision}`);
+			this.print(this.asJson ? toCompactEntityRestoreAcknowledgement(restored) : restored, `Restored ${entityId} revision ${revision} as revision ${restored.headRevision}`);
 			return 0;
 		});
 	}
@@ -200,15 +198,13 @@ export class RestoreCommand extends PositionalsTenantCommand {
 
 export class ArchiveCommand extends PositionalsTenantCommand {
 	public static paths = [["archive"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "archive <id>");
 			const result = await store.archiveEntity({ entityId });
 
-			this.print(this.asJson && view === "compact" ? toCompactStatusAcknowledgement("archive", result) : result, `Archived ${result.entity.id} from ${result.previousStatus} to ${result.entity.status}`);
+			this.print(this.asJson ? toCompactStatusAcknowledgement("archive", result) : result, `Archived ${result.entity.id} from ${result.previousStatus} to ${result.entity.status}`);
 			return 0;
 		});
 	}
@@ -216,15 +212,13 @@ export class ArchiveCommand extends PositionalsTenantCommand {
 
 export class DeleteCommand extends PositionalsTenantCommand {
 	public static paths = [["delete"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "delete <id>");
 			const result = await store.deleteEntity({ entityId });
 
-			this.print(this.asJson && view === "compact" ? toCompactDeleteAcknowledgement(result) : result, `Deleted ${result.entity.id} ${result.entity.kind} ${result.entity.title}`);
+			this.print(this.asJson ? toCompactDeleteAcknowledgement(result) : result, `Deleted ${result.entity.id} ${result.entity.kind} ${result.entity.title}`);
 			return 0;
 		});
 	}
@@ -232,17 +226,15 @@ export class DeleteCommand extends PositionalsTenantCommand {
 
 export class MoveCommand extends PositionalsTenantCommand {
 	public static paths = [["move"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "move <id> <newParentId>");
 			const newParentId = requirePositional(this.positionals, 1, "move <id> <newParentId>");
 			const result = await store.moveEntity({ entityId, newParentId });
 
 			this.print(
-				this.asJson && view === "compact" ? toCompactMoveAcknowledgement(result) : result,
+				this.asJson ? toCompactMoveAcknowledgement(result) : result,
 				`Moved ${result.entity.id} from ${result.previousParentId ?? "none"} to ${result.newParentId} as ${result.relationType}`
 			);
 			return 0;
@@ -252,10 +244,8 @@ export class MoveCommand extends PositionalsTenantCommand {
 
 export class LinkCommand extends PositionalsTenantCommand {
 	public static paths = [["link"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const fromId = requirePositional(this.positionals, 0, "link <fromId> <relationType> <toId>");
 			const relationType = requirePositional(this.positionals, 1, "link <fromId> <relationType> <toId>");
@@ -268,7 +258,7 @@ export class LinkCommand extends PositionalsTenantCommand {
 
 				const result = await store.linkPlanEntryIssue({ entryId: planEntry.id, issueId: toId });
 				this.print(
-					this.asJson && view === "compact" ? toCompactLinkAcknowledgement("link", result) : result,
+					this.asJson ? toCompactLinkAcknowledgement("link", result) : result,
 					result.created
 						? `Linked ${fromId} -> ${toId} as ${relationType}`
 						: `Relation already existed: ${fromId} -> ${toId} as ${relationType}`
@@ -279,7 +269,7 @@ export class LinkCommand extends PositionalsTenantCommand {
 			const result = await store.linkEntities({ fromId, relationType, toId });
 
 			this.print(
-				this.asJson && view === "compact" ? toCompactLinkAcknowledgement("link", result) : result,
+				this.asJson ? toCompactLinkAcknowledgement("link", result) : result,
 				result.created
 					? `Linked ${fromId} -> ${toId} as ${relationType}`
 					: `Relation already existed: ${fromId} -> ${toId} as ${relationType}`
@@ -291,10 +281,8 @@ export class LinkCommand extends PositionalsTenantCommand {
 
 export class UnlinkCommand extends PositionalsTenantCommand {
 	public static paths = [["unlink"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const fromId = requirePositional(this.positionals, 0, "unlink <fromId> <relationType> <toId>");
 			const relationType = requirePositional(this.positionals, 1, "unlink <fromId> <relationType> <toId>");
@@ -307,7 +295,7 @@ export class UnlinkCommand extends PositionalsTenantCommand {
 
 				const result = await store.unlinkPlanEntryIssue({ entryId: planEntry.id, issueId: toId });
 				this.print(
-					this.asJson && view === "compact" ? toCompactLinkAcknowledgement("unlink", result) : result,
+					this.asJson ? toCompactLinkAcknowledgement("unlink", result) : result,
 					result.removed
 						? `Unlinked ${fromId} -> ${toId} as ${relationType}`
 						: `Relation did not exist: ${fromId} -> ${toId} as ${relationType}`
@@ -318,7 +306,7 @@ export class UnlinkCommand extends PositionalsTenantCommand {
 			const result = await store.unlinkEntities({ fromId, relationType, toId });
 
 			this.print(
-				this.asJson && view === "compact" ? toCompactLinkAcknowledgement("unlink", result) : result,
+				this.asJson ? toCompactLinkAcknowledgement("unlink", result) : result,
 				result.removed
 					? `Unlinked ${fromId} -> ${toId} as ${relationType}`
 					: `Relation did not exist: ${fromId} -> ${toId} as ${relationType}`
@@ -341,32 +329,14 @@ async function findPlanEntry(store: { getPlanEntry(input: { entryId: string }): 
 
 export class StatusCommand extends PositionalsTenantCommand {
 	public static paths = [["status"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "status <id> <status>");
 			const status = requirePositional(this.positionals, 1, "status <id> <status>");
 			const result = await store.updateEntityStatus({ entityId, status });
 
-			this.print(this.asJson && view === "compact" ? toCompactStatusAcknowledgement("status", result) : result, `Updated ${result.entity.id} from ${result.previousStatus} to ${result.entity.status}`);
-			return 0;
-		});
-	}
-}
-
-export class BundleCommand extends PositionalsTenantCommand {
-	public static paths = [["bundle"]];
-	public view = Option.String("--view");
-
-	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
-		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
-			const initiativeId = requirePositional(this.positionals, 0, "bundle <initiativeId>");
-			const bundle = await store.getInitiativeBundle(initiativeId);
-
-			this.print(this.asJson && view === "compact" ? toCompactInitiativeBundle(bundle) : bundle, renderInitiativeBundle(bundle));
+			this.print(this.asJson ? toCompactStatusAcknowledgement("status", result) : result, `Updated ${result.entity.id} from ${result.previousStatus} to ${result.entity.status}`);
 			return 0;
 		});
 	}
@@ -404,9 +374,9 @@ export class NextWorkCommand extends PositionalsTenantCommand {
 }
 
 async function resolveContainingInitiative(
-	store: { queryEntityRelations(input: { entityId: string; direction: RelationDirection; types: RelationType[] }): Promise<{ entity: EntityRecord; incoming: Array<{ relationType: RelationType; entity: EntityRecord }> }> },
+	store: { queryEntityRelations(input: { entityId: string; direction: RelationDirection; types: RelationType[] }): Promise<{ entity: EntitySummary; incoming: Array<{ relationType: RelationType; entity: EntitySummary }> }> },
 	scopeId: string
-): Promise<EntityRecord> {
+): Promise<EntitySummary> {
 	let details = await store.queryEntityRelations({ entityId: scopeId, direction: "incoming", types: STRUCTURAL_PARENT_RELATION_TYPES });
 	const visited = new Set<string>();
 	while (details.entity.kind !== "initiative") {
@@ -471,10 +441,8 @@ export class RelationsCommand extends PositionalsTenantCommand {
 	public static paths = [["relations"]];
 	public directionValue = Option.String("--direction");
 	public typeValues = Option.String("--type");
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		const direction = this.directionValue ?? "both";
 		if (direction !== "incoming" && direction !== "outgoing" && direction !== "both") {
 			throw new Error(`Unknown relation direction: ${direction}`);
@@ -493,7 +461,7 @@ export class RelationsCommand extends PositionalsTenantCommand {
 				types: types as RelationType[]
 			});
 
-			this.print(this.asJson && view === "compact" ? toCompactEntityDetails(details) : details, renderEntityDetails(details));
+			this.print(this.asJson ? toCompactEntityDetails(details) : details, renderEntityDetails(details));
 			return 0;
 		});
 	}
@@ -515,17 +483,15 @@ export class OrphansCommand extends PositionalsTenantCommand {
 
 export class ShowCommand extends PositionalsTenantCommand {
 	public static paths = [["show"]];
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "show <id>");
 			const details = await store.getEntityDetails(entityId);
 
 			if (details.entity.kind === "initiative") {
 				const bundle = await store.getInitiativeBundle(entityId);
-				this.print(this.asJson && view === "compact" ? toCompactInitiativeBundle(bundle) : bundle, renderInitiativeBundle(bundle));
+				this.print(bundle, renderInitiativeBundle(bundle));
 				return 0;
 			}
 
@@ -536,7 +502,7 @@ export class ShowCommand extends PositionalsTenantCommand {
 				return 0;
 			}
 
-			this.print(this.asJson && view === "compact" ? toCompactEntityDetails(details) : details, renderEntityDetails(details));
+			this.print(details, renderEntityDetails(details));
 			return 0;
 		});
 	}
@@ -547,10 +513,8 @@ export class ListCommand extends PositionalsTenantCommand {
 	public limit = Option.String("--limit");
 	public parent = Option.String("--parent");
 	public statusValues = Option.String("--status");
-	public view = Option.String("--view");
 
 	public async execute(): Promise<number> {
-		const view = parseEntityView(this.view);
 		const limit = parsePositiveIntegerOption(this.limit, "--limit");
 		const kind = requirePositional(this.positionals, 0, "list <kind>");
 		if (!isEntityKind(kind)) {
@@ -566,9 +530,7 @@ export class ListCommand extends PositionalsTenantCommand {
 
 			this.print(
 				this.asJson
-					? view === "compact"
-						? toCompactEntityList(result.entities, result.total, result.openBlockers, result.parentGroups)
-						: result.parentGroups ? result : result.entities
+					? toCompactEntityList(result.entities, result.total, result.openBlockers, result.parentGroups)
 					: result.entities,
 				renderEntityList(kind, result.entities, result.openBlockers, result.parentGroups)
 			);

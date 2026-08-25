@@ -2,6 +2,7 @@ import type { installAgent, listAgent, uninstallAgent } from "../agent-installer
 import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
 import type { SynchronizeSummary } from "@agent-issues/core";
 import type { listTenants } from "@agent-issues/api-local";
+import type { installMcp, listMcp, uninstallMcp } from "../mcp-installer.js";
 import type { SavedLoginView } from "../auth-session.js";
 import type { startLiveSite } from "../site/index.js";
 import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
@@ -131,11 +132,7 @@ export function renderInstallAgent(result: ReturnType<typeof installAgent>): str
 	return [
 		`Installed agent to ${result.targetDir}`,
 		`${result.installed.installedName} ${result.installed.status} ${result.installed.agentFile}`,
-		`hook ${result.installed.hookFile}`,
-		...result.additionalInstalled.flatMap((item) => [
-			`${item.host} ${item.installedName} ${item.status} ${item.agentFile}`,
-			`${item.host} hook ${item.hookFile}`
-		])
+		...result.additionalInstalled.map((item) => `${item.host} ${item.installedName} ${item.status} ${item.agentFile}`)
 	].join("\n");
 }
 
@@ -153,11 +150,7 @@ export function renderListAgent(result: ReturnType<typeof listAgent>): string {
 	return [
 		`Packaged agent in ${result.targetDir}`,
 		`${result.agent.installedName} ${result.agent.status} ${result.agent.agentFile}`,
-		`hook ${result.agent.hookFile}`,
-		...result.additionalAgents.flatMap((item) => [
-			`${item.host} ${item.installedName} ${item.status} ${item.agentFile}`,
-			`${item.host} hook ${item.hookFile}`
-		])
+		...result.additionalAgents.map((item) => `${item.host} ${item.installedName} ${item.status} ${item.agentFile}`)
 	].join("\n");
 }
 
@@ -175,12 +168,20 @@ export function renderUninstallAgent(result: ReturnType<typeof uninstallAgent>):
 	return [
 		`Removed agent from ${result.targetDir}`,
 		`${result.removed.installedName} ${result.removed.status} ${result.removed.agentFile}`,
-		`hook ${result.removed.hookFile}`,
-		...result.additionalRemoved.flatMap((item) => [
-			`${item.host} ${item.installedName} ${item.status} ${item.agentFile}`,
-			`${item.host} hook ${item.hookFile}`
-		])
+		...result.additionalRemoved.map((item) => `${item.host} ${item.installedName} ${item.status} ${item.agentFile}`)
 	].join("\n");
+}
+
+export function renderInstallMcp(result: ReturnType<typeof installMcp>): string {
+	return `MCP server ${result.server.name} ${result.server.status} in ${result.targetFile}`;
+}
+
+export function renderListMcp(result: ReturnType<typeof listMcp>): string {
+	return `MCP server ${result.server.name} ${result.server.status} in ${result.targetFile}`;
+}
+
+export function renderUninstallMcp(result: ReturnType<typeof uninstallMcp>): string {
+	return `MCP server ${result.server.name} ${result.server.status} in ${result.targetFile}`;
 }
 
 export function renderCurrentTenant(result: {

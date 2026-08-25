@@ -93,7 +93,7 @@ agent-issues create prd --title "Workflow PRD" --parent INIT1
 agent-issues create userStory --title "Story one" --parent PRD1
 agent-issues create issue --title "Implement CLI" --parent INIT1
 agent-issues create issue --title "Handle parser edge cases" --parent ISS1
-agent-issues bundle INIT1
+agent-issues show INIT1 --json
 agent-issues create handoff --title "Resume parser work" --body-file - --link handsOff ISS1
 agent-issues edit HO1 --title "Resume parser work" --body-file -
 agent-issues move US1 PRD2
@@ -102,7 +102,7 @@ agent-issues relations ISS1
 agent-issues orphans
 agent-issues link ISS1 fixes US1
 agent-issues unlink ISS1 fixes US1
-agent-issues show INIT1 --view full --json
+agent-issues show ISS1 --json
 agent-issues list issue
 agent-issues auth login
 agent-issues auth list
@@ -127,8 +127,8 @@ agent-issues auth logout work
 ## Output
 
 - Default output is human-readable text.
-- Use `--json` for compact machine-readable output. Entity lists return `{ items, total }`, and mutation acknowledgements are compact.
-- Add `--view full` when an entity command must return complete records or authored body content.
+- Use `--json` for machine-readable output. Entity lists return `{ items, total }`, relations return summaries, and mutations return compact acknowledgements.
+- Use `show <id> --json` for a complete entity read, including authored body content. `show <initiativeId> --json` returns the complete initiative graph.
 - Add `--pretty` with `--json` when you want indented JSON.
 - Human-readable output is unchanged by the JSON response-shape change. See [release notes](docs/release-notes.md) for migration details.
 
@@ -250,7 +250,7 @@ The live server exposes the viewer assets together with `site-config.json`, `/ap
 
 ## Query-focused commands
 
-- `bundle <initiativeId>` returns one initiative bundle directly.
+- `show <initiativeId>` returns one complete initiative graph directly.
 - Initiative bundles include structural sub-issue links so issue trees can be reconstructed in the CLI and UI.
 - `create handoff --title ... --body-file - --link handsOff <focusId>` records a handoff as a graph entity.
 - `list handoff`, `show HOx`, `relations HOx`, and `edit HOx --title ... --body-file -` read and update handoffs through the generic entity commands.

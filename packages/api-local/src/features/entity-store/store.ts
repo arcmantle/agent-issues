@@ -41,12 +41,15 @@ import {
 	RESERVED_SYSTEM_AUTHOR,
 	shortEntityReference,
 	STRUCTURAL_RELATION_TYPES,
+	toEntitySummary,
 	type BodySource,
 	type DatabaseSnapshot,
 	type DeleteResult,
 	type EntityDetails,
 	type EntityKind,
 	type EntityRecord,
+	type EntityRelations,
+	type EntitySummary,
 	type EntityRevisionPatch,
 	type EntityStore,
 	type HistoryEntryRecord,
@@ -98,7 +101,11 @@ type EntityRow = {
 	updated_at: string;
 };
 
+type EntitySummaryRow = Omit<EntityRow, "body" | "body_source">;
+
 type DrizzleEntityRow = typeof entities.$inferSelect;
+
+const ENTITY_SUMMARY_COLUMNS = sql`entities.id, entities.reference, entities.short_reference, entities.created_by, entities.updated_by, entities.kind, entities.title, entities.status, entities.category, entities.priority, entities.type, entities.revision, entities.content_hash, entities.tombstone, entities.project_id, entities.created_at, entities.updated_at`;
 
 type RelationRow = {
 	from_id: string;
@@ -407,7 +414,7 @@ export function updateEntityStatus(
 	});
 
 	return {
-		entity: getEntityOrThrow(executor, entity.id),
+		entity: toEntitySummary({ ...entity, status: input.status, revision: newRevision, updatedBy: actorId, updatedAt }),
 		previousStatus
 	};
 }
@@ -876,14 +883,14 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 
 export function getEntityDetails(executor: SqliteExecutor, entityId: string): EntityDetails {
 	const entity = getEntityOrThrow(executor, entityId);
-	const incomingRows = all<EntityRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, entities.*
+	const incomingRows = all<EntitySummaryRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.to_id = ${entity.id}
 			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
-	const outgoingRows = all<EntityRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, entities.*
+	const outgoingRows = all<EntitySummaryRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId}
@@ -896,11 +903,11 @@ export function getEntityDetails(executor: SqliteExecutor, entityId: string): En
 		entity: applyDerivedStatus(entity, statusMap),
 		incoming: incomingRows.map((row) => ({
 			relationType: row.relation_type as RelationType,
-			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
 		outgoing: outgoingRows.map((row) => ({
 			relationType: row.relation_type as RelationType,
-			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
 		planEntries: entity.kind === "issue" ? getRelatedPlanEntries(executor, entity.id) : []
 	};
@@ -909,14 +916,14 @@ export function getEntityDetails(executor: SqliteExecutor, entityId: string): En
 export function queryEntityRelations(
 	executor: SqliteExecutor,
 	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] }
-): EntityDetails {
+): EntityRelations {
 	const details = getEntityDetails(executor, input.entityId);
 	const types = input.types?.length ? new Set(input.types) : undefined;
 	const includeIncoming = input.direction === undefined || input.direction === "both" || input.direction === "incoming";
 	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
 
 	return {
-		entity: details.entity,
+		entity: toEntitySummary(details.entity),
 		incoming: includeIncoming ? details.incoming.filter(({ relationType }) => !types || types.has(relationType)) : [],
 		outgoing: includeOutgoing ? details.outgoing.filter(({ relationType }) => !types || types.has(relationType)) : [],
 		planEntries: details.planEntries
@@ -995,12 +1002,12 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 	};
 }
 
-export function listEntities(executor: SqliteExecutor, kind: string): EntityRecord[] {
+export function listEntities(executor: SqliteExecutor, kind: string): EntitySummary[] {
 	if (!isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
 
-	return getAllDerivedEntities(executor).filter((entity) => entity.kind === kind);
+	return getAllDerivedEntitySummaries(executor).filter((entity) => entity.kind === kind);
 }
 
 export function queryEntities(
@@ -1008,7 +1015,7 @@ export function queryEntities(
 	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
 ): QueryEntitiesResult {
 	let selected = listEntities(executor, input.kind);
-	let parents: EntityRecord[] | undefined;
+	let parents: EntitySummary[] | undefined;
 	let structuralRelations: RelationRecord[] = [];
 	if (input.statuses?.length) {
 		const statuses = new Set(input.statuses);
@@ -1019,7 +1026,7 @@ export function queryEntities(
 		if (parentRows.length === 0) {
 			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
-		parents = parentRows.map((parent) => getEntityDetails(executor, parent.id).entity);
+		parents = parentRows.map((parent) => toEntitySummary(getEntityDetails(executor, parent.id).entity));
 		const parentIds = new Set(parents.map((parent) => parent.id));
 		structuralRelations = listAllRelations(executor)
 			.filter((relation) => parentIds.has(relation.fromId) && isStructuralRelationType(relation.type));
@@ -1049,7 +1056,7 @@ export function queryEntities(
  * never have to resolve a raw id back to something they can pass to another
  * command.
  */
-function getOpenBlockers(executor: SqliteExecutor, issues: EntityRecord[]): Record<string, string[]> {
+function getOpenBlockers(executor: SqliteExecutor, issues: EntitySummary[]): Record<string, string[]> {
 	const issueIds = new Set(issues.map((entity) => entity.id));
 	const referenceById = new Map(issues.map((entity) => [entity.id, entity.reference]));
 	const openBlockers: Record<string, string[]> = {};
@@ -1619,6 +1626,14 @@ function getAllEntities(executor: SqliteExecutor): EntityRecord[] {
 	return rows.map(mapEntityRow);
 }
 
+function getAllEntitySummaries(executor: SqliteExecutor): EntitySummary[] {
+	const rows = all<EntitySummaryRow>(
+		executor,
+		sql`SELECT ${ENTITY_SUMMARY_COLUMNS} FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND tombstone = 0 ORDER BY id`
+	);
+	return rows.map(mapEntitySummaryRow);
+}
+
 function getTenantEntities(executor: SqliteExecutor): EntityRecord[] {
 	const rows = all<EntityRow>(executor, sql`SELECT * FROM entities WHERE tenant_id = ${executor.tenantId} AND tombstone = 0 ORDER BY id`);
 	return rows.map(mapEntityRow);
@@ -1670,11 +1685,15 @@ function getAllDerivedEntities(executor: SqliteExecutor): EntityRecord[] {
 	return deriveEntityStatuses(getAllEntities(executor), getAllRelations(executor));
 }
 
+function getAllDerivedEntitySummaries(executor: SqliteExecutor): EntitySummary[] {
+	return deriveEntityStatuses(getAllEntitySummaries(executor), getAllRelations(executor));
+}
+
 function getDerivedStatusMap(executor: SqliteExecutor): Map<string, string> {
 	return new Map(getAllDerivedEntities(executor).map((entity) => [entity.id, entity.status]));
 }
 
-function applyDerivedStatus(entity: EntityRecord, statusMap: Map<string, string>): EntityRecord {
+function applyDerivedStatus<T extends EntitySummary>(entity: T, statusMap: Map<string, string>): T {
 	const derived = statusMap.get(entity.id);
 	return derived === undefined || derived === entity.status ? entity : { ...entity, status: derived };
 }
@@ -1870,6 +1889,30 @@ function mapEntityRow(row: EntityRow): EntityRecord {
 	};
 }
 
+function mapEntitySummaryRow(row: EntitySummaryRow): EntitySummary {
+	if (!isEntityKind(row.kind)) {
+		throw new Error(`Unexpected entity kind in database: ${row.kind}`);
+	}
+
+	return {
+		id: row.id,
+		reference: row.reference,
+		shortReference: row.short_reference,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
+		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
+		kind: row.kind,
+		title: row.title,
+		status: row.status,
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind as EntityKind, row.type) ? row.type : null,
+		revision: row.revision ?? 1,
+		contentHash: row.content_hash ?? "",
+		createdAt: row.created_at,
+		updatedAt: row.updated_at
+	};
+}
+
 function tenantParams<T extends Record<string, unknown>>(executor: SqliteExecutor, values: T): T & { tenantId: string } {
 	return {
 		tenantId: executor.tenantId,
@@ -1928,11 +1971,11 @@ export class LocalEntityStore implements EntityStore {
 		return getEntityDetails(this.executor, entityId);
 	}
 
-	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): Promise<EntityDetails> {
+	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): ReturnType<EntityStore["queryEntityRelations"]> {
 		return queryEntityRelations(this.executor, input);
 	}
 
-	public async listEntities(kind: string): Promise<EntityRecord[]> {
+	public async listEntities(kind: string): ReturnType<EntityStore["listEntities"]> {
 		return listEntities(this.executor, kind);
 	}
 

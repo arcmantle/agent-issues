@@ -192,7 +192,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 			// The active remote login routes the ordinary create command to the
 			// destination; synchronize then brings that entity down to local.
 			const createOut = createCapture();
-			await runCli(["create", "initiative", "--title", "Ship synchronize", "--json", "--view", "full"], {
+			await runCli(["create", "initiative", "--title", "Ship synchronize", "--json"], {
 				credentialStoreOptions,
 				cwd: projectDirectory,
 				stdout: createOut.stream

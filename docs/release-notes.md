@@ -1,14 +1,15 @@
 # Release notes
 
-## Compact JSON default
+## Fixed Entity JSON Contracts
 
-This breaking release changes the default JSON response shape for entity commands:
+This breaking release removes entity `--view` selection and gives each command one JSON response shape:
 
-- Entity commands using `--json` now return compact projections by default.
-- Mutation acknowledgements are compact by default.
+- `show <id> --json` returns complete entity content; `show <initiativeId> --json` returns the complete initiative graph.
+- `list` and `relations` return summary projections without authored bodies.
+- Mutations return compact acknowledgements.
 - `list` JSON returns `{ items, total }`, where `total` is the filtered count before `--limit` is applied.
-- Pass `--view full` to restore the former full-fidelity entity, relation, or bundle response, including authored body content.
+- The redundant `bundle` command is removed; use `show <initiativeId>`.
 - Human-readable output is unchanged.
 - `list` filters and limits, plus relation type and direction filters, execute in storage so large trackers do not fetch records that will be discarded.
 
-Scripts that depend on complete entity records or the former list array shape must add `--view full` or migrate to the compact response shape.
+Scripts that need complete entity content must use `show <id>`. Scripts that consume list or relation output must use their summary response shapes.

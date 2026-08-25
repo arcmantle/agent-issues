@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const AGENT_FILE_NAME = "agent-issues.agent.md";
 const CLAUDE_AGENT_FILE_NAME = "agent-issues.md";
-const HOOK_FILE_NAME = "agent-issues-enforcer.mjs";
+const LEGACY_HOOK_FILE_NAME = "agent-issues-enforcer.mjs";
 const LANGUAGE_FILE_NAME = "agent-issues-language.md";
 const RECIPES_DIRECTORY_NAME = "recipes";
 const AGENT_FILES_MANIFEST = ".agent-issues-agent-files.json";
@@ -16,7 +16,6 @@ type AgentHost = "claude" | "copilot" | "vscode";
 type AgentInstallRecord = {
 	installedName: string;
 	agentFile: string;
-	hookFile: string;
 };
 
 type AgentInstallation = AgentInstallRecord & {
@@ -143,16 +142,15 @@ function installAgentAtTarget(
 	force: boolean
 ): AgentInstallRecord & { status: "installed" | "updated" | "skipped" } {
 	const sourceAgentFile = path.join(sourceRoot, "agents", target.host === "claude" ? "agent-issues.claude.md" : AGENT_FILE_NAME);
-	const sourceHookFile = path.join(sourceRoot, "hooks", HOOK_FILE_NAME);
 	const sourceLanguageFile = path.join(sourceRoot, "..", "skills", LANGUAGE_FILE_NAME);
 	const sourceRecipesDirectory = path.join(sourceRoot, "..", "skills", RECIPES_DIRECTORY_NAME);
 	const destinationAgentFile = path.join(target.targetDir, target.agentFileName);
-	const destinationHookFile = path.join(target.targetDir, HOOK_FILE_NAME);
+	const legacyHookFile = path.join(target.targetDir, LEGACY_HOOK_FILE_NAME);
 	const destinationLanguageFile = path.join(target.targetDir, LANGUAGE_FILE_NAME);
 	const destinationRecipesDirectory = path.join(target.targetDir, RECIPES_DIRECTORY_NAME);
-	const existed = existsSync(destinationAgentFile) || existsSync(destinationHookFile);
+	const existed = existsSync(destinationAgentFile);
 
-	if (!existsSync(sourceAgentFile) || !existsSync(sourceHookFile) || !existsSync(sourceLanguageFile) || !existsSync(sourceRecipesDirectory)) {
+	if (!existsSync(sourceAgentFile) || !existsSync(sourceLanguageFile) || !existsSync(sourceRecipesDirectory)) {
 		throw new Error(`Packaged agent assets not found under ${sourceRoot}`);
 	}
 
@@ -162,13 +160,12 @@ function installAgentAtTarget(
 		return {
 			installedName: INSTALLED_AGENT_NAME,
 			agentFile: destinationAgentFile,
-			hookFile: destinationHookFile,
 			status: "skipped"
 		};
 	}
 
 	cpSync(sourceAgentFile, destinationAgentFile);
-	cpSync(sourceHookFile, destinationHookFile);
+	rmSync(legacyHookFile, { force: true });
 	cpSync(sourceLanguageFile, destinationLanguageFile);
 	if (force || !existsSync(destinationRecipesDirectory)) {
 		if (existsSync(destinationRecipesDirectory)) {
@@ -177,24 +174,21 @@ function installAgentAtTarget(
 		cpSync(sourceRecipesDirectory, destinationRecipesDirectory, { recursive: true });
 		writeOwnedRecipeCatalog(target.targetDir);
 	}
-	rewriteInstalledAgentHooks(destinationAgentFile, destinationHookFile, target.host);
-
 	return {
 		installedName: INSTALLED_AGENT_NAME,
 		agentFile: destinationAgentFile,
-		hookFile: destinationHookFile,
 		status: existed ? "updated" : "installed"
 	};
 }
 
 function uninstallAgentAtTarget(target: AgentTarget): AgentInstallRecord & { status: "removed" | "missing" } {
 	const destinationAgentFile = path.join(target.targetDir, target.agentFileName);
-	const destinationHookFile = path.join(target.targetDir, HOOK_FILE_NAME);
+	const legacyHookFile = path.join(target.targetDir, LEGACY_HOOK_FILE_NAME);
 	const destinationLanguageFile = path.join(target.targetDir, LANGUAGE_FILE_NAME);
 	const destinationRecipesDirectory = path.join(target.targetDir, RECIPES_DIRECTORY_NAME);
-	const existed = existsSync(destinationAgentFile) || existsSync(destinationHookFile);
+	const existed = existsSync(destinationAgentFile);
 
-	for (const destinationFile of [destinationAgentFile, destinationHookFile, destinationLanguageFile]) {
+	for (const destinationFile of [destinationAgentFile, legacyHookFile, destinationLanguageFile]) {
 		if (existsSync(destinationFile)) {
 			rmSync(destinationFile, { force: true });
 		}
@@ -208,38 +202,22 @@ function uninstallAgentAtTarget(target: AgentTarget): AgentInstallRecord & { sta
 	return {
 		installedName: INSTALLED_AGENT_NAME,
 		agentFile: destinationAgentFile,
-		hookFile: destinationHookFile,
 		status: existed ? "removed" : "missing"
 	};
 }
 
 function listAgentAtTarget(target: AgentTarget): AgentInstallRecord & { status: "installed" | "partial" | "missing" } {
 	const destinationAgentFile = path.join(target.targetDir, target.agentFileName);
-	const destinationHookFile = path.join(target.targetDir, HOOK_FILE_NAME);
 	const destinationRecipesDirectory = path.join(target.targetDir, RECIPES_DIRECTORY_NAME);
 	const agentExists = existsSync(destinationAgentFile);
-	const hookExists = existsSync(destinationHookFile);
 	const recipesExist = existsSync(destinationRecipesDirectory);
 	const ownsRecipeCatalog = hasOwnedRecipeCatalog(target.targetDir);
 
 	return {
 		installedName: INSTALLED_AGENT_NAME,
 		agentFile: destinationAgentFile,
-		hookFile: destinationHookFile,
-		status: agentExists && hookExists && recipesExist && ownsRecipeCatalog ? "installed" : agentExists || hookExists || recipesExist ? "partial" : "missing"
+		status: agentExists && recipesExist && ownsRecipeCatalog ? "installed" : agentExists || recipesExist ? "partial" : "missing"
 	};
-}
-
-function rewriteInstalledAgentHooks(agentFilePath: string, hookFilePath: string, host: AgentHost): void {
-	const current = readFileSync(agentFilePath, "utf8");
-	const hookCommand = JSON.stringify(`node \"${hookFilePath}\"`);
-	const updated = host === "claude"
-		? current.replaceAll("{{AGENT_ISSUES_HOOK_COMMAND}}", hookCommand)
-		: current.replace(
-			/^hooks:\s+\{.*\}$/m,
-			`hooks: { UserPromptSubmit: [{ type: command, command: ${hookCommand}, cwd: ".", timeout: 10 }], PreToolUse: [{ type: command, command: ${hookCommand}, cwd: ".", timeout: 10 }] }`
-		);
-	writeFileSync(agentFilePath, updated, "utf8");
 }
 
 function hasOwnedRecipeCatalog(targetDir: string): boolean {

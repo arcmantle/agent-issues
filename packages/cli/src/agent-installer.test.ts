@@ -44,9 +44,6 @@ describe("agent installer", () => {
 			expect(existsSync(copilotAgentFile)).toBe(true);
 			expect(existsSync(claudeAgentFile)).toBe(true);
 			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
-			`command: ${JSON.stringify(`node \"${path.join(homeDirectory, ".claude", "agents", "agent-issues-enforcer.mjs")}\"`)}`
-		);
-			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
 				"Follow the shared [language standard](./agent-issues-language.md)."
 			);
 			expect(readFileSync(claudeAgentFile, "utf8")).toContain(
@@ -71,33 +68,33 @@ describe("agent installer", () => {
 		}
 	});
 
-	it("installs the packaged custom agent and rewrites the hook path for the target directory", () => {
+	it("installs the packaged custom agent for the target directory", () => {
 		const targetDir = createTargetDir();
 		const result = installAgent({ targetDir });
 		const installedAgent = readFileSync(result.installed.agentFile, "utf8");
-		const expectedHookCommand = JSON.stringify(`node \"${result.installed.hookFile}\"`);
 		const languageFile = path.join(targetDir, "agent-issues-language.md");
 		const recipesDirectory = path.join(targetDir, "recipes");
 
 		expect(result.installed.status).toBe("installed");
 		expect(existsSync(result.installed.agentFile)).toBe(true);
-		expect(existsSync(result.installed.hookFile)).toBe(true);
 		expect(existsSync(path.join(recipesDirectory, "README.md"))).toBe(true);
 		expect(existsSync(path.join(recipesDirectory, "user-story.md"))).toBe(true);
-		expect(installedAgent).toContain(`command: ${expectedHookCommand}`);
-		expect(installedAgent).not.toContain("node .github/hooks/agent-issues-enforcer.mjs");
 		expect(installedAgent).toContain("agent");
 		expect(installedAgent).toContain("web");
 		expect(installedAgent).toContain("./agent-issues-language.md");
 		expect(readFileSync(languageFile, "utf8")).toContain("# Language standard");
 	});
 
-	it("reports a partial install when only one installed file exists", () => {
+	it("removes a stale hook file when it force-updates an agent", () => {
 		const targetDir = createTargetDir();
 		const result = installAgent({ targetDir });
-		rmSync(result.installed.hookFile, { force: true });
+		const legacyHookFile = path.join(targetDir, "agent-issues-enforcer.mjs");
+		writeFileSync(legacyHookFile, "legacy hook");
 
-		expect(listAgent({ targetDir }).agent.status).toBe("partial");
+		installAgent({ targetDir, force: true });
+
+		expect(existsSync(result.installed.agentFile)).toBe(true);
+		expect(existsSync(legacyHookFile)).toBe(false);
 	});
 
 	it("reports a partial install when the recipe catalog is missing", () => {
@@ -111,11 +108,13 @@ describe("agent installer", () => {
 	it("uninstalls both installed files", () => {
 		const targetDir = createTargetDir();
 		const result = installAgent({ targetDir });
+		const legacyHookFile = path.join(targetDir, "agent-issues-enforcer.mjs");
+		writeFileSync(legacyHookFile, "legacy hook");
 		const removed = uninstallAgent({ targetDir });
 
 		expect(removed.removed.status).toBe("removed");
 		expect(existsSync(result.installed.agentFile)).toBe(false);
-		expect(existsSync(result.installed.hookFile)).toBe(false);
+		expect(existsSync(legacyHookFile)).toBe(false);
 		expect(existsSync(path.join(targetDir, "agent-issues-language.md"))).toBe(false);
 		expect(existsSync(path.join(targetDir, "recipes"))).toBe(false);
 		expect(listAgent({ targetDir }).agent.status).toBe("missing");

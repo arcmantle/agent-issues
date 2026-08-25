@@ -15,10 +15,10 @@ Recipe migration is a user-invoked process that restructures existing authored b
 
 Start from an entity, initiative, shared context, or full project. Preview one selected scope at a time:
 
-- **Entity:** Read the record with `agent-issues show <reference> --view full --json`.
-- **Initiative:** Read `agent-issues bundle <initiativeReference> --json` and `agent-issues context show <initiativeReference> --json`.
-- **Shared context:** Read `agent-issues context show default --json`.
-- **Full project:** Read each supported entity kind with `agent-issues list <kind> --json`, then read project and initiative context with `agent-issues context list --json`.
+- **Entity:** Run the **Entity Read** recipe.
+- **Initiative:** Run the **Initiative Read** recipe and the **Context Read** recipe.
+- **Shared context:** Run the **Context Read** recipe for the shared context.
+- **Full project:** Run the **Entity List** recipe for each supported entity kind, then run the **Context Read** recipe with directory input.
 
 Include authored entity bodies, context summaries, and context terms in the selected scope. Do not migrate generated bodies, empty bodies, or issue comments. Comment migration remains reserved until comment records exist.
 
@@ -35,19 +35,15 @@ For a full-project recipe migration, preview all supported authored entity bodie
 ## Approval And Write
 
 1. Ask for explicit approval of the remaining preview. Approval may cover the selected scope after per-record exclusions.
-2. Before each write, reload the record and compare its revision and body with the preview. The migration skips it when the body changed after preview. Do not retry or overwrite a stale record.
-3. Write an approved entity with `agent-issues edit <reference> --body-file <path> --json`.
-4. Write an approved context summary with `agent-issues context set --scope <scope> --title <title> --body-file <path> --json`.
-5. Write an approved context term with `agent-issues context define <term> --scope <scope> --body-file <path> --avoid <existingAvoidList> --json`.
+2. Before each write, run the **Entity Read** recipe or the **Context Read** recipe to reload the record and compare its revision and body with the preview. The migration skips it when the body changed after preview. Do not retry or overwrite a stale record.
+3. Run the **Entity Create And Edit** recipe to update an approved entity with direct body text.
+4. Run the **Context Write** recipe to update an approved context summary with direct title and body text.
+5. Run the **Context Write** recipe to update an approved context term with direct definition and `avoid` text.
 
-Use existing CLI operations only. Do not add a recipe command group or conditional-write options.
+Use existing tracker operations only. Do not add a recipe operation group or conditional-write options.
 
 ## Report
 
-Report updated, unchanged, excluded, and stale records separately. For every item, include its complete tracker reference. For updated records, report the prior and resulting revisions. Explain restoration with the existing revision commands:
-
-- `agent-issues restore <reference> --revision <priorRevision> --json` for an entity.
-- `agent-issues restore --context <scope> --revision <priorRevision> --json` for a context summary.
-- `agent-issues restore --context <scope> --term <term> --revision <priorRevision> --json` for a context term.
+Report updated, unchanged, excluded, and stale records separately. For every item, include its complete tracker reference. For updated records, report the prior and resulting revisions. Run the **Revision Read** recipe before the **Entity Restore** recipe or the **Context Restore** recipe. The context restore recipe explicitly identifies its CLI-only fallback.
 
 End after the report. A stale record needs a new preview before it can be considered again.

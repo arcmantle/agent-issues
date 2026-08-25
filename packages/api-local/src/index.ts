@@ -4,6 +4,8 @@ export * from "./features/entity-store/store.js";
 export * from "./features/context/context-store.js";
 export * from "./sqlite-store.js";
 export * from "./daemon/daemon-state.js";
+export * from "./daemon/daemon-lifecycle.js";
+export * from "./daemon/local-daemon-store.js";
 export * from "./auth/daemon-token.js";
 export { createLocalDaemonServer, type LocalDaemonServerHandle, type LocalDaemonServerOptions } from "./daemon/local-daemon-server.js";
 export { DaemonTokenAuthProvider, type DaemonTokenAuthProviderOptions } from "./auth/daemon-token-auth-provider.js";

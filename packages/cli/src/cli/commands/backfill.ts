@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { backfillBodies, parseBackfillableBodyKinds } from "../../body-backfill.js";
+import { backfillBodies, parseBackfillableBodyKinds } from "@agent-issues/core";
 
 import { renderBackfillBodies } from "../renderers.js";
 import { MutableTenantCommand, parseCsvOption, withStore } from "../shared.js";

@@ -34,17 +34,17 @@ If one document mixes more than one concern, split it into the smallest set of t
 
 1. Create or reuse the parent initiative.
 2. Migrate glossary and context terms.
-3. Create or reuse PRDs with their migrated markdown in the body: `agent-issues create prd --title ... --parent INITx --body-file "$prdBodyFile" --json`. If you reuse an existing PRD, update it with `agent-issues edit PRDx --body-file "$prdBodyFile" --json`.
-4. Create the PRD's user stories with `agent-issues create userStory --title ... --parent PRDx --body-file "$userStoryBodyFile" --json`. Keep the full committed story text in the body, even when the title is shorter. If you reuse a story, update it with `agent-issues edit USx --body-file "$userStoryBodyFile" --json`.
-5. Create or reuse ADRs with their decision text in the body: `agent-issues create adr --title ... --parent INITx --body-file "$adrBodyFile" --json`. If you reuse an ADR, update it with `agent-issues edit ADRx --body-file "$adrBodyFile" --json`.
-6. Create issues with their migrated implementation text in the body: `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json`. If you reuse an issue, update it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json`.
-7. Link issues to user stories with `agent-issues link ISSx fixes USy`.
-8. Link ADR constraints with `agent-issues link ADRx constrains ISSy` when a decision clearly governs implementation work.
-9. Link issue dependencies with `agent-issues link BLOCKER_ISS blocks BLOCKED_ISS`.
+3. Run the **Entity Create And Edit** recipe to create or reuse PRDs with their migrated markdown as direct body text. If you reuse an existing PRD, update its body.
+4. Run the **Entity Create And Edit** recipe to create the PRD's user stories with the PRD as parent. Keep the full committed story text in the body, even when the title is shorter. If you reuse a story, update its body.
+5. Run the **Entity Create And Edit** recipe to create or reuse ADRs with their decision text in the body. If you reuse an ADR, update its body.
+6. Run the **Entity Create And Edit** recipe to create issues with their migrated implementation text in the body. If you reuse an issue, update its body.
+7. Run the **Entity Relations** recipe to link issues to user stories with `fixes`.
+8. Run the **Entity Relations** recipe to link ADR constraints with `constrains` when a decision clearly governs implementation work.
+9. Run the **Entity Relations** recipe to link issue dependencies with `blocks`.
 
 Publish blockers before you publish blocked issues, so every relation points to a real record.
 
-When you migrate markdown docs, store the source text in the record body. Do not compress it into a title. Drop only the duplicate top-level heading when the record title already covers it. Prefer `--body-file` for these migrations, so multiline markdown lands exactly as written.
+When you migrate markdown docs, store the source text in the record body. Do not compress it into a title. Drop only the duplicate top-level heading when the record title already covers it. The **Entity Create And Edit** recipe uses direct MCP body input or its exact CLI standard-input fallback, so multiline markdown lands exactly as written.
 
 ### 4. Handle gaps and unclear cases carefully
 

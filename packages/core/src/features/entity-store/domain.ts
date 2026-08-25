@@ -148,6 +148,28 @@ export type EntityRecord = {
 	updatedAt: string;
 };
 
+export type EntitySummary = Omit<EntityRecord, "body" | "bodySource">;
+
+export function toEntitySummary(entity: EntityRecord): EntitySummary {
+	return {
+		id: entity.id,
+		reference: entity.reference,
+		shortReference: entity.shortReference,
+		createdBy: entity.createdBy,
+		updatedBy: entity.updatedBy,
+		kind: entity.kind,
+		title: entity.title,
+		status: entity.status,
+		category: entity.category,
+		priority: entity.priority,
+		type: entity.type,
+		revision: entity.revision,
+		contentHash: entity.contentHash,
+		createdAt: entity.createdAt,
+		updatedAt: entity.updatedAt
+	};
+}
+
 /**
  * Computes the canonical content hash for an entity's mutable title and body
  * (ADR55/ISS257). Used to populate `EntityRecord.contentHash` on creation and
@@ -431,7 +453,7 @@ export function deriveIssueStatus(storedStatus: string, subIssueStatuses: string
 	return storedStatus === "blocked" ? "todo" : storedStatus;
 }
 
-export function deriveEntityStatuses(entities: EntityRecord[], relations: RelationRecord[]): EntityRecord[] {
+export function deriveEntityStatuses<T extends Pick<EntityRecord, "id" | "kind" | "status">>(entities: T[], relations: RelationRecord[]): T[] {
 	const storedStatusById = new Map(entities.map((entity) => [entity.id, entity.status]));
 	const entityById = new Map(entities.map((entity) => [entity.id, entity]));
 	const kindById = new Map(entities.map((entity) => [entity.id, entity.kind]));

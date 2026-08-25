@@ -1,12 +1,16 @@
 import { installAgent, listAgent, uninstallAgent } from "../../agent-installer.js";
+import { installMcp, listMcp, uninstallMcp } from "../../mcp-installer.js";
 import { installSkills, listSkills, uninstallSkills } from "../../skill-installer.js";
 
 import {
 	renderInstallAgent,
+	renderInstallMcp,
 	renderInstallSkills,
 	renderListAgent,
+	renderListMcp,
 	renderListSkills,
 	renderUninstallAgent,
+	renderUninstallMcp,
 	renderUninstallSkills
 } from "../renderers.js";
 import { TargetCommand } from "../shared.js";
@@ -67,6 +71,36 @@ export class UninstallAgentCommand extends TargetCommand {
 	public async execute(): Promise<number> {
 		const result = uninstallAgent({ targetDir: this.target });
 		this.print(result, renderUninstallAgent(result));
+		return 0;
+	}
+}
+
+export class InstallMcpCommand extends TargetCommand {
+	public static paths = [["install-mcp"]];
+
+	public async execute(): Promise<number> {
+		const result = installMcp({ targetFile: this.target, force: this.force });
+		this.print(result, renderInstallMcp(result));
+		return 0;
+	}
+}
+
+export class ListMcpCommand extends TargetCommand {
+	public static paths = [["list-mcp"]];
+
+	public async execute(): Promise<number> {
+		const result = listMcp({ targetFile: this.target });
+		this.print(result, renderListMcp(result));
+		return 0;
+	}
+}
+
+export class UninstallMcpCommand extends TargetCommand {
+	public static paths = [["uninstall-mcp"]];
+
+	public async execute(): Promise<number> {
+		const result = uninstallMcp({ targetFile: this.target });
+		this.print(result, renderUninstallMcp(result));
 		return 0;
 	}
 }

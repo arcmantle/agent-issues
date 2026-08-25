@@ -14,6 +14,8 @@ import type {
 	DeleteTenantResult,
 	EntityDetails,
 	EntityRecord,
+	EntityRelations,
+	EntitySummary,
 	ForgetContextTermResult,
 	HistoryEntryRecord,
 	InitiativeBundle,
@@ -215,11 +217,11 @@ export class PgStore implements StorageDriver {
 		return { ...details, comments: await this.listIssueComments({ issueId: issue.id }) };
 	}
 
-	public async queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails> {
+	public async queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityRelations> {
 		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).queryEntityRelations(input));
 	}
 
-	public async listEntities(kind: string): Promise<EntityRecord[]> {
+	public async listEntities(kind: string): Promise<EntitySummary[]> {
 		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listEntities(kind));
 	}
 

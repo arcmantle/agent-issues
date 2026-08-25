@@ -53,14 +53,14 @@ describe("skill installer", () => {
 		for (const skillName of ["ai-grill-with-docs", "ai-plan"]) {
 			const skill = readFileSync(path.join(targetDir, skillName, "SKILL.md"), "utf8");
 
-			expect(skill).toContain("`agent-issues show <initiative-reference> --view full --json`");
-			expect(skill).toContain("`agent-issues create plan --title \"<Plan title>\" --parent <initiative-reference> --body-file - --json`");
+			expect(skill).toContain("**Entity Read** recipe for the active initiative");
+			expect(skill).toContain("**Entity Create And Edit** recipe to create one initiative-owned Plan");
 			expect(skill).toContain("If the user gives an explicit Plan reference, resume that Plan instead.");
 			expect(skill).toContain("Do not infer a Plan to resume or create a duplicate Plan.");
-			expect(skill).toContain("`agent-issues plan-entry add`");
+			expect(skill).toContain("**Plan Entry Write** recipe");
 			expect(skill).toContain("before asking it");
 			expect(skill).toContain("before continuing");
-			expect(skill).toContain("--supersedes <question-reference>");
+			expect(skill).toContain("supersedes the question reference");
 			expect(skill).toContain("durable fact from code or tool output");
 		}
 			for (const callerName of ["ai-implement", "ai-prepare", "ai-start-work", "ai-tdd"]) {
@@ -102,10 +102,10 @@ describe("skill installer", () => {
 
 		expect(skill).toContain("explicit ready Plan reference");
 		expect(skill).toContain("active Plan entries");
-		expect(skill).toContain("Plan informs PRD");
+		expect(skill).toContain("**Plan Entry Issue Link** recipe to create the non-structural Plan `informs` PRD provenance relation");
 		expect(skill).toContain("tombstone: true");
 		expect(skill).toContain("supersededEntryIds");
-		expect(skill).toContain("agent-issues link <plan-reference> informs <prd-reference> --json");
+		expect(skill).toContain("direct body text");
 	});
 
 	it("installs typed Wayfinder Plan workflow guidance", () => {
@@ -114,11 +114,11 @@ describe("skill installer", () => {
 		installSkills({ targetDir });
 		const skill = readFileSync(path.join(targetDir, "ai-wayfinder", "SKILL.md"), "utf8");
 
-		expect(skill).toContain("--type wayfinder-map");
-		expect(skill).toContain("--type wayfinder-ticket");
-		expect(skill).toContain("agent-issues create plan --parent <initiativeReference>");
+		expect(skill).toContain("**Entity Create And Edit** recipe to create the map as a `wayfinder-map` issue");
+		expect(skill).toContain("each ticket as a `wayfinder-ticket` child");
+		expect(skill).toContain("**Entity Create And Edit** recipe to create an initiative-owned Plan");
 		expect(skill).toContain("resumes only an explicit Plan reference");
-		expect(skill).toContain("--reference <ticket-reference>");
+		expect(skill).toContain("**Plan Entry Write** recipe to link back to the ticket reference");
 		expect(skill).toContain("canonical detailed resolution");
 		expect(skill).toContain("does not inform a Wayfinder map");
 		expect(skill).toContain("update only `## Resolution`");
@@ -239,23 +239,25 @@ describe("skill installer", () => {
 		expect(readFileSync(operatingContractFile, "utf8")).toBe("custom operating guidance");
 	});
 
-	it("installs the operating contract with the generic handoff command", () => {
+	it("installs the operating contract with MCP-first handoff guidance", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
 
 		installSkills({ targetDir });
 
 		const operatingContract = readFileSync(path.join(targetDir, "agent-issues-operating-contract.md"), "utf8");
-		expect(operatingContract).toContain("agent-issues create handoff");
-		expect(operatingContract).not.toContain("agent-issues handoff");
+		expect(operatingContract).toContain("## Operation Recipes");
+		expect(operatingContract).toContain("MCP: `entity_next_work({ scopeId })`");
+		expect(operatingContract).toContain("CLI fallback: `agent-issues next-work <initiativeOrDescendantId> --json`");
+		expect(operatingContract).toContain("MCP: `entity_create({ kind: \"handoff\"");
 
 			for (const skillName of ["ai-agent-issues", "ai-grill-with-docs", "ai-handoff", "ai-implement", "ai-prepare", "ai-start-work", "ai-tdd", "ai-to-issues"]) {
 			const installedSkill = readFileSync(path.join(targetDir, skillName, "SKILL.md"), "utf8");
 
-			expect(installedSkill).not.toContain("agent-issues handoff");
+			expect(installedSkill).not.toContain("agent-issues create handoff");
 		}
 	});
 
-	it("installs narrow compact read guidance for agent workflows", () => {
+	it("installs MCP-first read guidance for agent workflows", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
 
 		installSkills({ targetDir });
@@ -265,13 +267,60 @@ describe("skill installer", () => {
 		const nextWork = readFileSync(path.join(targetDir, "ai-next-work", "SKILL.md"), "utf8");
 		const installedGuidance = `${operatingContract}\n${toolingGuide}\n${nextWork}`;
 
-		expect(installedGuidance).toContain("agent-issues list <kind> --json");
-		expect(installedGuidance).toContain("agent-issues relations <id> --json");
-		expect(installedGuidance).toContain("agent-issues show <id> --view full --json");
-		expect(nextWork).toContain("agent-issues next-work <initiativeOrDescendantId> --json");
-		expect(installedGuidance).not.toContain("compatibility default");
-		expect(installedGuidance).toContain("Use `bundle` only for a planned initiative-wide read");
-		expect(installedGuidance).toContain("Routine `jq` filtering shows a missing CLI feature");
+		expect(installedGuidance).toContain("Every tracker operation uses one of these recipes");
+		expect(installedGuidance).toContain("MCP: `entity_list({ kind, statuses?, parentId?, limit? })`");
+		expect(installedGuidance).toContain("CLI fallback: `agent-issues relations <entityId>");
+		expect(nextWork).toContain("**Next Work** recipe");
+		expect(installedGuidance).toContain("MCP: `initiative_bundle({ initiativeId })`");
+		expect(installedGuidance).toContain("exact CLI fallback");
+	});
+
+	it("installs explicit MCP and CLI fallback recipes for tracker operations", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+
+		installSkills({ targetDir });
+		const operatingContract = readFileSync(path.join(targetDir, "agent-issues-operating-contract.md"), "utf8");
+		const recipes = [
+			["### Entity Read", "**Kind:** Read.", "MCP: `entity_show({ reference })`", "CLI fallback: `agent-issues show <reference> --json`"],
+			["### Entity List", "**Kind:** Read.", "MCP: `entity_list({ kind, statuses?, parentId?, limit? })`", "CLI fallback: `agent-issues list <kind>"],
+			["### Relation Query", "**Kind:** Read.", "MCP: `relation_query({ entityId, direction?, types? })`", "CLI fallback: `agent-issues relations <entityId>"],
+			["### Initiative Read", "**Kind:** Read.", "MCP: `initiative_bundle({ initiativeId })`", "CLI fallback: `agent-issues show <initiativeId> --json`"],
+			["### Next Work", "**Kind:** Read.", "MCP: `entity_next_work({ scopeId })`", "CLI fallback: `agent-issues next-work <initiativeOrDescendantId> --json`"],
+			["### Context Read", "**Kind:** Read.", "MCP: `context_show({ scopeRef? })`", "CLI fallback: `agent-issues context show [<scope>] --json`"],
+			["### Context Write", "**Kind:** Write.", "MCP: `context_set({ scopeRef?, title, summary", "CLI fallback: `agent-issues context set --scope <scope>"],
+			["### Entity Create And Edit", "**Kind:** Write.", "MCP create: `entity_create({ kind, title, body?", "CLI fallback: `agent-issues create <kind>"],
+			["### Entity State And Structure", "**Kind:** Write.", "MCP: `entity_status({ entityId, status })`", "CLI fallback: `agent-issues status <entityId> <status> --json`"],
+			["### Entity Relations", "**Kind:** Write.", "MCP: `relation_link({ fromId, relationType, toId })`", "CLI fallback: `agent-issues link <fromId> <relationType> <toId> --json`"],
+			["### Plan Entry Read", "**Kind:** Read.", "MCP: `plan_entry_list({ planId })`", "CLI fallback: `agent-issues plan-entry list <planId> --json`"],
+			["### Plan Entry Write", "**Kind:** Write.", "MCP: `plan_entry_create({ planId, role, body", "CLI fallback: `agent-issues plan-entry add <planId>"],
+			["### Plan Entry Issue Link", "**Kind:** Write.", "MCP: `plan_entry_issue_link({ entryId, issueId })`", "CLI fallback: `agent-issues link <planEntryId> informs <issueId> --json`"],
+			["### Issue Comment Read", "**Kind:** Read.", "MCP: `comment_list({ issueId, before?, all? })`", "CLI fallback: `agent-issues comment list <issueId>"],
+			["### Issue Comment Write", "**Kind:** Write.", "MCP: `comment_create({ issueId, body", "CLI fallback: `agent-issues comment add <issueId>"],
+			["### Revision Read", "**Kind:** Read.", "MCP: `entity_history({ entityId, revision })`", "CLI fallback: `agent-issues history <entityId> --revision <revision> --json`"],
+			["### Entity Restore", "**Kind:** Destructive write.", "MCP: first call `entity_restore_inspect({ entityId, revision })`", "CLI fallback: `agent-issues restore <entityId> --revision <revision> --json`"],
+			["### Context Restore", "**Kind:** Destructive write.", "MCP: unavailable.", "CLI fallback: `agent-issues restore --context <scope> --revision <revision> --json`"],
+			["### Handoff Read", "**Kind:** Read.", "MCP: `entity_list({ kind: \"handoff\" })`", "CLI fallback: `agent-issues list handoff --json`"],
+			["### Handoff Write", "**Kind:** Write.", "MCP: `entity_create({ kind: \"handoff\"", "CLI fallback: `agent-issues create handoff --title \"<title>\" --body-file - --link handsOff <focusId> --json`"],
+			["### Host Operations", "**Kind:** Host.", "These operations have no MCP equivalent.", "Use the CLI: `install-mcp`"]
+		];
+
+		for (const [heading, kind, mcp, cliFallback] of recipes) {
+			expect(operatingContract).toContain(heading);
+			expect(operatingContract).toContain(kind);
+			expect(operatingContract).toContain(mcp);
+			expect(operatingContract).toContain(cliFallback);
+		}
+
+		for (const handoffReadStep of [
+			"`entity_list({ kind: \"handoff\" })`",
+			"`relation_query({ entityId: handoffId, direction: \"outgoing\", types: [\"handsOff\"] })`",
+			"`entity_show({ reference: handoffId })`",
+			"`agent-issues list handoff --json`",
+			"`agent-issues relations <handoffId> --direction outgoing --type handsOff --json`",
+			"`agent-issues show <handoffId> --json`"
+		]) {
+			expect(operatingContract).toContain(handoffReadStep);
+		}
 	});
 
 	it("installs the ADR lifecycle guidance without issue-derived status", () => {

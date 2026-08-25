@@ -41,6 +41,7 @@ import {
 	SYSTEM_AUTHENTICATION_SUBJECT,
 	sanitizePathSegment,
 	STRUCTURAL_RELATION_TYPES,
+	toEntitySummary,
 	wouldOrphanSubtree as wouldOrphanSubtreeInGraph,
 	type BodySource,
 	type ContextDetails,
@@ -49,6 +50,8 @@ import {
 	type EntityDetails,
 	type EntityKind,
 	type EntityRecord,
+	type EntityRelations,
+	type EntitySummary,
 	type EntityRevisionPatch,
 	type EntityStore,
 	type HistoryEntryRecord,
@@ -96,6 +99,10 @@ export type EntityRow = {
 	created_at: string;
 	updated_at: string;
 };
+
+type EntitySummaryRow = Omit<EntityRow, "body" | "body_source">;
+
+const ENTITY_SUMMARY_COLUMNS = sql`entities.id, entities.reference, entities.short_reference, entities.created_by, entities.updated_by, entities.kind, entities.title, entities.status, entities.category, entities.priority, entities.type, entities.revision, entities.content_hash, entities.tombstone, entities.project_id, entities.created_at, entities.updated_at`;
 
 export type RelationRow = {
 	from_id: string;
@@ -618,6 +625,15 @@ async function getAllEntities(executor: TenantExecutor): Promise<EntityRecord[]>
 	return rows.map(mapDrizzleEntityRow);
 }
 
+async function getAllEntitySummaries(executor: TenantExecutor): Promise<EntitySummary[]> {
+	const result = await executor.execute(sql`
+		SELECT ${ENTITY_SUMMARY_COLUMNS} FROM entities
+		WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND tombstone = false
+		ORDER BY id
+	`);
+	return (result.rows as EntitySummaryRow[]).map(mapEntitySummaryRow);
+}
+
 async function getAllRelations(executor: TenantExecutor): Promise<RelationRecord[]> {
 	const projectId = executor.currentProjectId;
 	const result = await executor.execute(sql`
@@ -726,7 +742,7 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 	return new Map(entities.map((entity) => [entity.id, entity.status]));
 }
 
-function applyDerivedStatus(entity: EntityRecord, statusMap: ReadonlyMap<string, string>): EntityRecord {
+function applyDerivedStatus<T extends EntitySummary>(entity: T, statusMap: ReadonlyMap<string, string>): T {
 	const derived = statusMap.get(entity.id);
 	return derived === undefined || derived === entity.status ? entity : { ...entity, status: derived };
 }
@@ -1093,7 +1109,7 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 	const entity = await getEntityOrThrow(executor, entityId);
 
 	const incomingResult = await executor.execute(sql`
-		SELECT relations.type AS relation_type, entities.*
+		SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
@@ -1101,7 +1117,7 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		ORDER BY entities.id
 	`);
 	const outgoingResult = await executor.execute(sql`
-		SELECT relations.type AS relation_type, entities.*
+		SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
@@ -1115,11 +1131,11 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		entity: applyDerivedStatus(entity, statusMap),
 		incoming: (incomingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
 			relationType: row.relation_type as RelationType,
-			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
 		outgoing: (outgoingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
 			relationType: row.relation_type as RelationType,
-			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
 		planEntries: entity.kind === "issue" ? await getRelatedPlanEntries(executor, entity.id) : []
 	};
@@ -1128,14 +1144,14 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 export async function queryEntityRelations(
 	executor: TenantExecutor,
 	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] }
-): Promise<EntityDetails> {
+): Promise<EntityRelations> {
 	const entity = await getEntityOrThrow(executor, input.entityId);
 	const typeFilter = input.types?.length ? sql`AND relations.type IN ${input.types}` : sql``;
 	const includeIncoming = input.direction === undefined || input.direction === "both" || input.direction === "incoming";
 	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
 	const incomingResult = includeIncoming
 		? await executor.execute(sql`
-			SELECT relations.type AS relation_type, entities.*
+			SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 			WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
@@ -1145,7 +1161,7 @@ export async function queryEntityRelations(
 		: { rows: [] };
 	const outgoingResult = includeOutgoing
 		? await executor.execute(sql`
-			SELECT relations.type AS relation_type, entities.*
+			SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 			WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
@@ -1155,31 +1171,31 @@ export async function queryEntityRelations(
 		: { rows: [] };
 	const relatedIds = [
 		entity.id,
-		...(incomingResult.rows as EntityRow[]).map((row) => row.id),
-		...(outgoingResult.rows as EntityRow[]).map((row) => row.id)
+		...(incomingResult.rows as EntitySummaryRow[]).map((row) => row.id),
+		...(outgoingResult.rows as EntitySummaryRow[]).map((row) => row.id)
 	];
 	const statusMap = await getDerivedStatusMap(executor, relatedIds);
 
 	return {
-		entity: applyDerivedStatus(entity, statusMap),
-		incoming: (incomingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
+		entity: toEntitySummary(applyDerivedStatus(entity, statusMap)),
+		incoming: (incomingResult.rows as Array<EntitySummaryRow & { relation_type: string }>).map((row) => ({
 			relationType: row.relation_type as RelationType,
-			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
-		outgoing: (outgoingResult.rows as Array<EntityRow & { relation_type: string }>).map((row) => ({
+		outgoing: (outgoingResult.rows as Array<EntitySummaryRow & { relation_type: string }>).map((row) => ({
 			relationType: row.relation_type as RelationType,
-			entity: applyDerivedStatus(mapEntityRow(row), statusMap)
+			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
 		planEntries: entity.kind === "issue" ? await getRelatedPlanEntries(executor, entity.id) : []
 	};
 }
 
-export async function listEntities(executor: TenantExecutor, kind: string): Promise<EntityRecord[]> {
+export async function listEntities(executor: TenantExecutor, kind: string): Promise<EntitySummary[]> {
 	if (!isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
 	}
 
-	const entities = deriveEntityStatuses(await getAllEntities(executor), await getAllRelations(executor));
+	const entities = deriveEntityStatuses(await getAllEntitySummaries(executor), await getAllRelations(executor));
 	return entities.filter((entity) => entity.kind === kind);
 }
 
@@ -1234,16 +1250,15 @@ export async function queryEntities(
 	if (limitedIds.length === 0) {
 		return { entities: [], total, openBlockers: input.kind === "issue" ? {} : undefined };
 	}
-	const selectedRows = await executor.select().from(entities).where(and(
-		eq(entities.tenantId, executor.tenantId),
-		inArray(entities.id, limitedIds)
-	));
-	const selectedById = new Map(selectedRows.map((row) => [row.id, applyDerivedStatus(mapDrizzleEntityRow(row), statusMap)]));
+	const selectedResult = await executor.execute(sql`
+		SELECT ${ENTITY_SUMMARY_COLUMNS} FROM entities
+		WHERE tenant_id = ${executor.tenantId} AND id IN ${limitedIds}
+	`);
+	const selectedById = new Map((selectedResult.rows as EntitySummaryRow[]).map((row) => [row.id, applyDerivedStatus(mapEntitySummaryRow(row), statusMap)]));
 	const resultEntities = limitedIds.map((entityId) => selectedById.get(entityId)!);
 	const parentGroups = parents
 		&& parents.length > 1
 		? await Promise.all(parents.map(async (parent) => {
-			const details = await getEntityDetails(executor, parent.id);
 			const childResult = await executor.execute(sql`
 				SELECT to_id FROM relations
 				WHERE tenant_id = ${executor.tenantId}
@@ -1251,7 +1266,7 @@ export async function queryEntities(
 					AND type IN ${STRUCTURAL_RELATION_TYPES}
 			`);
 			const childIds = new Set((childResult.rows as Array<{ to_id: string }>).map((row) => row.to_id));
-			return { parent: details.entity, entities: resultEntities.filter((entity) => childIds.has(entity.id)) };
+			return { parent: toEntitySummary(mapDrizzleEntityRow(parent)), entities: resultEntities.filter((entity) => childIds.has(entity.id)) };
 		}))
 		: undefined;
 
@@ -1262,7 +1277,6 @@ export async function queryEntities(
 		openBlockers: input.kind === "issue" ? await getOpenBlockers(executor, resultEntities) : undefined
 	};
 }
-
 /**
  * Maps each of `issues`' canonical references to the references of its open
  * (not-`done`) `blocks` sources, so `queryEntities` can report blocked-status
@@ -1271,7 +1285,7 @@ export async function queryEntities(
  * never have to resolve a raw id back to something they can pass to another
  * command.
  */
-async function getOpenBlockers(executor: TenantExecutor, issues: EntityRecord[]): Promise<Record<string, string[]>> {
+async function getOpenBlockers(executor: TenantExecutor, issues: EntitySummary[]): Promise<Record<string, string[]>> {
 	const openBlockers: Record<string, string[]> = {};
 	const referenceById = new Map(issues.map((entity) => [entity.id, entity.reference]));
 	for (const entity of issues) {
@@ -1312,6 +1326,30 @@ async function getOpenBlockers(executor: TenantExecutor, issues: EntityRecord[])
 	}
 
 	return openBlockers;
+}
+
+function mapEntitySummaryRow(row: EntitySummaryRow): EntitySummary {
+	if (!isEntityKind(row.kind)) {
+		throw new Error(`Unexpected entity kind in database: ${row.kind}`);
+	}
+
+	return {
+		id: row.id,
+		reference: row.reference,
+		shortReference: row.short_reference,
+		createdBy: row.created_by ?? RESERVED_SYSTEM_AUTHOR,
+		updatedBy: row.updated_by ?? RESERVED_SYSTEM_AUTHOR,
+		kind: row.kind,
+		title: row.title,
+		status: row.status,
+		category: row.category && isEntityCategory(row.category) ? row.category : null,
+		priority: row.priority && isEntityPriority(row.priority) ? row.priority : null,
+		type: row.type && isEntityType(row.kind, row.type) ? row.type : null,
+		revision: row.revision ?? 1,
+		contentHash: row.content_hash ?? "",
+		createdAt: row.created_at,
+		updatedAt: row.updated_at
+	};
 }
 
 export async function listEntityHistory(executor: TenantExecutor, entityId: string): Promise<HistoryEntryRecord[]> {
@@ -1607,7 +1645,10 @@ export async function updateEntityStatus(
 		priorStatus: entity.status
 	});
 
-	return { entity: await getEntityOrThrow(executor, entity.id), previousStatus };
+	return {
+		entity: toEntitySummary({ ...entity, status: input.status, revision: newRevision, updatedBy: actorId, updatedAt }),
+		previousStatus
+	};
 }
 
 export async function setEntityBody(
@@ -2468,11 +2509,11 @@ export class PgEntityStore implements EntityStore {
 		return getEntityDetails(this.executor, entityId);
 	}
 
-	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): Promise<EntityDetails> {
+	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): ReturnType<EntityStore["queryEntityRelations"]> {
 		return queryEntityRelations(this.executor, input);
 	}
 
-	public async listEntities(kind: string): Promise<EntityRecord[]> {
+	public async listEntities(kind: string): ReturnType<EntityStore["listEntities"]> {
 		return listEntities(this.executor, kind);
 	}
 

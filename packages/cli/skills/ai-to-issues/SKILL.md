@@ -14,9 +14,9 @@ Break a plan into issues you can grab independently. Use tracer-bullet vertical 
 
 ### 1. Gather context
 
-Work from what is already in the conversation context. If the user gives an entity ID or a file path as an argument, resolve it first.
+Work from what is already in the conversation context. If the user gives an entity ID, run the **Entity Read** recipe to resolve it. If the user gives a file path, read the file first.
 
-Use the active initiative and its records to find:
+Run the **Initiative Read** recipe and the **Relation Query** recipe for the active scope to find:
 
 - the parent initiative that must structurally own the new issues
 - the PRD and user stories the issues must satisfy
@@ -31,7 +31,7 @@ If you have not explored the codebase yet, do so now to understand the current s
 
 Break the plan into tracer-bullet issues. Each issue is a thin vertical slice that cuts through every relevant integration layer end to end. It is not a horizontal slice of one layer.
 
-A slice can be `HITL` or `AFK`. Prefer `AFK` over `HITL` when you can. If the choice matters to the user, state it in the text you present. Do not invent tracker fields the CLI does not support.
+A slice can be `HITL` or `AFK`. Prefer `AFK` over `HITL` when you can. If the choice matters to the user, state it in the text you present. Do not invent unsupported tracker fields.
 
 Rules:
 
@@ -58,12 +58,12 @@ Repeat until the user approves the breakdown.
 For each approved slice:
 
 1. Write a short markdown issue body from the [Issue recipe](../recipes/issue.md) before you publish it. Keep the substance of the approved slice in the body, not just in the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, the acceptance criteria, and any explicit blocker or dependency from the approved breakdown.
-2. For a multiline body, write the markdown to a temporary file first. Publish it with `--body-file` instead of relying on fragile shell quoting.
-3. Create the issue under the correct structural parent: `agent-issues create issue --title ... --parent INITx --body-file "$issueBodyFile" --json` for top-level initiative work, or `agent-issues create issue --title ... --parent ISSx --body-file "$issueBodyFile" --json` for a sub-issue.
-4. If you reuse an existing issue whose body is missing or old, refresh it with `agent-issues edit ISSx --body-file "$issueBodyFile" --json` before you link anything else.
-5. Link each leaf issue to every user story it satisfies with `agent-issues link ISSx fixes USy`.
-6. For Plan-based work, link each issue to every active Plan entry it implements with `agent-issues link PLAN_ENTRYx informs ISSx --json`. Issue creation owns these links.
-7. Record dependencies with `agent-issues link BLOCKER_ISS blocks BLOCKED_ISS`.
+2. The **Entity Create And Edit** recipe sends the body as direct MCP text. Its CLI fallback reads the body from standard input; do not place multiline text in a shell argument.
+3. Run the **Entity Create And Edit** recipe to create the issue under the correct structural parent: the initiative for top-level work or the parent issue for a sub-issue.
+4. If you reuse an existing issue whose body is missing or old, run the **Entity Create And Edit** recipe to update its body before you link anything else.
+5. Run the **Entity Relations** recipe to link each leaf issue to every user story it satisfies with `fixes`.
+6. For Plan-based work, run the **Plan Entry Issue Link** recipe to link each issue to every active Plan entry it implements with `informs`. Issue creation owns these links.
+7. Run the **Entity Relations** recipe to record dependencies with `blocks`.
 
 Publish blockers first, so later issues can link to real issue IDs.
 

@@ -1,8 +1,9 @@
-import type { BodySource, EntityRecord, HistoryEntryRecord, RelationRecord, MaterializedEntityRevision } from "../entity-store/domain.js";
+import type { BodySource, EntityRecord, EntitySummary, HistoryEntryRecord, RelationRecord, MaterializedEntityRevision } from "../entity-store/domain.js";
 import type {
 	DatabaseSnapshot,
 	DeleteResult,
 	EntityDetails,
+	EntityRelations,
 	InitiativeBundle,
 	LinkResult,
 	MoveResult,
@@ -37,8 +38,8 @@ export interface EntityStore {
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntityRecord>;
 	getEntityDetails(entityId: string): Promise<EntityDetails>;
-	queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityDetails>;
-	listEntities(kind: string): Promise<EntityRecord[]>;
+	queryEntityRelations(input: QueryEntityRelationsInput): Promise<EntityRelations>;
+	listEntities(kind: string): Promise<EntitySummary[]>;
 	queryEntities(input: QueryEntitiesInput): Promise<QueryEntitiesResult>;
 	listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]>;
 	/** Non-structural relations transferred after canonical entity import. */

@@ -5,25 +5,15 @@ The canonical glossary lives in the `agent-issues` database. It does not live in
 Project context contains project-wide terms. Initiative context is the database equivalent of a `CONTEXT.md` file inside an initiative folder.
 Use the [Context Summary recipe](../../recipes/context-summary.md) for a context body and the [Context Term recipe](../../recipes/context-term.md) for a term definition.
 
-Read the relevant project or initiative glossary with `agent-issues context show <entityOrProjectOrInitiativeId> --json`.
+Run the **Context Read** recipe to read the relevant project or initiative glossary.
 
-For project-wide discovery across shared and initiative scopes, use `agent-issues context search <query> --json`.
+For project-wide discovery across shared and initiative scopes, run the **Context Read** recipe with search input.
 
-Before you add or rename a term, check whether the same label already exists in another scope with `agent-issues context conflicts --json`.
+Before you add or rename a term, run the **Context Read** recipe with conflict input to check whether the same label already exists in another scope.
 
-Use `agent-issues context list --json` only when you need the raw list of stored scopes.
+Run the **Context Read** recipe with directory input only when you need the raw list of stored scopes.
 
-Set up or update the shared context with:
-
-```bash
-agent-issues context set --scope PROJ1 --title "Payments Context" --body-file /tmp/payments-summary.md --json
-```
-
-Add or update a term with:
-
-```bash
-agent-issues context define "Order" --scope INIT1 --body-file /tmp/order-definition.md --avoid "purchase, transaction" --json
-```
+Run the **Context Write** recipe to set up or update shared context with direct title and body text. Run it again to add or update a term with its definition and `avoid` terms as structured input.
 
 ## Structure
 

@@ -1,7 +1,7 @@
-import type { EntityDetails, EntityRecord, InitiativeBundle } from "@agent-issues/core";
+import type { EntityDetails, EntityRecord } from "@agent-issues/core";
 import { describe, expect, it } from "vitest";
 
-import { toCompactEntity, toCompactEntityDetails, toCompactEntityList, toCompactInitiativeBundle } from "./entity-projection.js";
+import { toCompactEntity, toCompactEntityDetails, toCompactEntityList } from "./entity-projection.js";
 
 const entity: EntityRecord = {
 	id: "ISS_01",
@@ -156,42 +156,4 @@ describe("compact CLI entity projections", () => {
 		expect(compact.items[0]).not.toHaveProperty("updatedAt");
 	});
 
-	it("projects every initiative bundle entity while preserving its exact keys and link structure", () => {
-		const initiative = { ...entity, id: "INIT_01", kind: "initiative" as const, title: "Compact views" };
-		const prd = { ...entity, id: "PRD_01", kind: "prd" as const, title: "Projection contract" };
-		const story = { ...entity, id: "US_01", kind: "userStory" as const, title: "Read compact JSON" };
-		const adr = { ...entity, id: "ADR_01", kind: "adr" as const, title: "Project at CLI boundary" };
-		const issue = { ...entity, id: "ISS_01", title: "Wire compact views" };
-		const subIssue = { ...entity, id: "ISS_02", title: "Cover bundle links" };
-		const bundle: InitiativeBundle = {
-			initiative,
-			entities: [initiative, prd, story, adr, issue, subIssue],
-			prds: [prd],
-			userStories: [story],
-			adrs: [adr],
-			issues: [issue, subIssue],
-			fixLinks: [{ issue, userStory: story }],
-			subIssueLinks: [{ parent: issue, issue: subIssue }],
-			blockerLinks: [{ source: subIssue, target: issue }],
-			constrainsLinks: [{ adr, issue }]
-		};
-
-		const compact = toCompactInitiativeBundle(bundle);
-		const summary = (record: EntityRecord) => ({ id: record.id, reference: record.reference, kind: record.kind, status: record.status, title: record.title });
-
-		expect(compact).toEqual({
-			initiative: summary(initiative),
-			entities: bundle.entities.map(summary),
-			prds: [summary(prd)],
-			userStories: [summary(story)],
-			adrs: [summary(adr)],
-			issues: [summary(issue), summary(subIssue)],
-			fixLinks: [{ issue: summary(issue), userStory: summary(story) }],
-			subIssueLinks: [{ parent: summary(issue), issue: summary(subIssue) }],
-			blockerLinks: [{ source: summary(subIssue), target: summary(issue) }],
-			constrainsLinks: [{ adr: summary(adr), issue: summary(issue) }]
-		});
-		expect(Object.keys(compact)).toEqual(Object.keys(bundle));
-		expect(compact.entities.every((record) => !Object.hasOwn(record, "body"))).toBe(true);
-	});
 });

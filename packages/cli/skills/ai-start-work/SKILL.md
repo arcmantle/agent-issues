@@ -23,14 +23,14 @@ Find the scope you were asked to work on.
 
 ### 2. Select the next workable issue
 
-Start the `ai-next-work` skill for the active scope. If the user supplied an explicit issue, treat it as confirmed and continue to step 3. Otherwise, show its result and confirm the selected issue with the user before you write code. If it reports the work is complete or blocked, stop and return that result.
+Start the `ai-next-work` skill for the active scope. It runs the **Next Work** recipe. If the user supplied an explicit issue, treat it as confirmed and continue to step 3. Otherwise, show its result and confirm the selected issue with the user before you write code. If it reports the work is complete or blocked, stop and return that result.
 
 ### 3. Decide how to approach it
 
 Once the issue is selected, work out the approach before you start the build.
 
 - Explore the codebase to understand the current state of the area the issue touches.
-- Read `agent-issues relations <id> --view full --json` once. This single call returns the issue's own full body. It also returns the full body of every directly related entity, in both directions and all types. The response's incoming entries of type `constrains` are the ADRs that constrain the issue, so you can read each decision without a separate `show` call. Its outgoing entries of type `fixes` are the user stories it fixes. Its incoming entries of type `blocks` are its blockers. Check each one's `status` to see which are still open. Its `tracks`/`decomposes` entries are its parent or sub-issues. Read each relation type straight off this one response. Do not issue a separate filtered `relations` call per type.
+- Run the **Relation Query** recipe for the selected issue with its complete relation set. Use the result to identify constraining ADRs, fixed user stories, open blockers, and parent or sub-issue boundaries. Do not repeat relation queries per relation type when one complete result provides them.
 - Find the public interface the slice must expose and the behavior the user stories require.
 - Surface any assumption the plan left open. If a real, hard-to-reverse design question comes up, send it to `/ai-grill-with-docs`. Do not decide it on your own.
 
@@ -40,7 +40,7 @@ Summarize the approach in a few lines: the interface, the behaviors that matter,
 
 Begin the build under test-driven development. Use incremental implementation instead when the change does not fit a red-green-refactor loop, for example a broad refactor, a config or infrastructure change, or a multi-file migration.
 
-- Set the issue in progress: `agent-issues status ISSx in-progress`.
+- Run the **Entity State And Structure** recipe to set the selected issue to `in-progress`.
 - Start `ai-tdd` with the selected issue and approach, or `ai-implement` when the change has no fast test seam. Wait for its completion result and its next-workable-issue result before you continue.
 - Do not write production code outside that loop. This skill chooses the work. The build skill builds it.
 

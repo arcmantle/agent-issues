@@ -25,11 +25,11 @@ The map is a single `agent-issues` issue under the active initiative — the can
 
 The map is an **index**, not a store. It lists the decisions made and points at the tickets that hold their detail; a decision lives in exactly one place — its ticket — so the map never restates it, only gists it and links.
 
-Use `agent-issues` as the source of truth. Create the map with `agent-issues create issue --type wayfinder-map --parent <initiativeReference> ... --json`. Create each ticket with `--type wayfinder-ticket --parent <mapReference>`. Add dependencies after creation with `agent-issues link <blockerReference> blocks <blockedReference> --json`.
+Use `agent-issues` as the source of truth. Run the **Entity Create And Edit** recipe to create the map as a `wayfinder-map` issue under the initiative and each ticket as a `wayfinder-ticket` child of the map. Run the **Entity Relations** recipe to add dependencies after creation with `blocks` relations.
 
 ### The map body
 
-The whole map at low resolution, loaded once per session. Open tickets are **not** listed — query them with `agent-issues list issue --parent <mapReference> --json`.
+The whole map at low resolution, loaded once per session. Open tickets are **not** listed — run the **Entity List** recipe for child issues under the map when needed.
 Use the [Wayfinder Map recipe](../recipes/wayfinder-map.md). It preserves the current map format.
 
 ### Tickets
@@ -39,15 +39,15 @@ Use the [Wayfinder Ticket recipe](../recipes/wayfinder-ticket.md). It preserves 
 
 The `## Ticket type` value is one of `research`, `prototype`, `grilling`, or `task`; see Ticket Types below.
 
-A session **claims** a ticket before work by setting its status to `in-progress`: `agent-issues status <ticketReference> in-progress --json`. If this fails because another session changed the ticket, reload the frontier and select another ticket. An open `todo` or `ready` ticket is unclaimed.
+A session **claims** a ticket before work by running the **Entity State And Structure** recipe to set its status to `in-progress`. If this fails because another session changed the ticket, reload the frontier and select another ticket. An open `todo` or `ready` ticket is unclaimed.
 
-Blocking uses the native `blocks` relation. A ticket is **unblocked** when every blocker has status `done`; the **frontier** is the open, unblocked, unclaimed child issues. Use each child issue's `openBlockers` from `agent-issues list issue --parent <mapReference> --json` to identify it.
+Blocking uses the native `blocks` relation. A ticket is **unblocked** when every blocker has status `done`; the **frontier** is the open, unblocked, unclaimed child issues. Run the **Entity List** recipe and use each child issue's `openBlockers` to identify it.
 
-Record the answer in `## Resolution` when the ticket is complete, then set the ticket status to `done`. Link assets created while resolving a ticket from the issue body; do not paste them into the map.
+Run the **Entity Create And Edit** recipe to record the answer in `## Resolution` when the ticket is complete, then run the **Entity State And Structure** recipe to set the ticket status to `done`. Link assets created while resolving a ticket from the issue body; do not paste them into the map.
 
 ### Plan-backed ticket planning
 
-For a grilling ticket, give `ai-plan` the complete ticket reference. It creates an initiative-owned Plan with `agent-issues create plan --parent <initiativeReference>` for a new effort, or resumes only an explicit Plan reference. Every Plan entry from that session includes `--reference <ticket-reference>`.
+For a grilling ticket, give `ai-plan` the complete ticket reference. It runs the **Entity Create And Edit** recipe to create an initiative-owned Plan for a new effort, or resumes only an explicit Plan reference. Every Plan entry from that session uses the **Plan Entry Write** recipe to link back to the ticket reference.
 
 The Plan is the canonical detailed resolution. When the ticket is done, retain its Question and status, and use a concise Resolution link to the Plan. Do not copy the detailed reasoning into the ticket. A Plan does not inform a Wayfinder map.
 
@@ -89,7 +89,7 @@ Two modes. Either way, **never resolve more than one ticket per session** — wi
 
 User invokes with a loose idea.
 
-1. **Resolve the tracked scope.** Find the active initiative and read its context. For a new feature, create a new initiative by default. Do not create a map outside an initiative.
+1. **Resolve the tracked scope.** Run the **Entity Read** recipe and the **Context Read** recipe to find the active initiative and read its context. For a new feature, run the **Entity Create And Edit** recipe to create a new initiative by default. Do not create a map outside an initiative.
 2. **Name the destination.** Run `ai-plan` with `ai-domain-modeling` active to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so settle it first.
 3. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surface the open decisions and the first steps that are possible now. **If this finds no fog** — the way to the destination is already clear and small enough for one session — do not create a map. Ask the user how to proceed.
 4. **Create the map** as a `wayfinder-map` child issue of the initiative: Destination and Notes filled in, Decisions-so-far empty, and the fog recorded in **Not yet specified**.
@@ -101,10 +101,10 @@ User invokes with a loose idea.
 
 User invokes with a map (URL or number). A ticket is **optional** — without one, you pick the next decision, not the user.
 
-1. Load the **map** with `agent-issues show <mapReference> --view full --json`, then read its scoped context. Do not load every ticket body.
+1. Run the **Entity Read** recipe to load the **map**, then run the **Context Read** recipe for its scoped context. Do not load every ticket body.
 2. Choose the ticket. If the user named one, use it. Otherwise select the first frontier ticket. **Claim it** by setting it to `in-progress` before work.
-3. Resolve it — **zoom as needed**: load the full body of related or closed tickets only when needed. Use the skills named in `## Notes`. For a grilling ticket, use `ai-plan` with `ai-domain-modeling` active and follow Plan-backed ticket planning.
-4. Record the resolution: for a Plan-backed grilling ticket, retain its Ticket type and Question and update only `## Resolution` with the concise Plan link. For other tickets, replace the ticket body with its completed `## Resolution`. Set the ticket status to `done`, and append a title-and-reference link with a one-line gist to the map's Decisions-so-far.
-5. Add newly surfaced tickets (create, then link); graduate any fog that the answer made specific. Remove each graduated patch from **Not yet specified** so it exists only in its new ticket. If the answer shows that a ticket sits beyond the destination, **rule it out of scope** instead of resolving it on the route. If the decision invalidates other map parts, update or delete those tickets. When no open tickets or in-scope fog remain, set the map status to `done`.
+3. Resolve it — **zoom as needed**: run the **Entity Read** recipe or the **Relation Query** recipe to load related or closed tickets only when needed. Use the skills named in `## Notes`. For a grilling ticket, use `ai-plan` with `ai-domain-modeling` active and follow Plan-backed ticket planning.
+4. Record the resolution: for a Plan-backed grilling ticket, retain its Ticket type and Question and use the **Entity Create And Edit** recipe to update only `## Resolution` with the concise Plan link. For other tickets, use that recipe to replace the ticket body with its completed `## Resolution`. Run the **Entity State And Structure** recipe to set the ticket status to `done`, and append a title-and-reference link with a one-line gist to the map's Decisions-so-far.
+5. Add newly surfaced tickets with the **Entity Create And Edit** recipe, then link them with the **Entity Relations** recipe; graduate any fog that the answer made specific. Remove each graduated patch from **Not yet specified** so it exists only in its new ticket. If the answer shows that a ticket sits beyond the destination, **rule it out of scope** instead of resolving it on the route. If the decision invalidates other map parts, update or delete those tickets. When no open tickets or in-scope fog remain, run the **Entity State And Structure** recipe to set the map status to `done`.
 
 The user may run unblocked tickets in parallel, so expect other sessions to be editing the tracker concurrently.

@@ -19,7 +19,7 @@ Do not narrow the input down to a single issue to work on. Do not decide what ge
 
 ### 1. Take the input as given
 
-Accept anything: an issue, user story, ADR, initiative, or handoff ID; a topic; a plain description; a fragment of a conversation. Do not force it into a single tracked entity first. If it names or describes one or more entities, resolve those. If it is a handoff, also read its `handsOff` target. If it is a description with no obvious ID, search for matching entities with `agent-issues context search <query> --json` and `agent-issues list <kind> --json`. It is normal for this to surface zero, one, or many entities — report what exists, do not force a pick.
+Accept anything: an issue, user story, ADR, initiative, or handoff ID; a topic; a plain description; a fragment of a conversation. Do not force it into a single tracked entity first. If it names or describes one or more entities, run the **Entity Read** recipe to resolve them. If it is a handoff, run the **Handoff Read** recipe. If it is a description with no obvious ID, run the **Context Read** recipe with search input and the **Entity List** recipe. It is normal for this to surface zero, one, or many entities — report what exists, do not force a pick.
 
 ### 2. Widen each entity to its owning initiative
 
@@ -27,7 +27,7 @@ The briefing must cover the whole initiative an entity belongs to, not just that
 
 For every resolved entity that is not itself an initiative, project, or epic:
 
-- Read `agent-issues relations <id> --direction incoming --type tracks,decomposes,creates,owns,records --json`. The source of whichever edge comes back is the structural parent.
+- Run the **Relation Query** recipe for incoming structural relation types: `tracks`, `decomposes`, `creates`, `owns`, or `records`. The source of the returned edge is the structural parent.
 - Repeat on that parent until you reach an entity of kind `initiative`. An issue tracked directly by an initiative takes one hop; a decomposed sub-issue or a user story reached through a PRD can take two or three.
 - Treat that initiative, not the original entity, as the scope for the rest of this skill. Keep a note of which entity started the search, so the briefing can say, for example, "started from ISS53, part of INIT7."
 
@@ -37,9 +37,9 @@ If an entity has no owning initiative (a standalone ADR, project, or epic), keep
 
 For every initiative in scope:
 
-- Read `agent-issues bundle <initiativeId> --json` (or `agent-issues show <initiativeId> --view full --json`, same shape) once. This single call returns the initiative plus every PRD, user story, ADR, and issue reachable from it — including sub-issues several `decomposes` hops deep — together with `fixLinks`, `subIssueLinks`, `blockerLinks`, and `constrainsLinks`. This is the ground truth for what belongs to the initiative. Do not rebuild it from separate `list` or `relations` calls per entity.
-- Read `agent-issues context show <initiativeId> --json` for initiative scope, or `agent-issues context show <projectId> --json` for project scope.
-- Read open blockers straight off `blockerLinks`: a `source` whose status is not `done` means its `target` is still blocked. Do not call `relations` per issue for this.
+- Run the **Initiative Read** recipe once. It returns the initiative plus every reachable PRD, user story, ADR, and issue, including deeply decomposed sub-issues, together with `fixLinks`, `subIssueLinks`, `blockerLinks`, and `constrainsLinks`. This is the ground truth for initiative scope. Do not rebuild it from separate entity and relation reads.
+- Run the **Context Read** recipe for the matching initiative or project scope.
+- Read open blockers directly from `blockerLinks`: a `source` whose status is not `done` means its `target` is still blocked. Do not query relations per issue for this.
 
 Stay within the owning initiative. Follow a linked handoff only when it is the input or when it contains information that changes the initiative-level briefing. Do not expand into related initiatives or other linked records just because they are reachable.
 

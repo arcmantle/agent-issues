@@ -1,0 +1,37 @@
+{
+	"name": "@agent-issues/mcp-server",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Model Context Protocol server for agent-issues.",
+	"type": "module",
+	"main": "./dist/index.js",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/node": "^25.9.2",
+		"typescript": "^7.0.0",
+		"vitest": "^4.1.8"
+	},
+	"dependencies": {
+		"@agent-issues/api-local": "workspace:*",
+		"@agent-issues/core": "workspace:*",
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"zod": "^4.4.3"
+	}
+}

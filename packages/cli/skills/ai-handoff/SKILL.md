@@ -28,33 +28,7 @@ If the user gave arguments, treat them as a description of the next session's fo
 
 Once you write the handoff body, save it in `agent-issues` so the next agent can retrieve it. Do not stop at returning text in your response.
 
-Save it with:
-
-```
-agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>
-```
-
-Pipe the handoff markdown to stdin with your current shell. Examples:
-
-POSIX shells:
-
-```sh
-cat <<'EOF' | agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>
-<handoff markdown>
-EOF
-```
-
-PowerShell:
-
-```powershell
-@'
-<handoff markdown>
-'@ | agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId>
-```
-
-- `<focusId>` is the tracked entity that anchors the handoff: the active issue, PRD, ADR, or initiative. The `handsOff` link records that focus in the graph.
-- `--body-file -` is required. It reads the full handoff markdown from stdin. This avoids shell quoting problems and does not need a temp file.
-- `--title` is required. It is the one-line label shown in handoff lists.
+Run the **Handoff Write** recipe to create a handoff with direct title and body text, then link it with `handsOff` to the active issue, PRD, ADR, or initiative. The returned handoff reference is the continuation target.
 
 After you save the handoff, return this continuation prompt in a code block, with the returned handoff ID (for example, `HO7`):
 
@@ -62,6 +36,6 @@ After you save the handoff, return this continuation prompt in a code block, wit
 Continue from handoff <handoffId>.
 ```
 
-To fix a saved handoff, use the generic entity editor: `agent-issues edit <handoffId> --title "<title>" --body-file -`.
+To fix a saved handoff, run the **Entity Create And Edit** recipe to update its title or body.
 
 If you need more text beyond the saved handoff, put it in your response only.

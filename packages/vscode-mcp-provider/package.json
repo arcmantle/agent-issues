@@ -1,0 +1,57 @@
+{
+	"name": "agent-issues-mcp-provider",
+	"displayName": "Agent Issues MCP Provider",
+	"version": "0.1.0",
+	"description": "Provides the local Agent Issues MCP server to VS Code.",
+	"private": true,
+	"publisher": "arcmantle",
+	"type": "module",
+	"engines": {
+		"vscode": "^1.131.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"main": "./dist/extension.js",
+	"files": [
+		"dist/**"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"contributes": {
+		"mcpServerDefinitionProviders": [
+			{
+				"id": "agent-issues.mcp-server",
+				"label": "Agent Issues"
+			}
+		],
+		"configuration": {
+			"title": "Agent Issues MCP Provider",
+			"properties": {
+				"agentIssues.mcp.command": {
+					"type": "string",
+					"default": "agent-issues-mcp",
+					"description": "Command that starts the Agent Issues MCP server."
+				},
+				"agentIssues.mcp.args": {
+					"type": "array",
+					"default": [],
+					"items": {
+						"type": "string"
+					},
+					"description": "Arguments passed to the Agent Issues MCP server command."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/node": "^25.9.2",
+		"@types/vscode": "1.120.0",
+		"typescript": "^7.0.0"
+	}
+}

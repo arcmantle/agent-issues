@@ -7,7 +7,6 @@ import { AddPlanEntryCommand, DeletePlanEntryCommand, EditPlanEntryCommand, List
 import { ContextCommand } from "./commands/context.js";
 import {
 	ArchiveCommand,
-	BundleCommand,
 	CreateCommand,
 	DeleteCommand,
 	EditCommand,
@@ -27,10 +26,13 @@ import { ExportCommand } from "./commands/export.js";
 import { FallbackCommand } from "./commands/fallback.js";
 import {
 	InstallAgentCommand,
+	InstallMcpCommand,
 	InstallSkillsCommand,
 	ListAgentCommand,
+	ListMcpCommand,
 	ListSkillsCommand,
 	UninstallAgentCommand,
+	UninstallMcpCommand,
 	UninstallSkillsCommand
 } from "./commands/installers.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
@@ -58,10 +60,13 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(CapabilitiesCommand);
 	cli.register(InstallSkillsCommand);
 	cli.register(InstallAgentCommand);
+	cli.register(InstallMcpCommand);
 	cli.register(ListSkillsCommand);
 	cli.register(ListAgentCommand);
+	cli.register(ListMcpCommand);
 	cli.register(UninstallSkillsCommand);
 	cli.register(UninstallAgentCommand);
+	cli.register(UninstallMcpCommand);
 	cli.register(ServeSiteCommand);
 	cli.register(OpenSiteCommand);
 	cli.register(StopSiteCommand);
@@ -93,7 +98,6 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(LinkCommand);
 	cli.register(UnlinkCommand);
 	cli.register(StatusCommand);
-	cli.register(BundleCommand);
 	cli.register(NextWorkCommand);
 	cli.register(ExportCommand);
 	cli.register(RelationsCommand);

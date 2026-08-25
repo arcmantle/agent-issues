@@ -1,10 +1,14 @@
 packages:
   - packages/core
   - packages/cli
+  - packages/mcp-server
   - packages/site
   - packages/api-pg
   - packages/api-local
+  - packages/vscode-mcp-provider
 
 allowBuilds:
+  '@vscode/vsce-sign': set this to true or false
   better-sqlite3: true
   esbuild: true
+  keytar: set this to true or false

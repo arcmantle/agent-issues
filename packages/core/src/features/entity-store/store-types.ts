@@ -1,4 +1,4 @@
-import type { EntityRecord, RelationRecord, RelationType } from "./domain.js";
+import type { EntityRecord, EntitySummary, RelationRecord, RelationType } from "./domain.js";
 import type { ContextDetails } from "../context/context-types.js";
 import type { IssueCommentPage } from "../storage-driver/issue-comment-store.js";
 import type { PlanEntryRecord } from "../plan-entry/plan-entry-types.js";
@@ -19,10 +19,17 @@ export type LinkResult = {
 
 export type EntityDetails = {
 	entity: EntityRecord;
-	incoming: Array<{ relationType: RelationType; entity: EntityRecord }>;
-	outgoing: Array<{ relationType: RelationType; entity: EntityRecord }>;
+	incoming: Array<{ relationType: RelationType; entity: EntitySummary }>;
+	outgoing: Array<{ relationType: RelationType; entity: EntitySummary }>;
 	planEntries: PlanEntryRecord[];
 	comments?: IssueCommentPage;
+};
+
+export type EntityRelations = {
+	entity: EntitySummary;
+	incoming: Array<{ relationType: RelationType; entity: EntitySummary }>;
+	outgoing: Array<{ relationType: RelationType; entity: EntitySummary }>;
+	planEntries: PlanEntryRecord[];
 };
 
 export type QueryEntitiesInput = {
@@ -33,12 +40,12 @@ export type QueryEntitiesInput = {
 };
 
 export type QueryEntityParentGroup = {
-	parent: EntityRecord;
-	entities: EntityRecord[];
+	parent: EntitySummary;
+	entities: EntitySummary[];
 };
 
 export type QueryEntitiesResult = {
-	entities: EntityRecord[];
+	entities: EntitySummary[];
 	total: number;
 	/** Present when a short `parentId` resolves to multiple structural parents. */
 	parentGroups?: QueryEntityParentGroup[];
@@ -117,7 +124,7 @@ export type ProjectSnapshot =
 	  };
 
 export type StatusUpdateResult = {
-	entity: EntityRecord;
+	entity: EntitySummary;
 	previousStatus: string;
 };
 

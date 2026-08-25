@@ -10,7 +10,7 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 A prototype is **throwaway code that answers a question**. The question decides the shape.
 
-Before you create a prototype, find the active tracked issue and read its relations and scoped context. If no issue owns the question, create one under the active initiative. Keep the prototype, its question, and its result attached to that issue.
+Before you create a prototype, run the **Entity Read** recipe, the **Relation Query** recipe, and the **Context Read** recipe for the active issue and scope. If no issue owns the question, run the **Entity Create And Edit** recipe to create one under the active initiative. Keep the prototype, its question, and its result attached to that issue.
 
 ## Pick a branch
 
@@ -28,4 +28,4 @@ The two branches produce very different artifacts — getting this wrong wastes 
 3. **No persistence by default.** State lives in memory. Persistence is the thing the prototype is _checking_, not something it should depend on. If the question explicitly involves a database, hit a scratch DB or a local file with a clear "PROTOTYPE — wipe me" name.
 4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
 5. **Surface the state.** After every action (logic) or on every variant switch (UI), print or render the full relevant state so the user can see what changed.
-6. **Capture it when done.** Do not fold the prototype into production code in this skill. Commit the prototype to a throwaway branch outside `main`, then add its branch or commit reference, its question, run command, and verdict to the active issue body according to the [Issue recipe](../recipes/issue.md). When it resolves a decision ticket, update that ticket's `## Resolution` and set it to `done`. Use `agent-issues context define` only for a resolved glossary term, not to record the prototype. The main branch keeps only a later, validated implementation.
+6. **Capture it when done.** Do not fold the prototype into production code in this skill. Commit the prototype to a throwaway branch outside `main`, then run the **Entity Create And Edit** recipe to add its branch or commit reference, its question, run command, and verdict to the active issue body according to the [Issue recipe](../recipes/issue.md). When it resolves a decision ticket, use the **Entity Create And Edit** recipe and the **Entity State And Structure** recipe to update that ticket's `## Resolution` and set it to `done`. Run the **Context Write** recipe only when the prototype resolves glossary language, not to record the prototype. The main branch keeps only a later, validated implementation.

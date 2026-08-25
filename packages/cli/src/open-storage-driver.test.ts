@@ -5,9 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpStore, type RunCredentialCommand } from "@agent-issues/core";
-import { saveDaemonState, saveDaemonToken, SqliteStore } from "@agent-issues/api-local";
+import { LocalDaemonStore, saveDaemonState, saveDaemonToken, SqliteStore } from "@agent-issues/api-local";
 import { saveSavedLogin, setActiveSavedLogin } from "./auth-session.js";
-import { LocalDaemonStore } from "./daemon/local-daemon-store.js";
 import { assertNoDaemonAllowed, openStorageDriver } from "./open-storage-driver.js";
 import { resolveProjectIdentity } from "./project-identity.js";
 

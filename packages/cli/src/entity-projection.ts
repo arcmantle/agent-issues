@@ -4,7 +4,8 @@ import type {
 	EntityDetails,
 	EntityKind,
 	EntityRecord,
-	InitiativeBundle,
+	EntityRelations,
+	EntitySummary,
 	LinkResult,
 	MaterializedContextRevision,
 	MaterializedContextTermRevision,
@@ -46,19 +47,6 @@ export type CompactEntityList = {
 	openBlockers?: Record<string, string[]>;
 };
 
-export type CompactInitiativeBundle = {
-	initiative: CompactEntity;
-	entities: CompactEntity[];
-	prds: CompactEntity[];
-	userStories: CompactEntity[];
-	adrs: CompactEntity[];
-	issues: CompactEntity[];
-	fixLinks: Array<{ issue: CompactEntity; userStory: CompactEntity }>;
-	subIssueLinks: Array<{ parent: CompactEntity; issue: CompactEntity }>;
-	blockerLinks: Array<{ source: CompactEntity; target: CompactEntity }>;
-	constrainsLinks: Array<{ adr: CompactEntity; issue: CompactEntity }>;
-};
-
 export type CompactNextWorkItem = {
 	issue: CompactEntity;
 	blockers: string[];
@@ -73,6 +61,7 @@ export type CompactNextWork = {
 
 export type CompactCreateAcknowledgement = {
 	operation: "create";
+	id: string;
 	reference: string;
 	status: string;
 	revision: number;
@@ -84,7 +73,7 @@ export type CompactEditAcknowledgement = {
 	revision: number;
 };
 
-export function toCompactEntity(entity: EntityRecord): CompactEntity {
+export function toCompactEntity(entity: EntitySummary): CompactEntity {
 	return {
 		id: entity.id,
 		reference: entity.reference,
@@ -97,6 +86,7 @@ export function toCompactEntity(entity: EntityRecord): CompactEntity {
 export function toCompactCreateAcknowledgement(entity: EntityRecord): CompactCreateAcknowledgement {
 	return {
 		operation: "create",
+		id: entity.id,
 		reference: entity.reference,
 		status: entity.status,
 		revision: entity.revision
@@ -208,7 +198,7 @@ export function toCompactContextTermRestoreAcknowledgement(result: MaterializedC
 	};
 }
 
-export function toCompactEntityDetails(details: EntityDetails): CompactEntityDetails {
+export function toCompactEntityDetails(details: EntityDetails | EntityRelations): CompactEntityDetails {
 	return {
 		entity: toCompactEntity(details.entity),
 		incoming: details.incoming.map(({ relationType, entity }) => ({
@@ -224,7 +214,7 @@ export function toCompactEntityDetails(details: EntityDetails): CompactEntityDet
 }
 
 export function toCompactEntityList(
-	entities: EntityRecord[],
+	entities: EntitySummary[],
 	total = entities.length,
 	openBlockers?: Record<string, string[]>,
 	parentGroups?: QueryEntityParentGroup[]
@@ -234,21 +224,6 @@ export function toCompactEntityList(
 		total,
 		...(parentGroups ? { parentGroups: parentGroups.map((group) => ({ parent: toCompactEntity(group.parent), items: group.entities.map(toCompactEntity) })) } : {}),
 		...(openBlockers ? { openBlockers } : {})
-	};
-}
-
-export function toCompactInitiativeBundle(bundle: InitiativeBundle): CompactInitiativeBundle {
-	return {
-		initiative: toCompactEntity(bundle.initiative),
-		entities: bundle.entities.map(toCompactEntity),
-		prds: bundle.prds.map(toCompactEntity),
-		userStories: bundle.userStories.map(toCompactEntity),
-		adrs: bundle.adrs.map(toCompactEntity),
-		issues: bundle.issues.map(toCompactEntity),
-		fixLinks: bundle.fixLinks.map(({ issue, userStory }) => ({ issue: toCompactEntity(issue), userStory: toCompactEntity(userStory) })),
-		subIssueLinks: bundle.subIssueLinks.map(({ parent, issue }) => ({ parent: toCompactEntity(parent), issue: toCompactEntity(issue) })),
-		blockerLinks: bundle.blockerLinks.map(({ source, target }) => ({ source: toCompactEntity(source), target: toCompactEntity(target) })),
-		constrainsLinks: bundle.constrainsLinks.map(({ adr, issue }) => ({ adr: toCompactEntity(adr), issue: toCompactEntity(issue) }))
 	};
 }
 

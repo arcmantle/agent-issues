@@ -1,5 +1,6 @@
 export * from "./features/entity-store/domain.js";
 export * from "./features/entity-store/canonical-reference.js";
+export * from "./features/entity-store/body-backfill.js";
 export * from "./features/issue-comment/issue-comment-types.js";
 export * from "./features/plan-entry/plan-entry-types.js";
 export * from "./features/context/context-term-id.js";
