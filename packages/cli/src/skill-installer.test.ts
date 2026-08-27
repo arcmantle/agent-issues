@@ -68,6 +68,12 @@ describe("skill installer", () => {
 
 			expect(caller).toContain("`ai-next-work` skill");
 		}
+			for (const implementerName of ["ai-implement", "ai-tdd"]) {
+				const implementer = readFileSync(path.join(targetDir, implementerName, "SKILL.md"), "utf8");
+
+				expect(implementer).toContain("Read every linked `planEntries` item returned by the issue");
+				expect(implementer).toContain("its current body can contain implementation decisions and constraints");
+			}
 
 		const uninstallResult = uninstallSkills({ targetDir });
 		const removedDomainModeling = uninstallResult.removed.find(

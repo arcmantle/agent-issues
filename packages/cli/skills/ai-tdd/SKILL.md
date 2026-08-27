@@ -32,9 +32,9 @@ Use vertical tracer bullets. Do not write all the tests first and all the implem
 
 ### 1. Planning
 
-Run the **Entity Read** recipe, the **Relation Query** recipe, and the **Context Read** recipe for the active issue and its scope. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you code. See [deep modules](deep-modules.md) and [interface design](interface-design.md) when these concerns matter.
+Run the **Entity Read** recipe, the **Relation Query** recipe, and the **Context Read** recipe for the active issue and its scope. Read every linked `planEntries` item returned by the issue; its current body can contain implementation decisions and constraints. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you code. See [deep modules](deep-modules.md) and [interface design](interface-design.md) when these concerns matter.
 
-Treat the issue's `planEntries` as planning inputs to inspect. Do not create or change Plan-entry links. Report missing Plan-entry provenance to the issue creator.
+Treat the issue's `planEntries` as planning inputs. Do not create or change Plan-entry links. Report missing Plan-entry provenance to the issue creator.
 
 ### 2. Tracer bullet
 

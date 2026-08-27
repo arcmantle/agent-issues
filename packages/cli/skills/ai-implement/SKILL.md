@@ -21,9 +21,9 @@ When an issue removes a feature, constraint, or compatibility path, remove or up
 
 ### 1. Planning
 
-Run the **Entity Read** recipe, the **Relation Query** recipe, and the **Context Read** recipe for the active issue and its scope. If `ai-prepare` reported a briefing at the fork, use that instead. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you write code. Send it to `/ai-grill-with-docs` instead of deciding it yourself.
+Run the **Entity Read** recipe, the **Relation Query** recipe, and the **Context Read** recipe for the active issue and its scope. Read every linked `planEntries` item returned by the issue; its current body can contain implementation decisions and constraints. If `ai-prepare` reported a briefing at the fork, use that instead. Confirm the public interface, the priority behaviors, and the approach. Resolve any hard-to-reverse question before you write code. Send it to `/ai-grill-with-docs` instead of deciding it yourself.
 
-Treat the issue's `planEntries` as planning inputs to inspect. Do not create or change Plan-entry links. Report missing Plan-entry provenance to the issue creator.
+Treat the issue's `planEntries` as planning inputs. Do not create or change Plan-entry links. Report missing Plan-entry provenance to the issue creator.
 
 Break the approach into vertical slices before you start:
 

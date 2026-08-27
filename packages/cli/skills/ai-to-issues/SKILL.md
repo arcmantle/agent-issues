@@ -8,7 +8,7 @@ Follow the shared [skill operating contract](../agent-issues-operating-contract.
 
 # To Issues
 
-Break a plan into issues you can grab independently. Use tracer-bullet vertical slices.
+Break a plan into sequenced, independently verifiable issues. Use tracer-bullet vertical slices.
 
 ## Process
 
@@ -29,16 +29,16 @@ If you have not explored the codebase yet, do so now to understand the current s
 
 ### 3. Draft vertical slices
 
-Break the plan into tracer-bullet issues. Each issue is a thin vertical slice that cuts through every relevant integration layer end to end. It is not a horizontal slice of one layer.
+List every testable behavior, contract, state, integration, and verification change in the plan. Draft one tracer-bullet issue per change. Dependencies remain linked issues; a shared feature outcome is not a reason to merge them.
 
 A slice can be `HITL` or `AFK`. Prefer `AFK` over `HITL` when you can. If the choice matters to the user, state it in the text you present. Do not invent unsupported tracker fields.
 
 Rules:
 
-- Each slice delivers a narrow but complete path through the affected behavior.
+- Each slice delivers one narrow, complete change through the affected behavior.
 - A finished slice is demoable or verifiable on its own.
-- Prefer many thin slices over a few thick ones.
-- Use sub-issues when one approved issue clearly breaks into smaller steps but must still roll up under one parent issue. In this shape, leaf sub-issues normally carry the `fixes` links to user stories.
+- Merge changes only when they share one implementation boundary and one acceptance check.
+- Use sub-issues when related changes must roll up under one parent issue. In this shape, leaf sub-issues normally carry the `fixes` links to user stories.
 
 ### 4. Quiz the user
 
