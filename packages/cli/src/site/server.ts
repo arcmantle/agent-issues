@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
@@ -14,7 +13,6 @@ export type LiveSiteInfo = {
 	host: string;
 	port: number;
 	url: string;
-	openInBrowser: boolean;
 	defaultTenant: string;
 };
 
@@ -38,7 +36,6 @@ export async function startLiveSite(input: {
 	dbPath?: string;
 	host?: string;
 	port?: number;
-	openInBrowser?: boolean;
 	tenant?: string;
 	currentWorkingDirectory?: string;
 	/** Overrides the local-mode snapshot-signature poll interval; defaults to 1000ms. Test-only knob. */
@@ -64,8 +61,7 @@ export async function startLiveSite(input: {
 		defaultTenant,
 		host,
 		port,
-		url: `http://${host}:${port}`,
-		openInBrowser: input.openInBrowser ?? false
+		url: `http://${host}:${port}`
 	};
 	const clients = new Set<ServerResponse>();
 
@@ -146,11 +142,7 @@ export async function startLiveSite(input: {
 		stopCloudEventsRelay?.();
 	});
 
-	server.listen(port, host, () => {
-		if (info.openInBrowser) {
-			openUrl(info.url);
-		}
-	});
+	server.listen(port, host);
 
 	return {
 		info,
@@ -400,20 +392,6 @@ function broadcast(clients: Set<ServerResponse>, payload: string) {
 	for (const client of clients) {
 		client.write(`data: ${payload}\n\n`);
 	}
-}
-
-function openUrl(url: string) {
-	if (process.platform === "darwin") {
-		spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-		return;
-	}
-
-	if (process.platform === "win32") {
-		spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
-		return;
-	}
-
-	spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
 }
 
 function writeJson(response: ServerResponse, payload: unknown) {

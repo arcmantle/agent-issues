@@ -36,7 +36,7 @@ import {
 	UninstallSkillsCommand
 } from "./commands/installers.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
-import { OpenSiteCommand, ServeSiteCommand, StopSiteCommand } from "./commands/site.js";
+import { SiteCommand } from "./commands/site.js";
 import { SynchronizeCommand } from "./commands/synchronize.js";
 import {
 	CurrentTenantCommand,
@@ -67,9 +67,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(UninstallSkillsCommand);
 	cli.register(UninstallAgentCommand);
 	cli.register(UninstallMcpCommand);
-	cli.register(ServeSiteCommand);
-	cli.register(OpenSiteCommand);
-	cli.register(StopSiteCommand);
+	cli.register(SiteCommand);
 	cli.register(InitCommand);
 	cli.register(CurrentTenantCommand);
 	cli.register(ListTenantsCommand);

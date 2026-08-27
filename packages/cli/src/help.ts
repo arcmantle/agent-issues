@@ -1010,9 +1010,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
-		name: "serve-site",
-		summary: "Serve a live read-only site that refreshes when the database changes.",
-		usage: ["agent-issues serve-site [--port <port>]", "agent-issues serve-site --json"],
+		name: "site",
+		summary: "Start the live site in the background and print its URL.",
+		usage: ["agent-issues site [--port <port>]", "agent-issues site --stop [--port <port>]", "agent-issues site --json"],
 		options: [
 			{
 				name: "--port <port>",
@@ -1020,71 +1020,19 @@ const COMMAND_SPECS: CommandSpec[] = [
 			}
 		],
 		examples: [
-			"agent-issues serve-site",
-			"agent-issues serve-site --port 4300",
-			"agent-issues serve-site --db ~/.agent-issues/agent-issues.db --json"
+			"agent-issues site",
+			"agent-issues site --port 4300",
+			"agent-issues site --stop"
 		],
 		notes: [
-			"The server exposes the built site assets plus /site-config.json, /api/snapshot, and /events.",
-			"Keep the process running to continue broadcasting database changes to connected browsers."
+			"The command starts a detached site process, then returns immediately.",
+			"Use agent-issues site --stop to close the live site."
 		],
 		output: {
 			human: [
-				"Serving live site at <url>",
-				"Database path and port summary"
+				"Started live site at <url>"
 			],
-			json: ["dbPath", "host", "port", "url", "openInBrowser"]
-		}
-	},
-	{
-		name: "open-site",
-		summary: "Start the live site server and request a browser launch.",
-		usage: ["agent-issues open-site [--port <port>]", "agent-issues open-site --json"],
-		options: [
-			{
-				name: "--port <port>",
-				description: "Port for the local HTTP server. Defaults to 4173."
-			}
-		],
-		examples: [
-			"agent-issues open-site",
-			"agent-issues open-site --port 4300",
-			"agent-issues open-site --db ~/.agent-issues/agent-issues.db --json"
-		],
-		notes: [
-			"This command serves the same live site as serve-site, then asks the OS to open the browser.",
-			"Keep the process running after launch so the page can continue receiving change notifications."
-		],
-		output: {
-			human: [
-				"Opened live site at <url>",
-				"Database path and port summary"
-			],
-			json: ["dbPath", "host", "port", "url", "openInBrowser"]
-		}
-	},
-	{
-		name: "stop-site",
-		summary: "Ask the local live site server on the selected port to stop.",
-		usage: ["agent-issues stop-site [--port <port>]", "agent-issues stop-site --json"],
-		options: [
-			{
-				name: "--port <port>",
-				description: "Port for the local HTTP server. Defaults to 4173."
-			}
-		],
-		examples: [
-			"agent-issues stop-site",
-			"agent-issues stop-site --port 4300",
-			"agent-issues stop-site --json"
-		],
-		notes: [
-			"This command only stops the local live site server listening on the selected port.",
-			"If some other server is running on that port, the command reports that the listener is not a stoppable agent-issues live site."
-		],
-		output: {
-			human: ["Stopped live site at <url> or reported that no live site was running there"],
-			json: ["host", "port", "url", "reachable", "stopped"]
+			json: ["host", "port", "url", "started"]
 		}
 	},
 	{
@@ -1350,9 +1298,8 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			"Use `agent-issues create plan --parent <initiativeId> --title <title> --body-file <path|-> --json` to create an initiative-owned Plan, then use `agent-issues plan-entry add` to record its planning state and `agent-issues link <planEntryId> informs <issueId>` to connect implementation work.",
 			"Use `agent-issues help <command> --json` for command-specific guidance.",
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
-			"Use `agent-issues serve-site --json` to start a local live browser view with snapshot and event endpoints.",
-			"Use `agent-issues open-site --json` to launch the live browser view in your default browser.",
-			"Use `agent-issues stop-site --json` to stop the local live browser view on the default or selected port.",
+			"Use `agent-issues site --json` to launch a detached local server with snapshot and event endpoints.",
+			"Use `agent-issues site --stop --json` to stop the local server on the default or selected port.",
 			"Use `agent-issues install-agent --json` to install the packaged Agent Issues custom agent into the default VS Code prompts directory.",
 			"Use `agent-issues list-agent --json` to inspect the packaged custom agent state in a prompts directory.",
 			"Use `agent-issues uninstall-agent --json` to remove the packaged custom agent from a prompts directory.",

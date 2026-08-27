@@ -77,9 +77,9 @@ agent-issues capabilities --json
 agent-issues current-tenant
 agent-issues list-tenants --json
 agent-issues init --tenant payments
-agent-issues serve-site --port 4300
-agent-issues serve-site --tenant payments
-agent-issues open-site
+agent-issues site --port 4300
+agent-issues site --tenant payments
+agent-issues site --stop
 agent-issues install-agent --json
 agent-issues list-agent --json
 agent-issues uninstall-agent --json
@@ -173,9 +173,8 @@ agent-issues auth logout work
 - `help` shows the command catalog or command-specific help.
 - `schema` exposes entity kinds, statuses, archive mappings, allowed relations, and structural parent rules.
 - `capabilities` returns both the help catalog and the workflow schema in one call.
-- `serve-site` starts a local live browser view backed by HTTP, live DB reads, and server-sent events.
-- `open-site` starts the same live server and asks the OS to open it in the default browser.
-- `stop-site` asks the local live server on the selected port to stop.
+- `site` starts a local HTTP view in the background and prints its URL.
+- `site --stop` asks the local live server on the selected port to stop.
 - `install-agent` installs the packaged Agent Issues custom agent and hook for VS Code, Copilot, and Claude.
 - `list-agent` reports whether the packaged Agent Issues custom agent is present for VS Code, Copilot, and Claude.
 - `uninstall-agent` removes the packaged Agent Issues custom agent and hook for VS Code, Copilot, and Claude.
@@ -186,7 +185,7 @@ agent-issues auth logout work
 - `agent-issues help <command> --json` is the main LLM-facing command discovery surface.
 - `agent-issues schema --json` is the main LLM-facing workflow schema surface.
 - `agent-issues capabilities --json` is the fastest single-shot discovery call for an LLM.
-- `agent-issues serve-site` or `agent-issues open-site` is the quickest way to inspect the full graph with live refresh.
+- `agent-issues site` is the quickest way to inspect the full graph with live refresh.
 
 ## Skill installation
 
@@ -240,13 +239,13 @@ Set `AGENT_ISSUES_DB` if you want the dev server to target a specific database p
 
 ### Live view
 
-Use `agent-issues serve-site` to run a local HTTP server that serves the built viewer and refreshes when the database changes.
+Use `agent-issues site` to start a detached local HTTP server that serves the built viewer and refreshes when the database changes.
 
-- Default live server: `agent-issues serve-site`
-- Choose a port: `agent-issues serve-site --port 4300`
-- Start the server and open a browser tab: `agent-issues open-site`
+- Default live server: `agent-issues site`
+- Choose a port: `agent-issues site --port 4300`
+- Stop the server: `agent-issues site --stop`
 
-The live server exposes the viewer assets together with `site-config.json`, `/api/snapshot`, and `/events`. Keep the process running while you want live updates.
+The live server exposes the viewer assets together with `site-config.json`, `/api/snapshot`, and `/events`.
 
 ## Query-focused commands
 

@@ -167,7 +167,7 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Host.
 
-These operations have no MCP equivalent. Use the CLI: `install-mcp`, `list-mcp`, `uninstall-mcp`, `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, `serve-site`, `open-site`, and `stop-site`.
+These operations have no MCP equivalent. Use the CLI: `install-mcp`, `list-mcp`, `uninstall-mcp`, `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, and `site`.
 
 ## Record body recipes
 

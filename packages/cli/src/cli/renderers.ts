@@ -274,15 +274,17 @@ export function renderRenameTenant(result: {
 	].join("\n");
 }
 
-export function renderLiveSite(result: Awaited<ReturnType<typeof startLiveSite>>["info"], opened: boolean): string {
+export function renderLiveSite(result: Awaited<ReturnType<typeof startLiveSite>>["info"]): string {
 	return [
-		`${opened ? "Opened" : "Serving"} live site at ${result.url}`,
+		`Serving live site at ${result.url}`,
 		`Database: ${result.dbPath}`,
 		`Port: ${result.port}`,
-		opened
-			? "Browser launch requested; keep this process running to continue listening for database changes."
-			: "Keep this process running to continue listening for database changes."
+		"Keep this process running to continue listening for database changes."
 	].join("\n");
+}
+
+export function renderStartedLiveSite(result: { port: number; started: boolean; url: string }): string {
+	return `Started live site at ${result.url}`;
 }
 
 export function renderStopLiveSite(result: { host: string; port: number; url: string; reachable: boolean; stopped: boolean }): string {

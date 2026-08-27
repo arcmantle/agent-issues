@@ -2214,7 +2214,7 @@ describe("cli", () => {
 			handle.server.once("close", () => resolve());
 		});
 
-		const exitCode = await runCli(["stop-site", "--port", String(port)], {
+		const exitCode = await runCli(["site", "--stop", "--port", String(port)], {
 			cwd: root,
 			stderr: stderr.stream,
 			stdout: stdout.stream
@@ -2360,7 +2360,7 @@ describe("cli", () => {
 		const stderr = createCapture();
 		const port = await getAvailablePort();
 
-		const exitCode = await runCli(["stop-site", "--port", String(port)], {
+		const exitCode = await runCli(["site", "--stop", "--port", String(port)], {
 			stderr: stderr.stream,
 			stdout: stdout.stream
 		});
@@ -2387,7 +2387,7 @@ describe("cli", () => {
 			}
 		});
 
-		const exitCode = await runCli(["stop-site", "--port", String(port)], {
+		const exitCode = await runCli(["site", "--stop", "--port", String(port)], {
 			stderr: stderr.stream,
 			stdout: stdout.stream
 		});
