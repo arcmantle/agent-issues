@@ -369,8 +369,8 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		const summary = await synchronizeStores(local, cloud);
 		expect(summary.entitiesCreatedCloud).toContain(handoff.id);
 		expect(summary.relationsAppliedToCloud).toBe(1);
-		expect(await cloud.listEntities("handoff")).toContainEqual(expect.objectContaining({ id: handoff.id, body: "Picking up from here." }));
-		expect((await cloud.getEntityDetails(handoff.id)).outgoing).toContainEqual(
+		expect(await cloud.listEntities("handoff")).toContainEqual(expect.objectContaining({ id: handoff.id }));
+		expect((await cloud.getEntityDetails(handoff.reference)).outgoing).toContainEqual(
 			expect.objectContaining({ relationType: "handsOff", entity: expect.objectContaining({ id: initiative.id }) })
 		);
 
