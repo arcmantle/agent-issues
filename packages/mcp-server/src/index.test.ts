@@ -59,6 +59,44 @@ describe("agent-issues MCP server", () => {
 		await store.close();
 	});
 
+	it("reports the resolved project identity", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const server = createMcpServer({ openStore: async () => store, projectIdentity: "shared-product" });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const result = await client.callTool({ name: "project_identity", arguments: {} });
+
+		expect(result).toMatchObject({ structuredContent: { projectIdentity: "shared-product" } });
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("reports a null project identity when no identity is configured", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const result = await client.callTool({ name: "project_identity", arguments: {} });
+
+		expect(result).toMatchObject({ structuredContent: { projectIdentity: null } });
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
 	it("creates an entity through entity_create", async () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
 		directories.push(directory);
@@ -270,6 +308,40 @@ describe("agent-issues MCP server", () => {
 				blocked: [expect.objectContaining({ issue: expect.objectContaining({ reference: blocked.reference }), blockers: [blocker.reference] })]
 			}
 		});
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("excludes every issue with an unfinished blocker from available entity_next_work", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Work initiative" });
+		const blocker = await store.createEntity({ kind: "issue", title: "Shared blocker", parentId: initiative.id });
+		const firstBlocked = await store.createEntity({ kind: "issue", title: "First blocked", parentId: initiative.id });
+		const secondBlocked = await store.createEntity({ kind: "issue", title: "Second blocked", parentId: initiative.id });
+		const selected = await store.createEntity({ kind: "issue", title: "Available selection", parentId: initiative.id });
+		await store.linkEntities({ fromId: blocker.id, relationType: "blocks", toId: firstBlocked.id });
+		await store.linkEntities({ fromId: blocker.id, relationType: "blocks", toId: secondBlocked.id });
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: selected.reference } });
+		const content = result.structuredContent as {
+			available: Array<{ issue: { reference: string } }>;
+			blocked: Array<{ issue: { reference: string }; blockers: string[] }>;
+		};
+
+		expect(content.available.map((item) => item.issue.reference).sort()).toEqual([blocker.reference, selected.reference].sort());
+		expect(content.blocked).toEqual(expect.arrayContaining([
+			expect.objectContaining({ issue: expect.objectContaining({ reference: firstBlocked.reference }), blockers: [blocker.reference] }),
+			expect.objectContaining({ issue: expect.objectContaining({ reference: secondBlocked.reference }), blockers: [blocker.reference] })
+		]));
 
 		await client.close();
 		await server.close();

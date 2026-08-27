@@ -2,7 +2,8 @@ import { Option } from "clipanion";
 
 import { resolveDatabasePath, resolveTenantRootPath, resolveTenantSlug } from "@agent-issues/api-local";
 
-import { renderCurrentTenant, renderDeleteTenant, renderRenameTenant, renderTenantList } from "../renderers.js";
+import { resolveProjectIdentity } from "../../project-identity.js";
+import { renderCurrentTenant, renderDeleteTenant, renderProjectIdentity, renderRenameTenant, renderTenantList } from "../renderers.js";
 import { MutableTenantCommand, TenantCommand, requirePositional, withStore } from "../shared.js";
 
 export class InitCommand extends TenantCommand {
@@ -35,6 +36,20 @@ export class CurrentTenantCommand extends TenantCommand {
 		};
 
 		this.print(result, renderCurrentTenant(result));
+		return 0;
+	}
+}
+
+export class ProjectIdentityCommand extends TenantCommand {
+	public static paths = [["project-identity"]];
+
+	public async execute(): Promise<number> {
+		const result = {
+			command: "project-identity" as const,
+			...resolveProjectIdentity(this.context.cwd)
+		};
+
+		this.print(result, renderProjectIdentity(result));
 		return 0;
 	}
 }

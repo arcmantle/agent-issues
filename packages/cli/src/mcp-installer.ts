@@ -157,10 +157,13 @@ function writeMcpManifest(targetFile: string): void {
 	writeFileSync(getMcpManifestFile(targetFile), `${JSON.stringify({ server: MCP_SERVER_NAME }, null, "\t")}\n`);
 }
 
-function createMcpServerConfiguration(): Record<string, string> {
+function createMcpServerConfiguration(): Record<string, unknown> {
 	return {
 		command: MCP_COMMAND,
 		cwd: "${workspaceFolder}",
+		env: {
+			AGENT_ISSUES_PROJECT_IDENTITY: "${config:agentIssues.projectIdentity}"
+		},
 		type: "stdio"
 	};
 }

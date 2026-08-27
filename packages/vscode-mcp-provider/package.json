@@ -1,7 +1,7 @@
 {
 	"name": "agent-issues-mcp-provider",
 	"displayName": "Agent Issues MCP Provider",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Provides the local Agent Issues MCP server to VS Code.",
 	"private": true,
 	"publisher": "arcmantle",
@@ -29,6 +29,11 @@
 		"configuration": {
 			"title": "Agent Issues MCP Provider",
 			"properties": {
+				"agentIssues.projectIdentity": {
+					"type": "string",
+					"scope": "window",
+					"description": "Explicit project identity for Agent Issues in this VS Code workspace."
+				},
 				"agentIssues.mcp.command": {
 					"type": "string",
 					"default": "agent-issues-mcp",

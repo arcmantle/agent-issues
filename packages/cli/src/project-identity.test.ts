@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PROJECT_IDENTITY_FILENAME, resolveProjectIdentity } from "./project-identity.js";
+import {
+	PROJECT_IDENTITY_ENVIRONMENT_VARIABLE,
+	PROJECT_IDENTITY_FILENAME,
+	PROJECT_IDENTITY_FILENAME_WITHOUT_JSON,
+	resolveProjectIdentity
+} from "./project-identity.js";
 
 const tempDirs: string[] = [];
 
@@ -93,25 +98,52 @@ describe("project identity resolution", () => {
 		});
 	});
 
-	it("prefers the .code-workspace filename over the package.json name field", () => {
+	it("does not inspect .code-workspace files when resolving identity directly", () => {
 		const workspaceRoot = createWorkspace("checkout-dir-name-does-not-matter");
 		writeFileSync(path.join(workspaceRoot, "package.json"), JSON.stringify({ name: "My Package Name" }));
-		writeFileSync(path.join(workspaceRoot, "Team Workspace.code-workspace"), JSON.stringify({ folders: [] }));
+		writeFileSync(
+			path.join(workspaceRoot, "eye-share-demo.code-workspace"),
+			JSON.stringify({ folders: [], settings: { "agentIssues.projectIdentity": "ClientFlex" } })
+		);
 
 		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
-			identity: "team-workspace",
-			source: "code-workspace"
+			identity: "my-package-name",
+			source: "package-json"
 		});
 	});
 
-	it("prefers the dedicated agent-issues project file over the .code-workspace filename", () => {
+	it("prefers the .agent-issues.json file over workspace and package metadata", () => {
 		const workspaceRoot = createWorkspace("checkout-dir-name-does-not-matter");
-		writeFileSync(path.join(workspaceRoot, "Team Workspace.code-workspace"), JSON.stringify({ folders: [] }));
-		writeFileSync(path.join(workspaceRoot, PROJECT_IDENTITY_FILENAME), JSON.stringify({ project: "Explicit Name" }));
+		writeFileSync(path.join(workspaceRoot, "package.json"), JSON.stringify({ name: "My Package Name" }));
+		writeFileSync(path.join(workspaceRoot, ".agent-issues.json"), JSON.stringify({ projectIdentity: "ClientFlex" }));
 
 		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
-			identity: "explicit-name",
+			identity: "clientflex",
 			source: "project-file"
+		});
+	});
+
+	it("supports the .agent-issues project file without the .json extension", () => {
+		const workspaceRoot = createWorkspace("checkout-dir-name-does-not-matter");
+		writeFileSync(path.join(workspaceRoot, PROJECT_IDENTITY_FILENAME_WITHOUT_JSON), JSON.stringify({ projectIdentity: "Extensionless Project" }));
+
+		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
+			identity: "extensionless-project",
+			source: "project-file"
+		});
+	});
+
+	it("uses an explicit environment project identity instead of workspace discovery", () => {
+		const workspaceRoot = createWorkspace("checkout-dir-name-does-not-matter");
+		writeFileSync(path.join(workspaceRoot, PROJECT_IDENTITY_FILENAME), JSON.stringify({ projectIdentity: "Repository project" }));
+		writeFileSync(
+			path.join(workspaceRoot, "eye-share-demo.code-workspace"),
+			JSON.stringify({ folders: [], settings: { "agentIssues.projectIdentity": "ClientFlex" } })
+		);
+
+		expect(resolveProjectIdentity(workspaceRoot, { [PROJECT_IDENTITY_ENVIRONMENT_VARIABLE]: "Workspace project" })).toEqual({
+			identity: "workspace-project",
+			source: "environment"
 		});
 	});
 
@@ -119,7 +151,7 @@ describe("project identity resolution", () => {
 		const workspaceRoot = createWorkspace("checkout-dir-name-does-not-matter");
 		writeFileSync(
 			path.join(workspaceRoot, PROJECT_IDENTITY_FILENAME),
-			JSON.stringify({ project: "Explicit Name", cloudUrl: "https://example.test", token: "super-secret" })
+			JSON.stringify({ projectIdentity: "Explicit Name", cloudUrl: "https://example.test", token: "super-secret" })
 		);
 
 		expect(Object.keys(resolveProjectIdentity(workspaceRoot)).sort()).toEqual(["identity", "source"]);

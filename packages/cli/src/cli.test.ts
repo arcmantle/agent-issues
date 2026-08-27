@@ -118,6 +118,66 @@ async function getAvailablePort(): Promise<number> {
 }
 
 describe("cli", () => {
+	it("reports the resolved project identity", async () => {
+		const root = createTempDir();
+		const stdout = createCapture();
+
+		expect(await runCli(["project-identity", "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: stdout.stream
+		})).toBe(0);
+
+		expect(JSON.parse(stdout.read())).toEqual({
+			command: "project-identity",
+			identity: "default-project",
+			source: "folder-name"
+		});
+	});
+
+	it("reports the resolved project identity in text output", async () => {
+		const root = createTempDir();
+		const stdout = createCapture();
+
+		expect(await runCli(["project-identity"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: stdout.stream
+		})).toBe(0);
+
+		expect(stdout.read()).toBe("Project identity: default-project\nSource: folder-name\n");
+	});
+
+	it("stops live sites through site --stop", async () => {
+		const root = createTempDir();
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			for (const command of ["site"]) {
+				const port = await getAvailablePort();
+				const handle = await startLiveSite({ currentWorkingDirectory: root, port });
+				await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+				const closed = new Promise<void>((resolve) => handle.server.once("close", resolve));
+				const output = createCapture();
+
+				expect(await runCli([command, "--stop", "--port", String(port), "--json"], {
+					cwd: root,
+					stderr: createCapture().stream,
+					stdout: output.stream
+				})).toBe(0);
+				await closed;
+				expect(JSON.parse(output.read())).toMatchObject({ port, stopped: true });
+			}
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
 	it.each(["bind", "unbind", "status"])("rejects the removed cloud %s command", async (subcommand) => {
 		await expect(runCli(["cloud", subcommand])).rejects.toThrow(/Extraneous positional argument/);
 	});

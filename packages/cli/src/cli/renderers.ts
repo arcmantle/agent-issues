@@ -197,6 +197,14 @@ export function renderCurrentTenant(result: {
 	].join("\n");
 }
 
+export function renderProjectIdentity(result: {
+	command: "project-identity";
+	identity: string;
+	source: string;
+}): string {
+	return [`Project identity: ${result.identity}`, `Source: ${result.source}`].join("\n");
+}
+
 export function renderTenantList(result: {
 	command: "list-tenants";
 	currentTenantId: string;

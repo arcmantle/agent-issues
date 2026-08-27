@@ -40,6 +40,32 @@ SQLite is the canonical store.
 
 The project glossary lives in this database. It is not a raw `CONTEXT.md` file.
 
+## MCP project identity
+
+The MCP server scopes tracker reads and writes to one project identity. For a VS Code multi-root workspace, set `agentIssues.projectIdentity` in the workspace file:
+
+```json
+{
+	"folders": [
+		{ "path": "api" },
+		{ "path": "web" }
+	],
+	"settings": {
+		"agentIssues.projectIdentity": "shared-product"
+	}
+}
+```
+
+The VS Code MCP provider and the configuration created by `agent-issues install-mcp` pass this value to the server. An explicit workspace value takes precedence over `.agent-issues.json`, `.agent-issues`, the `.code-workspace` filename, Git remote name, `package.json` name, and folder name.
+
+Outside VS Code, set the same identity in either `.agent-issues.json` or `.agent-issues`:
+
+```json
+{ "projectIdentity": "shared-product" }
+```
+
+Use `agent-issues project-identity --json` to inspect the CLI's resolved identity and its source. The MCP server exposes the same resolved value through `project_identity`.
+
 ## Context
 
 Context is a first-class database-backed concept.

@@ -43,6 +43,7 @@ import {
 	DeleteTenantCommand,
 	InitCommand,
 	ListTenantsCommand,
+	ProjectIdentityCommand,
 	RenameTenantCommand
 } from "./commands/tenants.js";
 import { stringifyJson, type AgentIssuesContext } from "./shared.js";
@@ -70,6 +71,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(SiteCommand);
 	cli.register(InitCommand);
 	cli.register(CurrentTenantCommand);
+	cli.register(ProjectIdentityCommand);
 	cli.register(ListTenantsCommand);
 	cli.register(DeleteTenantCommand);
 	cli.register(RenameTenantCommand);

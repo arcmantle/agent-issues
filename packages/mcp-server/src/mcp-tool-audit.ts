@@ -4,6 +4,7 @@ type McpDataCommand = {
 };
 
 const INCLUDED_MCP_DATA_COMMANDS: readonly McpDataCommand[] = [
+	{ command: "project-identity", toolNames: ["project_identity"] },
 	{ command: "create", toolNames: ["entity_create"] },
 	{ command: "edit", toolNames: ["entity_edit"] },
 	{ command: "archive", toolNames: ["entity_archive"] },

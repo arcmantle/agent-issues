@@ -361,6 +361,19 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
+		name: "project-identity",
+		summary: "Show the project identity resolved from the current workspace.",
+		usage: ["agent-issues project-identity"],
+		examples: ["agent-issues project-identity", "agent-issues project-identity --json"],
+		notes: [
+			"Resolution precedence is environment override, .agent-issues.json file, Git remote name, package.json name, then folder name."
+		],
+		output: {
+			human: ["Resolved project identity and its source"],
+			json: ["command", "identity", "source"]
+		}
+	},
+	{
 		name: "list-tenants",
 		summary: "List the tenants currently present in the selected database.",
 		usage: ["agent-issues list-tenants", "agent-issues list-tenants --db <path> --json"],

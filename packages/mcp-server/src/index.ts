@@ -17,6 +17,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 export type McpServerOptions = {
+	projectIdentity?: string;
 	openStore: () => Promise<
 		Pick<
 			StorageDriver,
@@ -72,6 +73,15 @@ export type McpServerOptions = {
 export function createMcpServer(options: McpServerOptions): McpServer {
 	const server = new McpServer({ name: "agent-issues", version: "0.1.0" });
 	const confirmationTokens = new ConfirmationTokenStore(options.now ?? Date.now);
+
+	server.registerTool(
+		"project_identity",
+		{
+			description: "Get the resolved project identity for this MCP server.",
+			inputSchema: {}
+		},
+		async () => toolResult({ projectIdentity: options.projectIdentity ?? null })
+	);
 
 	server.registerTool(
 		"entity_create",
@@ -828,6 +838,7 @@ function hashConfirmationInput(input: Record<string, unknown>): string {
 
 export function createLocalMcpServer(options: LocalDaemonStoreOptions): McpServer {
 	return createMcpServer({
+		projectIdentity: options.projectIdentity,
 		openStore: () => openLocalDaemonStore({ ...options, buildHash: options.buildHash ?? readBuildContentHash() })
 	});
 }

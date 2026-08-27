@@ -41,7 +41,14 @@ describe("MCP CLI commands", () => {
 			server: { name: "agent-issues", status: "installed" }
 		});
 		expect(JSON.parse(readFileSync(targetFile, "utf8"))).toMatchObject({
-			servers: { "agent-issues": { command: "agent-issues-mcp", cwd: "${workspaceFolder}", type: "stdio" } }
+			servers: {
+				"agent-issues": {
+					command: "agent-issues-mcp",
+					cwd: "${workspaceFolder}",
+					env: { AGENT_ISSUES_PROJECT_IDENTITY: "${config:agentIssues.projectIdentity}" },
+					type: "stdio"
+				}
+			}
 		});
 	});
 

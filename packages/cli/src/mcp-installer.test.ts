@@ -33,6 +33,7 @@ describe("MCP installer", () => {
 				"agent-issues": {
 					command: "agent-issues-mcp",
 					cwd: "${workspaceFolder}",
+					env: { AGENT_ISSUES_PROJECT_IDENTITY: "${config:agentIssues.projectIdentity}" },
 					type: "stdio"
 				}
 			}
@@ -87,6 +88,7 @@ describe("MCP installer", () => {
 				"agent-issues": {
 					command: "agent-issues-mcp",
 					cwd: "${workspaceFolder}",
+					env: { AGENT_ISSUES_PROJECT_IDENTITY: "${config:agentIssues.projectIdentity}" },
 					type: "stdio"
 				}
 			}

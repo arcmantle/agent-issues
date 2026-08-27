@@ -1,9 +1,9 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { resolveTenantRootPath, sanitizePathSegment } from "@agent-issues/api-local";
 
-export type ProjectIdentitySource = "folder-name" | "git-repository" | "package-json" | "code-workspace" | "project-file";
+export type ProjectIdentitySource = "environment" | "folder-name" | "git-repository" | "package-json" | "project-file";
 
 export type ProjectIdentityResolution = {
 	identity: string;
@@ -12,56 +12,62 @@ export type ProjectIdentityResolution = {
 
 /**
  * Dedicated, committed file carrying ONLY the explicit project identity
- * override (ADR10/ADR18). This resolver reads exclusively the "project"
+ * override (ADR10/ADR18). This resolver reads exclusively the "projectIdentity"
  * field and ignores everything else, so the file must never carry a cloud
  * URL or credentials.
  */
-export const PROJECT_IDENTITY_FILENAME = ".agent-issues-project.json";
+export const PROJECT_IDENTITY_FILENAME = ".agent-issues.json";
+export const PROJECT_IDENTITY_FILENAME_WITHOUT_JSON = ".agent-issues";
+export const PROJECT_IDENTITY_ENVIRONMENT_VARIABLE = "AGENT_ISSUES_PROJECT_IDENTITY";
 
 /**
  * Resolves a project's identity deterministically (ADR10), by precedence:
- * dedicated project file > .code-workspace filename > git repository name >
+ * environment override > dedicated project file > git repository name >
  * package.json "name" > sanitized folder name. Anchored to the same
  * workspace root as tenant resolution so the same repo (or any of its
  * subdirectories) resolves to the same identity regardless of local
  * checkout path.
  */
-export function resolveProjectIdentity(currentWorkingDirectory: string = process.cwd()): ProjectIdentityResolution {
+export function resolveProjectIdentity(
+	currentWorkingDirectory: string = process.cwd(),
+	environment: NodeJS.ProcessEnv = process.env
+): ProjectIdentityResolution {
 	const root = resolveTenantRootPath(currentWorkingDirectory);
 
 	return (
+		resolveFromEnvironment(environment) ??
 		resolveFromProjectFile(root) ??
-		resolveFromCodeWorkspace(root) ??
 		resolveFromGitRepository(root) ??
 		resolveFromPackageJson(root) ??
 		resolveFromFolderName(root)
 	);
 }
 
-function resolveFromProjectFile(root: string): ProjectIdentityResolution | undefined {
-	const projectFilePath = path.join(root, PROJECT_IDENTITY_FILENAME);
-	if (!existsSync(projectFilePath)) return undefined;
-
-	const project = parseJsonStringField(readFileSync(projectFilePath, "utf8"), "project");
+function resolveFromEnvironment(environment: NodeJS.ProcessEnv): ProjectIdentityResolution | undefined {
+	const project = environment[PROJECT_IDENTITY_ENVIRONMENT_VARIABLE];
 	if (!project) return undefined;
 
 	const identity = sanitizePathSegment(project);
 	if (!identity) return undefined;
 
-	return { identity, source: "project-file" };
+	return { identity, source: "environment" };
 }
 
-function resolveFromCodeWorkspace(root: string): ProjectIdentityResolution | undefined {
-	const codeWorkspaceFilenames = readdirSync(root)
-		.filter((entry) => entry.endsWith(".code-workspace"))
-		.sort();
-	const [firstCodeWorkspaceFilename] = codeWorkspaceFilenames;
-	if (!firstCodeWorkspaceFilename) return undefined;
+function resolveFromProjectFile(root: string): ProjectIdentityResolution | undefined {
+	for (const projectIdentityFilename of [PROJECT_IDENTITY_FILENAME, PROJECT_IDENTITY_FILENAME_WITHOUT_JSON]) {
+		const projectFilePath = path.join(root, projectIdentityFilename);
+		if (!existsSync(projectFilePath)) continue;
 
-	const identity = sanitizePathSegment(firstCodeWorkspaceFilename.replace(/\.code-workspace$/, ""));
-	if (!identity) return undefined;
+		const projectIdentity = parseJsonStringField(readFileSync(projectFilePath, "utf8"), "projectIdentity");
+		if (!projectIdentity) continue;
 
-	return { identity, source: "code-workspace" };
+		const identity = sanitizePathSegment(projectIdentity);
+		if (!identity) continue;
+
+		return { identity, source: "project-file" };
+	}
+
+	return undefined;
 }
 
 function resolveFromPackageJson(root: string): ProjectIdentityResolution | undefined {
