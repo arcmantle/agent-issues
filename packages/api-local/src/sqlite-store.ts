@@ -14,7 +14,7 @@ import * as localContextStore from "./features/context/context-store.js";
 import type { DatabaseLocationOptions } from "./db/database.js";
 import { LocalHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./db/database.js";
-import type { SqliteExecutor, SqliteInternalConnection } from "./db/sqlite-executor.js";
+import { getSqliteEntityOrThrow, type SqliteExecutor, type SqliteInternalConnection } from "./db/sqlite-executor.js";
 import { LocalEntityStore } from "./features/entity-store/store.js";
 import * as localEntityStore from "./features/entity-store/store.js";
 import { LocalIssueCommentStore } from "./features/issue-comment/store.js";
@@ -97,9 +97,17 @@ export class SqliteStore implements StorageDriver {
 
 	public async getEntityDetails(entityId: string) {
 		const details = await this.entityStore.getEntityDetails(entityId);
-		return details.entity.kind === "issue"
-			? { ...details, comments: this.issueCommentStore.listIssueComments({ issueId: details.entity.id }) }
-			: details;
+		if (details.entity.kind !== "issue") {
+			return details;
+		}
+
+		const issue = getSqliteEntityOrThrow(this.executor, details.entity.id);
+		if (issue.projectId !== this.executor.currentProjectId) {
+			const currentProject = getSqliteEntityOrThrow(this.executor, this.executor.currentProjectId);
+			throw new Error(`Entity not found in current project "${currentProject.title}" (${currentProject.reference}): ${entityId}`);
+		}
+
+		return { ...details, comments: this.issueCommentStore.listIssueComments({ issueId: issue.id }) };
 	}
 
 	public async queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]) {
