@@ -8,7 +8,7 @@
 		"node": ">=24"
 	},
 	"scripts": {
-		"build": "pnpm --filter @agent-issues/core build && pnpm --filter @agent-issues/api-local build && pnpm --filter @agent-issues/api-pg build && pnpm --filter @agent-issues/mcp-server build && pnpm --filter @agent-issues/site build && pnpm --filter @agent-issues/kanban build && pnpm --filter agent-issues build && pnpm --filter agent-issues-mcp-provider build",
+		"build": "node ./scripts/build.mjs",
 		"typecheck": "pnpm --filter @agent-issues/core build && pnpm --filter @agent-issues/api-local build && pnpm --filter @agent-issues/api-pg build && pnpm --filter @agent-issues/mcp-server build && pnpm -r typecheck",
 		"test": "pnpm -r test",
 		"site:dev": "pnpm --filter @agent-issues/site dev"
