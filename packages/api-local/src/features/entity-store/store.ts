@@ -386,12 +386,6 @@ export function updateEntityStatus(
 			);
 		}
 
-		if (input.status === "done") {
-			const owningInitiativeId = resolveOwningInitiativeId(executor, entity);
-			if (owningInitiativeId && hasReadyPlan(executor, owningInitiativeId) && !hasRelatedReadyPlanEntry(executor, entity.id, owningInitiativeId)) {
-				throw new Error(`Cannot set ${entity.id} to done while its initiative has a ready Plan: link the issue to a related Plan entry first.`);
-			}
-		}
 	}
 
 	const previousStatus = entity.status;
@@ -1518,14 +1512,6 @@ function getStructuralPath(executor: SqliteExecutor, entityId: string): Array<{ 
 	}
 }
 
-function resolveOwningInitiativeId(executor: SqliteExecutor, focus: EntityRecord): string | null {
-	if (focus.kind === "initiative") {
-		return focus.id;
-	}
-
-	return getStructuralPath(executor, focus.id).find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
-}
-
 function getRelatedPlanEntries(executor: SqliteExecutor, issueId: string): PlanEntryRecord[] {
 	const planRows = all<{ plan_id: string }>(executor, sql`SELECT DISTINCT plan_entries.plan_id
 		FROM plan_entries
@@ -1538,26 +1524,6 @@ function getRelatedPlanEntries(executor: SqliteExecutor, issueId: string): PlanE
 		ORDER BY plan_entries.plan_id`);
 
 	return planRows.flatMap(({ plan_id }) => listPlanEntries(executor, { planId: plan_id }).filter((entry) => entry.referencedEntityIds.includes(issueId)));
-}
-
-function hasReadyPlan(executor: SqliteExecutor, initiativeId: string): boolean {
-	return first<{ id: string }>(executor, sql`SELECT plans.id
-		FROM relations
-		JOIN entities AS plans ON plans.tenant_id = relations.tenant_id AND plans.id = relations.to_id
-		WHERE relations.tenant_id = ${executor.tenantId}
-			AND relations.from_id = ${initiativeId}
-			AND relations.type = 'owns'
-			AND plans.kind = 'plan'
-			AND plans.status = 'ready'
-			AND plans.tombstone = FALSE
-		LIMIT 1`) !== undefined;
-}
-
-function hasRelatedReadyPlanEntry(executor: SqliteExecutor, issueId: string, initiativeId: string): boolean {
-	return getRelatedPlanEntries(executor, issueId).some((entry) => {
-		const plan = getEntityOrThrow(executor, entry.planId);
-		return plan.status === "ready" && resolveOwningInitiativeId(executor, plan) === initiativeId;
-	});
 }
 
 function insertRelation(executor: SqliteExecutor, relation: RelationRecord) {

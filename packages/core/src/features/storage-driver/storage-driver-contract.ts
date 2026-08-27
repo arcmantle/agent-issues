@@ -178,20 +178,17 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
-		it("requires a ready Plan's issues to link an entry before completion", async () => {
+		it("allows an independently created issue to complete when its initiative has a ready Plan", async () => {
 			const store = await openStore();
 
 			try {
 				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry completion owner" });
 				const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Ready Plan" });
-				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Record the implementation decision." });
-				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Implement the decision" });
-
+				await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Record the implementation decision." });
 				await store.updateEntityStatus({ entityId: plan.id, status: "ready" });
-				await expect(store.updateEntityStatus({ entityId: issue.id, status: "done" })).rejects.toThrow(/ready Plan.*Plan entry/i);
+				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Independent follow-up" });
 
-				await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
-				expect((await store.getEntityDetails(issue.id)).planEntries).toMatchObject([{ id: entry.id }]);
+				expect((await store.getEntityDetails(issue.id)).planEntries).toEqual([]);
 				await expect(store.updateEntityStatus({ entityId: issue.id, status: "done" })).resolves.toMatchObject({ entity: { status: "done" } });
 			} finally {
 				await store.close();
@@ -2575,7 +2572,7 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 				const issue = await projectA.createEntity({ kind: "issue", title: "Project A issue" });
 				await projectA.createIssueComment({ issueId: issue.id, body: "Project A comment." });
 
-				await expect(projectB.getEntityDetails(issue.id)).rejects.toThrow(`Entity not found: ${issue.id}`);
+				await expect(projectB.getEntityDetails(issue.reference)).rejects.toThrow(`Entity not found in current project "comment-project-b"`);
 			} finally {
 				await projectA.close();
 				await projectB.close();

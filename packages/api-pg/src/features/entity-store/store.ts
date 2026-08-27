@@ -459,15 +459,6 @@ async function getStructuralPath(
 	}
 }
 
-async function resolveOwningInitiativeId(executor: TenantExecutor, focus: EntityRecord): Promise<string | null> {
-	if (focus.kind === "initiative") {
-		return focus.id;
-	}
-
-	const structuralPath = await getStructuralPath(executor, focus.id);
-	return structuralPath.find((entry) => entry.entity.kind === "initiative")?.entity.id ?? null;
-}
-
 async function getRelatedPlanEntries(executor: TenantExecutor, issueId: string): Promise<PlanEntryRecord[]> {
 	const result = await executor.execute(sql`SELECT DISTINCT plan_entries.plan_id
 		FROM plan_entries
@@ -483,33 +474,6 @@ async function getRelatedPlanEntries(executor: TenantExecutor, issueId: string):
 	const entries = await Promise.all((result.rows as Array<{ plan_id: string }>).map(({ plan_id }) => planStore.listPlanEntries({ planId: plan_id })));
 
 	return entries.flat().filter((entry) => entry.referencedEntityIds.includes(issueId));
-}
-
-async function hasReadyPlan(executor: TenantExecutor, initiativeId: string): Promise<boolean> {
-	const result = await executor.execute(sql`SELECT plans.id
-		FROM relations
-		JOIN entities AS plans ON plans.tenant_id = relations.tenant_id AND plans.id = relations.to_id
-		WHERE relations.tenant_id = ${executor.tenantId}
-			AND relations.from_id = ${initiativeId}::uuid
-			AND relations.type = 'owns'
-			AND plans.kind = 'plan'
-			AND plans.status = 'ready'
-			AND plans.tombstone = FALSE
-		LIMIT 1`);
-
-	return result.rows.length > 0;
-}
-
-async function hasRelatedReadyPlanEntry(executor: TenantExecutor, issueId: string, initiativeId: string): Promise<boolean> {
-	const entries = await getRelatedPlanEntries(executor, issueId);
-	for (const entry of entries) {
-		const plan = await getEntityOrThrow(executor, entry.planId);
-		if (plan.status === "ready" && await resolveOwningInitiativeId(executor, plan) === initiativeId) {
-			return true;
-		}
-	}
-
-	return false;
 }
 
 export async function nextEntityId(_client: TenantExecutor, kind: EntityKind): Promise<string> {
@@ -1620,12 +1584,6 @@ export async function updateEntityStatus(
 			);
 		}
 
-		if (input.status === "done") {
-			const owningInitiativeId = await resolveOwningInitiativeId(executor, entity);
-			if (owningInitiativeId && await hasReadyPlan(executor, owningInitiativeId) && !await hasRelatedReadyPlanEntry(executor, entity.id, owningInitiativeId)) {
-				throw new Error(`Cannot set ${entity.id} to done while its initiative has a ready Plan: link the issue to a related Plan entry first.`);
-			}
-		}
 	}
 
 	const previousStatus = entity.status;
