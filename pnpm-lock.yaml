@@ -154,6 +154,40 @@ importers:
         specifier: ^4.1.8
         version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
 
+  packages/kanban:
+    dependencies:
+      '@lit-labs/signals':
+        specifier: ^0.3.0
+        version: 0.3.0
+      '@lit/context':
+        specifier: ^1.1.6
+        version: 1.1.6
+      cytoscape:
+        specifier: ^3.34.0
+        version: 3.34.0
+      dompurify:
+        specifier: ^3.4.8
+        version: 3.4.8
+      lit:
+        specifier: ^3.3.1
+        version: 3.3.3
+      marked:
+        specifier: ^18.0.5
+        version: 18.0.5
+    devDependencies:
+      happy-dom:
+        specifier: ^20.10.2
+        version: 20.10.2
+      typescript:
+        specifier: ^7.0.0
+        version: 7.0.2
+      vite:
+        specifier: ^7.2.0
+        version: 7.3.5(@types/node@25.9.2)
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@25.9.2)(happy-dom@20.10.2)(vite@7.3.5(@types/node@25.9.2))
+
   packages/mcp-server:
     dependencies:
       '@agent-issues/api-local':
@@ -419,6 +453,9 @@ packages:
 
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
+
+  '@lit/context@1.1.6':
+    resolution: {integrity: sha512-M26qDE6UkQbZA2mQ3RjJ3Gzd8TxP+/0obMgE5HfkfLhEEyYE3Bui4A5XHiGPjy0MUGAyxB3QgVuw2ciS0kHn6A==}
 
   '@lit/reactive-element@2.1.2':
     resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
@@ -1897,6 +1934,10 @@ snapshots:
       signal-polyfill: 0.2.2
 
   '@lit-labs/ssr-dom-shim@1.6.0': {}
+
+  '@lit/context@1.1.6':
+    dependencies:
+      '@lit/reactive-element': 2.1.2
 
   '@lit/reactive-element@2.1.2':
     dependencies:
