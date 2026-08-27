@@ -153,6 +153,31 @@ const RELATION_TYPE_VALUES = Array.from(new Set(ALLOWED_RELATIONS.map((relation)
 const STATUS_VALUES = Array.from(new Set(Object.values(STATUS_FLOW).flat())).sort();
 const COMMAND_SPECS: CommandSpec[] = [
 	{
+		name: "sql",
+		summary: "Run a read-only SQL query against the active local SQLite database.",
+		usage: [
+			"agent-issues sql <statement>"
+		],
+		positionals: [
+			{
+				name: "statement",
+				description: "The SQL statement to run. Quote the statement in the shell.",
+				required: true
+			}
+		],
+		examples: [
+			'agent-issues sql "SELECT id, title FROM entities" --json'
+		],
+		notes: [
+			"This command is available only when the active saved login is local.",
+			"The query runs through a read-only SQLite connection."
+		],
+		output: {
+			human: ["A JSON array of result rows."],
+			json: ["An object with a rows array."]
+		}
+	},
+	{
 		name: "context",
 		summary: "Read and update shared, project-scoped, and initiative-scoped database-backed context.",
 		usage: [

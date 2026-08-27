@@ -69,6 +69,15 @@ export function resolveDatabasePath(inputPath?: string, options?: DatabaseLocati
 	return path.join(resolveAgentIssuesHomeDirectory(), DEFAULT_DATABASE_FILENAME);
 }
 
+export function querySqlite(dbPath: string, statement: string): unknown[] {
+	const db = openSqliteConnection(dbPath, { fileMustExist: true, readonly: true });
+	try {
+		return db.drizzle.all(sql.raw(statement));
+	} finally {
+		db.close();
+	}
+}
+
 export async function ensureDatabase(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenDatabaseResult> {
 	const dbPath = resolveDatabasePath(inputPath, options);
 	mkdirSync(path.dirname(dbPath), { recursive: true });

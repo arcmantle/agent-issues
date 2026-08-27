@@ -37,6 +37,7 @@ import {
 } from "./commands/installers.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
 import { SiteCommand } from "./commands/site.js";
+import { SqlCommand } from "./commands/sql.js";
 import { SynchronizeCommand } from "./commands/synchronize.js";
 import {
 	CurrentTenantCommand,
@@ -100,6 +101,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(StatusCommand);
 	cli.register(NextWorkCommand);
 	cli.register(ExportCommand);
+	cli.register(SqlCommand);
 	cli.register(RelationsCommand);
 	cli.register(OrphansCommand);
 	cli.register(ShowCommand);
