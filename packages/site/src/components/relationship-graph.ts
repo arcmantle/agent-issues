@@ -4,18 +4,18 @@ import { when } from "lit/directives/when.js";
 import type { GraphNode, RelationshipGraph } from "../models.js";
 
 const KIND_COLOR: Record<string, string> = {
-	adr: "#8250df",
-	debt: "#bf3989",
-	initiative: "#0969da",
-	issue: "#0a7ea4",
-	prd: "#1f883d",
-	project: "#24292f",
-	story: "#bf8700"
+	adr: "var(--graph-adr)",
+	debt: "var(--graph-debt)",
+	initiative: "var(--graph-initiative)",
+	issue: "var(--graph-issue)",
+	prd: "var(--success)",
+	project: "var(--graph-project)",
+	story: "var(--graph-story)"
 };
 
 const STATUS_STROKE: Record<string, string> = {
-	blocked: "#cf222e",
-	done: "#8250df"
+	blocked: "var(--danger)",
+	done: "var(--done)"
 };
 
 const NODE_W = 184;
@@ -42,6 +42,19 @@ class RelationshipGraphView extends LitElement {
 	};
 
 	public graph: RelationshipGraph | null = null;
+	public themeObserver: MutationObserver | null = null;
+
+	connectedCallback(): void {
+		super.connectedCallback();
+		this.themeObserver = new MutationObserver(() => this.requestUpdate());
+		this.themeObserver.observe(document.documentElement, { attributeFilter: ["data-theme"], attributes: true });
+	}
+
+	disconnectedCallback(): void {
+		this.themeObserver?.disconnect();
+		this.themeObserver = null;
+		super.disconnectedCallback();
+	}
 
 	protected onNodeClick(node: GraphNode) {
 		this.dispatchEvent(
@@ -54,7 +67,7 @@ class RelationshipGraphView extends LitElement {
 	}
 
 	protected nodeColor(node: GraphNode) {
-		return KIND_COLOR[node.kind] ?? "#59636e";
+		return KIND_COLOR[node.kind] ?? "var(--muted)";
 	}
 
 	protected nodeStroke(node: GraphNode) {
@@ -130,7 +143,7 @@ class RelationshipGraphView extends LitElement {
 							class="ai-edge"
 							d=${`M${x1} ${y1} C ${x1 + 46} ${y1}, ${x2 - 46} ${y2}, ${x2} ${y2}`}
 							fill="none"
-							stroke="#d0d7de"
+							stroke="var(--graph-edge)"
 							stroke-width="1.5"
 						/>
 						${when(
@@ -169,7 +182,7 @@ class RelationshipGraphView extends LitElement {
 							width=${NODE_W}
 							height=${NODE_H}
 							rx="9"
-							fill="#fff"
+							fill="var(--surface)"
 							stroke=${stroke}
 							stroke-width="1.5"
 						/>
@@ -219,7 +232,7 @@ class RelationshipGraphView extends LitElement {
 	}
 	.ai-node:not(.ai-node-static):hover .ai-node-rect {
 		stroke-width: 3;
-		filter: drop-shadow(0 2px 6px rgba(31, 35, 40, 0.18));
+			filter: drop-shadow(0 2px 6px var(--shadow));
 	}
 	`;
 }

@@ -9,6 +9,7 @@ import { when } from "lit/directives/when.js";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import "./context-view.js";
+import "./record-browser-elements.js";
 import "./relationship-graph.js";
 import "./relationship-graph-filters.js";
 import type { Entity, InitiativeBundle, InitiativeTab, ProjectGraphKind } from "../models.js";
@@ -25,7 +26,25 @@ type IssueTreeNode = {
 	children: IssueTreeNode[];
 };
 
+type RecordTreeTab = "issues" | "userStories";
+type RecordView = "list" | "tree";
+type RankedRecord = { index: number; rank: number; record: Entity };
+type InitiativeTabDefinition = {
+	label: string;
+	recordCount?: number;
+	tab: InitiativeTab;
+};
+
 const INITIATIVE_GRAPH_KINDS: ProjectGraphKind[] = ["initiative", "plan", "prd", "adr", "story", "issue", "debt"];
+const INITIATIVE_TAB_DETAILS: Array<[Exclude<InitiativeTab, "overview">, string]> = [
+	["issues", "Issues"],
+	["prds", "PRDs"],
+	["adrs", "ADRs"],
+	["graph", "Graph"],
+	["context", "Context"],
+	["userStories", "User stories"],
+	["debt", "Debt"]
+];
 
 class InitiativeDetailView extends SignalWatcher(LitElement) {
 	static properties = {
@@ -41,6 +60,10 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	public activeChildId: string | null = null;
 	protected collapsedIssueIds = new Set<string>();
 	protected collapsedOverviewSectionIds = new Set<string>();
+	protected recordQuery = "";
+	protected recordStatus = "all";
+	protected issueRecordView: RecordView = "list";
+	protected userStoryRecordView: RecordView = "list";
 	protected visibleGraphKinds = new Set<ProjectGraphKind>(INITIATIVE_GRAPH_KINDS);
 
 	protected activeBundle() {
@@ -50,6 +73,14 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 
 		return store.bundleForInitiativeId(this.initiativeId ?? store.selectedInitiativeId.get());
+	}
+
+	protected getTabButtonId(tab: InitiativeTab): string {
+		return `initiative-tab-${tab}`;
+	}
+
+	protected getTabPanelId(tab: InitiativeTab): string {
+		return `initiative-panel-${tab}`;
 	}
 
 	protected onSelectEntityClick = (event: Event) => {
@@ -71,7 +102,44 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			return;
 		}
 
+		this.recordQuery = "";
+		this.recordStatus = "all";
 		this.store?.setInitTab(tab);
+	};
+
+	protected onContextQueryInput = (event: Event) => {
+		this.recordQuery = (event.target as HTMLInputElement).value;
+		this.requestUpdate();
+	};
+
+	protected onRecordQueryChange = (event: Event) => {
+		this.recordQuery = (event as CustomEvent<{ query: string }>).detail.query;
+		this.requestUpdate();
+	};
+
+	protected onRecordStatusChange = (event: Event) => {
+		this.recordStatus = (event as CustomEvent<{ status: string }>).detail.status;
+		this.requestUpdate();
+	};
+
+	protected onRecordViewChange = (event: Event) => {
+		const { tab, view } = (event as CustomEvent<{ tab: RecordTreeTab; view: RecordView }>).detail;
+		if (tab === "issues") {
+			this.issueRecordView = view;
+		} else {
+			this.userStoryRecordView = view;
+		}
+		this.requestUpdate();
+	};
+
+	protected onRecordOpen = (event: Event) => {
+		const record = (event as CustomEvent<{ record: Entity }>).detail.record;
+		if (this.cascade && this.initiativeId) {
+			this.store?.drillCascade(this.initiativeId, record.id);
+			return;
+		}
+
+		this.store?.selectEntity(record.id);
 	};
 
 	protected onNodeOpen = (event: Event) => {
@@ -194,50 +262,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderStoryBlock(story: Entity) {
-		const store = this.store;
-		if (!store) {
-			return nothing;
-		}
-
-		const bundle = this.activeBundle();
-		const issueTree = bundle ? store.issueTreeForStory(bundle, story.id) : [];
-
-		return html`
-		<div class="story-block">
-			<button
-				class=${`story-head ${story.id === this.activeChildId ? "is-active-ref" : ""}`}
-				data-id=${story.id}
-				@click=${this.onSelectEntityClick}
-			>
-				<span class="idtag">${store.shortRef(story)}</span>
-				<span class="s-title">${story.title}</span>
-				<span class=${`badge ${store.badgeTone(story.status)}`}>${story.status}</span>
-				<span class="chev">›</span>
-			</button>
-			${when(
-				issueTree.length > 0,
-				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node))}</div>`,
-				() => html`<div class="children empty-children">No issues fix this story yet.</div>`
-			)}
-		</div>
-		`;
-	}
-
-	protected renderDirectIssues(bundle: InitiativeBundle) {
-		const issueTree = this.store?.issueTreeForDirectIssues(bundle) ?? [];
-
-		return html`
-		<div class="sec-body direct-issues">
-			${when(
-				issueTree.length > 0,
-				() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node, false))}</div>`,
-							() => html`<div class="empty-children">No unassigned issues.</div>`
-			)}
-		</div>
-		`;
-	}
-
 	protected renderOverviewSection(
 		sectionId: string,
 		title: string,
@@ -282,15 +306,283 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 
 		return html`
-		<button
-			class="line"
+		<agent-issues-record-list-item
+			.active=${entity.id === this.activeChildId}
+			.record=${entity}
+			.reference=${store.shortRef(entity)}
+			.statusTone=${store.badgeTone(entity.status)}
+			class=${classMap({ "is-active-ref": entity.id === this.activeChildId, line: true, "record-row": true })}
 			data-id=${entity.id}
-			@click=${this.onSelectEntityClick}
-		>
-			<span class="idtag">${store.shortRef(entity)}</span>
-			<span class="line-title">${entity.title}</span>
-			<span class=${`badge ${store.badgeTone(entity.status)}`}>${entity.status}</span>
-		</button>
+			@record-open=${this.onRecordOpen}
+		></agent-issues-record-list-item>
+		`;
+	}
+
+	protected getRecordView(tab: RecordTreeTab): RecordView {
+		return tab === "issues" ? this.issueRecordView : this.userStoryRecordView;
+	}
+
+	protected relatedRecordsFor(record: Entity, bundle: InitiativeBundle): Entity[] {
+		const store = this.store;
+		const relatedRecords = new Map<string, Entity>();
+		const add = (relatedRecord: Entity) => {
+			if (relatedRecord.id !== record.id) {
+				relatedRecords.set(relatedRecord.id, relatedRecord);
+			}
+		};
+
+		for (const link of bundle.fixLinks) {
+			if (link.issue.id === record.id) add(link.userStory);
+			if (link.userStory.id === record.id) add(link.issue);
+		}
+		for (const link of bundle.subIssueLinks) {
+			if (link.issue.id === record.id) add(link.parent);
+			if (link.parent.id === record.id) add(link.issue);
+		}
+		for (const link of bundle.blockerLinks) {
+			if (link.source.id === record.id) add(link.target);
+			if (link.target.id === record.id) add(link.source);
+		}
+		for (const link of bundle.constrainsLinks) {
+			if (link.adr.id === record.id) add(link.issue);
+			if (link.issue.id === record.id) add(link.adr);
+		}
+		for (const relation of [...(store?.incomingRelationsFor(record.id) ?? []), ...(store?.outgoingRelationsFor(record.id) ?? [])]) {
+			const relatedId = relation.fromId === record.id ? relation.toId : relation.fromId;
+			const relatedRecord = store?.entityById.get().get(relatedId);
+			if (relatedRecord) add(relatedRecord);
+		}
+
+		return [...relatedRecords.values()];
+	}
+
+	protected recordSearchRank(record: Entity, bundle: InitiativeBundle): number | null {
+		const query = this.recordQuery.trim().toLowerCase();
+		if (!query) {
+			return 0;
+		}
+
+		const store = this.store;
+		const relations = [...(store?.incomingRelationsFor(record.id) ?? []), ...(store?.outgoingRelationsFor(record.id) ?? [])];
+		const { body, ...recordFields } = record;
+		if (JSON.stringify(recordFields).toLowerCase().includes(query)) {
+			return 0;
+		}
+
+		if (relations.some((relation) => JSON.stringify(relation).toLowerCase().includes(query))) {
+			return 1;
+		}
+
+		const relatedRecords = this.relatedRecordsFor(record, bundle);
+		if (relatedRecords.some((relatedRecord) => {
+			const { body: relatedBody, ...relatedRecordFields } = relatedRecord;
+			return JSON.stringify(relatedRecordFields).toLowerCase().includes(query);
+		})) {
+			return 1;
+		}
+
+		if ((body ?? "").toLowerCase().includes(query)) {
+			return 2;
+		}
+
+		if (relatedRecords.some((relatedRecord) => (relatedRecord.body ?? "").toLowerCase().includes(query))) {
+			return 3;
+		}
+
+		return null;
+	}
+
+	protected filterRecords(records: Entity[], bundle: InitiativeBundle): Entity[] {
+		const rankedRecords: RankedRecord[] = [];
+
+		for (const [index, record] of records.entries()) {
+			if (this.recordStatus !== "all" && record.status !== this.recordStatus) {
+				continue;
+			}
+
+			const rank = this.recordSearchRank(record, bundle);
+			if (rank !== null) {
+				rankedRecords.push({ index, rank, record });
+			}
+		}
+
+		return rankedRecords
+			.sort((left, right) => left.rank - right.rank || left.index - right.index)
+			.map(({ record }) => record);
+	}
+
+	protected filterIssueTree(nodes: IssueTreeNode[], matchingIssueIds: ReadonlySet<string>): IssueTreeNode[] {
+		return nodes.flatMap((node) => {
+			const children = this.filterIssueTree(node.children, matchingIssueIds);
+			if (!matchingIssueIds.has(node.issue.id) && children.length === 0) return [];
+
+			return [{ ...node, children }];
+		});
+	}
+
+	protected issueTreeForRecords(bundle: InitiativeBundle, records: Entity[]): IssueTreeNode[] {
+		const recordsById = new Map(records.map((record) => [record.id, record]));
+		const childrenByParentId = new Map<string, Entity[]>();
+		const childIds = new Set<string>();
+
+		for (const link of bundle.subIssueLinks) {
+			const parent = recordsById.get(link.parent.id);
+			const child = recordsById.get(link.issue.id);
+			if (!parent || !child) continue;
+
+			const children = childrenByParentId.get(parent.id) ?? [];
+			children.push(child);
+			childrenByParentId.set(parent.id, children);
+			childIds.add(child.id);
+		}
+
+		const buildNode = (record: Entity, visitedIds: ReadonlySet<string>): IssueTreeNode => ({
+			children: (childrenByParentId.get(record.id) ?? [])
+				.filter((child) => !visitedIds.has(child.id))
+				.map((child) => buildNode(child, new Set([...visitedIds, child.id]))),
+			issue: record
+		});
+
+		return records.filter((record) => !childIds.has(record.id)).map((record) => buildNode(record, new Set([record.id])));
+	}
+
+	protected renderIssueTreeTab(bundle: InitiativeBundle, matchingRecords: Entity[]) {
+		const matchingIssueIds = new Set(matchingRecords.map((record) => record.id));
+		const nodes = this.filterIssueTree(this.issueTreeForRecords(bundle, bundle.issues), matchingIssueIds);
+
+		return html`
+		<div class="record-tree issue-tree">
+			${repeat(nodes, (node) => node.issue.id, (node) => this.renderIssueBranch(node, false))}
+		</div>
+		`;
+	}
+
+	protected renderUserStoryTreeTab(bundle: InitiativeBundle, matchingStories: Entity[]) {
+		const matchingStoryIds = new Set(matchingStories.map((story) => story.id));
+		const matchingIssueIds = new Set(this.filterRecords(bundle.issues, bundle).map((issue) => issue.id));
+
+		return html`
+		<div class="record-tree">
+			${bundle.userStories.flatMap((story) => {
+				const issueTree = this.filterIssueTree(this.store?.issueTreeForStory(bundle, story.id) ?? [], matchingIssueIds);
+				if (!matchingStoryIds.has(story.id) && issueTree.length === 0) return [];
+
+				return html`
+				<div class="story-tree-block">
+					${this.renderLine(story)}
+					${when(
+						issueTree.length > 0,
+						() => html`<div class="children issue-tree">${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueBranch(node))}</div>`,
+						() => nothing
+					)}
+				</div>
+				`;
+			})}
+		</div>
+		`;
+	}
+
+	protected renderRecordTab(
+		title: string,
+		records: Entity[],
+		emptyMessage: string,
+		bundle: InitiativeBundle,
+		options: { treeTab?: RecordTreeTab; treeContent?: (matchingRecords: Entity[]) => TemplateResult } = {}
+	) {
+		const filteredRecords = this.filterRecords(records, bundle);
+		const statuses = [...new Set(records.map((record) => record.status))].sort((left, right) => left.localeCompare(right));
+		const treeView = options.treeTab ? this.getRecordView(options.treeTab) === "tree" : false;
+
+		return html`
+		<section class="record-browser record-tab">
+			<agent-issues-record-filter-toolbar
+				.countText=${`${filteredRecords.length} of ${records.length}`}
+				.query=${this.recordQuery}
+				.status=${this.recordStatus}
+				.statuses=${statuses}
+				.title=${title}
+				.treeTab=${options.treeTab ?? null}
+				.treeView=${options.treeTab ? this.getRecordView(options.treeTab) : "list"}
+				@record-query-change=${this.onRecordQueryChange}
+				@record-status-change=${this.onRecordStatusChange}
+				@record-view-change=${this.onRecordViewChange}
+			></agent-issues-record-filter-toolbar>
+			<div class="record-browser-list record-tab-list">
+				${when(
+					records.length === 0,
+					() => html`<div class="empty-children">${emptyMessage}</div>`,
+					() => when(
+						filteredRecords.length > 0,
+						() => when(
+							treeView && options.treeContent,
+							() => options.treeContent?.(filteredRecords) ?? nothing,
+							() => repeat(filteredRecords, (record) => record.id, (record) => this.renderLine(record))
+						),
+						() => html`<div class="empty-children">No ${title.toLowerCase()} match this filter.</div>`
+					)
+				)}
+			</div>
+		</section>
+		`;
+	}
+
+	protected renderContextTab(bundle: InitiativeBundle) {
+		const context = this.store?.getContextForInitiative(bundle.initiative.id) ?? null;
+		if (!context) {
+			return html`
+			<section class="record-tab">
+				<div class="empty-children">No initiative context has been defined yet.</div>
+			</section>
+			`;
+		}
+
+		const query = this.recordQuery.trim().toLowerCase();
+		const contextText = JSON.stringify(context.context).toLowerCase();
+		const terms = context.terms.filter((term) => JSON.stringify(term).toLowerCase().includes(query));
+		const showsContext = !query || contextText.includes(query);
+
+		return html`
+		<section class="record-tab">
+			<div class="context-tab-toolbar">
+				<label class="record-filter">
+					<span class="record-filter-label">Filter context</span>
+					<input
+						placeholder="Filter context"
+						type="search"
+						.value=${this.recordQuery}
+						@input=${this.onContextQueryInput}
+					>
+				</label>
+				<span class="context-count">${terms.length} terms</span>
+			</div>
+			${when(
+				showsContext || terms.length > 0,
+				() => html`
+				<div class="context-tab-summary">
+					<h2>${context.context.title}</h2>
+					<p>${context.context.summary}</p>
+				</div>
+				<div class="record-tab-list">
+					${when(
+						terms.length > 0,
+						() => repeat(terms, (term) => term.term, (term) => html`
+						<article class="context-term">
+							<h3>${term.term}</h3>
+							<p>${term.definition}</p>
+							${when(
+								term.avoid.length > 0,
+								() => html`<p class="context-term-avoid">Avoid: ${term.avoid.join(", ")}</p>`,
+								() => nothing
+							)}
+						</article>
+						`),
+						() => html`<div class="empty-children">No glossary terms match this filter.</div>`
+					)}
+				</div>
+				`,
+				() => html`<div class="empty-children">No initiative context matches this filter.</div>`
+			)}
+		</section>
 		`;
 	}
 
@@ -307,13 +599,35 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 
 		const context = store.getContextForInitiative(bundle.initiative.id);
 		const stats = store.initiativeStats(bundle);
-		const tab = store.initTab.get();
+		const requestedTab = store.initTab.get();
 		const body = (bundle.initiative.body ?? "").trim();
 		const bodySource = bundle.initiative.bodySource ?? "authored";
 		const visibleGraphKinds = this.visibleGraphKinds;
 		const graphFilterActive = visibleGraphKinds.size !== INITIATIVE_GRAPH_KINDS.length;
-		const graph = store.buildInitiativeGraph(bundle, graphFilterActive ? visibleGraphKinds : undefined);
+		const baseGraph = store.buildInitiativeGraph(bundle);
+		const graph = graphFilterActive ? store.buildInitiativeGraph(bundle, visibleGraphKinds) : baseGraph;
 		const debtSections = store.debtRecordSectionsFor(bundle.initiative.id);
+		const debtRecords = [...new Map(debtSections.flatMap((section) => section.records).map((record) => [record.id, record])).values()];
+			const tabCounts: Partial<Record<InitiativeTab, number>> = {
+				adrs: bundle.adrs.length,
+				context: context?.terms.length ?? 0,
+				debt: debtRecords.length,
+				graph: baseGraph.nodes.length,
+				issues: bundle.issues.length,
+				prds: bundle.prds.length,
+				userStories: bundle.userStories.length
+			};
+			const initiativeTabs: InitiativeTabDefinition[] = [
+				{ label: "Overview", tab: "overview" },
+				...INITIATIVE_TAB_DETAILS
+					.filter(([candidate]) => {
+						if (candidate === "graph") return baseGraph.edges.length > 0;
+						if (candidate === "context") return context?.context.exists === true;
+						return (tabCounts[candidate] ?? 0) > 0;
+					})
+					.map(([candidate, label]) => ({ label, recordCount: tabCounts[candidate], tab: candidate }))
+			];
+			const tab = initiativeTabs.some(({ tab: candidate }) => candidate === requestedTab) ? requestedTab : "overview";
 
 		return html`
 		<div class="detail-inner">
@@ -348,30 +662,38 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				<span class="b-open" style=${`width:${100 - stats.pct}%`}></span>
 			</div>
 
-			<div class="subtabs">
+			<div
+				aria-label="Initiative details"
+				class="subtabs"
+				role="tablist"
+			>
+				${repeat(initiativeTabs, ({ tab: candidate }) => candidate, ({ label, recordCount, tab: candidate }) => html`
 				<button
-					class=${classMap({ active: tab === "overview", subtab: true })}
-					data-tab="overview"
+					aria-label=${recordCount === undefined ? label : `${label}: ${recordCount} records`}
+					aria-controls=${this.getTabPanelId(candidate)}
+					aria-selected=${String(tab === candidate)}
+					class=${classMap({ active: tab === candidate, subtab: true })}
+					data-tab=${candidate}
+					id=${this.getTabButtonId(candidate)}
 					@click=${this.onSetTab}
+					role="tab"
 				>
-					Overview
+					<span
+						class="subtab-label"
+						data-label=${label}
+					>
+						<span class="subtab-label-text">${label}</span>
+					</span>
+					${when(recordCount !== undefined, () => html`<span aria-hidden="true" class="subtab-count">${recordCount}</span>`, () => nothing)}
 				</button>
-				<button
-					class=${classMap({ active: tab === "graph", subtab: true })}
-					data-tab="graph"
-					@click=${this.onSetTab}
-				>
-					Graph
-				</button>
-				<button
-					class=${classMap({ active: tab === "context", subtab: true })}
-					data-tab="context"
-					@click=${this.onSetTab}
-				>
-					Context
-				</button>
+				`)}
 			</div>
 
+			<section
+				aria-labelledby=${this.getTabButtonId(tab)}
+				id=${this.getTabPanelId(tab)}
+				role="tabpanel"
+			>
 			${choose(
 				tab,
 				[
@@ -400,60 +722,21 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 							{ count: String(section.records.length) }
 						)
 					)}
-					${this.renderOverviewSection(
-						"stories",
-						"User stories & issues",
-						html`
-						<div class="sec-body">
-							${when(
-								bundle.userStories.length > 0,
-								() => repeat(bundle.userStories, (story) => story.id, (story) => this.renderStoryBlock(story)),
-								() => html`<div class="empty-children">No user stories yet.</div>`
-							)}
-						</div>
-						`,
-						{ count: `${stats.stories} stories · ${stats.issues} issues` }
-					)}
-					${this.renderOverviewSection(
-						"direct-issues",
-						"Unassigned issues",
-						this.renderDirectIssues(bundle)
-					)}
-					${this.renderOverviewSection(
-						"prds",
-						"PRDs",
-						html`
-						<div class="sec-body">
-							${when(
-								bundle.prds.length > 0,
-								() => repeat(bundle.prds, (prd) => prd.id, (prd) => this.renderLine(prd)),
-								() => html`<div class="empty-children">No PRDs attached.</div>`
-							)}
-						</div>
-						`
-					)}
-					${this.renderOverviewSection(
-						"adrs",
-						"ADRs",
-						html`
-						<div class="sec-body">
-							${when(
-								bundle.adrs.length > 0,
-								() => repeat(bundle.adrs, (adr) => adr.id, (adr) => this.renderLine(adr)),
-								() => html`<div class="empty-children">No ADRs recorded.</div>`
-							)}
-						</div>
-						`
-					)}
 					`],
+					["issues", () => this.renderRecordTab("Issues", bundle.issues, "No issues attached.", bundle, {
+						treeContent: (matchingRecords) => this.renderIssueTreeTab(bundle, matchingRecords),
+						treeTab: "issues"
+					})],
+					["prds", () => this.renderRecordTab("PRDs", bundle.prds, "No PRDs attached.", bundle)],
+					["adrs", () => this.renderRecordTab("ADRs", bundle.adrs, "No ADRs recorded.", bundle)],
 					["context", () => html`
-					<section class="sec context-sec">
-						<agent-issues-context-view
-							.context=${context}
-							.emptyMessage=${"No context has been defined for this initiative yet."}
-						></agent-issues-context-view>
-					</section>
+					${this.renderContextTab(bundle)}
 					`],
+					["userStories", () => this.renderRecordTab("User stories", bundle.userStories, "No user stories attached.", bundle, {
+						treeContent: (matchingRecords) => this.renderUserStoryTreeTab(bundle, matchingRecords),
+						treeTab: "userStories"
+					})],
+					["debt", () => this.renderRecordTab("Debt", debtRecords, "No debt recorded.", bundle)],
 					["graph", () => html`
 					<div class="ai-graph-wrap">
 						<div class="graph-scroll-content">
@@ -465,17 +748,24 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 								></agent-issues-relationship-graph-filters>
 								<span class="ai-graph-hint">Click any node to open it</span>
 							</div>
-							<div class="graph-host">
-								<agent-issues-relationship-graph
-									.graph=${graph}
-									@node-open=${this.onNodeOpen}
-								></agent-issues-relationship-graph>
-							</div>
+							${when(
+								graph.nodes.length > 0,
+								() => html`
+								<div class="graph-host">
+									<agent-issues-relationship-graph
+										.graph=${graph}
+										@node-open=${this.onNodeOpen}
+									></agent-issues-relationship-graph>
+								</div>
+								`,
+								() => html`<div class="empty-children">No graph records match the selected filters.</div>`
+							)}
 						</div>
 					</div>
 					`]
 				]
 			)}
+			</section>
 		</div>
 		`;
 	}
@@ -549,20 +839,117 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			gap: 18px;
 			margin-top: 22px;
 			border-bottom: 1px solid var(--border-muted);
+			overflow-x: auto;
 		}
 		.subtab {
-			padding: 8px 2px;
+			position: relative;
+			flex: 0 0 auto;
+			padding: 8px 24px;
 			border: 0;
 			border-bottom: 2px solid transparent;
 			background: transparent;
 			color: var(--muted);
 			cursor: pointer;
 			font: inherit;
+				text-align: center;
+		}
+		.subtab-label {
+			display: inline-grid;
+		}
+		.subtab-label::before,
+		.subtab-label-text {
+			grid-area: 1 / 1;
+		}
+		.subtab-label::before {
+			visibility: hidden;
+			content: attr(data-label);
+			font-weight: 600;
 		}
 		.subtab.active {
 			border-bottom-color: #fd8c73;
 			color: var(--text);
 			font-weight: 600;
+		}
+		.record-tab {
+			margin-top: 18px;
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			background: var(--surface);
+		}
+		.context-tab-toolbar {
+			display: flex;
+			gap: 12px;
+			align-items: end;
+			padding: 12px 16px;
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.record-filter {
+			display: grid;
+			gap: 4px;
+		}
+		.record-filter:first-child {
+			flex: 1;
+		}
+		.record-filter-label {
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 600;
+		}
+		.record-filter input,
+		.record-filter select {
+			box-sizing: border-box;
+			min-height: 32px;
+			padding: 6px 8px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--text);
+			font: inherit;
+		}
+		.context-count {
+			padding-bottom: 7px;
+			color: var(--muted);
+			font-size: 12px;
+			white-space: nowrap;
+		}
+		.record-tab-list {
+			display: grid;
+			gap: 2px;
+			padding: 8px;
+		}
+		.record-tree {
+			display: grid;
+			gap: 8px;
+		}
+		.story-tree-block {
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.story-tree-block:last-child {
+			border-bottom: 0;
+		}
+		.context-tab-summary {
+			padding: 14px 16px 0;
+		}
+		.context-tab-summary h2,
+		.context-term h3 {
+			margin: 0;
+			font-size: 14px;
+		}
+		.context-tab-summary p,
+		.context-term p {
+			margin: 6px 0 0;
+			color: var(--muted);
+			font-size: 13px;
+		}
+		.context-term .context-term-avoid {
+			color: var(--danger);
+		}
+		.context-term {
+			padding: 10px 8px;
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.context-term:last-child {
+			border-bottom: 0;
 		}
 		.sec {
 			margin-top: 18px;
@@ -621,23 +1008,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		.context-sec {
 			padding: 16px;
 		}
-		.story-block {
-			border-bottom: 1px solid var(--border-muted);
-		}
-		.story-block:last-child {
-			border-bottom: 0;
-		}
-		.story-head {
-			display: flex;
-			gap: 10px;
-			align-items: center;
-			width: stretch;
-			padding: 10px 8px;
-			border: 0;
-			background: transparent;
-			cursor: pointer;
-			text-align: left;
-		}
 		.story-head:hover,
 		.child:hover,
 		.line:hover {
@@ -688,18 +1058,8 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			padding-left: 12px;
 			border-left: 1px solid var(--border-muted);
 		}
-		.s-title {
-			flex: 1;
-			font-weight: 600;
-		}
-		.chev {
-			color: var(--muted);
-		}
 		.children {
 			padding: 0 8px 8px 28px;
-		}
-		.direct-issues .children {
-			padding-left: 0;
 		}
 		.issue-tree {
 			display: grid;
@@ -709,6 +1069,21 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			padding: 12px 8px;
 			color: var(--muted);
 			font-size: 13px;
+		}
+		@media (max-width: 640px) {
+			.detail-inner {
+				padding: 20px 16px 40px;
+			}
+			.kpis {
+				grid-template-columns: repeat(2, 1fr);
+			}
+			.context-tab-toolbar {
+				align-items: stretch;
+				flex-direction: column;
+			}
+			.context-count {
+				padding-bottom: 0;
+			}
 		}
 		.child,
 		.line {
@@ -747,16 +1122,21 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			border-color: var(--danger);
 		}
 		.subtab-count {
-			display: inline-flex;
-			align-items: center;
-			justify-content: center;
-			min-width: 18px;
-			padding: 0 5px;
-			border-radius: 999px;
-			background: var(--border-muted);
-			color: var(--muted);
-			font-size: 11px;
-			font-weight: 600;
+			box-sizing: border-box;
+			display: inline-grid;
+			min-width: 16px;
+			height: 16px;
+			padding: 0 3px;
+			place-items: center;
+			position: absolute;
+			top: 1px;
+			right: 3px;
+			border-radius: 50%;
+			background: var(--accent);
+			color: var(--surface);
+			font-size: 10px;
+			font-weight: 700;
+			line-height: 1;
 		}
 		.handoff {
 			padding: 14px 16px;

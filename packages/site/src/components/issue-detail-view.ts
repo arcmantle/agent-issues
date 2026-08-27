@@ -1,24 +1,18 @@
 import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html, nothing } from "lit";
 import type { TemplateResult } from "lit";
+import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { when } from "lit/directives/when.js";
-import DOMPurify from "dompurify";
-import { marked } from "marked";
-import type { Entity, IssueComment, PlanEntry } from "../models.js";
+import { createEntityDetailRenderer, type EntityDetailTab, type DetailIssueTreeNode as IssueTreeNode, type DetailRecordSection, type RecordView } from "./entity-detail-renderers.js";
+import "./record-browser-elements.js";
+import "./relationship-graph.js";
+import "./relationship-graph-filters.js";
+import { PROJECT_GRAPH_KINDS, type ContextDetails, type Entity, type InitiativeBundle, type IssueComment, type PlanEntry, type ProjectGraphKind, type RelationshipGraph } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
-function renderAuthoredBody(markdown: string): string {
-	const rawHtml = marked.parse(markdown, { async: false });
-	return DOMPurify.sanitize(rawHtml);
-}
-
-type IssueTreeNode = {
-	issue: Entity;
-	children: IssueTreeNode[];
-};
+type RankedRecord = { index: number; rank: number; record: Entity };
 
 class IssueDetailView extends SignalWatcher(LitElement) {
 	static properties = {
@@ -33,6 +27,12 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	public cascade = false;
 	public activeChildId: string | null = null;
 	protected collapsedIssueIds = new Set<string>();
+	public entityDetailTab: EntityDetailTab = "overview";
+	protected recordQuery = "";
+	protected recordStatus = "all";
+	protected issueRecordView: RecordView = "list";
+	protected userStoryRecordView: RecordView = "list";
+	public visibleGraphKinds = new Set<ProjectGraphKind>(PROJECT_GRAPH_KINDS);
 
 	protected onBackClick = () => {
 		this.store?.closeEntity();
@@ -74,7 +74,76 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		this.requestUpdate();
 	};
 
-	protected renderBodySourceNotice() {
+	protected onSetIssueTab = (event: Event) => {
+		const tab = (event.currentTarget as HTMLElement).dataset.tab as EntityDetailTab | undefined;
+		if (!tab) return;
+
+		this.entityDetailTab = tab;
+		this.recordQuery = "";
+		this.recordStatus = "all";
+		this.requestUpdate();
+	};
+
+	protected onRecordQueryChange = (event: Event) => {
+		this.recordQuery = (event as CustomEvent<{ query: string }>).detail.query;
+		this.requestUpdate();
+	};
+
+	protected onContextQueryInput = (event: Event) => {
+		this.recordQuery = (event.target as HTMLInputElement).value;
+		this.requestUpdate();
+	};
+
+	protected onRecordStatusChange = (event: Event) => {
+		this.recordStatus = (event as CustomEvent<{ status: string }>).detail.status;
+		this.requestUpdate();
+	};
+
+	protected onRecordViewChange = (event: Event) => {
+		const { tab, view } = (event as CustomEvent<{ tab: string; view: RecordView }>).detail;
+
+		if (tab === "issues") {
+			this.issueRecordView = view;
+		} else {
+			this.userStoryRecordView = view;
+		}
+		this.requestUpdate();
+	};
+
+	protected onRecordOpen = (event: Event) => {
+		const { crossLink, record } = (event as CustomEvent<{ crossLink: boolean; record: Entity }>).detail;
+		if (this.cascade) {
+			if (crossLink) {
+				this.store?.reRootCascade(record.id);
+			} else if (this.entityId) {
+				this.store?.drillCascade(this.entityId, record.id);
+			}
+			return;
+		}
+
+		this.store?.selectEntity(record.id);
+	};
+
+	protected onNodeOpen = (event: Event) => {
+		const id = (event as CustomEvent<{ id: string }>).detail.id;
+		if (id) this.store?.selectEntity(id);
+	};
+
+	protected onToggleGraphKind = (event: Event) => {
+		const kind = (event as CustomEvent<{ kind: ProjectGraphKind }>).detail.kind;
+		if (!kind) return;
+
+		const visibleKinds = new Set(this.visibleGraphKinds);
+		if (visibleKinds.has(kind)) {
+			visibleKinds.delete(kind);
+		} else {
+			visibleKinds.add(kind);
+		}
+		this.visibleGraphKinds = visibleKinds;
+		this.requestUpdate();
+	};
+
+	public renderBodySourceNotice() {
 		return html`
 		<div class="ai-body-source ai-body-source-generated">
 			<span class="ai-body-source-badge">Generated fallback</span>
@@ -83,7 +152,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderRef(record: Entity, crossLink = false) {
+	public renderRef(record: Entity, crossLink = false) {
 		const store = this.store;
 		if (!store) {
 			return nothing;
@@ -100,6 +169,238 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			<span class="r-title">${record.title}</span>
 			<span class=${`badge ${store.badgeTone(record.status)}`}>${record.status}</span>
 		</button>
+		`;
+	}
+
+	protected renderRecordLine(record: Entity, crossLink = false) {
+		const store = this.store;
+		if (!store) return nothing;
+
+		return html`
+		<agent-issues-record-list-item
+			.active=${record.id === this.activeChildId}
+			.crossLink=${crossLink}
+			.record=${record}
+			.reference=${store.shortRef(record)}
+			.statusTone=${store.badgeTone(record.status)}
+			class=${classMap({ "is-active-ref": record.id === this.activeChildId, line: true, "record-row": true })}
+			data-id=${record.id}
+			@record-open=${this.onRecordOpen}
+		></agent-issues-record-list-item>
+		`;
+	}
+
+	protected getTabButtonId(entityId: string, tab: EntityDetailTab): string {
+		return `issue-detail-${entityId}-${tab}-tab`;
+	}
+
+	protected getTabPanelId(entityId: string, tab: EntityDetailTab): string {
+		return `issue-detail-${entityId}-${tab}-panel`;
+	}
+
+	protected relatedRecordsFor(record: Entity, bundle: InitiativeBundle | null): Entity[] {
+		const store = this.store;
+		const relatedRecords = new Map<string, Entity>();
+		const add = (relatedRecord: Entity) => {
+			if (relatedRecord.id !== record.id) relatedRecords.set(relatedRecord.id, relatedRecord);
+		};
+
+		for (const link of bundle?.fixLinks ?? []) {
+			if (link.issue.id === record.id) add(link.userStory);
+			if (link.userStory.id === record.id) add(link.issue);
+		}
+		for (const link of bundle?.subIssueLinks ?? []) {
+			if (link.issue.id === record.id) add(link.parent);
+			if (link.parent.id === record.id) add(link.issue);
+		}
+		for (const link of bundle?.blockerLinks ?? []) {
+			if (link.source.id === record.id) add(link.target);
+			if (link.target.id === record.id) add(link.source);
+		}
+		for (const link of bundle?.constrainsLinks ?? []) {
+			if (link.adr.id === record.id) add(link.issue);
+			if (link.issue.id === record.id) add(link.adr);
+		}
+		for (const relation of [...(store?.incomingRelationsFor(record.id) ?? []), ...(store?.outgoingRelationsFor(record.id) ?? [])]) {
+			const relatedId = relation.fromId === record.id ? relation.toId : relation.fromId;
+			const relatedRecord = store?.entityById.get().get(relatedId);
+			if (relatedRecord) add(relatedRecord);
+		}
+
+		return [...relatedRecords.values()];
+	}
+
+	protected recordSearchRank(record: Entity, bundle: InitiativeBundle | null): number | null {
+		const query = this.recordQuery.trim().toLowerCase();
+		if (!query) return 0;
+
+		const store = this.store;
+		const relations = [...(store?.incomingRelationsFor(record.id) ?? []), ...(store?.outgoingRelationsFor(record.id) ?? [])];
+		const { body, ...recordFields } = record;
+		if (JSON.stringify(recordFields).toLowerCase().includes(query)) return 0;
+		if (relations.some((relation) => JSON.stringify(relation).toLowerCase().includes(query))) return 1;
+
+		const relatedRecords = this.relatedRecordsFor(record, bundle);
+		if (relatedRecords.some((relatedRecord) => {
+			const { body: relatedBody, ...relatedRecordFields } = relatedRecord;
+			return JSON.stringify(relatedRecordFields).toLowerCase().includes(query);
+		})) return 1;
+		if ((body ?? "").toLowerCase().includes(query)) return 2;
+		if (relatedRecords.some((relatedRecord) => (relatedRecord.body ?? "").toLowerCase().includes(query))) return 3;
+
+		return null;
+	}
+
+	protected filterRecords(records: Entity[], bundle: InitiativeBundle | null): Entity[] {
+		const rankedRecords: RankedRecord[] = [];
+
+		for (const [index, record] of records.entries()) {
+			if (this.recordStatus !== "all" && record.status !== this.recordStatus) continue;
+
+			const rank = this.recordSearchRank(record, bundle);
+			if (rank !== null) rankedRecords.push({ index, rank, record });
+		}
+
+		return rankedRecords
+			.sort((left, right) => left.rank - right.rank || left.index - right.index)
+			.map(({ record }) => record);
+	}
+
+	protected getRecordView(tab: "issues" | "userStories"): RecordView {
+		return tab === "issues" ? this.issueRecordView : this.userStoryRecordView;
+	}
+
+	protected filterIssueTree(nodes: IssueTreeNode[], matchingIssueIds: ReadonlySet<string>): IssueTreeNode[] {
+		return nodes.flatMap((node) => {
+			const children = this.filterIssueTree(node.children, matchingIssueIds);
+			if (!matchingIssueIds.has(node.issue.id) && children.length === 0) return [];
+
+			return [{ ...node, children }];
+		});
+	}
+
+	protected issueTreeForRecords(bundle: InitiativeBundle, records: Entity[]): IssueTreeNode[] {
+		const recordsById = new Map(records.map((record) => [record.id, record]));
+		const childrenByParentId = new Map<string, Entity[]>();
+		const childIds = new Set<string>();
+
+		for (const link of bundle.subIssueLinks) {
+			const parent = recordsById.get(link.parent.id);
+			const child = recordsById.get(link.issue.id);
+			if (!parent || !child) continue;
+
+			const children = childrenByParentId.get(parent.id) ?? [];
+			children.push(child);
+			childrenByParentId.set(parent.id, children);
+			childIds.add(child.id);
+		}
+
+		const buildNode = (record: Entity, visitedIds: ReadonlySet<string>): IssueTreeNode => ({
+			children: (childrenByParentId.get(record.id) ?? [])
+				.filter((child) => !visitedIds.has(child.id))
+				.map((child) => buildNode(child, new Set([...visitedIds, child.id]))),
+			issue: record
+		});
+
+		return records.filter((record) => !childIds.has(record.id)).map((record) => buildNode(record, new Set([record.id])));
+	}
+
+	public renderRecordBrowser(
+		title: string,
+		records: Entity[],
+		emptyMessage: string,
+		bundle: InitiativeBundle | null,
+		options: {
+			crossLinkRecordIds?: ReadonlySet<string>;
+			treeTab?: "issues" | "userStories";
+			treeContent?: (matchingRecords: Entity[]) => TemplateResult;
+		} = {}
+	) {
+		const filteredRecords = this.filterRecords(records, bundle);
+		const statuses = [...new Set(records.map((record) => record.status))].sort((left, right) => left.localeCompare(right));
+		const treeView = options.treeTab ? this.getRecordView(options.treeTab) === "tree" : false;
+
+		return html`
+		<section class="ai-record-tab record-browser">
+			<agent-issues-record-filter-toolbar
+				.countText=${`${filteredRecords.length} of ${records.length}`}
+				.query=${this.recordQuery}
+				.status=${this.recordStatus}
+				.statuses=${statuses}
+				.title=${title}
+				.treeTab=${options.treeTab ?? null}
+				.treeView=${options.treeTab ? this.getRecordView(options.treeTab) : "list"}
+				@record-query-change=${this.onRecordQueryChange}
+				@record-status-change=${this.onRecordStatusChange}
+				@record-view-change=${this.onRecordViewChange}
+			></agent-issues-record-filter-toolbar>
+			<div class="ai-record-list record-browser-list">
+				${when(
+					records.length === 0,
+					() => html`<div class="ai-empty">${emptyMessage}</div>`,
+					() => when(
+						filteredRecords.length > 0,
+						() => when(
+							treeView && options.treeContent,
+							() => options.treeContent?.(filteredRecords) ?? nothing,
+							() => repeat(filteredRecords, (record) => record.id, (record) => this.renderRecordLine(record, options.crossLinkRecordIds?.has(record.id)))
+						),
+						() => html`<div class="ai-empty">No ${title.toLowerCase()} match this filter.</div>`
+					)
+				)}
+			</div>
+		</section>
+		`;
+	}
+
+	public renderContextTab(context: ContextDetails | null) {
+		if (!context) {
+			return html`<section class="ai-record-tab"><div class="ai-empty">No inherited initiative context is available.</div></section>`;
+		}
+
+		const query = this.recordQuery.trim().toLowerCase();
+		const contextText = JSON.stringify(context.context).toLowerCase();
+		const terms = context.terms.filter((term) => JSON.stringify(term).toLowerCase().includes(query));
+		const showsContext = !query || contextText.includes(query);
+
+		return html`
+		<section class="ai-record-tab">
+			<div class="ai-record-toolbar">
+				<label class="ai-record-filter">
+					<span>Filter context</span>
+					<input
+						placeholder="Filter context"
+						type="search"
+						.value=${this.recordQuery}
+						@input=${this.onContextQueryInput}
+					>
+				</label>
+				<span class="ai-record-count">${terms.length} terms</span>
+			</div>
+			${when(
+				showsContext || terms.length > 0,
+				() => html`
+				<div class="ai-context-summary">
+					<h2>${context.context.title}</h2>
+					<p>${context.context.summary}</p>
+				</div>
+				<div class="ai-record-list">
+					${when(
+						terms.length > 0,
+						() => repeat(terms, (term) => term.term, (term) => html`
+						<article class="ai-context-term">
+							<h3>${term.term}</h3>
+							<p>${term.definition}</p>
+							${when(term.avoid.length > 0, () => html`<p class="ai-context-avoid">Avoid: ${term.avoid.join(", ")}</p>`, () => nothing)}
+						</article>
+						`),
+						() => html`<div class="ai-empty">No glossary terms match this filter.</div>`
+					)}
+				</div>
+				`,
+				() => html`<div class="ai-empty">No inherited context matches this filter.</div>`
+			)}
+		</section>
 		`;
 	}
 
@@ -138,20 +439,77 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderPrdStoryBlock(story: Entity, issueTree: IssueTreeNode[]): TemplateResult {
+	public renderIssueTree(nodes: IssueTreeNode[]): TemplateResult {
+		return html`${repeat(nodes, (node) => node.issue.id, (node) => this.renderIssueTreeNode(node))}`;
+	}
+
+	public renderIssueTreeForRecords(bundle: InitiativeBundle, records: Entity[], matchingRecords: Entity[]): TemplateResult {
+		const matchingIssueIds = new Set(matchingRecords.map((record) => record.id));
+		return this.renderIssueTree(this.filterIssueTree(this.issueTreeForRecords(bundle, records), matchingIssueIds));
+	}
+
+	public renderRefSections(sections: DetailRecordSection[]): TemplateResult {
 		return html`
-		<div class="ai-story-block">
-			${this.renderRef(story)}
+		${repeat(
+			sections,
+			(section) => section.key,
+			(section) => html`
+			<section class="ai-sec">
+				<h2>${section.title}</h2>
+				<div class="ai-refs">
+					${repeat(section.records, (record) => record.id, (record) => this.renderRef(record, section.crossLink))}
+				</div>
+			</section>
+			`
+		)}
+		`;
+	}
+
+	public renderGraphTab(graph: RelationshipGraph): TemplateResult {
+		return html`
+		<div class="ai-graph-wrap">
+			<div class="ai-graph-legend">
+				<agent-issues-relationship-graph-filters
+					.kinds=${[...PROJECT_GRAPH_KINDS]}
+					.visibleKinds=${this.visibleGraphKinds}
+					@graph-kind-toggle=${this.onToggleGraphKind}
+				></agent-issues-relationship-graph-filters>
+			</div>
 			${when(
-				issueTree.length > 0,
+				graph.nodes.length > 0,
 				() => html`
-				<div class="ai-story-issues">
-					${repeat(issueTree, (node) => node.issue.id, (node) => this.renderIssueTreeNode(node))}
+				<div class="ai-graph-host">
+					<agent-issues-relationship-graph
+						.graph=${graph}
+						@node-open=${this.onNodeOpen}
+					></agent-issues-relationship-graph>
 				</div>
 				`,
-				() => html`<div class="ai-story-empty">No issues fix this story yet.</div>`
+				() => html`<div class="ai-empty">No graph records match the selected filters.</div>`
 			)}
 		</div>
+		`;
+	}
+
+	public renderTabButton(tab: EntityDetailTab, label: string, active: boolean, recordCount?: number): TemplateResult {
+		const entityId = this.entityId ?? this.store?.selectedId.get();
+		const accessibleLabel = recordCount === undefined ? label : `${label}: ${recordCount} records`;
+		if (!entityId) return html``;
+
+		return html`
+		<button
+			aria-label=${accessibleLabel}
+			aria-controls=${this.getTabPanelId(entityId, tab)}
+			aria-selected=${String(active)}
+			class=${classMap({ active, "ai-subtab": true })}
+			data-tab=${tab}
+			id=${this.getTabButtonId(entityId, tab)}
+			@click=${this.onSetIssueTab}
+			role="tab"
+		>
+			<span class="ai-subtab-label">${label}</span>
+			${when(recordCount !== undefined, () => html`<span aria-hidden="true" class="ai-subtab-count">${recordCount}</span>`, () => nothing)}
+		</button>
 		`;
 	}
 
@@ -160,7 +518,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		return user?.displayName ?? user?.authenticationSubject ?? userId;
 	}
 
-	protected renderIssueComment(comment: IssueComment): TemplateResult {
+	public renderIssueComment(comment: IssueComment): TemplateResult {
 		return html`
 		<article class="ai-comment">
 			<div class="ai-comment-reference">${comment.reference}</div>
@@ -182,7 +540,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderPlanEntry(entry: PlanEntry): TemplateResult {
+	public renderPlanEntry(entry: PlanEntry): TemplateResult {
 		const planEntries = this.store?.snapshot.get()?.planEntries ?? [];
 		const entryReferences = new Map(planEntries.map((candidate) => [candidate.id, candidate.reference]));
 		return html`
@@ -224,30 +582,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		const scopeLabel = isAdrSection ? "ADRs" : bundle?.initiative.title ?? "Initiatives";
 		const crumbScope = isAdrSection ? "ADRs" : bundle?.initiative.title ?? "Workspace";
 		const meta = store.detailMetaFor(entity.id);
-		const parentIssue = entity.kind === "issue" && bundle ? store.parentIssueForIssue(bundle, entity.id) : null;
-		const subIssueTree = entity.kind === "issue" && bundle ? store.subIssueTreeForIssue(bundle, entity.id) : [];
-		const prdStories = entity.kind === "prd"
-			? bundle?.userStories.filter((story) =>
-				store.outgoingRelationsFor(entity.id).some((relation) => relation.type === "creates" && relation.toId === story.id)
-			) ?? []
-			: [];
-		const debtSections = store.debtRecordSectionsFor(entity.id);
-		const sections = store.linkedRecordSectionsFor(
-			entity.id,
-			{
-				excludeRelatedIds: debtSections.flatMap((section) => section.records.map((record) => record.id)),
-				excludeRelationTypes: entity.kind === "issue"
-					? ["decomposes"]
-					: entity.kind === "prd"
-						? ["creates"]
-						: []
-			}
-		);
-		const body = (entity.body ?? "").trim();
-		const bodySource = entity.bodySource ?? "authored";
-		const hasIssueStructure = entity.kind === "issue" && (parentIssue !== null || subIssueTree.length > 0);
-		const comments = entity.kind === "issue" ? store.snapshot.get()?.issueComments[entity.id]?.comments ?? [] : [];
-		const planProjection = entity.kind === "plan" ? store.planProjectionFor(entity.id) : null;
+		const renderer = createEntityDetailRenderer(store, entity, this);
 
 		return html`
 		<div class="detail-inner">
@@ -281,145 +616,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 					`
 				)}
 			</div>
-			${when(
-				body.length > 0,
-				() => html`
-				<section class="ai-sec ai-body">
-					${when(bodySource === "generated", () => this.renderBodySourceNotice())}
-					${unsafeHTML(renderAuthoredBody(body))}
-				</section>
-				`
-			)}
-			${when(
-				planProjection !== null,
-				() => html`
-				<section class="ai-sec ai-plan-current">
-					<h2>Current Plan</h2>
-					${repeat(
-						planProjection!.current,
-						(group) => group.key,
-						(group) => html`
-						<div class="ai-plan-group">
-							<h3>${group.title}</h3>
-							${when(
-								group.entries.length > 0,
-								() => repeat(group.entries, (entry) => entry.id, (entry) => this.renderPlanEntry(entry)),
-								() => html`<div class="ai-empty">None.</div>`
-							)}
-						</div>
-						`
-					)}
-				</section>
-				<section class="ai-sec ai-plan-history">
-					<h2>Plan Entry History</h2>
-					${when(
-						planProjection!.history.length > 0,
-						() => repeat(planProjection!.history, (entry) => entry.id, (entry) => this.renderPlanEntry(entry)),
-						() => html`<div class="ai-empty">No Plan entries yet.</div>`
-					)}
-				</section>
-				`,
-				() => nothing
-			)}
-			${when(
-				comments.length > 0,
-				() => html`
-				<section class="ai-sec ai-conversation">
-					<h2>Conversation</h2>
-					${repeat(comments, (comment) => comment.id, (comment) => this.renderIssueComment(comment))}
-				</section>
-				`,
-				() => nothing
-			)}
-			${when(
-				hasIssueStructure,
-				() => html`
-				${when(
-					parentIssue !== null,
-					() => html`
-					<section class="ai-sec">
-						<h2>Parent issue</h2>
-						<div class="ai-refs">${this.renderRef(parentIssue!)}</div>
-					</section>
-					`,
-					() => nothing
-				)}
-				${when(
-					subIssueTree.length > 0,
-					() => html`
-					<section class="ai-sec">
-						<h2>Sub-issues</h2>
-						<div class="ai-issue-tree">
-							${repeat(subIssueTree, (node) => node.issue.id, (node) => this.renderIssueTreeNode(node))}
-						</div>
-					</section>
-					`,
-					() => nothing
-				)}
-				`,
-				() => nothing
-			)}
-			${when(
-				entity.kind === "prd",
-				() => html`
-				<section class="ai-sec">
-					<h2>Creates</h2>
-					<div class="ai-story-list">
-						${when(
-							prdStories.length > 0,
-							() => repeat(
-								prdStories,
-								(story) => story.id,
-								(story) => this.renderPrdStoryBlock(story, bundle ? store.issueTreeForStory(bundle, story.id) : [])
-							),
-							() => html`<div class="ai-empty">This PRD does not create any user stories yet.</div>`
-						)}
-					</div>
-				</section>
-				`,
-				() => nothing
-			)}
-			${when(
-				debtSections.length > 0,
-				() => repeat(
-					debtSections,
-					(section) => section.key,
-					(section) => html`
-					<section class="ai-sec">
-						<h2>${section.title}</h2>
-						<div class="ai-refs">
-							${repeat(section.records, (record) => record.id, (record) => this.renderRef(record))}
-						</div>
-					</section>
-					`
-				),
-				() => nothing
-			)}
-			${when(
-				sections.length > 0,
-				() => repeat(
-					sections,
-					(section) => section.key,
-					(section) => html`
-					<section class="ai-sec">
-						<h2>${section.title}</h2>
-						<div class="ai-refs">
-							${repeat(section.records, (record) => record.id, (record) => this.renderRef(record, section.crossLink))}
-						</div>
-					</section>
-					`
-				),
-				() => when(
-					hasIssueStructure,
-					() => nothing,
-					() => html`
-				<section class="ai-sec">
-					<h2>Linked records</h2>
-					<div class="ai-empty">Nothing is linked to this record yet.</div>
-				</section>
-				`
-				)
-			)}
+			${renderer.renderDetail()}
 		</div>
 		`;
 	}
@@ -500,6 +697,165 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		}
 		.ai-meta .m .v {
 			font-weight: 600;
+		}
+		.ai-subtabs {
+			display: flex;
+			gap: 18px;
+			margin-top: 22px;
+			border-bottom: 1px solid var(--border-muted);
+			overflow-x: auto;
+		}
+		.ai-subtab {
+			position: relative;
+			flex: 0 0 auto;
+			padding: 8px 20px 8px 2px;
+			border: 0;
+			border-bottom: 2px solid transparent;
+			background: transparent;
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+		}
+		.ai-subtab-count {
+			box-sizing: border-box;
+			display: inline-grid;
+			min-width: 16px;
+			height: 16px;
+			padding: 0 3px;
+			place-items: center;
+			position: absolute;
+			top: 1px;
+			right: 1px;
+			border-radius: 50%;
+			background: var(--accent);
+			color: var(--surface);
+			font-size: 10px;
+			font-weight: 700;
+			line-height: 1;
+		}
+		.ai-subtab.active {
+			border-bottom-color: var(--accent);
+			color: var(--text);
+			font-weight: 600;
+		}
+		.ai-record-tab {
+			margin-top: 18px;
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			background: var(--surface);
+		}
+		.ai-record-toolbar {
+			display: flex;
+			gap: 12px;
+			align-items: end;
+			padding: 12px 16px;
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.ai-record-filter {
+			display: grid;
+			gap: 4px;
+		}
+		.ai-record-filter:first-child {
+			flex: 1;
+		}
+		.ai-record-filter > span {
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 600;
+		}
+		.ai-record-filter input,
+		.ai-record-filter select {
+			box-sizing: border-box;
+			min-height: 32px;
+			padding: 6px 8px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--text);
+			font: inherit;
+		}
+		.ai-record-view-toggle {
+			display: inline-flex;
+			align-self: end;
+			overflow: hidden;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+		}
+		.ai-record-view-button {
+			min-height: 32px;
+			padding: 6px 10px;
+			border: 0;
+			border-right: 1px solid var(--border);
+			background: var(--surface);
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+		}
+		.ai-record-view-button:last-child {
+			border-right: 0;
+		}
+		.ai-record-view-button.active {
+			background: var(--surface-muted);
+			color: var(--text);
+			font-weight: 600;
+		}
+		.ai-record-count {
+			padding-bottom: 7px;
+			color: var(--muted);
+			font-size: 12px;
+			white-space: nowrap;
+		}
+		.ai-record-list,
+		.ai-record-tree {
+			display: grid;
+			gap: 8px;
+			padding: 8px;
+		}
+		.ai-context-summary {
+			padding: 14px 16px 0;
+		}
+		.ai-context-summary h2,
+		.ai-context-term h3 {
+			margin: 0;
+			font-size: 14px;
+		}
+		.ai-context-summary p,
+		.ai-context-term p {
+			margin: 6px 0 0;
+			color: var(--muted);
+			font-size: 13px;
+		}
+		.ai-context-avoid {
+			color: var(--danger);
+		}
+		.ai-context-term {
+			padding: 10px 8px;
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.ai-context-term:last-child {
+			border-bottom: 0;
+		}
+		.ai-graph-wrap {
+			margin-top: 18px;
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			background:
+				radial-gradient(circle, rgba(208, 215, 222, 0.5) 1px, transparent 1px) 0 0 / 22px 22px,
+				var(--surface);
+			overflow: auto;
+		}
+		.ai-graph-legend {
+			display: flex;
+			gap: 16px;
+			flex-wrap: wrap;
+			padding: 10px 14px;
+			border-bottom: 1px solid var(--border-muted);
+			background: var(--surface);
+		}
+		.ai-graph-host {
+			width: max-content;
+			min-width: 100%;
+			padding: 14px 0;
 		}
 		.ai-sec {
 			margin-top: 24px;
@@ -669,10 +1025,6 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			display: grid;
 			gap: 8px;
 		}
-		.ai-story-list {
-			display: grid;
-			gap: 12px;
-		}
 		.ai-story-block {
 			display: grid;
 			gap: 10px;
@@ -683,12 +1035,6 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			margin-left: 18px;
 			padding-left: 14px;
 			border-left: 1px solid var(--border-muted);
-		}
-		.ai-story-empty {
-			margin-left: 18px;
-			padding-left: 14px;
-			color: var(--muted);
-			font-size: 13px;
 		}
 		.ai-issue-tree {
 			display: grid;
@@ -770,6 +1116,13 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		@media (max-width: 700px) {
 			.detail-inner {
 				padding: 20px 16px 48px;
+			}
+			.ai-record-toolbar {
+				align-items: stretch;
+				flex-direction: column;
+			}
+			.ai-record-count {
+				padding-bottom: 0;
 			}
 			.ai-body-source {
 				flex-direction: column;

@@ -2,24 +2,6 @@ import { css } from "lit";
 
 export const issueBrowserTokenStyles = css`
 :host {
-	--page-bg: #f6f8fa;
-	--surface: #ffffff;
-	--surface-muted: #f6f8fa;
-	--rail-bg: #f6f8fa;
-	--border: #d0d7de;
-	--border-muted: #d8dee4;
-	--text: #1f2328;
-	--muted: #59636e;
-	--accent: #0969da;
-	--accent-soft: #ddf4ff;
-	--success: #1a7f37;
-	--success-bg: #dafbe1;
-	--warn: #9a6700;
-	--warn-bg: #fff8c5;
-	--danger: #cf222e;
-	--danger-bg: #ffebe9;
-	--done: #8250df;
-	--done-bg: #fbefff;
 	color: var(--text);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
 }
@@ -108,7 +90,7 @@ select:focus,
 .initiative-button:focus,
 .bundle-title-button:focus,
 .bundle-toggle:focus {
-	outline: 2px solid rgba(9, 105, 218, 0.28);
+	outline: 2px solid var(--focus-ring);
 	outline-offset: 2px;
 }
 
@@ -155,7 +137,7 @@ select:focus,
 .badge.info,
 .graph-action {
 	border-color: rgba(9, 105, 218, 0.18);
-	background: #ddf4ff;
+	background: var(--accent-soft);
 	color: var(--accent);
 }
 

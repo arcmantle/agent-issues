@@ -83,12 +83,239 @@ async function mountDetail(store: AgentIssuesStore) {
 	return view;
 }
 
+function tabLabels(view: HTMLElement) {
+	return [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+		.map((tab) => tab.querySelector(".ai-subtab-label")?.textContent?.trim());
+}
+
+function tabRecordCounts(view: HTMLElement) {
+	return Object.fromEntries(
+		[...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+			.flatMap((tab) => {
+				const count = tab.querySelector(".ai-subtab-count")?.textContent?.trim();
+				return count ? [[tab.dataset.tab, count]] : [];
+			})
+	);
+}
+
+function updateIssueRecordFilter(view: HTMLElement, detail: { query?: string; status?: string }) {
+	const toolbar = view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar");
+	if (detail.query !== undefined) {
+		toolbar?.dispatchEvent(new CustomEvent("record-query-change", { detail: { query: detail.query } }));
+	}
+	if (detail.status !== undefined) {
+		toolbar?.dispatchEvent(new CustomEvent("record-status-change", { detail: { status: detail.status } }));
+	}
+}
+
+function updateIssueRecordView(view: HTMLElement, tab: "issues" | "userStories", viewMode: "list" | "tree") {
+	view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.dispatchEvent(
+		new CustomEvent("record-view-change", { detail: { tab, view: viewMode } })
+	);
+}
+
 afterEach(() => {
 	document.body.replaceChildren();
 	window.location.hash = "";
 });
 
 describe("entity detail pane", () => {
+	it("provides User stories with shared tabs and their linked issue hierarchy", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ body: "User story overview content.", id: "US1", kind: "userStory", status: "draft", title: "Complete the workflow" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Implement the workflow" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Verify the workflow" });
+		const bundle = makeBundle(initiative, {
+			fixLinks: [{ issue: parentIssue, userStory: story }],
+			issues: [parentIssue, childIssue],
+			subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
+			userStories: [story]
+		});
+		const store = makeStore(makeSnapshot({ entities: [initiative, story, parentIssue, childIssue], initiatives: [bundle] }));
+		store.selectEntity(story.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "Issues"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')?.textContent).toContain("User story overview content.");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-ref[data-id="ISS1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-issue-tree-children .ai-ref[data-id="ISS2"]')).not.toBeNull();
+	});
+
+	it("provides ADRs with the shared record tabs, filters, and issue hierarchy", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const adr = makeEntity({ body: "ADR overview content.", id: "ADR1", kind: "adr", status: "current", title: "Use shared detail tabs" });
+		const parentIssue = makeEntity({ category: "searchable architecture field", id: "ISS1", kind: "issue", status: "todo", title: "Apply decision" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Verify decision" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Decision outcome" });
+		const bundle = makeBundle(initiative, {
+			adrs: [adr],
+			constrainsLinks: [{ adr, issue: parentIssue }],
+			fixLinks: [{ issue: parentIssue, userStory: story }],
+			issues: [parentIssue, childIssue],
+			subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
+			userStories: [story]
+		});
+		const store = makeStore(makeSnapshot({ entities: [initiative, adr, parentIssue, childIssue, story], initiatives: [bundle] }));
+		store.selectEntity(adr.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "Issues", "User stories"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')?.textContent).toContain("ADR overview content.");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordFilter(view, { query: "searchable architecture field" });
+		await view.updateComplete;
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS1", "ISS2"]);
+
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-issue-tree-children .ai-ref[data-id="ISS2"]')).not.toBeNull();
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="userStories"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="US1"]')).not.toBeNull();
+	});
+
+	it("provides filterable record tabs and ranked issue and user-story trees", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const parentIssue = makeEntity({ category: "priority phrase", id: "ISS_FULL_REFERENCE_123", kind: "issue", status: "todo", title: "Parent issue" });
+		const childIssue = makeEntity({ body: "priority phrase appears only in this body", id: "ISS2", kind: "issue", status: "done", title: "Child issue" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Keep issue work visible" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "Use record tabs" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "active", title: "Related delivery plan" });
+		const snapshot = makeSnapshot({
+			entities: [initiative, parentIssue, childIssue, story, adr, plan],
+			initiatives: [makeBundle(initiative, {
+				constrainsLinks: [{ adr, issue: parentIssue }],
+				fixLinks: [{ issue: childIssue, userStory: story }],
+				issues: [parentIssue, childIssue],
+				subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
+				userStories: [story]
+			})],
+			relations: [makeRelation(parentIssue.id, "blocks", plan.id)]
+		});
+		const store = makeStore(snapshot);
+		store.selectEntity(parentIssue.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "Issues", "ADRs", "User stories", "Related", "Graph"]);
+		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "2", related: "1", userStories: "1" });
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 2 records");
+		expect(view.shadowRoot?.querySelector('[data-tab="issues"] .ai-subtab-count')?.getAttribute("aria-hidden")).toBe("true");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="adrs"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ADR1"]')).not.toBeNull();
+		updateIssueRecordFilter(view, { query: "record tabs" });
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ADR1"]')).not.toBeNull();
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordFilter(view, { query: "priority phrase" });
+		await view.updateComplete;
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS_FULL_REFERENCE_123", "ISS2"]);
+		updateIssueRecordFilter(view, { status: "done" });
+		await view.updateComplete;
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS2"]);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="related"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PLAN1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.query).toBe("");
+		expect(view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.status).toBe("all");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-issue-tree-children .ai-ref[data-id="ISS2"]')).not.toBeNull();
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="userStories"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "userStories", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.ai-story-block .ai-ref[data-id="US1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector('.ai-story-issues .ai-ref[data-id="ISS2"]')).not.toBeNull();
+	});
+
+	it("hides issue tabs that have no useful data", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Standalone issue" });
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, issue],
+			initiatives: [makeBundle(initiative, { issues: [issue] })]
+		}));
+		store.selectEntity(issue.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe("issue-detail-ISS1-overview-tab");
+	});
+
+	it("falls back to Overview when the selected issue tab loses its data", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Changing issue" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Temporary child" });
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, issue, childIssue],
+			initiatives: [makeBundle(initiative, { issues: [issue, childIssue], subIssueLinks: [{ issue: childIssue, parent: issue }] })]
+		}));
+		store.selectEntity(issue.id);
+		const view = await mountDetail(store);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-selected")).toBe("true");
+		store.snapshot.set(makeSnapshot({
+			entities: [initiative, issue],
+			initiatives: [makeBundle(initiative, { issues: [issue] })]
+		}));
+		await view.updateComplete;
+
+		expect([...view.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []].map((tab) => tab.textContent?.trim())).toEqual(["Overview"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe("issue-detail-ISS1-overview-tab");
+	});
+
+	it("renders and filters the issue-local relationship graph", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render local graph" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Open graph records" });
+		const snapshot = makeSnapshot({
+			entities: [initiative, issue, story],
+			initiatives: [makeBundle(initiative, { issues: [issue], userStories: [story] })],
+			relations: [makeRelation(issue.id, "fixes", story.id)]
+		});
+		const store = makeStore(snapshot);
+		store.selectEntity(issue.id);
+		const view = await mountDetail(store);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="graph"]')?.click();
+		await view.updateComplete;
+		const graph = view.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		expect(graph?.shadowRoot?.querySelectorAll(".ai-node").length).toBe(2);
+
+		const filters = view.shadowRoot?.querySelector("agent-issues-relationship-graph-filters");
+		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="issue"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector("agent-issues-relationship-graph")?.shadowRoot?.querySelector('.ai-node[data-id="ISS1"]') ?? null).toBeNull();
+		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="story"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="graph"]')?.getAttribute("aria-selected")).toBe("true");
+		expect(view.shadowRoot?.textContent).toContain("No graph records match the selected filters.");
+
+		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="story"]')?.click();
+		filters?.shadowRoot?.querySelector<HTMLButtonElement>('[data-graph-kind="issue"]')?.click();
+		await view.updateComplete;
+		view.shadowRoot?.querySelector("agent-issues-relationship-graph")?.shadowRoot?.querySelector<SVGGElement>('.ai-node[data-id="US1"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+		expect(store.selectedId.get()).toBe(story.id);
+	});
+
 	it("renders a Plan's generated current groups and complete entry history", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Plan owner" });
 		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "in-progress", title: "Plan record" });
@@ -198,8 +425,66 @@ describe("entity detail pane", () => {
 			"Created",
 			"Updated"
 		]);
-		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
-		expect(sectionTitles).toEqual(expect.arrayContaining(["Recorded by", "Resolved by", "Related records", "Incoming handoffs"]));
+		expect(tabLabels(view)).toEqual(["Overview", "Issues", "Related", "Graph"]);
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="related"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PROJ1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="HO1"]')).not.toBeNull();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ISS1"]')).not.toBeNull();
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-ref[data-id="ISS1"]')).not.toBeNull();
+	});
+
+	it("provides Plans with shared tabs while keeping the plan projection in Overview", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Plan owner" });
+		const plan = makeEntity({ body: "Plan overview content.", id: "PLAN1", kind: "plan", status: "in-progress", title: "Plan record" });
+		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Plan requirements" });
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, plan, prd],
+			initiatives: [makeBundle(initiative, { entities: [initiative, plan], prds: [prd] })],
+			planEntries: [{
+				body: "Ship the plan.",
+				createdAt: "2026-01-01T00:00:00.000Z",
+				id: "ENTRY1",
+				planId: plan.id,
+				reference: "PLAN_ENTRY_DECISION",
+				referencedEntityIds: [],
+				role: "decision",
+				scopeDirection: null,
+				supersededEntryIds: [],
+				tombstone: false,
+				updatedAt: "2026-01-01T00:00:00.000Z"
+			}],
+			relations: [makeRelation(plan.id, "informs", prd.id)]
+		}));
+		store.selectEntity(plan.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "PRDs", "Graph"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-plan-current')?.textContent).toContain("Decisions");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="prds"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PRD1"]')).not.toBeNull();
+	});
+
+	it("provides Handoffs with shared data-aware tabs", async () => {
+		const handoff = makeEntity({ body: "Handoff overview content.", id: "HO1", kind: "handoff", status: "active", title: "Resume work" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Continue implementation" });
+		const store = makeStore(makeSnapshot({
+			entities: [handoff, issue],
+			relations: [makeRelation(handoff.id, "handsOff", issue.id)]
+		}));
+		store.selectEntity(handoff.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "Issues"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')?.textContent).toContain("Handoff overview content.");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ISS1"]')).not.toBeNull();
 	});
 
 	it("renders a specialized issue type", async () => {
@@ -247,12 +532,22 @@ describe("entity detail pane", () => {
 			);
 			store.selectEntity(owner.id);
 			const view = await mountDetail(store);
-			const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
-
-			expect(sectionTitles).toEqual(expect.arrayContaining(["Owned debt", "Resolves debt"]));
-			expect(sectionTitles).not.toContain("Records");
-			expect(view.shadowRoot?.textContent).toContain(ownedDebt.title);
-			expect(view.shadowRoot?.textContent).toContain(resolvedDebt.title);
+			if (ownerKind === "issue") {
+				view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="debt"]')?.click();
+				await view.updateComplete;
+				expect(view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.countText).toBe("2 of 2");
+			} else {
+				const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
+				expect(sectionTitles).toEqual(expect.arrayContaining(["Owned debt", "Resolves debt"]));
+				expect(sectionTitles).not.toContain("Records");
+			}
+			if (ownerKind === "issue") {
+				expect(view.shadowRoot?.querySelector<HTMLElement>(`.record-browser-list .record-row[data-id="${ownedDebt.id}"]`)?.shadowRoot?.textContent).toContain(ownedDebt.title);
+				expect(view.shadowRoot?.querySelector<HTMLElement>(`.record-browser-list .record-row[data-id="${resolvedDebt.id}"]`)?.shadowRoot?.textContent).toContain(resolvedDebt.title);
+			} else {
+				expect(view.shadowRoot?.textContent).toContain(ownedDebt.title);
+				expect(view.shadowRoot?.textContent).toContain(resolvedDebt.title);
+			}
 			document.body.replaceChildren();
 		}
 	});
@@ -402,7 +697,7 @@ describe("entity detail pane", () => {
 		expect(store.selectedId.get()).toBeNull();
 	});
 
-	it("renders derived linked-record sections grouped by relation from the record's relations", async () => {
+	it("shows issues that fix a User story in its shared Issues tab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const story = makeEntity({ id: "US7", kind: "userStory", status: "draft", title: "Open any record" });
 		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "done", title: "Wire the detail pane" });
@@ -415,11 +710,11 @@ describe("entity detail pane", () => {
 		store.selectEntity("US7");
 		const view = await mountDetail(store);
 
-		const sectionTitle = view.shadowRoot?.querySelector(".ai-sec h2");
-		const ref = view.shadowRoot?.querySelector(".ai-sec .ai-ref");
-		expect(sectionTitle?.textContent?.trim()).toBe("Fixed by");
-		expect(ref?.querySelector(".r-id")?.textContent?.trim()).toBe(store.shortRef(issue));
-		expect(ref?.querySelector(".r-title")?.textContent?.trim()).toBe("Wire the detail pane");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		const ref = view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS9"]');
+		expect(ref?.shadowRoot?.querySelector(".idtag")?.textContent?.trim()).toBe(store.shortRef(issue));
+		expect(ref?.shadowRoot?.querySelector(".line-title")?.textContent?.trim()).toBe("Wire the detail pane");
 	});
 
 	it("opens a linked child record in the detail pane when its ref is clicked", async () => {
@@ -435,8 +730,10 @@ describe("entity detail pane", () => {
 		store.selectEntity("US7");
 		const view = await mountDetail(store);
 
-		const ref = view.shadowRoot?.querySelector<HTMLButtonElement>(".ai-sec .ai-ref");
-		ref?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		const ref = view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS9"]');
+		ref?.shadowRoot?.querySelector<HTMLButtonElement>("button")?.click();
 		await view.updateComplete;
 
 		expect(store.selectedId.get()).toBe("ISS9");
@@ -464,11 +761,13 @@ describe("entity detail pane", () => {
 		store.selectEntity("ISS1");
 		const view = await mountDetail(store);
 
-		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
-		expect(sectionTitles).toContain("Sub-issues");
-		const nestedRefs = [...(view.shadowRoot?.querySelectorAll(".ai-issue-tree .ai-ref .r-id") ?? [])].map((node) => node.textContent?.trim());
-		expect(nestedRefs).toEqual([store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
-		expect(view.shadowRoot?.querySelector(".ai-issue-tree-children .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(nestedSubIssue));
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		const nestedRefs = [...(view.shadowRoot?.querySelectorAll(".ai-record-tree .ai-ref .r-id") ?? [])].map((node) => node.textContent?.trim());
+		expect(nestedRefs).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
+		expect(view.shadowRoot?.querySelector(".ai-issue-tree-children .ai-issue-tree-children .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(nestedSubIssue));
 	});
 
 	it("renders the parent issue section when a sub-issue is open", async () => {
@@ -483,9 +782,9 @@ describe("entity detail pane", () => {
 		store.selectEntity("ISS2");
 		const view = await mountDetail(store);
 
-		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
-		expect(sectionTitles).toContain("Parent issue");
-		expect(view.shadowRoot?.querySelector(".ai-refs .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(parentIssue));
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS1"]')?.shadowRoot?.querySelector(".idtag")?.textContent?.trim()).toBe(store.shortRef(parentIssue));
 	});
 
 	it("highlights the child reference matching the active child id", async () => {
@@ -512,6 +811,10 @@ describe("entity detail pane", () => {
 		view.activeChildId = "ISS2";
 		document.body.appendChild(view);
 		await view.updateComplete;
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
 
 		const activeRef = view.shadowRoot?.querySelector('.ai-ref[data-id="ISS2"]');
 		const otherRef = view.shadowRoot?.querySelector('.ai-ref[data-id="ISS3"]');
@@ -537,17 +840,19 @@ describe("entity detail pane", () => {
 		document.body.appendChild(view);
 		await view.updateComplete;
 
-		const crossRef = view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-sec .ai-ref[data-id="ISS40"]');
-		crossRef?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		const crossRef = view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS40"]');
+		crossRef?.shadowRoot?.querySelector<HTMLButtonElement>("button")?.click();
 		await view.updateComplete;
 
 		expect(store.reRootTrail.get()).toEqual([["INIT4", "ISS18"]]);
 		expect(store.cascadePath.get()).toEqual(["ISS40"]);
 	});
 
-	it("renders created user stories with their issue trees in PRD detail view", async () => {
+	it("provides PRDs with shared record tabs and created story issue trees", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Console graph PRD" });
+		const prd = makeEntity({ body: "PRD overview content.", id: "PRD1", kind: "prd", status: "draft", title: "Console graph PRD" });
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
 		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
 		const subIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Sub-issue" });
@@ -568,9 +873,14 @@ describe("entity detail pane", () => {
 		store.selectEntity("PRD1");
 		const view = await mountDetail(store);
 
-		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".ai-sec h2") ?? [])].map((node) => node.textContent?.trim());
-		expect(sectionTitles).toContain("Creates");
-		expect(view.shadowRoot?.querySelector('.ai-story-list .ai-ref[data-id="US1"]')).not.toBeNull();
+		expect(tabLabels(view)).toEqual(["Overview", "Issues", "User stories", "Graph"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')?.textContent).toContain("PRD overview content.");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="userStories"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "userStories", "tree");
+		await view.updateComplete;
+
+		expect(view.shadowRoot?.querySelector('.ai-story-block .ai-ref[data-id="US1"]')).not.toBeNull();
 		expect([...view.shadowRoot?.querySelectorAll('.ai-story-issues .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue)]);
 	});
 
@@ -594,16 +904,20 @@ describe("entity detail pane", () => {
 		const store = makeStore(snapshot);
 		store.selectEntity("ISS1");
 		const view = await mountDetail(store);
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
 
 		const toggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.branch-toggle[data-id="ISS2"]');
 		toggle?.click();
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.ai-issue-tree-children .ai-ref .r-id')?.textContent?.trim()).not.toBe(store.shortRef(nestedSubIssue));
-		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(subIssue)]);
+		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue)]);
 
 		toggle?.click();
 		await view.updateComplete;
-		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
+		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
 	});
 
 	it("offers a back control that closes the open record", async () => {

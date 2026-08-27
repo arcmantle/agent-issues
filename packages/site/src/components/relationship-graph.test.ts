@@ -38,6 +38,14 @@ describe("relationship graph", () => {
 		expect(nodes.length).toBe(3);
 	});
 
+	it("uses graph theme tokens for nodes and edges", async () => {
+		const view = await mountGraph(makeGraph());
+
+		expect(view.shadowRoot?.querySelector('.ai-node[data-id="INIT1"] .ai-node-rect')?.getAttribute("fill")).toBe("var(--surface)");
+		expect(view.shadowRoot?.querySelector('.ai-node[data-id="INIT1"] circle')?.getAttribute("fill")).toBe("var(--graph-initiative)");
+		expect(view.shadowRoot?.querySelector(".ai-edge")?.getAttribute("stroke")).toBe("var(--graph-edge)");
+	});
+
 	it("emits node-open with the record id when a node is clicked", async () => {
 		const view = await mountGraph(makeGraph());
 		let openedId: string | null = null;

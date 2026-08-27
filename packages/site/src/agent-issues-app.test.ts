@@ -111,10 +111,99 @@ async function mountApp(store: AgentIssuesStore) {
 
 afterEach(() => {
 	document.body.replaceChildren();
+	document.documentElement.removeAttribute("data-theme");
+	window.localStorage.removeItem("agent-issues-theme");
 	vi.unstubAllGlobals();
 });
 
 describe("three-pane console shell", () => {
+	it("uses a header rail with side-by-side master and detail panes at medium widths", async () => {
+		vi.stubGlobal("innerWidth", 1080);
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
+		const store = makeStore(makeConfig(), makeSnapshot({
+			entities: [initiative],
+			initiatives: [makeBundle(initiative)]
+		}));
+		store.selectInitiative(initiative.id);
+		const app = await mountApp(store);
+
+		const console = app.shadowRoot?.querySelector(".console");
+		expect(console?.classList.contains("medium")).toBe(true);
+		expect(console?.classList.contains("narrow")).toBe(false);
+		expect(app.shadowRoot?.querySelector('[data-pane="master"]')).not.toBeNull();
+		expect(app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view')).not.toBeNull();
+	});
+
+	it("hides the medium master pane for top-level Context and Graph sections", async () => {
+		vi.stubGlobal("innerWidth", 1080);
+		const store = makeStore(makeConfig(), makeSnapshot());
+		const app = await mountApp(store);
+
+		for (const section of ["context", "graph"] as const) {
+			store.selectSection(section);
+			await app.updateComplete;
+			expect(app.shadowRoot?.querySelector(".console")?.classList.contains("wide")).toBe(true);
+			expect(app.shadowRoot?.querySelector('[data-pane="master"]')).toBeNull();
+			expect(app.shadowRoot?.querySelector('[data-pane="detail"]')).not.toBeNull();
+		}
+	});
+
+	it("uses a detail-first narrow workspace with an on-demand record list", async () => {
+		vi.stubGlobal("innerWidth", 390);
+		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
+		const store = makeStore(makeConfig(), makeSnapshot({
+			entities: [initiative],
+			initiatives: [makeBundle(initiative)]
+		}));
+		store.selectInitiative(initiative.id);
+		const app = await mountApp(store);
+
+		const console = app.shadowRoot?.querySelector(".console");
+		expect(console?.classList.contains("narrow")).toBe(true);
+		expect(console?.classList.contains("has-detail")).toBe(true);
+		expect(app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view')).not.toBeNull();
+		expect(app.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-master-toggle")?.getAttribute("aria-pressed")).toBe("false");
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-master-toggle")?.click();
+		await app.updateComplete;
+		expect(console?.classList.contains("mobile-master-open")).toBe(true);
+		expect(app.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-master-toggle")?.getAttribute("aria-pressed")).toBe("true");
+		expect(app.shadowRoot?.activeElement).toBe(app.shadowRoot?.querySelector(".master-search"));
+
+		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-section="adrs"]')?.click();
+		await app.updateComplete;
+		expect(console?.classList.contains("mobile-master-open")).toBe(false);
+	});
+
+	it("switches themes from the rail footer and compact header", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const store = makeStore(makeConfig(), makeSnapshot());
+		const app = await mountApp(store);
+
+		const railToggle = app.shadowRoot?.querySelector<HTMLButtonElement>('[data-theme-toggle="rail"]');
+		expect(railToggle).not.toBeNull();
+		railToggle?.click();
+		await app.updateComplete;
+		expect(document.documentElement.dataset.theme).toBe("dark");
+		expect(window.localStorage.getItem("agent-issues-theme")).toBe("dark");
+
+		document.body.replaceChildren();
+		const remountedApp = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		expect(document.documentElement.dataset.theme).toBe("dark");
+		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="rail"]')?.getAttribute("aria-pressed")).toBe("true");
+
+		vi.stubGlobal("innerWidth", 390);
+		window.dispatchEvent(new Event("resize"));
+		await remountedApp.updateComplete;
+		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="rail"]')).toBeNull();
+
+		const headerToggle = remountedApp.shadowRoot?.querySelector<HTMLButtonElement>('[data-theme-toggle="header"]');
+		expect(headerToggle).not.toBeNull();
+		headerToggle?.click();
+		await remountedApp.updateComplete;
+		expect(document.documentElement.dataset.theme).toBe("light");
+	});
+
 	it("renders the selected tenant's project chooser when no project is selected", async () => {
 		const store = makeStore(makeConfig(), makeSnapshot());
 		store.selectedProjectId.set(null);
@@ -341,15 +430,13 @@ describe("three-pane console shell", () => {
 		await app.updateComplete;
 
 		const root = app.shadowRoot;
-		const cascade = root?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & { updateComplete: Promise<unknown> };
-		await cascade?.updateComplete;
 		expect(store.selectedInitiativeId.get()).toBe("INIT1");
-		expect(cascade?.shadowRoot?.querySelector('agent-issues-initiative-detail-view')).not.toBeNull();
+		expect(root?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view')).not.toBeNull();
 		expect(root?.querySelector('[data-pane="rail"] [data-tenant]')).not.toBeNull();
 		expect(root?.querySelector('[data-pane="master"] [data-initiative]')).not.toBeNull();
 	});
 
-	it("opens the selected initiative as the root column of a cascade", async () => {
+	it("keeps the detail pane fixed when an initiative is selected", async () => {
 		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
 		const snapshot = makeSnapshot({
 			entities: [initiative],
@@ -362,19 +449,10 @@ describe("three-pane console shell", () => {
 		masterItem?.click();
 		await app.updateComplete;
 
-		const cascade = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & {
-			updateComplete: Promise<unknown>;
-		};
-		expect(cascade).not.toBeNull();
-		expect(store.cascadePath.get()).toEqual(["INIT1"]);
-
-		await cascade.updateComplete;
-		const columns = cascade.shadowRoot?.querySelectorAll(".cascade-column");
-		expect(columns?.length).toBe(1);
-		expect(columns?.[0]?.getAttribute("data-column-id")).toBe("INIT1");
+		expect(app.shadowRoot?.querySelectorAll('[data-pane="detail"]').length).toBe(1);
 	});
 
-	it("opens a new cascade column when a child reference is clicked, without a reload", async () => {
+	it("replaces the right panel when a linked record is selected", async () => {
 		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "ready", title: "Drill the lineage" });
 		const snapshot = makeSnapshot({
@@ -387,23 +465,11 @@ describe("three-pane console shell", () => {
 		app.shadowRoot?.querySelector<HTMLButtonElement>('[data-pane="master"] [data-initiative="INIT1"]')?.click();
 		await app.updateComplete;
 
-		const cascade = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & {
-			updateComplete: Promise<unknown>;
-		};
-		await cascade.updateComplete;
-		const initiativeView = cascade.shadowRoot?.querySelector('agent-issues-initiative-detail-view') as HTMLElement & {
-			updateComplete: Promise<unknown>;
-		};
-		await initiativeView.updateComplete;
-		initiativeView.shadowRoot?.querySelector<HTMLButtonElement>('.story-head')?.click();
+		store.selectEntity(story.id);
 		await app.updateComplete;
-		await cascade.updateComplete;
 
-		expect(store.cascadePath.get()).toEqual(["INIT1", "US1"]);
-		const columnIds = [...(cascade.shadowRoot?.querySelectorAll('.cascade-column') ?? [])].map((column) =>
-			column.getAttribute("data-column-id")
-		);
-		expect(columnIds).toEqual(["INIT1", "US1"]);
+		expect(store.selectedId.get()).toBe("US1");
+		expect(app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-detail-view')).not.toBeNull();
 	});
 
 	it("switches the active project when a rail item is clicked", async () => {
@@ -562,16 +628,14 @@ describe("three-pane console shell", () => {
 		store.selectInitiative("INIT1");
 		await app.updateComplete;
 
-		const cascade = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-cascade-view') as HTMLElement & { updateComplete: Promise<unknown> };
-		await cascade?.updateComplete;
-		const initiativeView = cascade?.shadowRoot?.querySelector('agent-issues-initiative-detail-view') as HTMLElement & { updateComplete: Promise<unknown> };
+		const initiativeView = app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view') as HTMLElement & { updateComplete: Promise<unknown> };
 		await initiativeView?.updateComplete;
 		const detail = initiativeView?.shadowRoot;
 
 		const kpis = detail?.querySelectorAll(".kpi");
-		const subtabs = [...(detail?.querySelectorAll(".subtab") ?? [])].map((element) => element.textContent?.trim());
+		const subtabs = [...(detail?.querySelectorAll(".subtab-label-text") ?? [])].map((element) => element.textContent?.trim());
 		expect(kpis?.length).toBe(4);
-		expect(subtabs).toEqual(["Overview", "Graph", "Context"]);
+		expect(subtabs).toEqual(["Overview", "Issues", "Graph", "User stories"]);
 	});
 
 	it("keeps the owning initiative highlighted in the master rail while one of its records is open", async () => {
@@ -646,21 +710,6 @@ describe("collapse toggles", () => {
 		expect(app.shadowRoot?.querySelector(".console")?.classList.contains("master-collapsed")).toBe(true);
 	});
 
-	it("auto-collapses the master list while drilling two columns deep", async () => {
-		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
-		const child = makeEntity({ id: "PRD1", kind: "prd", title: "Console PRD" });
-		const snapshot = makeSnapshot({
-			entities: [initiative, child],
-			initiatives: [makeBundle(initiative)]
-		});
-		const store = makeStore(makeConfig(), snapshot);
-		const app = await mountApp(store);
-
-		store.cascadePath.set(["INIT1", "PRD1"]);
-		await app.updateComplete;
-
-		expect(app.shadowRoot?.querySelector(".console")?.classList.contains("master-collapsed")).toBe(true);
-	});
 });
 
 describe("project relationship graph section", () => {

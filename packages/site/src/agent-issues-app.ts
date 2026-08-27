@@ -5,7 +5,6 @@ import { classMap } from "lit/directives/class-map.js";
 import { map } from "lit/directives/map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { when } from "lit/directives/when.js";
-import "./components/cascade-view.js";
 import "./components/context-view.js";
 import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
@@ -16,9 +15,16 @@ import { AgentIssuesStore } from "./services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
 const SWITCHER_MENU_ID = "tenant-switcher-menu";
+const THEME_STORAGE_KEY = "agent-issues-theme";
+
+type SiteTheme = "light" | "dark";
 
 class AgentIssuesApp extends SignalWatcher(LitElement) {
 	public store = new AgentIssuesStore();
+	protected medium = false;
+	protected narrow = false;
+	protected mobileMasterOpen = false;
+	protected theme: SiteTheme = "light";
 
 	protected onSelectTenant = (event: Event) => {
 		const tenantId = (event.currentTarget as HTMLElement).dataset.tenant;
@@ -36,6 +42,8 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 
 		this.store.selectSection(section);
+		this.mobileMasterOpen = false;
+		this.requestUpdate();
 	};
 
 	protected onSelectInitiative = (event: Event) => {
@@ -45,6 +53,8 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 
 		this.store.selectInitiative(initiativeId);
+		this.mobileMasterOpen = false;
+		this.requestUpdate();
 	};
 
 	protected onSelectProject = (event: Event) => {
@@ -67,6 +77,8 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 
 		this.store.selectEntity(entityId);
+		this.mobileMasterOpen = false;
+		this.requestUpdate();
 	};
 
 	protected onSearchInput = (event: Event) => {
@@ -79,6 +91,20 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	protected onToggleMaster = () => {
 		this.store.toggleMaster();
+	};
+
+	protected onToggleMobileMaster = async () => {
+		this.mobileMasterOpen = !this.mobileMasterOpen;
+		this.requestUpdate();
+		if (this.mobileMasterOpen) {
+			await this.updateComplete;
+			this.shadowRoot?.querySelector<HTMLInputElement>(".master-search")?.focus();
+		}
+	};
+
+	protected onToggleTheme = () => {
+		const theme: SiteTheme = this.theme === "light" ? "dark" : "light";
+		this.setTheme(theme, true);
 	};
 
 	protected onToggleEpic = (event: Event) => {
@@ -167,12 +193,60 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	connectedCallback(): void {
 		super.connectedCallback();
+		const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+		this.setTheme(storedTheme === "dark" ? "dark" : "light");
+		this.updateNarrowMode();
+		window.addEventListener("resize", this.updateNarrowMode);
 		this.store.connect();
 	}
 
 	disconnectedCallback(): void {
+		window.removeEventListener("resize", this.updateNarrowMode);
 		this.store.disconnect();
 		super.disconnectedCallback();
+	}
+
+	protected updateNarrowMode = () => {
+		const narrow = window.innerWidth <= 900;
+		const medium = !narrow && window.innerWidth <= 1200;
+		if (this.narrow === narrow && this.medium === medium) {
+			return;
+		}
+
+		this.narrow = narrow;
+		this.medium = medium;
+		if (!narrow) {
+			this.mobileMasterOpen = false;
+		}
+		this.requestUpdate();
+	};
+
+	protected setTheme(theme: SiteTheme, persist = false) {
+		this.theme = theme;
+		document.documentElement.dataset.theme = theme;
+		if (persist) {
+			window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+		}
+		this.requestUpdate();
+	}
+
+	protected renderThemeToggle(placement: "header" | "rail") {
+		const nextTheme = this.theme === "light" ? "dark" : "light";
+		const icon = this.theme === "light" ? "☾" : "☼";
+
+		return html`
+		<button
+			aria-label=${`Switch to ${nextTheme} theme`}
+			aria-pressed=${this.toAriaBoolean(this.theme === "dark")}
+			class=${`theme-toggle ${placement}-theme-toggle`}
+			data-theme-toggle=${placement}
+			title=${`Switch to ${nextTheme} theme`}
+			@click=${this.onToggleTheme}
+			type="button"
+		>
+			${icon}
+		</button>
+		`;
 	}
 
 	protected renderSwitcherMenu() {
@@ -183,7 +257,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		<div
 			class="menu"
 			id=${SWITCHER_MENU_ID}
-			popover
+			popover=${"auto"}
 		>
 			${repeat(
 				tenantOptions,
@@ -224,6 +298,15 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		return html`
 		<aside class="rail" data-pane="rail">
 			<button
+				aria-label=${this.mobileMasterOpen ? "Close record list" : "Open record list"}
+				aria-pressed=${this.toAriaBoolean(this.mobileMasterOpen)}
+				class="mobile-master-toggle"
+				@click=${this.onToggleMobileMaster}
+				type="button"
+			>
+				☰
+			</button>
+			<button
 				class="pane-collapse"
 				data-collapse="rail"
 				title=${store.railCollapsed.get() ? "Expand rail" : "Collapse rail"}
@@ -262,6 +345,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 						class=${classMap({ active: section === item.section, "nav-item": true })}
 						data-section=${item.section}
 						data-tenant-nav=${item.section}
+						title=${item.label}
 						@click=${this.onSelectSection}
 					>
 						<span class="nav-icon">${item.icon}</span>
@@ -282,7 +366,11 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					<span class="nav-count">${store.projectIssueCount.get()}</span>
 				</div>
 			</nav>
-			<div class="rail-foot">${store.projectDescription.get()}</div>
+			<div class="rail-foot">
+				<span class="rail-foot-copy">${store.projectDescription.get()}</span>
+				${when(!this.narrow, () => this.renderThemeToggle("rail"), () => nothing)}
+			</div>
+			${when(this.narrow, () => this.renderThemeToggle("header"), () => nothing)}
 		</aside>
 		`;
 	}
@@ -842,14 +930,6 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			`;
 		}
 
-		if (store.cascadePath.get().length > 0) {
-			return html`
-			<section class="detail" data-pane="detail">
-				<agent-issues-cascade-view .store=${store}></agent-issues-cascade-view>
-			</section>
-			`;
-		}
-
 		if (selectedId) {
 			return html`
 			<section class="detail" data-pane="detail">
@@ -885,12 +965,22 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 
 		const section = store.activeSection.get();
-		const wide = section === "graph" || section === "context";
+		const wide = !this.narrow && (section === "graph" || section === "context");
 		const railCollapsed = store.railCollapsed.get();
 		const masterCollapsed = !wide && store.masterCollapsed.get();
+		const hasDetail = store.selectedId.get() !== null || store.selectedInitiativeId.get() !== null || section === "context" || section === "graph";
 
 		return html`
-		<div class=${classMap({ console: true, wide, "rail-collapsed": railCollapsed, "master-collapsed": masterCollapsed })}>
+		<div class=${classMap({
+			console: true,
+			"has-detail": hasDetail,
+			"master-collapsed": masterCollapsed,
+			medium: this.medium,
+			"mobile-master-open": this.mobileMasterOpen,
+			narrow: this.narrow,
+			"rail-collapsed": railCollapsed,
+			wide
+		})}>
 			${this.renderRail()}
 			${when(!wide, () => this.renderMaster(), () => nothing)}
 			${this.renderDetail()}
@@ -959,6 +1049,9 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			border-color: var(--accent);
 			color: var(--text);
 		}
+		.mobile-master-toggle {
+			display: none;
+		}
 		.console.rail-collapsed .rail .pane-collapse,
 		.console.master-collapsed .master .pane-collapse {
 			align-self: center;
@@ -1017,8 +1110,8 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			width: 28px;
 			height: 28px;
 			border-radius: 6px;
-			background: linear-gradient(135deg, #0969da, #8250df);
-			color: #fff;
+			background: linear-gradient(135deg, var(--avatar-start), var(--avatar-end));
+			color: var(--avatar-text);
 			font-size: 13px;
 			font-weight: 700;
 		}
@@ -1050,7 +1143,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			border: 1px solid var(--border);
 			border-radius: 10px;
 			background: var(--surface);
-			box-shadow: 0 12px 28px rgba(31, 35, 40, 0.18);
+			box-shadow: 0 12px 28px var(--shadow);
 		}
 		.menu-item {
 			display: flex;
@@ -1126,10 +1219,42 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			color: var(--accent);
 		}
 		.rail-foot {
+			display: flex;
+			gap: 8px;
+			align-items: center;
 			padding: 12px;
 			border-top: 1px solid var(--border-muted);
 			color: var(--muted);
 			font-size: 12px;
+		}
+		.rail-foot-copy {
+			min-width: 0;
+			flex: 1;
+		}
+		.theme-toggle {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 32px;
+			height: 32px;
+			padding: 0;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--text);
+			font: inherit;
+			font-size: 17px;
+			line-height: 1;
+			cursor: pointer;
+		}
+		.theme-toggle:hover,
+		.theme-toggle[aria-pressed="true"] {
+			border-color: var(--accent);
+			background: var(--accent-soft);
+			color: var(--accent);
+		}
+		.header-theme-toggle {
+			display: none;
 		}
 		.master {
 			display: flex;
@@ -1608,14 +1733,208 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			color: var(--danger);
 		}
 		@media (max-width: 900px) {
+			:host {
+				height: 100dvh;
+			}
 			.console,
 			.console.wide {
-				grid-template-columns: 1fr;
+				position: relative;
+				grid-template-columns: minmax(0, 1fr);
+				grid-template-rows: 52px minmax(0, 1fr);
+				height: 100dvh;
+				overflow: hidden;
+			}
+			.console.narrow .rail {
+				grid-column: 1;
+				grid-row: 1;
+				flex-direction: row;
+				align-items: center;
+				border-right: 0;
+				border-bottom: 1px solid var(--border);
+				overflow: hidden;
+				z-index: 10;
+			}
+			.console.narrow .rail .pane-collapse,
+			.console.narrow .rail-foot,
+			.console.narrow .nav-group-label,
+			.console.narrow .nav-item.static,
+			.console.narrow .nav-count,
+			.console.narrow .sw-text,
+			.console.narrow .switcher-tenant-button {
+				display: none;
+			}
+			.mobile-master-toggle {
+				display: inline-flex;
+				flex: 0 0 40px;
+				align-items: center;
+				justify-content: center;
+				align-self: stretch;
+				padding: 0;
+				border: 0;
+				border-right: 1px solid var(--border);
+				background: var(--surface);
+				color: var(--text);
+				font: inherit;
+				font-size: 18px;
+				cursor: pointer;
+			}
+			.mobile-master-toggle[aria-pressed="true"] {
+				background: var(--accent-soft);
+				color: var(--accent);
+			}
+			.console.narrow .rail-switcher {
+				flex: 0 0 auto;
+				padding: 4px 8px;
+				border: 0;
+			}
+			.console.narrow .header-theme-toggle {
+				display: inline-flex;
+				flex: 0 0 40px;
+				align-self: stretch;
+				width: 40px;
 				height: auto;
-				overflow: visible;
+				margin-left: auto;
+				border-top: 0;
+				border-right: 0;
+				border-bottom: 0;
+				border-radius: 0;
+			}
+			.console.narrow .switcher-button {
+				width: 36px;
+				padding: 4px;
+				border: 0;
+				background: transparent;
+			}
+			.console.narrow .rail-nav {
+				display: flex;
+				flex: 1;
+				gap: 2px;
+				align-self: stretch;
+				overflow-x: auto;
+				overflow-y: hidden;
+				padding: 4px;
+			}
+			.console.narrow .nav-item {
+				flex: 0 0 40px;
+				justify-content: center;
+				width: 40px;
+				padding: 0;
+			}
+			.console.narrow .nav-label {
+				display: none;
+			}
+			.console.narrow .master,
+			.console.narrow .detail {
+				grid-column: 1;
+				grid-row: 2;
+				min-height: 0;
+			}
+			.console.narrow .detail {
+				overflow-y: auto;
+			}
+			.console.narrow .master {
+				z-index: 5;
+				border-right: 0;
+				box-shadow: 0 12px 28px rgba(31, 35, 40, 0.18);
+			}
+			.console.narrow.has-detail:not(.mobile-master-open) .master {
+				display: none;
+			}
+			.console.narrow .master .pane-collapse {
+				display: none;
+			}
+			.console.narrow.master-collapsed .master-head,
+			.console.narrow.master-collapsed .master-list {
+				display: block;
+			}
+			.console.narrow .detail-inner {
+				padding: 20px 16px 40px;
 			}
 			.project-chooser-inner {
 				padding: 28px 16px 40px;
+			}
+		}
+		@media (min-width: 901px) and (max-width: 1200px) {
+			.console,
+			.console.wide {
+				grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+				grid-template-rows: 52px minmax(0, 1fr);
+			}
+			.console.medium.rail-collapsed,
+			.console.medium.master-collapsed,
+			.console.medium.rail-collapsed.master-collapsed {
+				grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+			}
+			.console.medium .rail {
+				grid-column: 1 / -1;
+				grid-row: 1;
+				flex-direction: row;
+				align-items: center;
+				border-right: 0;
+				border-bottom: 1px solid var(--border);
+				overflow: hidden;
+			}
+			.console.medium .rail .pane-collapse,
+			.console.medium .rail-foot,
+			.console.medium .nav-group-label,
+			.console.medium .nav-item.static,
+			.console.medium .nav-count,
+			.console.medium .sw-text,
+			.console.medium .switcher-tenant-button {
+				display: none;
+			}
+			.console.medium .rail-switcher {
+				flex: 0 0 auto;
+				padding: 4px 8px;
+				border: 0;
+			}
+			.console.medium .switcher-button {
+				width: 36px;
+				padding: 4px;
+				border: 0;
+				background: transparent;
+			}
+			.console.medium .rail-nav {
+				display: flex;
+				flex: 1;
+				gap: 2px;
+				align-self: stretch;
+				overflow-x: auto;
+				overflow-y: hidden;
+				padding: 4px;
+			}
+			.console.medium .nav-item {
+				flex: 0 0 40px;
+				justify-content: center;
+				width: 40px;
+				padding: 0;
+			}
+			.console.medium .nav-label {
+				display: none;
+			}
+			.console.medium .master {
+				grid-column: 1;
+				grid-row: 2;
+				min-height: 0;
+			}
+			.console.medium .detail {
+				grid-column: 2;
+				grid-row: 2;
+				min-width: 0;
+			}
+			.console.medium.wide .detail {
+				grid-column: 1 / -1;
+			}
+			.console.medium .master .pane-collapse {
+				display: none;
+			}
+			.console.medium.rail-collapsed .rail-switcher,
+			.console.medium.rail-collapsed .rail-nav {
+				display: flex;
+			}
+			.console.medium.master-collapsed .master-head,
+			.console.medium.master-collapsed .master-list {
+				display: block;
 			}
 		}
 		`

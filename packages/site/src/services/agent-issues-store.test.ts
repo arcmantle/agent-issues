@@ -571,84 +571,127 @@ describe("id-driven initiative bundle", () => {
 	});
 });
 
-describe("cascade path model", () => {
-	it("opens a cascade rooted at an id and derives that single column", () => {
-		const initiative = makeEntity({ id: "INIT4", kind: "initiative", status: "active", title: "Lineage column navigation" });
-		const store = new AgentIssuesStore();
-		store.snapshot.set(makeSnapshot({ entities: [initiative], initiatives: [makeBundle(initiative)] }));
-
-		store.openCascade("INIT4");
-
-		expect(store.cascadePath.get()).toEqual(["INIT4"]);
-		expect(store.cascadeColumns.get().map((entity) => entity.id)).toEqual(["INIT4"]);
-	});
-
-	it("derives an ordered column per id in the cascade path", () => {
-		const initiative = makeEntity({ id: "INIT4", kind: "initiative", status: "active", title: "Lineage column navigation" });
-		const issue = makeEntity({ id: "ISS18", kind: "issue", status: "todo", title: "Cascade skeleton" });
-		const store = new AgentIssuesStore();
-		store.snapshot.set(
-			makeSnapshot({
-				entities: [initiative, issue],
-				initiatives: [makeBundle(initiative, { issues: [issue] })]
-			})
-		);
-
-		store.cascadePath.set(["INIT4", "ISS18"]);
-
-		expect(store.cascadeColumns.get().map((entity) => entity.id)).toEqual(["INIT4", "ISS18"]);
-	});
-
-	it("extends the path and truncates anything to the right when drilling a child", () => {
-		const store = new AgentIssuesStore();
-		store.snapshot.set(makeSnapshot());
-
-		store.cascadePath.set(["INIT4", "PRD4", "US18"]);
-		store.drillCascade("INIT4", "ISS18");
-
-		expect(store.cascadePath.get()).toEqual(["INIT4", "ISS18"]);
-	});
-
-	it("appends a child when drilling from the current leaf", () => {
-		const store = new AgentIssuesStore();
-		store.snapshot.set(makeSnapshot());
-
-		store.cascadePath.set(["INIT4", "PRD4"]);
-		store.drillCascade("PRD4", "US18");
-
-		expect(store.cascadePath.get()).toEqual(["INIT4", "PRD4", "US18"]);
-	});
-});
-
-describe("cascade URL round-trip", () => {
+describe("browser detail routes", () => {
 	afterEach(() => {
 		window.location.hash = "";
 	});
 
-	it("encodes the cascade path into the URL when opening and drilling", () => {
+	it("removes legacy cascade state after direct hash navigation", async () => {
 		const store = new AgentIssuesStore();
-		store.snapshot.set(makeSnapshot());
+		store.snapshot.set(makeSnapshot({ entities: [makeEntity({ id: "ISS18" })] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		window.location.hash = "tenant=demo&project=PROJ1&entity=ISS18&cascade=INIT4~ISS18";
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot({ entities: [makeEntity({ id: "ISS18" })] }) }), { status: 200 })
+		);
 
-		store.openCascade("INIT4");
-		store.drillCascade("INIT4", "ISS18");
+		await store.onBrowserNavigation();
 
-		expect(window.location.hash).toContain("cascade=INIT4~ISS18");
+		expect(store.selectedId.get()).toBe("ISS18");
+		expect(store.cascadePath.get()).toEqual([]);
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS18");
+		fetchMock.mockRestore();
 	});
 
-	it("restores the cascade path from the URL on hash change", () => {
+	it("restores initiative and entity panels from browser navigation without changing the route", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Open record" });
 		const store = new AgentIssuesStore();
-		store.snapshot.set(makeSnapshot());
-		window.location.hash = "cascade=INIT4~ISS18";
+		store.snapshot.set(makeSnapshot({ entities: [initiative, issue], initiatives: [makeBundle(initiative, { issues: [issue] })] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&initiative=INIT1");
 
-		store.onHashChange();
+		await store.onPopState();
+		expect(store.selectedInitiativeId.get()).toBe("INIT1");
+		expect(store.selectedId.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&initiative=INIT1");
 
-		expect(store.cascadePath.get()).toEqual(["INIT4", "ISS18"]);
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&entity=ISS1");
+		await store.onPopState();
+
+		expect(store.selectedInitiativeId.get()).toBeNull();
+		expect(store.selectedId.get()).toBe("ISS1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS1");
+
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1");
+		await store.onPopState();
+		expect(store.selectedInitiativeId.get()).toBeNull();
+		expect(store.selectedId.get()).toBeNull();
+		expect(store.activePage.get()).toBe("list");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1");
+	});
+
+	it("restores main menu sections from browser history", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+
+		store.selectSection("adrs");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&section=adrs");
+
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&section=graph");
+		await store.onPopState();
+		expect(store.activeSection.get()).toBe("graph");
+
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1");
+		await store.onPopState();
+		expect(store.activeSection.get()).toBe("initiatives");
 	});
 });
 
 describe("tenant and project route scope", () => {
 	afterEach(() => {
 		window.location.hash = "";
+	});
+
+	it("hydrates the selected project name after opening a project hash link", async () => {
+		const store = new AgentIssuesStore();
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({ availableTenants: [{ displayName: "Demo", id: "demo" }], currentTenant: "demo", dbPath: "/tmp/agent-issues.db" }),
+					{ status: 200 }
+				)
+			)
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						kind: "available",
+						projects: [{ completedInitiativeCount: 0, epicCount: 0, initiativeCount: 0, project: makeEntity({ id: "PROJ1", kind: "project", title: "Console Viewer" }) }]
+					}),
+					{ status: 200 }
+				)
+			)
+			.mockResolvedValueOnce(new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot() }), { status: 200 }));
+
+		await (store as unknown as { bootstrap(): Promise<void> }).bootstrap();
+
+		expect(store.selectedProjectDisplayName.get()).toBe("Console Viewer");
+		fetchMock.mockRestore();
+	});
+
+	it("records the default tenant chooser route during startup", async () => {
+		window.history.replaceState({}, "", "/");
+		const store = new AgentIssuesStore();
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({ availableTenants: [{ displayName: "Demo", id: "demo" }], currentTenant: "demo", dbPath: "/tmp/agent-issues.db" }),
+					{ status: 200 }
+				)
+			)
+			.mockResolvedValueOnce(new Response(JSON.stringify({ kind: "available", projects: [] }), { status: 200 }));
+
+		store.connect();
+		await vi.waitFor(() => expect(window.location.hash).toBe("#tenant=demo"));
+
+		store.disconnect();
+		fetchMock.mockRestore();
 	});
 
 	it("opens tenant-only hash links in project chooser scope", () => {
@@ -756,7 +799,7 @@ describe("tenant and project route scope", () => {
 		fetchMock.mockRestore();
 	});
 
-	it("reloads a project hash navigation after discarding prior detail scope", async () => {
+	it("reloads a project hash navigation and restores its selected entity", async () => {
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("demo");
 		store.selectedProjectId.set("PROJ1");
@@ -764,18 +807,19 @@ describe("tenant and project route scope", () => {
 		store.selectedInitiativeId.set("INIT1");
 		store.cascadePath.set(["INIT1", "ISS1"]);
 		window.location.hash = "tenant=demo&project=PROJ2&entity=ISS2";
+		const issue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Restored issue" });
 		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot() }), { status: 200 })
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot({ entities: [issue] }) }), { status: 200 })
 		);
 
 		await store.onBrowserNavigation();
 
 		expect(store.selectedTenant.get()).toBe("demo");
 		expect(store.selectedProjectId.get()).toBe("PROJ2");
-		expect(store.selectedId.get()).toBeNull();
+		expect(store.selectedId.get()).toBe("ISS2");
 		expect(store.selectedInitiativeId.get()).toBeNull();
 		expect(store.cascadePath.get()).toEqual([]);
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2&entity=ISS2");
 		fetchMock.mockRestore();
 	});
 
@@ -1093,29 +1137,6 @@ describe("cascade branch selector", () => {
 		expect(store.cascadeSeamFor("PRD4", "US18").branch).toBeNull();
 	});
 
-	it("re-derives ancestor columns toward the root from the newly chosen branch and updates the URL", () => {
-		const store = makeBranchingStore();
-		store.cascadePath.set(["INIT4", "PRD4", "US18", "ISS18"]);
-
-		store.selectCascadeBranch("ISS18", "US40");
-
-		expect(store.cascadePath.get()).toEqual(["INIT2", "PRD2", "US40", "ISS18"]);
-		expect(window.location.hash).toBe("#cascade=INIT2~PRD2~US40~ISS18");
-	});
-
-	it("round-trips the chosen branch through the URL hash", () => {
-		const store = makeBranchingStore();
-		store.cascadePath.set(["INIT4", "PRD4", "US18", "ISS18"]);
-
-		store.selectCascadeBranch("ISS18", "US40");
-		const hash = window.location.hash;
-		store.cascadePath.set([]);
-		window.location.hash = hash;
-		store.onHashChange();
-
-		expect(store.cascadePath.get()).toEqual(["INIT2", "PRD2", "US40", "ISS18"]);
-		expect(store.cascadeSeamFor("US40", "ISS18").branch?.selectedIndex).toBe(1);
-	});
 });
 
 describe("re-root trail", () => {
@@ -1205,13 +1226,6 @@ describe("collapse toggles and auto-collapse", () => {
 		expect(store.masterCollapsed.get()).toBe(false);
 	});
 
-	it("auto-collapses the master list once the cascade is two or more columns deep", () => {
-		const store = new AgentIssuesStore();
-		store.cascadePath.set(["INIT4", "PRD4"]);
-
-		expect(store.masterCollapsed.get()).toBe(true);
-	});
-
 	it("toggles the rail collapse state independently of the master list", () => {
 		const store = new AgentIssuesStore();
 
@@ -1220,29 +1234,6 @@ describe("collapse toggles and auto-collapse", () => {
 
 		expect(store.railCollapsed.get()).toBe(true);
 		expect(store.masterCollapsed.get()).toBe(false);
-	});
-
-	it("lets a manual expand override the auto-collapse while the cascade stays deep", () => {
-		const store = new AgentIssuesStore();
-		store.cascadePath.set(["INIT4", "PRD4"]);
-
-		store.toggleMaster();
-
-		expect(store.masterCollapsed.get()).toBe(false);
-	});
-
-	it("clears the manual expand override once the cascade drops below two columns deep", () => {
-		const store = new AgentIssuesStore();
-		store.cascadePath.set(["INIT4", "PRD4"]);
-		store.toggleMaster();
-
-		store.openCascade("INIT4");
-
-		expect(store.masterCollapsed.get()).toBe(false);
-
-		store.drillCascade("INIT4", "PRD4");
-
-		expect(store.masterCollapsed.get()).toBe(true);
 	});
 
 	it("lets a manual collapse while shallow persist", () => {

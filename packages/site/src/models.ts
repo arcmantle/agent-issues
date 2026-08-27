@@ -206,11 +206,17 @@ export type RootTab = "initiatives" | "adrs";
 
 export type ContextPageTab = "all" | "global" | "initiatives";
 
-export type ConsoleSection = "initiatives" | "adrs" | "debt" | "graph" | "context";
+export const CONSOLE_SECTIONS = ["initiatives", "adrs", "debt", "graph", "context"] as const;
+
+export type ConsoleSection = (typeof CONSOLE_SECTIONS)[number];
+
+export function isConsoleSection(value: string | null): value is ConsoleSection {
+	return typeof value === "string" && (CONSOLE_SECTIONS as readonly string[]).includes(value);
+}
 
 export type DebtFilter = "lifecycle" | "category" | "priority";
 
-export type InitiativeTab = "overview" | "graph" | "context";
+export type InitiativeTab = "overview" | "issues" | "prds" | "adrs" | "context" | "userStories" | "debt" | "graph";
 
 export type GraphStatus = "idle" | "loading" | "ready" | "error";
 

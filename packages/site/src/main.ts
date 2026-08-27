@@ -1,3 +1,4 @@
+import "./styles/theme.css";
 import "./agent-issues-app.js";
 
 const root = document.querySelector("#app");

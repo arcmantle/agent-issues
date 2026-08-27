@@ -4,15 +4,15 @@ import { repeat } from "lit/directives/repeat.js";
 import { PROJECT_GRAPH_KINDS, type ProjectGraphKind } from "../models.js";
 
 const GRAPH_KIND_DETAILS: Record<ProjectGraphKind, { color: string; label: string }> = {
-	adr: { color: "#8250df", label: "ADR" },
-	debt: { color: "#bf3989", label: "Debt" },
-	epic: { color: "#9a6700", label: "Epic" },
-	initiative: { color: "#0969da", label: "Initiative" },
-	issue: { color: "#0a7ea4", label: "Issue" },
-	plan: { color: "#8250df", label: "Plan" },
-	prd: { color: "#1f883d", label: "PRD" },
-	project: { color: "#24292f", label: "Project" },
-	story: { color: "#bf8700", label: "User story" }
+	adr: { color: "var(--graph-adr)", label: "ADR" },
+	debt: { color: "var(--graph-debt)", label: "Debt" },
+	epic: { color: "var(--graph-epic)", label: "Epic" },
+	initiative: { color: "var(--graph-initiative)", label: "Initiative" },
+	issue: { color: "var(--graph-issue)", label: "Issue" },
+	plan: { color: "var(--graph-adr)", label: "Plan" },
+	prd: { color: "var(--success)", label: "PRD" },
+	project: { color: "var(--graph-project)", label: "Project" },
+	story: { color: "var(--graph-story)", label: "User story" }
 };
 
 class RelationshipGraphFilters extends LitElement {
@@ -65,7 +65,7 @@ class RelationshipGraphFilters extends LitElement {
 					>
 						<span
 							class="sw"
-							style=${`background:${detail.color}`}
+							style=${`background-color:${detail.color}`}
 						></span>
 						${detail.label}
 					</button>

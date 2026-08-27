@@ -58,9 +58,9 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 			padding: 0;
 			border-top: 1px solid var(--border-muted);
 			background:
-				radial-gradient(circle at 1px 1px, rgba(31, 35, 40, 0.08) 1px, transparent 0),
-				radial-gradient(circle at top, rgba(9, 105, 218, 0.08), transparent 58%),
-				linear-gradient(180deg, #ffffff 0%, #f6f8fa 100%);
+				radial-gradient(circle at 1px 1px, var(--graph-canvas-grid) 1px, transparent 0),
+				radial-gradient(circle at top, var(--graph-canvas-glow), transparent 58%),
+				linear-gradient(180deg, var(--surface) 0%, var(--surface-muted) 100%);
 			background-size: 28px 28px, auto, auto;
 			overflow: hidden;
 		}
@@ -87,7 +87,7 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 			display: grid;
 			place-items: center;
 			padding: 24px;
-			background: rgba(246, 248, 250, 0.85);
+			background: var(--graph-overlay);
 			color: var(--muted);
 			font-size: 0.9375rem;
 			text-align: center;
@@ -120,6 +120,17 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 	public graphSignature = "";
 	public graphStatus: GraphStatus = "idle";
 	public graphErrorMessage: string | null = null;
+	public themeObserver: MutationObserver | null = null;
+
+	connectedCallback(): void {
+		super.connectedCallback();
+		this.themeObserver = new MutationObserver(() => {
+			if (this.graph) {
+				this.scheduleGraphSync();
+			}
+		});
+		this.themeObserver.observe(document.documentElement, { attributeFilter: ["data-theme"], attributes: true });
+	}
 
 	updated(): void {
 		super.updated(new Map());
@@ -204,8 +215,14 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 	}
 
 	disconnectedCallback(): void {
+		this.themeObserver?.disconnect();
+		this.themeObserver = null;
 		this.destroyGraph();
 		super.disconnectedCallback();
+	}
+
+	protected graphToken(token: string) {
+		return getComputedStyle(this).getPropertyValue(token).trim();
 	}
 
 	protected scheduleGraphSync() {
@@ -270,11 +287,11 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 						width: 176,
 						height: 72,
 						padding: "10px",
-						"background-color": "#ffffff",
-						"border-color": "#d0d7de",
+						"background-color": this.graphToken("--surface"),
+						"border-color": this.graphToken("--border"),
 						"border-width": 1.2,
 						label: "data(label)",
-						color: "#1f2328",
+						color: this.graphToken("--text"),
 						"font-size": 12,
 						"font-weight": 600,
 						"text-wrap": "wrap",
@@ -290,17 +307,17 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 					style: {
 						width: 188,
 						height: 80,
-						"background-color": "#ddf4ff",
-						"border-color": "#0969da",
+						"background-color": this.graphToken("--accent-soft"),
+						"border-color": this.graphToken("--accent"),
 						"border-width": 2.3,
-						color: "#1f2328"
+						color: this.graphToken("--text")
 					}
 				},
 				{
 					selector: "node.warn",
 					style: {
-						"border-color": "#9a6700",
-						"background-color": "#fff8c5"
+						"border-color": this.graphToken("--warn"),
+						"background-color": this.graphToken("--warn-bg")
 					}
 				},
 				{
@@ -315,14 +332,14 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 					style: {
 						width: 1.4,
 						"curve-style": "bezier",
-						"line-color": "rgba(89, 99, 110, 0.45)",
-						"target-arrow-color": "rgba(89, 99, 110, 0.45)",
+						"line-color": this.graphToken("--graph-edge-muted"),
+						"target-arrow-color": this.graphToken("--graph-edge-muted"),
 						"target-arrow-shape": "triangle",
 						"arrow-scale": 0.8,
 						label: "data(label)",
-						color: "#59636e",
+						color: this.graphToken("--muted"),
 						"font-size": 10,
-						"text-background-color": "rgba(255, 255, 255, 0.92)",
+						"text-background-color": this.graphToken("--graph-edge-label-bg"),
 						"text-background-opacity": 1,
 						"text-background-padding": "2px",
 						"text-rotation": "autorotate",
@@ -333,10 +350,10 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 				{
 					selector: "edge.direct",
 					style: {
-						"line-color": "rgba(9, 105, 218, 0.85)",
-						"target-arrow-color": "rgba(9, 105, 218, 0.85)",
+						"line-color": this.graphToken("--graph-edge-direct"),
+						"target-arrow-color": this.graphToken("--graph-edge-direct"),
 						width: 2.1,
-						color: "#1f2328"
+						color: this.graphToken("--text")
 					}
 				},
 				{

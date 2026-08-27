@@ -79,6 +79,41 @@ async function mountView(store: AgentIssuesStore) {
 	return view;
 }
 
+function recordItems(view: HTMLElement): HTMLElement[] {
+	return [...(view.shadowRoot?.querySelectorAll<HTMLElement>(".record-tab-list agent-issues-record-list-item") ?? [])];
+}
+
+function tabLabels(view: HTMLElement) {
+	return [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".subtab") ?? [])]
+		.map((button) => button.querySelector(".subtab-label")?.textContent?.trim());
+}
+
+function tabRecordCounts(view: HTMLElement) {
+	return Object.fromEntries(
+		[...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".subtab") ?? [])]
+			.flatMap((button) => {
+				const count = button.querySelector(".subtab-count")?.textContent?.trim();
+				return count ? [[button.dataset.tab, count]] : [];
+			})
+	);
+}
+
+function updateRecordFilter(view: HTMLElement, detail: { query?: string; status?: string }) {
+	const toolbar = view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar");
+	if (detail.query !== undefined) {
+		toolbar?.dispatchEvent(new CustomEvent("record-query-change", { detail: { query: detail.query } }));
+	}
+	if (detail.status !== undefined) {
+		toolbar?.dispatchEvent(new CustomEvent("record-status-change", { detail: { status: detail.status } }));
+	}
+}
+
+function updateRecordView(view: HTMLElement, tab: "issues" | "userStories", viewMode: "list" | "tree") {
+	view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.dispatchEvent(
+		new CustomEvent("record-view-change", { detail: { tab, view: viewMode } })
+	);
+}
+
 afterEach(() => {
 	document.body.replaceChildren();
 	window.location.hash = "";
@@ -150,53 +185,25 @@ describe("initiative detail overview tab", () => {
 		expect(view.shadowRoot?.querySelector('.sec-toggle[data-section-id="overview-body"]')).toBeNull();
 	});
 
-	it("renders sub-issues nested beneath their parent issue in the story overview", async () => {
+	it("keeps the overview free of record sections that have dedicated tabs", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
-		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
-		const subIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Sub-issue" });
-		const bundle = makeBundle(initiative, {
-			fixLinks: [{ issue: subIssue, userStory: story }],
-			issues: [parentIssue, subIssue],
-			subIssueLinks: [{ issue: subIssue, parent: parentIssue }],
-			userStories: [story]
-		});
-		const store = makeStore(bundle);
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render nodes" });
+		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Graph PRD" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "SVG graph layout" });
+		const store = makeStore(makeBundle(initiative, { adrs: [adr], issues: [issue], prds: [prd], userStories: [story] }));
 
 		const view = await mountView(store);
+		const overviewText = view.shadowRoot?.querySelector('[role="tabpanel"]')?.textContent ?? "";
+
+		expect(overviewText).not.toContain("User stories & issues");
+		expect(overviewText).not.toContain("Unassigned issues");
+		expect(overviewText).not.toContain("Graph PRD");
+		expect(overviewText).not.toContain("SVG graph layout");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="prds"]')?.click();
 		await view.updateComplete;
-
-		const issueButtons = [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".issue-tree .child") ?? [])];
-		expect(issueButtons.map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2"]);
-		expect(view.shadowRoot?.querySelector(".issue-branch-children .child")?.getAttribute("data-id")).toBe("ISS2");
-	});
-
-	it("renders unassigned issues that are not linked to a user story", async () => {
-		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
-		const directIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Direct initiative issue" });
-		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Direct issue child" });
-		const storyIssue = makeEntity({ id: "ISS3", kind: "issue", status: "todo", title: "Story issue" });
-		const directLeafIssue = makeEntity({ id: "ISS4", kind: "issue", status: "todo", title: "Direct leaf issue" });
-		const bundle = makeBundle(initiative, {
-			fixLinks: [{ issue: storyIssue, userStory: story }],
-			issues: [directIssue, childIssue, storyIssue, directLeafIssue],
-			subIssueLinks: [{ issue: childIssue, parent: directIssue }],
-			userStories: [story]
-		});
-		const store = makeStore(bundle);
-
-		const view = await mountView(store);
-		await view.updateComplete;
-
-		const directIssueButtons = [...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".direct-issues .child") ?? [])];
-		expect(directIssueButtons.map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2", "ISS4"]);
-		expect(view.shadowRoot?.textContent).toContain("Unassigned issues");
-		expect(view.shadowRoot?.querySelector<HTMLButtonElement>(".direct-issues .branch-toggle")?.getAttribute("aria-label")).toBe(
-			"Collapse sub-issues for Direct initiative issue"
-		);
-		const directLeafRow = view.shadowRoot?.querySelector('.direct-issues .child[data-id="ISS4"]')?.closest(".issue-branch-row");
-		expect(directLeafRow?.querySelector(".branch-spacer")).toBeNull();
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('.record-tab-list .line[data-id="PRD1"]')).not.toBeNull();
 	});
 
 	it("renders owned and resolved debt in distinct initiative sections", async () => {
@@ -220,100 +227,170 @@ describe("initiative detail overview tab", () => {
 
 		const sectionTitles = [...(view.shadowRoot?.querySelectorAll(".sec-title") ?? [])].map((title) => title.textContent?.trim());
 		expect(sectionTitles).toEqual(expect.arrayContaining(["Owned debt", "Resolves debt"]));
-		expect(view.shadowRoot?.querySelector('.line[data-id="DEBT1"]')?.textContent).toContain("Replace legacy storage");
-		expect(view.shadowRoot?.querySelector('.line[data-id="DEBT2"]')?.textContent).toContain("Document incident response");
+		expect(view.shadowRoot?.querySelector<HTMLElement>('.line[data-id="DEBT1"]')?.shadowRoot?.textContent).toContain("Replace legacy storage");
+		expect(view.shadowRoot?.querySelector<HTMLElement>('.line[data-id="DEBT2"]')?.shadowRoot?.textContent).toContain("Document incident response");
 	});
 
-	it("shows child issues when the parent issue itself fixes the story", async () => {
+});
+
+describe("initiative detail record tabs", () => {
+	it("ranks direct non-body field matches ahead of body matches", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
-		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
-		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Child issue" });
+		const bodyMatch = makeEntity({ body: "This issue includes the priority phrase in its body.", id: "ISS1", kind: "issue", status: "todo", title: "Body match" });
+		const fieldMatch = makeEntity({ category: "priority phrase", id: "ISS2", kind: "issue", status: "todo", title: "Field match" });
+		const store = makeStore(makeBundle(initiative, { issues: [bodyMatch, fieldMatch] }));
+		const view = await mountView(store);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateRecordFilter(view, { query: "priority phrase" });
+		await view.updateComplete;
+
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2", "ISS1"]);
+	});
+
+	it("filters every entity field and directly linked record fields", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const story = makeEntity({ body: "A companion phrase exists only on this related story.", id: "US1", kind: "userStory", status: "draft", title: "Filter related records" });
+		const parentIssue = makeEntity({ body: "Parent metadata", id: "ISS_FULL_REFERENCE_123", kind: "issue", status: "todo", title: "Parent issue" });
+		const childIssue = makeEntity({ body: "Child issue body field", id: "ISS2", kind: "issue", status: "todo", title: "Child issue" });
 		const bundle = makeBundle(initiative, {
-			fixLinks: [{ issue: parentIssue, userStory: story }],
+			fixLinks: [{ issue: childIssue, userStory: story }],
 			issues: [parentIssue, childIssue],
 			subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
 			userStories: [story]
 		});
 		const store = makeStore(bundle);
-
 		const view = await mountView(store);
-		await view.updateComplete;
 
-		expect([...(view.shadowRoot?.querySelectorAll<HTMLButtonElement>(".issue-tree .child") ?? [])].map((button) => button.dataset.id)).toEqual(["ISS1", "ISS2"]);
-		expect(view.shadowRoot?.querySelector('.issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateRecordFilter(view, { query: "iss_full_reference_123" });
+		await view.updateComplete;
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS_FULL_REFERENCE_123", "ISS2"]);
+
+		updateRecordFilter(view, { query: "companion phrase" });
+		await view.updateComplete;
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2"]);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="userStories"]')?.click();
+		await view.updateComplete;
+		updateRecordFilter(view, { query: "child issue body field" });
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-tab-list agent-issues-record-list-item[data-id="US1"]')).not.toBeNull();
 	});
 
-	it("collapses and expands nested sub-issues in the story overview", async () => {
+	it("switches issues and user stories between list and tree views", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
-		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "blocked", title: "Parent issue" });
-		const subIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Sub-issue" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Show issue hierarchy" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Parent issue" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Child issue" });
 		const bundle = makeBundle(initiative, {
-			fixLinks: [{ issue: subIssue, userStory: story }],
-			issues: [parentIssue, subIssue],
-			subIssueLinks: [{ issue: subIssue, parent: parentIssue }],
+			fixLinks: [{ issue: childIssue, userStory: story }],
+			issues: [parentIssue, childIssue],
+			subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
 			userStories: [story]
 		});
 		const store = makeStore(bundle);
-
 		const view = await mountView(store);
-		await view.updateComplete;
 
-		const toggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.branch-toggle[data-id="ISS1"]');
-		toggle?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
-		expect(view.shadowRoot?.querySelector('.issue-branch-children .child[data-id="ISS2"]')).toBeNull();
+		expect(view.shadowRoot?.querySelector(".record-tree")).toBeNull();
+		updateRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-tree.issue-tree .issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector(".record-tree.issue-tree")).not.toBeNull();
 
-		toggle?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="userStories"]')?.click();
 		await view.updateComplete;
-		expect(view.shadowRoot?.querySelector('.issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
+		updateRecordView(view, "userStories", "tree");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.story-tree-block agent-issues-record-list-item[data-id="US1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector('.story-tree-block .issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
 	});
 
-	it("collapses large overview sections independently", async () => {
+	it("shows each related record type in a filterable tab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
-		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Explore the graph" });
-		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render nodes" });
-		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Graph PRD" });
-		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "SVG graph layout" });
+		const todoIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Build filtered list" });
+		const doneIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Ship the component" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "accepted", title: "Use entity tabs" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Filter initiative records" });
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", status: "open", title: "Unify record filters" });
 		const bundle = makeBundle(initiative, {
-			fixLinks: [{ issue, userStory: story }],
-			issues: [issue],
-			prds: [prd],
 			adrs: [adr],
+			issues: [todoIssue, doneIssue],
 			userStories: [story]
 		});
-		const store = makeStore(bundle);
-
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.snapshot.set(
+			makeSnapshot({
+				entities: [initiative, todoIssue, doneIssue, adr, story, debt],
+				initiatives: [bundle],
+				relations: [{ createdAt: "2026-01-01T00:00:00.000Z", fromId: initiative.id, toId: debt.id, type: "records" }]
+			})
+		);
+		store.selectInitiative(initiative.id);
 		const view = await mountView(store);
-		await view.updateComplete;
 
-		const prdToggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.sec-toggle[data-section-id="prds"]');
-		const storyToggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.sec-toggle[data-section-id="stories"]');
-		const adrToggle = view.shadowRoot?.querySelector<HTMLButtonElement>('.sec-toggle[data-section-id="adrs"]');
+		expect(tabLabels(view)).toEqual(["Overview", "Issues", "ADRs", "Graph", "User stories", "Debt"]);
+		expect(tabRecordCounts(view)).toEqual({ adrs: "1", debt: "1", graph: "6", issues: "2", userStories: "1" });
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 2 records");
+		expect(view.shadowRoot?.querySelector('[data-tab="issues"] .subtab-count')?.getAttribute("aria-hidden")).toBe("true");
 
-		prdToggle?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
-		expect(prdToggle?.getAttribute("aria-expanded")).toBe("false");
-		expect(view.shadowRoot?.querySelector('.line[data-id="PRD1"]')).toBeNull();
-		expect(view.shadowRoot?.querySelector('.story-head[data-id="US1"]')).not.toBeNull();
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS1", "ISS2"]);
 
-		storyToggle?.click();
+		updateRecordFilter(view, { query: "ship" });
 		await view.updateComplete;
-		expect(storyToggle?.getAttribute("aria-expanded")).toBe("false");
-		expect(view.shadowRoot?.querySelector('.story-head[data-id="US1"]')).toBeNull();
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2"]);
 
-		adrToggle?.click();
+		updateRecordFilter(view, { status: "done" });
 		await view.updateComplete;
-		expect(adrToggle?.getAttribute("aria-expanded")).toBe("false");
-		expect(view.shadowRoot?.querySelector('.line[data-id="ADR1"]')).toBeNull();
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2"]);
 
-		prdToggle?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="debt"]')?.click();
 		await view.updateComplete;
-		expect(prdToggle?.getAttribute("aria-expanded")).toBe("true");
-		expect(view.shadowRoot?.querySelector('.line[data-id="PRD1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector('.record-tab-list agent-issues-record-list-item[data-id="DEBT1"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.query).toBe("");
+		expect(view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.status).toBe("all");
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="debt"]')?.getAttribute("aria-selected")).toBe("true");
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe("initiative-tab-debt");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateRecordFilter(view, { query: "missing" });
+		await view.updateComplete;
+		expect(view.shadowRoot?.textContent).toContain("No issues match this filter.");
 	});
 });
+
+	it("hides initiative tabs that have no useful data", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Standalone initiative" });
+		const store = makeStore(makeBundle(initiative));
+		const view = await mountView(store);
+
+		expect(tabLabels(view)).toEqual(["Overview"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe("initiative-tab-overview");
+	});
+
+	it("falls back to Overview when the selected tab loses its data", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Changing initiative" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Temporary issue" });
+		const store = makeStore(makeBundle(initiative, { issues: [issue] }));
+		store.setInitTab("issues");
+		const view = await mountView(store);
+
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-selected")).toBe("true");
+		store.snapshot.set(makeSnapshot({ initiatives: [makeBundle(initiative)] }));
+		await view.updateComplete;
+
+		expect([...view.shadowRoot?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []].map((tab) => tab.textContent?.trim())).toEqual(["Overview"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe("initiative-tab-overview");
+	});
+
 describe("initiative detail graph tab", () => {
 	it("renders the relationship graph with a node per record on the graph subtab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
@@ -368,6 +445,13 @@ describe("initiative detail graph tab", () => {
 		const graph = view.shadowRoot?.querySelector("agent-issues-relationship-graph");
 		expect(graph?.shadowRoot?.querySelector('.ai-node[data-id="ISS1"]')).toBeNull();
 		expect([...graph?.shadowRoot?.querySelectorAll<SVGTextElement>(".ai-colhead") ?? []].map((node) => node.textContent?.trim())).not.toContain("Issues");
+
+		for (const chip of filters?.shadowRoot?.querySelectorAll<HTMLButtonElement>('.graph-kind-chip[aria-pressed="true"]') ?? []) {
+			chip.click();
+		}
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="graph"]')?.getAttribute("aria-selected")).toBe("true");
+		expect(view.shadowRoot?.textContent).toContain("No graph records match the selected filters.");
 	});
 
 	it("renders sub-issues in their own graph column", async () => {
@@ -444,9 +528,7 @@ describe("initiative detail context tab", () => {
 		const view = await mountView(store);
 		await view.updateComplete;
 
-		const contextView = view.shadowRoot?.querySelector("agent-issues-context-view");
-		expect(contextView).not.toBeNull();
-		const text = contextView?.shadowRoot?.textContent ?? "";
+		const text = view.shadowRoot?.querySelector(".record-tab")?.textContent ?? "";
 		expect(text).toContain("How the console viewer is structured.");
 		expect(text).toContain("Console");
 		expect(text).toContain("The three-pane browser.");

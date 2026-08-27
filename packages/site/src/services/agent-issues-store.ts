@@ -1,5 +1,5 @@
 import { computed, signal } from "@lit-labs/signals";
-import { PROJECT_GRAPH_KINDS, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type PlanEntry, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
+import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type PlanEntry, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
@@ -63,9 +63,9 @@ type ProjectSnapshot = {
 type ViewerRoute = {
 	tenantId: string | null;
 	projectId: string | null;
+	section: ConsoleSection;
 	entityId: string | null;
 	initiativeId: string | null;
-	cascadePath: string[];
 };
 
 function filterGraphByKind(graph: RelationshipGraph, visibleKinds: ReadonlySet<ProjectGraphKind>): RelationshipGraph {
@@ -184,7 +184,7 @@ export class AgentIssuesStore {
 			return override;
 		}
 
-		return this.cascadePath.get().length >= 2;
+		return false;
 	});
 
 	public readonly cascadeColumnWidth = 480;
@@ -709,15 +709,7 @@ export class AgentIssuesStore {
 	}
 
 	public onHashChange = () => {
-		const route = this.normalizeRoute(this.readRoute());
-		this.selectedTenant.set(route.tenantId);
-		this.selectedProjectId.set(route.projectId);
-		this.cascadePath.set(route.cascadePath);
-		this.clearMasterOverrideIfShallow();
-		this.selectedId.set(route.entityId);
-		this.selectedInitiativeId.set(route.initiativeId);
-		this.activePage.set(route.entityId ? "entity" : route.initiativeId ? "initiative" : "list");
-		this.activeView.set("overview");
+		const route = this.applyRoute(this.readRoute());
 		this.writeRoute(route, true);
 	};
 
@@ -728,12 +720,15 @@ export class AgentIssuesStore {
 			return;
 		}
 
-		this.onHashChange();
-		this.popReRoot();
+		this.applyRoute(route);
 	};
 
 	public onBrowserNavigation = async () => {
 		await this.navigateToRoute(this.readRoute());
+		const params = new URLSearchParams(new URL(window.location.href).hash.slice(1));
+		if (params.has("cascade")) {
+			this.writeRoute(this.currentRoute(), true);
+		}
 	};
 
 	public setSearchFromEvent = (event: Event) => {
@@ -819,6 +814,11 @@ export class AgentIssuesStore {
 	};
 
 	public selectEntity(entityId: string) {
+		if (this.entityForId(entityId)?.kind === "initiative") {
+			this.selectInitiative(entityId);
+			return;
+		}
+
 		this.cascadePath.set([]);
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(entityId);
@@ -963,7 +963,9 @@ export class AgentIssuesStore {
 		this.activeSection.set("initiatives");
 		this.activeView.set("overview");
 		this.initTab.set("overview");
-		this.openCascade(initiativeId);
+		this.cascadePath.set([]);
+		this.clearMasterOverrideIfShallow();
+		this.writeRoute(this.currentRoute());
 	}
 
 	public clearSelection() {
@@ -1756,7 +1758,11 @@ export class AgentIssuesStore {
 			const config = await this.fetchJson<SiteConfig>("site-config.json");
 			this.config.set(config);
 			const route = this.readRoute();
-			await this.navigateToRoute({ ...route, tenantId: route.tenantId ?? config.currentTenant });
+			const initialRoute = { ...route, tenantId: route.tenantId ?? config.currentTenant };
+			this.selectedTenant.set(initialRoute.tenantId);
+			await this.reloadProjectDiscovery();
+			await this.navigateToRoute(initialRoute);
+			this.writeRoute(this.currentRoute(), true);
 		} catch (error) {
 			this.errorMessage.set(error instanceof Error ? error.message : String(error));
 			this.syncLabel.set("load failed");
@@ -1796,12 +1802,11 @@ export class AgentIssuesStore {
 		if (scopeChanged) {
 			this.resetScopeDetail();
 		}
-		this.writeRoute(this.currentRoute(), true);
-
 		if (!route.projectId) {
 			this.snapshot.set(null);
 			this.syncLabel.set("choose a project");
 			await this.reloadProjectDiscovery();
+			this.applyRoute(route);
 			return;
 		}
 
@@ -1810,6 +1815,7 @@ export class AgentIssuesStore {
 		try {
 			await this.reloadSnapshot();
 			this.connectEvents();
+			this.applyRoute(route);
 		} catch (error) {
 			this.selectedProjectId.set(null);
 			this.snapshot.set(null);
@@ -1951,9 +1957,9 @@ export class AgentIssuesStore {
 		return {
 			tenantId: this.selectedTenant.get(),
 			projectId: this.selectedProjectId.get(),
+			section: this.activeSection.get(),
 			entityId: this.selectedId.get(),
-			initiativeId: this.selectedInitiativeId.get(),
-			cascadePath: this.cascadePath.get()
+			initiativeId: this.selectedInitiativeId.get()
 		};
 	}
 
@@ -1963,14 +1969,13 @@ export class AgentIssuesStore {
 		const legacyParams = url.searchParams;
 		const tenantId = params.get("tenant") ?? legacyParams.get("tenant");
 		const projectId = params.get("project") ?? legacyParams.get("project");
-		const cascade = params.get("cascade");
-
+		const section = params.get("section");
 		return {
 			tenantId,
 			projectId,
+			section: isConsoleSection(section) ? section : "initiatives",
 			entityId: params.get("entity"),
-			initiativeId: params.get("initiative"),
-			cascadePath: cascade ? cascade.split("~").filter(Boolean) : []
+			initiativeId: params.get("initiative")
 		};
 	}
 
@@ -1982,14 +1987,26 @@ export class AgentIssuesStore {
 
 		const validEntityId = route.entityId && entityById.has(route.entityId) ? route.entityId : null;
 		const validInitiativeId = route.initiativeId && this.bundleForInitiativeId(route.initiativeId) ? route.initiativeId : null;
-		const validCascadePath = route.cascadePath.every((entityId) => entityById.has(entityId)) ? route.cascadePath : [];
-
 		return {
 			...route,
 			entityId: validEntityId,
-			initiativeId: validInitiativeId,
-			cascadePath: validCascadePath
+			initiativeId: validInitiativeId
 		};
+	}
+
+	protected applyRoute(route: ViewerRoute): ViewerRoute {
+		const normalizedRoute = this.normalizeRoute(route);
+		this.selectedTenant.set(normalizedRoute.tenantId);
+		this.selectedProjectId.set(normalizedRoute.projectId);
+		this.activeSection.set(normalizedRoute.section);
+		this.selectedId.set(normalizedRoute.entityId);
+		this.selectedInitiativeId.set(normalizedRoute.initiativeId);
+		this.cascadePath.set([]);
+		this.reRootTrail.set([]);
+		this.clearMasterOverrideIfShallow();
+		this.activePage.set(normalizedRoute.entityId ? "entity" : normalizedRoute.initiativeId ? "initiative" : "list");
+		this.activeView.set("overview");
+		return normalizedRoute;
 	}
 
 	protected writeRoute(route: ViewerRoute, replace = false) {
@@ -2002,12 +2019,9 @@ export class AgentIssuesStore {
 		};
 		add("tenant", route.tenantId);
 		add("project", route.projectId);
+		add("section", route.section === "initiatives" ? null : route.section);
 		add("entity", route.entityId);
 		add("initiative", route.initiativeId);
-		if (route.cascadePath.length > 0) {
-			entries.push(`cascade=${route.cascadePath.map((entityId) => encodeURIComponent(entityId)).join("~")}`);
-		}
-
 		nextUrl.searchParams.delete("tenant");
 		nextUrl.searchParams.delete("project");
 		nextUrl.hash = entries.join("&");
