@@ -1,0 +1,54 @@
+name: Pnpm Publish
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies.
+        run: pnpm install
+
+      - name: Build project.
+        run: pnpm build
+
+      - name: Calculate version with Prospector
+        id: version
+        uses: arcmantle/prospector@main
+        with:
+          dir: '.'
+
+      - name: Set package version
+        run: |
+          cd packages/cli
+          echo "✅ Setting package version to ${{ steps.version.outputs.version }}"
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          echo "📦 Package $PACKAGE_NAME ready to publish at version ${{ steps.version.outputs.version }}"
+
+      - name: Publish to NPM
+        run: |
+          cd packages/cli
+          pnpm publish --access ${{ inputs.access }} --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}
+          NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
