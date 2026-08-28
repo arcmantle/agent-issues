@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { readBuildContentHash, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/api-local";
+import type { SearchRequest, SearchSourceType } from "@agent-issues/core";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
@@ -274,6 +275,41 @@ async function handleRequest(input: {
 		return;
 	}
 
+	if (requestUrl.pathname === "/api/search/capability") {
+		writeJson(
+			input.response,
+			await readSearchCapability(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions
+			)
+		);
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/search") {
+		const searchRequest = parseSearchRequest(requestUrl);
+		if (!searchRequest) {
+			writeText(input.response, 400, "Invalid search request.");
+			return;
+		}
+
+		writeJson(
+			input.response,
+			await readSearch(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions,
+				searchRequest
+			)
+		);
+		return;
+	}
+
 	if (requestUrl.pathname === "/events") {
 		input.response.writeHead(200, {
 			"Content-Type": "text/event-stream; charset=utf-8",
@@ -377,6 +413,103 @@ async function readProjectDiscovery(
 		{ credentialStoreOptions, currentWorkingDirectory, tenant },
 		(store) => store.getProjectDiscovery(projectId ? { projectId } : undefined)
 	);
+}
+
+async function readSearchCapability(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined
+) {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { state: "unsupported" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, tenant },
+		(store) => store.getSearchCapability()
+	);
+}
+
+async function readSearch(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	searchRequest: SearchRequest
+) {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { state: "unsupported" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, tenant },
+		(store) => store.search(searchRequest)
+	);
+}
+
+function parseSearchRequest(requestUrl: URL): SearchRequest | null {
+	const query = requestUrl.searchParams.get("query")?.trim();
+	const scope = requestUrl.searchParams.get("scope");
+	const projectId = requestUrl.searchParams.get("project")?.trim();
+	const sourceTypes = parseSearchSourceTypes(requestUrl.searchParams.get("sourceTypes"));
+	const limit = parseSearchLimit(requestUrl.searchParams.get("limit"));
+	if (!query || !scope || sourceTypes === null || limit === null) {
+		return null;
+	}
+
+	const filters = sourceTypes.length > 0 ? { sourceTypes } : undefined;
+	if (scope === "all-projects") {
+		return { filters, limit: limit ?? undefined, query, scope: { type: "all-projects" } };
+	}
+	if (scope === "current-project" && projectId) {
+		return { filters, limit: limit ?? undefined, query, scope: { projectId, type: "current-project" } };
+	}
+
+	return null;
+}
+
+function parseSearchSourceTypes(value: string | null): SearchSourceType[] | null {
+	if (!value) {
+		return [];
+	}
+
+	const validSourceTypes: SearchSourceType[] = ["entity", "context", "context-term", "issue-comment", "plan-entry"];
+	const sourceTypes = value.split(",").map((sourceType) => sourceType.trim()).filter(Boolean);
+	return sourceTypes.every((sourceType): sourceType is SearchSourceType => validSourceTypes.includes(sourceType as SearchSourceType))
+		? [...new Set(sourceTypes)]
+		: null;
+}
+
+function parseSearchLimit(value: string | null): number | null | undefined {
+	if (value === null) {
+		return undefined;
+	}
+
+	if (!/^\d+$/.test(value)) {
+		return null;
+	}
+
+	const limit = Number(value);
+	return limit > 0 && limit <= 100 ? limit : null;
 }
 
 async function readSnapshotSignature(

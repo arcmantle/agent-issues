@@ -1,8 +1,11 @@
 import { computed, signal } from "@lit-labs/signals";
+import type { SearchCapability, SearchNavigationTarget, SearchResponse, SearchResult, SearchSourceType } from "@agent-issues/core";
 import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type PlanEntry, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
+const GLOBAL_SEARCH_RECENTS_LIMIT = 5;
+const GLOBAL_SEARCH_RECENTS_STORAGE_PREFIX = "agent-issues-global-search-recents";
 const PLAN_CURRENT_GROUPS = [
 	{ key: "questions", title: "Questions" },
 	{ key: "decisions", title: "Decisions" },
@@ -66,7 +69,45 @@ type ViewerRoute = {
 	section: ConsoleSection;
 	entityId: string | null;
 	initiativeId: string | null;
+	target: NestedRouteTarget | null;
 };
+
+type NestedRouteTarget = { scopeRef?: string } & (
+	| { type: "context"; id: null }
+	| { type: "context-term"; id: string }
+	| { type: "issue-comment" | "plan-entry"; id: string }
+);
+
+export type GlobalSearchRecent = {
+	target: SearchNavigationTarget;
+	title: string;
+	sourceType: SearchSourceType;
+};
+
+function isSearchNavigationTarget(value: unknown): value is SearchNavigationTarget {
+	if (!value || typeof value !== "object" || !("type" in value)) {
+		return false;
+	}
+	const target = value as Record<string, unknown>;
+
+	if (target.type === "entity") {
+		return typeof target.entityId === "string";
+	}
+
+	if (target.type === "plan-entry") {
+		return typeof target.planId === "string" && typeof target.entryId === "string";
+	}
+
+	if (target.type === "issue-comment") {
+		return typeof target.issueId === "string" && typeof target.commentId === "string";
+	}
+
+	if (target.type === "context") {
+		return target.scopeRef === undefined || typeof target.scopeRef === "string";
+	}
+
+	return target.type === "context-term" && typeof target.term === "string" && (target.scopeRef === undefined || typeof target.scopeRef === "string");
+}
 
 function filterGraphByKind(graph: RelationshipGraph, visibleKinds: ReadonlySet<ProjectGraphKind>): RelationshipGraph {
 	const visibleNodes = graph.nodes.filter((node) => visibleKinds.has(node.kind as ProjectGraphKind));
@@ -86,6 +127,15 @@ export class AgentIssuesStore {
 	public snapshot = signal<Snapshot | null>(null);
 	public projectDiscovery = signal<ProjectDiscovery | null>(null);
 	public search = signal("");
+	public globalSearchCapability = signal<SearchCapability | null>(null);
+	public globalSearchQuery = signal("");
+	public globalSearchScope = signal<"current-project" | "all-projects">("current-project");
+	public globalSearchSourceTypes = signal<SearchSourceType[]>(["entity", "context", "context-term", "plan-entry", "issue-comment"]);
+	public globalSearchResponse = signal<SearchResponse | null>(null);
+	public globalSearchResults = signal<SearchResult[]>([]);
+	public globalSearchRecents = signal<SearchNavigationTarget[]>([]);
+	public globalSearchProgress = signal(false);
+	public globalSearchOpen = signal(false);
 	public contextSearch = signal("");
 	public contextTab = signal<ContextPageTab>("all");
 	public selectedContextInitiativeId = signal<string | null>(null);
@@ -100,6 +150,7 @@ export class AgentIssuesStore {
 	public selectedProjectId = signal<string | null>(null);
 	public selectedInitiativeId = signal<string | null>(null);
 	public selectedId = signal<string | null>(null);
+	public selectedNestedTarget = signal<NestedRouteTarget | null>(null);
 	public cascadePath = signal<string[]>([]);
 	public cascadeAvailableWidth = signal<number>(0);
 	public cascadeWindowStart = signal<number | null>(null);
@@ -114,6 +165,9 @@ export class AgentIssuesStore {
 	public activeRootTab = signal<RootTab>("initiatives");
 	public activeSection = signal<ConsoleSection>("initiatives");
 	public initTab = signal<InitiativeTab>("overview");
+	protected globalSearchAbortController: AbortController | null = null;
+	protected globalSearchProgressTimer: number | null = null;
+	protected globalSearchRequestTimer: number | null = null;
 
 	public tenantById = computed(() => new Map((this.config.get()?.availableTenants ?? []).map((tenant) => [tenant.id, tenant])));
 
@@ -168,8 +222,185 @@ export class AgentIssuesStore {
 		return new Map([...snapshot.entities, ...snapshot.projectAdrs, ...bundleEntities].map((entity) => [entity.id, entity]));
 	});
 
+	public globalSearchRecentRecords = computed(() => this.globalSearchRecents.get().flatMap((target): GlobalSearchRecent[] => {
+		const snapshot = this.snapshot.get();
+		if (!snapshot) {
+			return [];
+		}
+
+		if (target.type === "entity") {
+			const entity = this.entityForId(target.entityId);
+			return entity ? [{ sourceType: "entity", target, title: entity.title }] : [];
+		}
+
+		if (target.type === "plan-entry") {
+			const entry = snapshot.planEntries?.find((candidate) => candidate.id === target.entryId && candidate.planId === target.planId && !candidate.tombstone);
+			return entry && this.entityForId(target.planId) ? [{ sourceType: "plan-entry", target, title: entry.body ?? "Plan entry" }] : [];
+		}
+
+		if (target.type === "issue-comment") {
+			const comment = snapshot.issueComments[target.issueId]?.comments.find((candidate) => candidate.id === target.commentId && !candidate.tombstone);
+			return comment && this.entityForId(target.issueId) ? [{ sourceType: "issue-comment", target, title: comment.body ?? "Comment" }] : [];
+		}
+
+		const contexts = [snapshot.contexts.shared, ...snapshot.contexts.initiatives];
+		const context = target.scopeRef
+			? contexts.find((candidate) => candidate.context.key === target.scopeRef || candidate.context.scopeEntityId === target.scopeRef)
+			: snapshot.contexts.shared;
+		if (!context?.context.exists) {
+			return [];
+		}
+
+		if (target.type === "context") {
+			return [{ sourceType: "context", target, title: context.context.title }];
+		}
+
+		const term = context.terms.find((candidate) => candidate.term === target.term);
+		return term ? [{ sourceType: "context-term", target, title: term.term }] : [];
+	}));
+
 	public entityForId(entityId: string | null): Entity | null {
 		return entityId ? this.entityById.get().get(entityId) ?? null : null;
+	}
+
+	public openGlobalSearch() {
+		this.globalSearchOpen.set(true);
+		this.globalSearchRecents.set(this.readGlobalSearchRecents());
+		void this.reloadGlobalSearchCapability();
+	}
+
+	public closeGlobalSearch() {
+		this.globalSearchOpen.set(false);
+		this.setGlobalSearchQuery("");
+	}
+
+	public setGlobalSearchQuery(query: string) {
+		this.globalSearchQuery.set(query);
+		this.globalSearchResponse.set(null);
+		this.globalSearchProgress.set(false);
+		this.cancelGlobalSearchRequest();
+
+		if (!query.trim()) {
+			this.globalSearchResults.set([]);
+			return;
+		}
+
+		this.globalSearchRequestTimer = window.setTimeout(() => {
+			void this.requestGlobalSearch(query);
+		}, 150);
+	}
+
+	public setGlobalSearchScope(scope: "current-project" | "all-projects") {
+		this.globalSearchScope.set(scope);
+		this.setGlobalSearchQuery(this.globalSearchQuery.get());
+	}
+
+	public setGlobalSearchSourceTypes(sourceTypes: SearchSourceType[]) {
+		this.globalSearchSourceTypes.set(sourceTypes);
+		this.setGlobalSearchQuery(this.globalSearchQuery.get());
+	}
+
+	public async retryGlobalSearch() {
+		const query = this.globalSearchQuery.get();
+		if (query.trim()) {
+			await this.requestGlobalSearch(query);
+		}
+	}
+
+	public async reloadGlobalSearchCapability() {
+		const tenantId = this.selectedTenant.get();
+		if (!tenantId) {
+			this.globalSearchCapability.set(null);
+			return;
+		}
+
+		try {
+			const response = await fetch(`/api/search/capability?${new URLSearchParams({ tenant: tenantId })}`, { cache: "no-store" });
+			if (!response.ok) {
+				throw new Error("Global search capability request failed.");
+			}
+
+			const capability = (await response.json()) as SearchCapability;
+			if (this.selectedTenant.get() === tenantId) {
+				this.globalSearchCapability.set(capability);
+			}
+		} catch {
+			this.globalSearchCapability.set(null);
+		}
+	}
+
+	protected async requestGlobalSearch(query: string) {
+		if (query !== this.globalSearchQuery.get()) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		if (!tenantId || !projectId) {
+			return;
+		}
+
+		const abortController = new AbortController();
+		this.globalSearchAbortController = abortController;
+		this.globalSearchProgressTimer = window.setTimeout(() => {
+			if (this.globalSearchAbortController === abortController) {
+				this.globalSearchProgress.set(true);
+			}
+		}, 150);
+		const params = new URLSearchParams({
+			tenant: tenantId,
+			project: projectId,
+			query,
+			scope: this.globalSearchScope.get()
+		});
+		params.set("sourceTypes", this.globalSearchSourceTypes.get().join(","));
+
+		try {
+			const response = await fetch(`/api/search?${params}`, { cache: "no-store", signal: abortController.signal });
+			if (!response.ok) {
+				throw new Error("Global search request failed.");
+			}
+
+			const result = (await response.json()) as SearchResponse;
+			if (this.globalSearchAbortController === abortController) {
+				this.globalSearchResponse.set(result);
+				if (result.state === "available") {
+					this.globalSearchResults.set(result.results);
+				}
+			}
+		} catch (error) {
+			if (error instanceof DOMException && error.name === "AbortError") {
+				return;
+			}
+
+			if (this.globalSearchAbortController === abortController) {
+				this.globalSearchResponse.set({ state: "operational-error" });
+			}
+		} finally {
+			if (this.globalSearchAbortController === abortController) {
+				this.globalSearchAbortController = null;
+				this.clearGlobalSearchProgressTimer();
+				this.globalSearchProgress.set(false);
+			}
+		}
+	}
+
+	protected cancelGlobalSearchRequest() {
+		if (this.globalSearchRequestTimer !== null) {
+			window.clearTimeout(this.globalSearchRequestTimer);
+			this.globalSearchRequestTimer = null;
+		}
+
+		this.globalSearchAbortController?.abort();
+		this.globalSearchAbortController = null;
+		this.clearGlobalSearchProgressTimer();
+	}
+
+	protected clearGlobalSearchProgressTimer() {
+		if (this.globalSearchProgressTimer !== null) {
+			window.clearTimeout(this.globalSearchProgressTimer);
+			this.globalSearchProgressTimer = null;
+		}
 	}
 
 	public cascadeColumns = computed(() =>
@@ -327,7 +558,7 @@ export class AgentIssuesStore {
 
 		return (
 			(this.snapshot.get()?.initiatives ?? []).find((bundle) =>
-				[bundle.initiative, ...bundle.prds, ...bundle.userStories, ...bundle.adrs, ...bundle.issues].some(
+				[bundle.initiative, ...bundle.entities, ...bundle.prds, ...bundle.userStories, ...bundle.adrs, ...bundle.issues].some(
 					(candidate) => candidate.id === entityId
 				)
 			) ?? null
@@ -700,6 +931,7 @@ export class AgentIssuesStore {
 		this.connected = false;
 		window.removeEventListener("hashchange", this.onBrowserNavigation);
 		window.removeEventListener("popstate", this.onPopState);
+		this.cancelGlobalSearchRequest();
 		this.events?.close();
 		this.events = null;
 		if (this.pollTimer !== null) {
@@ -747,6 +979,7 @@ export class AgentIssuesStore {
 		this.activeSection.set(section);
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(null);
+		this.selectedNestedTarget.set(null);
 		this.initTab.set("overview");
 		this.contextSearch.set("");
 		this.contextTab.set("all");
@@ -813,7 +1046,77 @@ export class AgentIssuesStore {
 		this.activeView.set(nextView);
 	};
 
-	public selectEntity(entityId: string) {
+	public openSearchTarget(target: SearchNavigationTarget) {
+		this.recordGlobalSearchRecent(target);
+
+		if (target.type === "entity") {
+			this.selectEntity(target.entityId);
+			return;
+		}
+
+		if (target.type === "plan-entry") {
+			this.selectEntity(target.planId, { id: target.entryId, type: target.type });
+			return;
+		}
+
+		if (target.type === "issue-comment") {
+			this.selectEntity(target.issueId, { id: target.commentId, type: target.type });
+			return;
+		}
+
+		if (target.type === "context" || target.type === "context-term") {
+			this.activeSection.set("context");
+			this.selectedInitiativeId.set(null);
+			this.selectedId.set(null);
+			this.activePage.set("list");
+			this.contextTab.set(target.scopeRef ? "initiatives" : "global");
+			this.selectedContextInitiativeId.set(target.scopeRef ?? null);
+			this.selectedNestedTarget.set(target.type === "context"
+				? { id: null, scopeRef: target.scopeRef, type: target.type }
+				: { id: target.term, scopeRef: target.scopeRef, type: target.type });
+			this.writeRoute(this.currentRoute());
+		}
+	}
+
+	protected globalSearchRecentsStorageKey(): string | null {
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		return tenantId && projectId ? `${GLOBAL_SEARCH_RECENTS_STORAGE_PREFIX}:${tenantId}:${projectId}` : null;
+	}
+
+	protected readGlobalSearchRecents(): SearchNavigationTarget[] {
+		const storageKey = this.globalSearchRecentsStorageKey();
+		if (!storageKey) {
+			return [];
+		}
+
+		try {
+			const stored = window.localStorage.getItem(storageKey);
+			if (!stored) {
+				return [];
+			}
+
+			const targets = JSON.parse(stored) as unknown;
+			return Array.isArray(targets) ? targets.filter(isSearchNavigationTarget).slice(0, GLOBAL_SEARCH_RECENTS_LIMIT) : [];
+		} catch {
+			return [];
+		}
+	}
+
+	protected recordGlobalSearchRecent(target: SearchNavigationTarget) {
+		const storageKey = this.globalSearchRecentsStorageKey();
+		if (!storageKey) {
+			return;
+		}
+
+		const recents = this.readGlobalSearchRecents();
+		const targetKey = JSON.stringify(target);
+		const nextRecents = [target, ...recents.filter((recent) => JSON.stringify(recent) !== targetKey)].slice(0, GLOBAL_SEARCH_RECENTS_LIMIT);
+		window.localStorage.setItem(storageKey, JSON.stringify(nextRecents));
+		this.globalSearchRecents.set(nextRecents);
+	}
+
+	public selectEntity(entityId: string, target: NestedRouteTarget | null = null) {
 		if (this.entityForId(entityId)?.kind === "initiative") {
 			this.selectInitiative(entityId);
 			return;
@@ -822,6 +1125,7 @@ export class AgentIssuesStore {
 		this.cascadePath.set([]);
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(entityId);
+		this.selectedNestedTarget.set(target);
 		this.activePage.set("entity");
 		this.writeRoute(this.currentRoute());
 	}
@@ -959,6 +1263,7 @@ export class AgentIssuesStore {
 	public selectInitiative(initiativeId: string) {
 		this.selectedId.set(null);
 		this.selectedInitiativeId.set(initiativeId);
+		this.selectedNestedTarget.set(null);
 		this.activePage.set("initiative");
 		this.activeSection.set("initiatives");
 		this.activeView.set("overview");
@@ -973,6 +1278,7 @@ export class AgentIssuesStore {
 		this.clearMasterOverrideIfShallow();
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(null);
+		this.selectedNestedTarget.set(null);
 		this.activePage.set("list");
 		this.activeView.set("overview");
 		this.writeRoute(this.currentRoute());
@@ -1444,6 +1750,49 @@ export class AgentIssuesStore {
 		return status === "done" || status === "complete" || status === "closed";
 	}
 
+	public sortIssuesByExpectedCompletion(records: Entity[], bundle: InitiativeBundle): Entity[] {
+		const recordsById = new Map(records.map((record) => [record.id, record]));
+		const positionById = new Map(records.map((record, index) => [record.id, index]));
+		const blockersRemainingById = new Map(records.map((record) => [record.id, 0]));
+		const unblockedIssueIdsById = new Map(records.map((record) => [record.id, [] as string[]]));
+		const linkedIssueIds = new Set<string>();
+		const compare = (left: Entity, right: Entity) => {
+			const completionDifference = Number(!this.isDoneStatus(left.status)) - Number(!this.isDoneStatus(right.status));
+			return completionDifference || positionById.get(left.id)! - positionById.get(right.id)!;
+		};
+
+		for (const link of bundle.blockerLinks) {
+			if (!recordsById.has(link.source.id) || !recordsById.has(link.target.id)) continue;
+			if (!this.isDoneStatus(link.source.status) && this.isDoneStatus(link.target.status)) continue;
+
+			const linkId = `${link.source.id}:${link.target.id}`;
+			if (linkedIssueIds.has(linkId)) continue;
+			linkedIssueIds.add(linkId);
+			blockersRemainingById.set(link.target.id, blockersRemainingById.get(link.target.id)! + 1);
+			unblockedIssueIdsById.get(link.source.id)!.push(link.target.id);
+		}
+
+		const readyIssues = records.filter((record) => blockersRemainingById.get(record.id) === 0);
+		const orderedIssues: Entity[] = [];
+		const emittedIssueIds = new Set<string>();
+
+		while (readyIssues.length > 0) {
+			readyIssues.sort(compare);
+			const issue = readyIssues.shift()!;
+			if (emittedIssueIds.has(issue.id)) continue;
+
+			emittedIssueIds.add(issue.id);
+			orderedIssues.push(issue);
+			for (const unblockedIssueId of unblockedIssueIdsById.get(issue.id) ?? []) {
+				const blockersRemaining = blockersRemainingById.get(unblockedIssueId)! - 1;
+				blockersRemainingById.set(unblockedIssueId, blockersRemaining);
+				if (blockersRemaining === 0) readyIssues.push(recordsById.get(unblockedIssueId)!);
+			}
+		}
+
+		return [...orderedIssues, ...records.filter((record) => !emittedIssueIds.has(record.id)).sort(compare)];
+	}
+
 	public issueStatusTone(status: string) {
 		if (this.isDoneStatus(status)) {
 			return "done";
@@ -1737,6 +2086,7 @@ export class AgentIssuesStore {
 	public closeEntity() {
 		const bundle = this.selectedBundle.get();
 		this.selectedId.set(null);
+		this.selectedNestedTarget.set(null);
 
 		if (this.activeSection.get() !== "adrs" && bundle) {
 			this.selectedInitiativeId.set(bundle.initiative.id);
@@ -1826,8 +2176,15 @@ export class AgentIssuesStore {
 	}
 
 	protected resetScopeDetail() {
+		this.cancelGlobalSearchRequest();
+		this.globalSearchCapability.set(null);
+		this.globalSearchQuery.set("");
+		this.globalSearchResponse.set(null);
+		this.globalSearchProgress.set(false);
+		this.globalSearchOpen.set(false);
 		this.selectedId.set(null);
 		this.selectedInitiativeId.set(null);
+		this.selectedNestedTarget.set(null);
 		this.cascadePath.set([]);
 		this.reRootTrail.set([]);
 		this.activeSection.set("initiatives");
@@ -1959,7 +2316,8 @@ export class AgentIssuesStore {
 			projectId: this.selectedProjectId.get(),
 			section: this.activeSection.get(),
 			entityId: this.selectedId.get(),
-			initiativeId: this.selectedInitiativeId.get()
+			initiativeId: this.selectedInitiativeId.get(),
+			target: this.selectedNestedTarget.get()
 		};
 	}
 
@@ -1970,12 +2328,23 @@ export class AgentIssuesStore {
 		const tenantId = params.get("tenant") ?? legacyParams.get("tenant");
 		const projectId = params.get("project") ?? legacyParams.get("project");
 		const section = params.get("section");
+		const targetType = params.get("target");
+		const targetId = params.get("target-id");
+		const targetScopeRef = params.get("target-scope") ?? undefined;
+		const target: NestedRouteTarget | null = targetType === "context"
+			? { id: null, scopeRef: targetScopeRef, type: "context" }
+			: targetId && targetType === "context-term"
+				? { id: targetId, scopeRef: targetScopeRef, type: targetType }
+			: targetId && (targetType === "context-term" || targetType === "issue-comment" || targetType === "plan-entry")
+				? { type: targetType, id: targetId }
+				: null;
 		return {
 			tenantId,
 			projectId,
 			section: isConsoleSection(section) ? section : "initiatives",
 			entityId: params.get("entity"),
-			initiativeId: params.get("initiative")
+			initiativeId: params.get("initiative"),
+			target
 		};
 	}
 
@@ -1990,8 +2359,35 @@ export class AgentIssuesStore {
 		return {
 			...route,
 			entityId: validEntityId,
-			initiativeId: validInitiativeId
+			initiativeId: validInitiativeId,
+			target: this.normalizeNestedTarget(route.target, validEntityId)
 		};
+	}
+
+	protected normalizeNestedTarget(target: NestedRouteTarget | null, entityId: string | null): NestedRouteTarget | null {
+		if (!target) {
+			return null;
+		}
+
+		if (target.type === "plan-entry") {
+			const planEntry = (this.snapshot.get()?.planEntries ?? []).find((entry) => entry.id === target.id && entry.planId === entityId && !entry.tombstone);
+			return planEntry ? target : null;
+		}
+
+		if (target.type === "issue-comment") {
+			const comment = entityId ? this.snapshot.get()?.issueComments[entityId]?.comments.find((candidate) => candidate.id === target.id && !candidate.tombstone) : null;
+			return comment ? target : null;
+		}
+
+		const context = target.scopeRef ? this.getContextForInitiative(target.scopeRef) : this.sharedContext.get();
+		if (!context?.context.exists) {
+			return null;
+		}
+		if (target.type === "context") {
+			return target;
+		}
+
+		return context.terms.some((term) => term.term === target.id) ? target : null;
 	}
 
 	protected applyRoute(route: ViewerRoute): ViewerRoute {
@@ -2001,6 +2397,11 @@ export class AgentIssuesStore {
 		this.activeSection.set(normalizedRoute.section);
 		this.selectedId.set(normalizedRoute.entityId);
 		this.selectedInitiativeId.set(normalizedRoute.initiativeId);
+		this.selectedNestedTarget.set(normalizedRoute.target);
+		if (normalizedRoute.target?.type === "context" || normalizedRoute.target?.type === "context-term") {
+			this.contextTab.set(normalizedRoute.target.scopeRef ? "initiatives" : "global");
+			this.selectedContextInitiativeId.set(normalizedRoute.target.scopeRef ?? null);
+		}
 		this.cascadePath.set([]);
 		this.reRootTrail.set([]);
 		this.clearMasterOverrideIfShallow();
@@ -2022,6 +2423,9 @@ export class AgentIssuesStore {
 		add("section", route.section === "initiatives" ? null : route.section);
 		add("entity", route.entityId);
 		add("initiative", route.initiativeId);
+		add("target", route.target?.type ?? null);
+		add("target-id", route.target?.id ?? null);
+		add("target-scope", route.target?.scopeRef ?? null);
 		nextUrl.searchParams.delete("tenant");
 		nextUrl.searchParams.delete("project");
 		nextUrl.hash = entries.join("&");

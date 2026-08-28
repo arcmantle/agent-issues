@@ -5,7 +5,7 @@ import type { PropertyValues } from "lit";
 import { choose } from "lit/directives/choose.js";
 import type { CytoscapeFactory, GraphStatus } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
-import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
+import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
 class IssueGraphPanel extends SignalWatcher(LitElement) {
 	static properties = {
@@ -13,7 +13,6 @@ class IssueGraphPanel extends SignalWatcher(LitElement) {
 	};
 
 	static styles = [
-		issueBrowserTokenStyles,
 		issueBrowserTypographyStyles,
 		issueBrowserControlStyles,
 		css`

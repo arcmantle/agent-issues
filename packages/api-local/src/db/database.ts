@@ -235,6 +235,7 @@ export function deleteTenant(db: SqliteInternalConnection, tenantId: string): De
 		db.drizzle.run(sql`DELETE FROM relations WHERE tenant_id = ${tenantId}`);
 		db.drizzle.run(sql`DELETE FROM contexts WHERE tenant_id = ${tenantId}`);
 		db.drizzle.run(sql`DELETE FROM entities WHERE tenant_id = ${tenantId}`);
+		db.drizzle.run(sql`DELETE FROM search_documents WHERE tenant_id = ${tenantId}`);
 		return db.drizzle.run(sql`DELETE FROM counters WHERE tenant_id = ${tenantId}`).changes;
 	});
 
@@ -275,11 +276,12 @@ export function renameTenant(db: SqliteInternalConnection, previousTenantId: str
 	db.drizzle.run(sql.raw("PRAGMA defer_foreign_keys = ON"));
 	try {
 		db.drizzle.transaction(() => {
-				db.drizzle.run(sql`UPDATE plan_entry_references SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
-				db.drizzle.run(sql`UPDATE plan_entry_supersessions SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
-				db.drizzle.run(sql`UPDATE plan_entries SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE plan_entry_references SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE plan_entry_supersessions SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE plan_entries SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE counters SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE entities SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE search_documents SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE relations SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE contexts SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE context_terms SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
@@ -374,6 +376,7 @@ function tenantHasAnyRows(db: SqliteInternalConnection, tenantId: string): boole
 		SELECT EXISTS(
 			SELECT 1 FROM counters WHERE tenant_id = ${tenantId}
 			UNION SELECT 1 FROM entities WHERE tenant_id = ${tenantId}
+			UNION SELECT 1 FROM search_documents WHERE tenant_id = ${tenantId}
 			UNION SELECT 1 FROM relations WHERE tenant_id = ${tenantId}
 			UNION SELECT 1 FROM contexts WHERE tenant_id = ${tenantId}
 			UNION SELECT 1 FROM context_terms WHERE tenant_id = ${tenantId}

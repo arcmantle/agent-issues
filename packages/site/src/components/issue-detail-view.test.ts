@@ -182,6 +182,49 @@ describe("entity detail pane", () => {
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="US1"]')).not.toBeNull();
 	});
 
+	it("orders the entity Issues tab by expected completion through blockers", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "Use completion order" });
+		const availableIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Available issue" });
+		const blockedIssue = makeEntity({ id: "ISS2", kind: "issue", status: "blocked", title: "Blocked issue" });
+		const laterIssue = makeEntity({ id: "ISS3", kind: "issue", status: "blocked", title: "Later issue" });
+		const completedBlocker = makeEntity({ id: "ISS4", kind: "issue", status: "done", title: "Completed blocker" });
+		const completedIssue = makeEntity({ id: "ISS5", kind: "issue", status: "done", title: "Completed issue" });
+		const bundle = makeBundle(initiative, {
+			adrs: [adr],
+			blockerLinks: [
+				{ source: completedBlocker, target: completedIssue },
+				{ source: availableIssue, target: blockedIssue },
+				{ source: blockedIssue, target: laterIssue }
+			],
+			constrainsLinks: [
+				{ adr, issue: laterIssue },
+				{ adr, issue: blockedIssue },
+				{ adr, issue: availableIssue },
+				{ adr, issue: completedIssue },
+				{ adr, issue: completedBlocker }
+			],
+			issues: [laterIssue, blockedIssue, availableIssue, completedIssue, completedBlocker]
+		});
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, adr, availableIssue, blockedIssue, laterIssue, completedBlocker, completedIssue],
+			initiatives: [bundle]
+		}));
+		store.selectEntity(adr.id);
+		const view = await mountDetail(store);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id))
+			.toEqual(["ISS4", "ISS5", "ISS1", "ISS2", "ISS3"]);
+
+		updateIssueRecordView(view, "issues", "tree");
+		await view.updateComplete;
+		expect([...view.shadowRoot?.querySelectorAll(".ai-record-tree .ai-ref .r-id") ?? []].map((record) => record.textContent?.trim()))
+			.toEqual([completedBlocker, completedIssue, availableIssue, blockedIssue, laterIssue].map((issue) => store.shortRef(issue)));
+	});
+
 	it("provides filterable record tabs and ranked issue and user-story trees", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const parentIssue = makeEntity({ category: "priority phrase", id: "ISS_FULL_REFERENCE_123", kind: "issue", status: "todo", title: "Parent issue" });
@@ -204,8 +247,8 @@ describe("entity detail pane", () => {
 		store.selectEntity(parentIssue.id);
 		const view = await mountDetail(store);
 
-		expect(tabLabels(view)).toEqual(["Overview", "Issues", "ADRs", "User stories", "Related", "Graph"]);
-		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "2", related: "1", userStories: "1" });
+		expect(tabLabels(view)).toEqual(["Overview", "Issues", "Plans", "ADRs", "User stories", "Graph"]);
+		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "2", plans: "1", userStories: "1" });
 		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 2 records");
 		expect(view.shadowRoot?.querySelector('[data-tab="issues"] .ai-subtab-count')?.getAttribute("aria-hidden")).toBe("true");
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="adrs"]')?.click();
@@ -224,7 +267,7 @@ describe("entity detail pane", () => {
 		await view.updateComplete;
 		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS2"]);
 
-		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="related"]')?.click();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="plans"]')?.click();
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PLAN1"]')).not.toBeNull();
 		expect(view.shadowRoot?.querySelector("agent-issues-record-filter-toolbar")?.query).toBe("");
@@ -316,7 +359,7 @@ describe("entity detail pane", () => {
 		expect(store.selectedId.get()).toBe(story.id);
 	});
 
-	it("renders a Plan's generated current groups and complete entry history", async () => {
+	it("renders a Plan's generated current groups and complete entry history in its Plan tab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Plan owner" });
 		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "in-progress", title: "Plan record" });
 		const question = {
@@ -327,6 +370,7 @@ describe("entity detail pane", () => {
 			reference: "PLAN_ENTRY_QUESTION",
 			referencedEntityIds: [],
 			role: "question" as const,
+			shortReference: "PLAN_ENTRY_OLD",
 			scopeDirection: null,
 			supersededEntryIds: [],
 			tombstone: false,
@@ -338,8 +382,9 @@ describe("entity detail pane", () => {
 			id: "ENTRY2",
 			planId: plan.id,
 			reference: "PLAN_ENTRY_DECISION",
-			referencedEntityIds: [],
+			referencedEntityIds: [initiative.id],
 			role: "decision" as const,
+			shortReference: "PLAN_ENTRY_SHORT",
 			scopeDirection: null,
 			supersededEntryIds: [question.id],
 			tombstone: false,
@@ -366,12 +411,74 @@ describe("entity detail pane", () => {
 		store.selectEntity(plan.id);
 		const view = await mountDetail(store);
 
+		expect(tabLabels(view)).toContain("Plan");
+		expect(view.shadowRoot?.querySelector(".ai-plan-current")).toBeNull();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="plan"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLDetailsElement>(".ai-plan-group")?.open).toBe(false);
+		expect(view.shadowRoot?.querySelector(".ai-plan-group .ai-plan-count")?.textContent).toBe("1");
+		expect(view.shadowRoot?.querySelector<HTMLDetailsElement>(".ai-plan-history")?.open).toBe(false);
+		expect(view.shadowRoot?.querySelector(".ai-plan-history .ai-plan-count")?.textContent).toBe("3");
 		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).toContain("Decisions");
 		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).toContain(decision.body);
-		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).not.toContain(question.body);
-		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain(question.reference);
+		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).toContain(question.body);
+		expect([...view.shadowRoot?.querySelectorAll(".ai-plan-decision-pair-label") ?? []].map((label) => label.textContent?.trim())).toEqual(["Question", "Decision"]);
+		expect(view.shadowRoot?.querySelector('.ai-plan-decision-question .ai-plan-entry[data-plan-entry-id="ENTRY1"]')).not.toBeNull();
+		const currentEntry = view.shadowRoot?.querySelector('.ai-plan-decision-answer .ai-plan-entry[data-plan-entry-id="ENTRY2"]');
+		expect([...currentEntry?.children ?? []].map((child) => child.className)).toEqual(["ai-plan-entry-header", "ai-plan-entry-body", "ai-plan-entry-meta"]);
+		expect(currentEntry?.querySelector(".ai-plan-entry-reference")?.textContent?.trim()).toBe(decision.shortReference);
+		expect(currentEntry?.querySelector(".ai-plan-entry-reference")?.getAttribute("title")).toBe(decision.reference);
+		expect(view.shadowRoot?.querySelector('.ai-plan-current .ai-plan-entry-link[data-id="INIT1"]')?.textContent).toContain(initiative.title);
+		const currentGroup = view.shadowRoot?.querySelector<HTMLDetailsElement>(".ai-plan-group");
+		currentGroup!.open = true;
+		view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-plan-current .ai-plan-entry-link[data-plan-entry-id="ENTRY1"]')?.click();
+		const history = view.shadowRoot?.querySelector<HTMLDetailsElement>(".ai-plan-history");
+		const supersededEntry = history?.querySelector<HTMLElement>('[data-plan-entry-id="ENTRY1"]');
+		expect(history?.open).toBe(true);
+		expect(supersededEntry?.classList.contains("is-plan-entry-target")).toBe(true);
+		expect(view.shadowRoot?.activeElement).toBe(supersededEntry);
+		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain(question.shortReference);
 		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain(deleted.reference);
 		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain("Deleted");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-plan-current .ai-plan-entry-link[data-id="INIT1"]')?.click();
+		expect(store.selectedInitiativeId.get()).toBe(initiative.id);
+	});
+
+	it("opens and highlights a deep-linked Plan entry", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Search plan" });
+		const entry = {
+			body: "Define durable result routes.",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			id: "ENTRY1",
+			planId: plan.id,
+			reference: "PLAN_ENTRY_1",
+			referencedEntityIds: [],
+			role: "decision" as const,
+			scopeDirection: null,
+			shortReference: "PLAN_ENTRY_1",
+			supersededEntryIds: [],
+			tombstone: false,
+			updatedAt: "2026-01-01T00:00:00.000Z"
+		};
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, plan],
+			initiatives: [makeBundle(initiative, { entities: [initiative, plan] })],
+			planEntries: [entry]
+		}));
+		store.openSearchTarget({ type: "plan-entry", planId: plan.id, entryId: entry.id });
+
+		const view = await mountDetail(store);
+
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="plan"]')?.getAttribute("aria-selected")).toBe("true");
+		const target = view.shadowRoot?.querySelector<HTMLElement>('[data-plan-entry-id="ENTRY1"]');
+		expect(target?.classList.contains("is-plan-entry-target")).toBe(true);
+		expect(view.shadowRoot?.activeElement).toBe(target);
+
+		store.selectEntity(plan.id);
+		await view.updateComplete;
+
+		expect(target?.classList.contains("is-plan-entry-target")).toBe(false);
 	});
 
 	it("renders the kind label, title, id, and a status badge for the open record", async () => {
@@ -438,12 +545,13 @@ describe("entity detail pane", () => {
 		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-ref[data-id="ISS1"]')).not.toBeNull();
 	});
 
-	it("provides Plans with shared tabs while keeping the plan projection in Overview", async () => {
+	it("keeps a Plan's body in Overview and its projection in the dedicated Plan tab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Plan owner" });
 		const plan = makeEntity({ body: "Plan overview content.", id: "PLAN1", kind: "plan", status: "in-progress", title: "Plan record" });
+		const followUpPlan = makeEntity({ id: "PLAN2", kind: "plan", status: "ready", title: "Follow-up plan" });
 		const prd = makeEntity({ id: "PRD1", kind: "prd", status: "draft", title: "Plan requirements" });
 		const store = makeStore(makeSnapshot({
-			entities: [initiative, plan, prd],
+			entities: [initiative, plan, followUpPlan, prd],
 			initiatives: [makeBundle(initiative, { entities: [initiative, plan], prds: [prd] })],
 			planEntries: [{
 				body: "Ship the plan.",
@@ -458,16 +566,44 @@ describe("entity detail pane", () => {
 				tombstone: false,
 				updatedAt: "2026-01-01T00:00:00.000Z"
 			}],
-			relations: [makeRelation(plan.id, "informs", prd.id)]
+			relations: [
+				makeRelation(plan.id, "informs", prd.id),
+				makeRelation(plan.id, "continues", followUpPlan.id)
+			]
 		}));
 		store.selectEntity(plan.id);
 		const view = await mountDetail(store);
 
-		expect(tabLabels(view)).toEqual(["Overview", "PRDs", "Graph"]);
+		expect(tabLabels(view)).toEqual(["Overview", "Plan", "Plans", "PRDs", "Graph"]);
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')?.textContent).toContain("Plan overview content.");
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-plan-current')).toBeNull();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="plan"]')?.click();
+		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-plan-current')?.textContent).toContain("Decisions");
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')).toBeNull();
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="plans"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PLAN2"]')).not.toBeNull();
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="prds"]')?.click();
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PRD1"]')).not.toBeNull();
+	});
+
+	it("shows linked Plans in the entity detail tabs", async () => {
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Implement the workflow" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "ready", title: "Workflow implementation" });
+		const store = makeStore(makeSnapshot({
+			entities: [issue, plan],
+			relations: [makeRelation(issue.id, "implements", plan.id)]
+		}));
+		store.selectEntity(issue.id);
+		const view = await mountDetail(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "Plans", "Graph"]);
+		expect(tabRecordCounts(view)).toMatchObject({ plans: "1" });
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="plans"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="PLAN1"]')).not.toBeNull();
 	});
 
 	it("provides Handoffs with shared data-aware tabs", async () => {
@@ -610,6 +746,37 @@ describe("entity detail pane", () => {
 		]);
 		expect(comments[0]).toContain("First comment.");
 		expect(comments[0]).toContain("ISS10");
+	});
+
+	it("focuses and highlights a deep-linked issue comment", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "todo", title: "Discuss detail rendering" });
+		const comment = {
+			body: "Use a durable nested route.",
+			contentHash: "hash-1",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			createdBy: "user-1",
+			id: "COMMENT1",
+			issueId: issue.id,
+			reference: "COM_1",
+			referencedIssueIds: [],
+			revision: 1,
+			tombstone: false,
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			updatedBy: "user-1"
+		};
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, issue],
+			initiatives: [makeBundle(initiative, { issues: [issue] })],
+			issueComments: { [issue.id]: { comments: [comment], nextBefore: null, total: 1 } }
+		}));
+		store.openSearchTarget({ type: "issue-comment", issueId: issue.id, commentId: comment.id });
+
+		const view = await mountDetail(store);
+
+		const target = view.shadowRoot?.querySelector<HTMLElement>('[data-comment-id="COMMENT1"]');
+		expect(target?.classList.contains("is-comment-target")).toBe(true);
+		expect(view.shadowRoot?.activeElement).toBe(target);
 	});
 
 	it("resolves comment provenance and preserves a deleted-comment placeholder", async () => {

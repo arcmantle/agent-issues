@@ -10,7 +10,7 @@ import { marked } from "marked";
 import { PROJECT_GRAPH_KINDS, type ContextDetails, type Entity, type GraphEdge, type GraphNode, type InitiativeBundle, type IssueComment, type PlanEntry, type ProjectGraphKind, type RelationshipGraph } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
 
-export type EntityDetailTab = "overview" | "issues" | "prds" | "adrs" | "context" | "userStories" | "debt" | "related" | "graph";
+export type EntityDetailTab = "overview" | "plan" | "issues" | "plans" | "prds" | "adrs" | "context" | "userStories" | "debt" | "related" | "graph";
 export type RecordView = "list" | "tree";
 
 export type EntityDetailTabDefinition = {
@@ -37,6 +37,7 @@ export type EntityDetailData = {
 	issueRecords: Entity[];
 	linkedSections: DetailRecordSection[];
 	parentIssue: Entity | null;
+	planRecords: Entity[];
 	prdRecords: Entity[];
 	relatedRecords: Entity[];
 	subIssueTree: DetailIssueTreeNode[];
@@ -112,6 +113,10 @@ export abstract class EntityDetailRenderer {
 		return [];
 	}
 
+	public entityTabs(): EntityDetailTabDefinition[] {
+		return [];
+	}
+
 	public detailData(): EntityDetailData {
 		const bundle = this.store.bundleForEntityId(this.entity.id);
 		const debtSections = this.store.debtRecordSectionsFor(this.entity.id);
@@ -150,6 +155,7 @@ export abstract class EntityDetailRenderer {
 			...this.additionalUserStories(rendererContext, issueRecordIds),
 			...(context.bundle?.fixLinks.filter((link) => issueRecordIds.has(link.issue.id)).map((link) => link.userStory) ?? [])
 		]).filter((record) => record.id !== this.entity.id);
+		const planRecords = linkedRecords.filter((record) => record.kind === "plan");
 		const prdRecords = linkedRecords.filter((record) => record.kind === "prd");
 		const adrRecords = this.uniqueRecords([
 			...linkedRecords.filter((record) => record.kind === "adr"),
@@ -159,7 +165,7 @@ export abstract class EntityDetailRenderer {
 			...context.debtSections.flatMap((section) => section.records),
 			...linkedRecords.filter((record) => record.kind === "debt")
 		]);
-		const relatedRecords = linkedRecords.filter((record) => !["issue", "userStory", "prd", "adr", "debt"].includes(record.kind));
+		const relatedRecords = linkedRecords.filter((record) => !["issue", "userStory", "plan", "prd", "adr", "debt"].includes(record.kind));
 
 		return {
 			adrRecords,
@@ -172,10 +178,11 @@ export abstract class EntityDetailRenderer {
 			issueRecords,
 			linkedSections,
 			parentIssue: rendererContext.parentIssue,
+			planRecords,
 			prdRecords,
 			relatedRecords,
 			subIssueTree: this.entity.kind === "issue" && bundle ? this.store.subIssueTreeForIssue(bundle, this.entity.id) : [],
-			tabs: this.tabsFor(context, issueRecords, prdRecords, adrRecords, userStoryRecords, debtRecords, relatedRecords),
+			tabs: this.tabsFor(context, issueRecords, planRecords, prdRecords, adrRecords, userStoryRecords, debtRecords, relatedRecords),
 			userStoryRecords
 		};
 	}
@@ -209,6 +216,7 @@ export abstract class EntityDetailRenderer {
 		>
 			${choose(activeTab, [
 				["overview", () => this.renderOverview()],
+				["plan", () => this.renderPlanTab()],
 				["issues", () => this.host.renderRecordBrowser("Issues", data.issueRecords, "No related issues.", this.store.bundleForEntityId(this.entity.id), {
 					crossLinkRecordIds: data.crossLinkRecordIds,
 					treeContent: (matchingRecords) => when(
@@ -226,6 +234,7 @@ export abstract class EntityDetailRenderer {
 					),
 					treeTab: "issues"
 				})],
+				["plans", () => this.host.renderRecordBrowser("Plans", data.planRecords, "No related Plans.", this.store.bundleForEntityId(this.entity.id))],
 				["prds", () => this.host.renderRecordBrowser("PRDs", data.prdRecords, "No related PRDs.", this.store.bundleForEntityId(this.entity.id))],
 				["adrs", () => this.host.renderRecordBrowser("ADRs", data.adrRecords, "No related ADRs.", this.store.bundleForEntityId(this.entity.id))],
 				["context", () => this.host.renderContextTab(data.inheritedContext)],
@@ -260,6 +269,10 @@ export abstract class EntityDetailRenderer {
 			`
 		)}
 		`;
+	}
+
+	public renderPlanTab(): TemplateResult {
+		return html``;
 	}
 
 	public renderUserStoryTree(data: EntityDetailData, stories: Entity[]): TemplateResult {
@@ -369,6 +382,7 @@ export abstract class EntityDetailRenderer {
 	public tabsFor(
 		context: EntityDetailDataContext,
 		issueRecords: Entity[],
+		planRecords: Entity[],
 		prdRecords: Entity[],
 		adrRecords: Entity[],
 		userStoryRecords: Entity[],
@@ -377,6 +391,7 @@ export abstract class EntityDetailRenderer {
 	): EntityDetailTabDefinition[] {
 		const candidateTabs: Array<EntityDetailTabDefinition & { visible: () => boolean }> = [
 			{ label: "Issues", recordCount: issueRecords.length, tab: "issues", visible: () => issueRecords.some((record) => record.id !== context.entity.id) },
+			{ label: "Plans", recordCount: planRecords.length, tab: "plans", visible: () => planRecords.length > 0 },
 			{ label: "PRDs", recordCount: prdRecords.length, tab: "prds", visible: () => prdRecords.length > 0 },
 			{ label: "ADRs", recordCount: adrRecords.length, tab: "adrs", visible: () => adrRecords.length > 0 },
 			{ label: "Context", tab: "context", visible: () => context.inheritedContext?.context.exists === true },
@@ -388,6 +403,7 @@ export abstract class EntityDetailRenderer {
 
 		return [
 			{ label: "Overview", tab: "overview" },
+			...this.entityTabs(),
 			...candidateTabs.filter((tab) => tab.visible())
 		];
 	}
@@ -494,42 +510,77 @@ class UserStoryRenderer extends EntityDetailRenderer {
 class PlanRenderer extends EntityDetailRenderer {
 	public label = "Plan";
 
-	public override renderOverview(): TemplateResult {
-		const planProjection = this.store.planProjectionFor(this.entity.id);
+	public override entityTabs(): EntityDetailTabDefinition[] {
+		return [{ label: "Plan", tab: "plan" }];
+	}
+
+	public renderCurrentPlanEntry(entry: PlanEntry, showQuestionContext: boolean, entriesById: ReadonlyMap<string, PlanEntry>): TemplateResult {
+		const questions = showQuestionContext ? supersededQuestionsFor(entry, entriesById) : [];
 
 		return html`
-		${super.renderOverview()}
 		${when(
-			planProjection !== null,
+			questions.length > 0,
 			() => html`
-			<section class="ai-sec ai-plan-current">
-				<h2>Current Plan</h2>
-				${repeat(
-					planProjection!.current,
-					(group) => group.key,
-					(group) => html`
-					<div class="ai-plan-group">
-						<h3>${group.title}</h3>
-						${when(
-							group.entries.length > 0,
-							() => repeat(group.entries, (entry) => entry.id, (entry) => this.host.renderPlanEntry(entry)),
-							() => html`<div class="ai-empty">None.</div>`
-						)}
-					</div>
-					`
-				)}
-			</section>
-			<section class="ai-sec ai-plan-history">
-				<h2>Plan Entry History</h2>
-				${when(
-					planProjection!.history.length > 0,
-					() => repeat(planProjection!.history, (entry) => entry.id, (entry) => this.host.renderPlanEntry(entry)),
-					() => html`<div class="ai-empty">No Plan entries yet.</div>`
-				)}
-			</section>
+			<div class="ai-plan-decision-pair">
+				${repeat(questions, (question) => question.id, (question) => html`
+				<section class="ai-plan-decision-question">
+					<div class="ai-plan-decision-pair-label">Question</div>
+					${this.host.renderPlanEntry(question)}
+				</section>
+				`)}
+				<section class="ai-plan-decision-answer">
+					<div class="ai-plan-decision-pair-label">Decision</div>
+					${this.host.renderPlanEntry(entry)}
+				</section>
+			</div>
 			`,
-			() => nothing
+			() => this.host.renderPlanEntry(entry)
 		)}
+		`;
+	}
+
+	public override renderPlanTab(): TemplateResult {
+		const planProjection = this.store.planProjectionFor(this.entity.id);
+		const currentGroups = planProjection.current.filter((group) => group.entries.length > 0);
+		const entriesById = new Map(planProjection.history.map((entry) => [entry.id, entry]));
+
+		return html`
+		<div class="ai-plan-tab">
+			<section class="ai-sec ai-plan-current">
+				<h2>Current plan</h2>
+				${when(
+					currentGroups.length > 0,
+					() => repeat(currentGroups, (group) => group.key, (group) => html`
+					<details class="ai-plan-group">
+						<summary>
+							<span>${group.title}</span>
+							<span class="ai-plan-count">${group.entries.length}</span>
+						</summary>
+						<div
+							class="ai-plan-entries"
+							data-plan-group=${group.key}
+						>
+							${repeat(group.entries, (entry) => entry.id, (entry) => this.renderCurrentPlanEntry(entry, group.key === "decisions", entriesById))}
+						</div>
+					</details>
+					`),
+					() => html`<div class="ai-empty">No current Plan entries.</div>`
+				)}
+			</section>
+			<details class="ai-sec ai-plan-history">
+				<summary>
+					<span>Entry history</span>
+					<span class="ai-plan-count">${planProjection.history.length}</span>
+				</summary>
+				<div class="ai-plan-entries">
+					${when(
+						planProjection.history.length > 0,
+						() => repeat(planProjection.history, (entry) => entry.id, (entry) => this.host.renderPlanEntry(entry)),
+						() => html`<div class="ai-empty">No Plan entries yet.</div>`
+					)}
+				</div>
+			</details>
+		</div>
 		`;
 	}
 }
@@ -569,6 +620,23 @@ export function createEntityDetailRenderer(store: AgentIssuesStore, entity: Enti
 		default:
 			return new GenericEntityRenderer(store, entity, host);
 	}
+}
+
+function supersededQuestionsFor(entry: PlanEntry, entriesById: ReadonlyMap<string, PlanEntry>): PlanEntry[] {
+	const questions = new Map<string, PlanEntry>();
+	const visitedIds = new Set<string>();
+	const visit = (entryId: string) => {
+		if (visitedIds.has(entryId)) return;
+		visitedIds.add(entryId);
+
+		const supersededEntry = entriesById.get(entryId);
+		if (!supersededEntry) return;
+		if (supersededEntry.role === "question" && !supersededEntry.tombstone) questions.set(supersededEntry.id, supersededEntry);
+		for (const supersededEntryId of supersededEntry.supersededEntryIds) visit(supersededEntryId);
+	};
+
+	for (const supersededEntryId of entry.supersededEntryIds) visit(supersededEntryId);
+	return [...questions.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
 }
 
 function unsafeHtml(value: string): TemplateResult {

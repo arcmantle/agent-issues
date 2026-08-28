@@ -20,6 +20,7 @@
 	"scripts": {
 		"build": "node --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json",
 		"postbuild": "node --eval \"import { writeBuildInfoFile } from './dist/daemon/build-info.js'; writeBuildInfoFile('dist');\"",
+		"benchmark:search": "pnpm --filter @agent-issues/core build && pnpm run build && node ./scripts/benchmark-search.mjs",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
@@ -35,6 +36,7 @@
 	"dependencies": {
 		"@agent-issues/core": "workspace:*",
 		"better-sqlite3": "^12.10.0",
-		"drizzle-orm": "^0.45.2"
+		"drizzle-orm": "^0.45.2",
+		"marked": "^18.0.5"
 	}
 }

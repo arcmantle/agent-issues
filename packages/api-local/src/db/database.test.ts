@@ -176,6 +176,19 @@ describe("tenant resolution", () => {
 				{ name: "relations" },
 				{ name: "revision_entries" },
 				{ name: "schema_migrations" },
+				{ name: "search_documents" },
+				{ name: "search_documents_fts" },
+				{ name: "search_documents_fts_config" },
+				{ name: "search_documents_fts_data" },
+				{ name: "search_documents_fts_docsize" },
+				{ name: "search_documents_fts_idx" },
+				{ name: "search_documents_trigram" },
+				{ name: "search_documents_trigram_config" },
+				{ name: "search_documents_trigram_data" },
+				{ name: "search_documents_trigram_docsize" },
+				{ name: "search_documents_trigram_idx" },
+				{ name: "search_typo_vocabulary" },
+				{ name: "search_typo_vocabulary_documents" },
 				{ name: "users" }
 			]);
 			expect(rawDb(created.db).prepare("SELECT id FROM schema_migrations ORDER BY rowid").all()).toEqual([
@@ -191,7 +204,12 @@ describe("tenant resolution", () => {
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
-				{ id: "plan-entry-supersession-position" }
+				{ id: "plan-entry-supersession-position" },
+				{ id: "entity-search" },
+				{ id: "record-search" },
+				{ id: "token-search" },
+				{ id: "trigram-search" },
+				{ id: "search-typo-vocabulary" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -212,6 +230,9 @@ describe("tenant resolution", () => {
 				{ name: "relations_tenant_to_id_idx" },
 				{ name: "revision_entries_chain_idx" },
 				{ name: "revision_entries_project_idx" },
+				{ name: "search_documents_entity_identity_idx" },
+				{ name: "search_documents_entity_title_idx" },
+				{ name: "search_typo_vocabulary_documents_document_idx" },
 				{ name: "users_tenant_authentication_subject_idx" }
 			]);
 			expect(rawDb(created.db).prepare("PRAGMA table_info('revision_entries')").all()).toEqual(
@@ -292,7 +313,12 @@ describe("tenant resolution", () => {
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
-				{ id: "plan-entry-supersession-position" }
+				{ id: "plan-entry-supersession-position" },
+				{ id: "entity-search" },
+				{ id: "record-search" },
+				{ id: "token-search" },
+				{ id: "trigram-search" },
+				{ id: "search-typo-vocabulary" }
 			]);
 		} finally {
 			upgraded.db.close();

@@ -38,6 +38,728 @@ afterEach(() => {
 
 runStorageDriverContractSuite({ label: "SqliteStore", openStore: openTestStore, openStoreForProject: openTestStoreForProject });
 
+describe("storage-driver seam: search capability (SqliteStore)", () => {
+	it("searches a created entity by its exact reference", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Searchable initiative" });
+
+			await expect(store.getSearchCapability()).resolves.toEqual({ state: "available" });
+			await expect(store.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: entity.id, sourceType: "entity" }),
+					match: { field: "identity" },
+					navigationTarget: { type: "entity", entityId: entity.id },
+					title: entity.title
+				})]
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("records privacy-safe diagnostics for each search", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Searchable initiative" });
+
+			await store.search({ query: entity.reference, scope: { type: "all-projects" } });
+
+			expect(await store.getSearchDiagnostics()).toEqual([{
+				candidateCounts: {
+					fullText: 0,
+					identity: 1,
+					typo: 0
+				},
+				capability: { state: "available" },
+				durationMs: expect.any(Number),
+				resultCount: 1
+			}]);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("limits merged search candidates across all search paths", async () => {
+		const store = await openTestStore();
+
+		try {
+			for (let recordIndex = 0; recordIndex < 120; recordIndex += 1) {
+				await store.createEntity({
+					kind: "initiative",
+					title: `Search candidate ${recordIndex}`,
+					body: "Search candidate content."
+				});
+			}
+
+			await store.search({ query: "Search", scope: { type: "all-projects" } });
+
+			const [diagnostic] = await store.getSearchDiagnostics();
+			expect(diagnostic!.candidateCounts.identity + diagnostic!.candidateCounts.fullText + diagnostic!.candidateCounts.typo).toBeLessThanOrEqual(100);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("searches visible Search document content with a highlighted snippet", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({
+				kind: "initiative",
+				title: "Searchable initiative",
+				body: "The ranked retrieval engine evaluates every query term."
+			});
+
+			await expect(store.search({ query: "ranked retrieval", scope: { type: "all-projects" } })).resolves.toEqual({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: entity.id }),
+					match: { field: "body" },
+					snippet: {
+						text: "The ranked retrieval engine evaluates every query term.",
+						highlights: [{ start: 4, end: 20 }]
+					}
+				})]
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("searches a three-character substring in Search document content", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({
+				kind: "initiative",
+				title: "Searchable initiative",
+				body: "The storage contract has one shared search boundary."
+			});
+
+			await expect(store.search({ query: "tract", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }), match: { field: "body" } })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("identifies a trigram title match as the strongest matching field", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Storage contract" });
+
+			await expect(store.search({ query: "tract", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }), match: { field: "title" } })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("finds a Search document for a one-edit content typo", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({
+				kind: "initiative",
+				title: "Searchable initiative",
+				body: "The retrieval system ranks matching records."
+			});
+
+			await expect(store.search({ query: "retrival", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: entity.id }),
+					match: { field: "body" },
+					snippet: {
+						text: "The retrieval system ranks matching records.",
+						highlights: [{ start: 4, end: 13 }]
+					}
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("combines typo-tolerant and exact plain query terms", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({
+				kind: "initiative",
+				title: "Searchable initiative",
+				body: "The retrieval system ranks matching records."
+			});
+
+			await expect(store.search({ query: "retrival records", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }), match: { field: "body" } })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("supports transpositions and permitted two-edit content typos", async () => {
+		const store = await openTestStore();
+
+		try {
+			const transposition = await store.createEntity({ kind: "initiative", title: "Searchable initiative", body: "The retrieval system ranks records." });
+			const twoEdits = await store.createEntity({ kind: "initiative", title: "Searchable configuration", body: "The configuration has a default value." });
+
+			await expect(store.search({ query: "retreival", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: expect.arrayContaining([expect.objectContaining({ identity: expect.objectContaining({ sourceId: transposition.id }) })])
+			}));
+			await expect(store.search({ query: "cnfigurtion", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: expect.arrayContaining([expect.objectContaining({ identity: expect.objectContaining({ sourceId: twoEdits.id }) })])
+			}));
+			await expect(store.search({ query: "cnfigrtion", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("finds Unicode content through a normalized typo and highlights the source text", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({
+				kind: "initiative",
+				title: "Searchable initiative",
+				body: "A café contains indexed records."
+			});
+
+			await expect(store.search({ query: "caff", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: entity.id }),
+					snippet: {
+						text: "A café contains indexed records.",
+						highlights: [{ start: 2, end: 6 }]
+					}
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("does not expand strict terms or identity values through typo matching", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Searchable initiative", body: "The retrieval system ranks records." });
+			const mistypedReference = `${entity.reference.slice(0, -1)}X`;
+
+			await expect(store.search({ query: '"retrival"', scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			await expect(store.search({ query: "retrival*", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			await expect(store.search({ query: mistypedReference, scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("returns no more than twenty final search results", async () => {
+		const store = await openTestStore();
+
+		try {
+			await Promise.all(Array.from({ length: 25 }, (_, index) => store.createEntity({
+				kind: "initiative",
+				title: `Matching result ${index}`
+			})));
+
+			const response = await store.search({ query: "matching", scope: { type: "all-projects" }, limit: 100 });
+			expect(response).toEqual(expect.objectContaining({ state: "available" }));
+			if (response.state !== "available") {
+				throw new Error("SQLite search must be available.");
+			}
+			expect(response.results).toHaveLength(20);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("executes a structured NEAR query against a Search document", async () => {
+		const store = await openTestStore();
+
+		try {
+			const nearMatch = await store.createEntity({
+				kind: "initiative",
+				title: "Near match",
+				body: "The ranked retrieval engine evaluates every query term."
+			});
+			await store.createEntity({
+				kind: "initiative",
+				title: "Distant match",
+				body: "The ranked result has several unrelated words before the retrieval engine."
+			});
+
+			await expect(store.search({ query: '"ranked retrieval" NEAR/2 engine', scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: nearMatch.id }) })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("excludes Search documents that match a NOT term", async () => {
+		const store = await openTestStore();
+
+		try {
+			const match = await store.createEntity({
+				kind: "initiative",
+				title: "Included result",
+				body: "Ranked retrieval evaluates query terms."
+			});
+			await store.createEntity({
+				kind: "initiative",
+				title: "Excluded result",
+				body: "Ranked retrieval excludes draft query terms."
+			});
+
+			await expect(store.search({ query: "ranked NOT draft", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: match.id }) })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("executes nested OR and NOT query expressions", async () => {
+		const store = await openTestStore();
+
+		try {
+			const firstMatch = await store.createEntity({ kind: "initiative", title: "First match", body: "Alpha query." });
+			const secondMatch = await store.createEntity({ kind: "initiative", title: "Second match", body: "Fallback query." });
+			const excludedMatch = await store.createEntity({ kind: "initiative", title: "Excluded match", body: "Alpha excluded query." });
+
+			const response = await store.search({ query: "(alpha OR fallback) AND NOT excluded", scope: { type: "all-projects" } });
+
+			expect(response).toEqual(expect.objectContaining({ state: "available" }));
+			if (response.state !== "available") {
+				throw new Error("SQLite search must be available.");
+			}
+			expect(new Set(response.results.map((result) => result.identity.sourceId))).toEqual(new Set([firstMatch.id, secondMatch.id]));
+			expect(response.results.some((result) => result.identity.sourceId === excludedMatch.id)).toBe(false);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("executes a strict prefix query against a Search document", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Prefix result", body: "Searchable query result." });
+
+			await expect(store.search({ query: "search*", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("ranks an exact title match ahead of a newer title prefix match", async () => {
+		const store = await openTestStore();
+
+		try {
+			const exactMatch = await store.createEntity({ kind: "initiative", title: "Ranked" });
+			await store.createEntity({ kind: "initiative", title: "Ranked retrieval" });
+
+			await expect(store.search({ query: "ranked", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: exactMatch.id }), match: { field: "title" } }),
+					expect.objectContaining({ match: { field: "title" } })
+				]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("identifies an FTS title match as the strongest matching field", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "The retrieval system" });
+
+			await expect(store.search({ query: "retrieval", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: entity.id }),
+					match: { field: "title" }
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("searches a Plan entry by its exact reference", async () => {
+		const store = await openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const plan = await store.createEntity({ kind: "plan", title: "Search Plan", parentId: initiative.id });
+			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Index this Plan entry." });
+
+			await expect(store.search({ query: entry.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: entry.id, sourceType: "plan-entry" }),
+					navigationTarget: { type: "plan-entry", planId: plan.id, entryId: entry.id }
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("searches an issue comment by its exact reference", async () => {
+		const store = await openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const issue = await store.createEntity({ kind: "issue", title: "Search issue", parentId: initiative.id });
+			const comment = await store.createIssueComment({ issueId: issue.id, body: "Index this issue comment." });
+
+			await expect(store.search({ query: comment.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: comment.id, sourceType: "issue-comment" }),
+					navigationTarget: { type: "issue-comment", issueId: issue.id, commentId: comment.id }
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("searches a scoped context by its exact reference", async () => {
+		const store = await openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const { context } = await store.upsertContext({
+				scopeRef: initiative.id,
+				title: "Search context",
+				summary: "Index this context summary."
+			});
+			if (!context.reference) {
+				throw new Error("Created context must have a reference.");
+			}
+
+			await expect(store.search({ query: context.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: context.id, sourceType: "context" }),
+					navigationTarget: { type: "context", scopeRef: initiative.id }
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("searches a context term by its exact reference", async () => {
+		const store = await openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const { term } = await store.defineContextTerm({
+				scopeRef: initiative.id,
+				term: "Search term",
+				definition: "Index this context term."
+			});
+
+			await expect(store.search({ query: term.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: term.id, sourceType: "context-term" }),
+					navigationTarget: { type: "context-term", scopeRef: initiative.id, term: term.term }
+				})]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("filters projected Search documents by source type", async () => {
+		const store = await openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const plan = await store.createEntity({ kind: "plan", title: "Search Plan", parentId: initiative.id });
+			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Index this Plan entry." });
+
+			await expect(store.search({
+				query: entry.reference,
+				scope: { type: "all-projects" },
+				filters: { sourceTypes: ["entity"] }
+			})).resolves.toEqual({ state: "available", results: [] });
+			await expect(store.search({
+				query: entry.reference,
+				scope: { type: "all-projects" },
+				filters: { sourceTypes: ["plan-entry"] }
+			})).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entry.id }) })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("returns a typed parse error for invalid search grammar", async () => {
+		const store = await openTestStore();
+
+		try {
+			await expect(store.search({ query: "search OR", scope: { type: "all-projects" } })).resolves.toEqual({
+				state: "parse-error",
+				error: { message: "Expected a search term.", start: 9, end: 9 }
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("stores visible Markdown text in Plan-entry Search documents", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-markdown-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const { store } = await openSqliteStore(dbPath, { tenant: "test" });
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const plan = await store.createEntity({ kind: "plan", title: "Search Plan", parentId: initiative.id });
+			const entry = await store.createPlanEntry({
+				planId: plan.id,
+				role: "decision",
+				body: "# Visible heading\n\n[Visible label](https://example.com) and `visibleCode`."
+			});
+			const inspection = new Database(dbPath, { readonly: true, fileMustExist: true });
+			const document = inspection.prepare("SELECT body FROM search_documents WHERE tenant_id = ? AND source_type = 'plan-entry' AND source_id = ?").get("test", entry.id) as { body: string };
+			inspection.close();
+
+			expect(document.body).toContain("Visible heading");
+			expect(document.body).toContain("Visible label");
+			expect(document.body).toContain("visibleCode");
+			expect(document.body).not.toContain("#");
+			expect(document.body).not.toContain("https://example.com");
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("removes and restores a context-term Search document", async () => {
+		const store = await openTestStore();
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const created = await store.defineContextTerm({
+				scopeRef: initiative.id,
+				term: "Search term",
+				definition: "Initial definition."
+			});
+			const deleted = await store.forgetContextTerm({
+				scopeRef: initiative.id,
+				term: created.term.term,
+				expectedRevision: created.term.revision,
+				expectedContentHash: created.term.contentHash
+			});
+
+			await expect(store.search({ query: created.term.reference, scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+
+			await store.defineContextTerm({
+				scopeRef: initiative.id,
+				term: created.term.term,
+				definition: "Restored definition.",
+				expectedRevision: deleted.currentRevision,
+				expectedContentHash: deleted.currentContentHash
+			});
+
+			await expect(store.search({ query: created.term.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: created.term.id }) })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("updates and removes the entity Search document with its source entity", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Initial title" });
+			const updated = await store.updateEntity({
+				entityId: entity.id,
+				title: "Updated title",
+				expectedRevision: entity.revision,
+				expectedContentHash: entity.contentHash
+			});
+
+			await expect(store.search({ query: "Initial title", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			await expect(store.search({ query: "Updated title", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+			}));
+
+			await store.deleteEntity({ entityId: updated.id });
+
+			await expect(store.search({ query: "Updated title", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("enforces the selected project for current-project searches", async () => {
+		const firstProjectStore = await openTestStoreForProject("first-project");
+		const secondProjectStore = await openTestStoreForProject("second-project");
+
+		try {
+			const entity = await firstProjectStore.createEntity({
+				kind: "initiative",
+				title: "First project search result",
+				body: "Isolated search result."
+			});
+
+			await expect(secondProjectStore.search({
+				query: "isolated result",
+				scope: { type: "current-project", projectId: entity.id }
+			})).resolves.toEqual({ state: "available", results: [] });
+			await expect(secondProjectStore.search({
+				query: "isolated result",
+				scope: { type: "all-projects" }
+			})).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+			}));
+		} finally {
+			await firstProjectStore.close();
+			await secondProjectStore.close();
+		}
+	});
+
+	it("removes Search documents when a tenant is deleted", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-search-tenant-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const betaStore = (await openSqliteStore(dbPath, { tenant: "beta" })).store;
+
+		try {
+			const entity = await betaStore.createEntity({ kind: "initiative", title: "Deleted tenant result" });
+			await betaStore.deleteTenant("beta");
+			await betaStore.close();
+
+			const reopenedStore = (await openSqliteStore(dbPath, { tenant: "beta" })).store;
+			try {
+				await expect(reopenedStore.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			} finally {
+				await reopenedStore.close();
+			}
+		} finally {
+			await betaStore.close();
+		}
+	});
+
+	it("preserves Search documents when a tenant is renamed", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-search-tenant-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const originalStore = (await openSqliteStore(dbPath, { tenant: "original" })).store;
+
+		try {
+			const entity = await originalStore.createEntity({ kind: "initiative", title: "Renamed tenant result" });
+			await originalStore.renameTenant("original", "renamed");
+			await originalStore.close();
+
+			const renamedStore = (await openSqliteStore(dbPath, { tenant: "renamed" })).store;
+			try {
+				await expect(renamedStore.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+					state: "available",
+					results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+				}));
+			} finally {
+				await renamedStore.close();
+			}
+		} finally {
+			await originalStore.close();
+		}
+	});
+
+	it("returns exact and prefix identity and title matches in ranking order", async () => {
+		const store = await openTestStore();
+
+		try {
+			const exactTitle = await store.createEntity({ kind: "initiative", title: "Search" });
+			const prefixTitle = await store.createEntity({ kind: "initiative", title: "Search result" });
+
+			await expect(store.search({ query: exactTitle.id, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({
+					identity: expect.objectContaining({ sourceId: exactTitle.id }),
+					match: { field: "identity" }
+				})]
+			}));
+			await expect(store.search({ query: exactTitle.reference.slice(0, 8), scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: expect.arrayContaining([
+					expect.objectContaining({
+						identity: expect.objectContaining({ sourceId: exactTitle.id }),
+						match: { field: "identity" }
+					})
+				])
+			}));
+			await expect(store.search({ query: "Search", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: exactTitle.id }), match: { field: "title" } }),
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: prefixTitle.id }), match: { field: "title" } })
+				]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("removes deleted entities and restores their Search documents", async () => {
+		const store = await openTestStore();
+
+		try {
+			const entity = await store.createEntity({ kind: "initiative", title: "Restorable search result" });
+			const deleted = await store.deleteEntity({ entityId: entity.id });
+
+			await expect(store.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			await store.restoreEntityRevision({
+				entityId: entity.id,
+				revision: entity.revision,
+				expectedRevision: deleted.entity.revision,
+				expectedContentHash: deleted.entity.contentHash
+			});
+			await expect(store.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+			}));
+		} finally {
+			await store.close();
+		}
+	});
+});
+
 describe("storage-driver seam: persisted Stable identity (SqliteStore)", () => {
 	it("stores the UUID, Canonical reference, and short reference separately", async () => {
 		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-identity-"));

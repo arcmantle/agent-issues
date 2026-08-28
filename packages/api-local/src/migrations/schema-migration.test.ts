@@ -110,7 +110,7 @@ afterEach(() => {
 
 describe("golden-fixture migration wall", () => {
 	it("registers the SQLite production migration plan", () => {
-		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position"]);
+		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "entity-search", "record-search", "token-search", "trigram-search", "search-typo-vocabulary"]);
 	});
 
 	it("implements the SQLite legacy route without clone or historical migration replay", () => {
@@ -489,15 +489,20 @@ describe("fresh install schema parity", () => {
 				{ id: "adr-status-to-current" },
 				{ id: "context-term-provenance" },
 				{ id: "debt-metadata" },
+				{ id: "entity-search" },
 				{ id: "entity-type" },
 				{ id: "final-baseline" },
 				{ id: "issue-comments" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
 				{ id: "record-provenance" },
+				{ id: "record-search" },
 				{ id: "relation-provenance" },
+				{ id: "search-typo-vocabulary" },
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
+				{ id: "token-search" },
+				{ id: "trigram-search" },
 				{ id: "user-directory" }
 			]);
 		} finally {

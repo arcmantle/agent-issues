@@ -79,6 +79,17 @@ runStorageDriverContractSuite({
 	openStoreForProject: openPgTestStoreForProject
 });
 
+it("reports unsupported search without implementing PostgreSQL search", async () => {
+	const store = await openPgTestStore();
+
+	try {
+		await expect(store.getSearchCapability()).resolves.toEqual({ state: "unsupported" });
+		await expect(store.search({ query: "project", scope: { type: "all-projects" } })).resolves.toEqual({ state: "unsupported" });
+	} finally {
+		await store.close();
+	}
+});
+
 it("imports and exports a canonical issue comment with its ordered references", async () => {
 	const store = await openPgTestStore();
 	try {

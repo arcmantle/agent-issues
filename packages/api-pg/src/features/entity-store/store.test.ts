@@ -248,7 +248,10 @@ describe("PgStore entity lifecycle", () => {
 
 		expect(read.entity).toMatchObject({ id: created.id, title: "Executor CRUD" });
 		expect(updated).toMatchObject({ id: created.id, title: "Executor CRUD updated" });
-		expect(deleted).toMatchObject({ entity: updated, removed: true });
+		expect(deleted).toMatchObject({
+			entity: { id: updated.id, title: updated.title, revision: updated.revision + 1 },
+			removed: true
+		});
 		await expect(store.getEntityDetails(created.id)).rejects.toThrow("Entity not found");
 	});
 

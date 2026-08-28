@@ -10,7 +10,7 @@ import "./relationship-graph.js";
 import "./relationship-graph-filters.js";
 import { PROJECT_GRAPH_KINDS, type ContextDetails, type Entity, type InitiativeBundle, type IssueComment, type PlanEntry, type ProjectGraphKind, type RelationshipGraph } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
-import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
+import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
 type RankedRecord = { index: number; rank: number; record: Entity };
 
@@ -33,6 +33,61 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	protected issueRecordView: RecordView = "list";
 	protected userStoryRecordView: RecordView = "list";
 	public visibleGraphKinds = new Set<ProjectGraphKind>(PROJECT_GRAPH_KINDS);
+
+	protected focusPlanEntry(entryId: string, selector = ".ai-plan-entry") {
+		const element = [...this.renderRoot.querySelectorAll<HTMLElement>(selector)]
+			.find((candidate) => candidate.dataset.planEntryId === entryId);
+		if (!element) {
+			return;
+		}
+
+		const disclosure = element.closest<HTMLDetailsElement>("details");
+		if (disclosure) {
+			disclosure.open = true;
+		}
+		element.classList.remove("is-plan-entry-target");
+		void element.offsetWidth;
+		element.classList.add("is-plan-entry-target");
+		element.focus({ preventScroll: true });
+		if (typeof element.scrollIntoView === "function") {
+			element.scrollIntoView({ behavior: "smooth", block: "center" });
+		}
+	}
+
+	protected focusIssueComment(commentId: string) {
+		const element = [...this.renderRoot.querySelectorAll<HTMLElement>(".ai-comment")]
+			.find((candidate) => candidate.dataset.commentId === commentId);
+		if (!element) {
+			return;
+		}
+
+		element.classList.remove("is-comment-target");
+		void element.offsetWidth;
+		element.classList.add("is-comment-target");
+		element.focus({ preventScroll: true });
+		if (typeof element.scrollIntoView === "function") {
+			element.scrollIntoView({ behavior: "smooth", block: "center" });
+		}
+	}
+
+	protected focusNestedTarget() {
+		for (const element of this.renderRoot.querySelectorAll<HTMLElement>(".is-comment-target, .is-plan-entry-target")) {
+			element.classList.remove("is-comment-target", "is-plan-entry-target");
+		}
+
+		const target = this.store?.selectedNestedTarget.get();
+		if (target?.type === "plan-entry") {
+			this.focusPlanEntry(target.id);
+			return;
+		}
+		if (target?.type === "issue-comment") {
+			this.focusIssueComment(target.id);
+		}
+	}
+
+	protected override updated() {
+		this.focusNestedTarget();
+	}
 
 	protected onBackClick = () => {
 		this.store?.closeEntity();
@@ -127,6 +182,13 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	protected onNodeOpen = (event: Event) => {
 		const id = (event as CustomEvent<{ id: string }>).detail.id;
 		if (id) this.store?.selectEntity(id);
+	};
+
+	protected onPlanEntryJump = (event: Event) => {
+		const entryId = (event.currentTarget as HTMLElement).dataset.planEntryId;
+		if (!entryId) return;
+
+		this.focusPlanEntry(entryId, ".ai-plan-history .ai-plan-entry");
 	};
 
 	protected onToggleGraphKind = (event: Event) => {
@@ -280,7 +342,9 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	}
 
 	protected issueTreeForRecords(bundle: InitiativeBundle, records: Entity[]): IssueTreeNode[] {
-		const recordsById = new Map(records.map((record) => [record.id, record]));
+		const orderedRecords = this.store?.sortIssuesByExpectedCompletion(records, bundle) ?? records;
+		const recordsById = new Map(orderedRecords.map((record) => [record.id, record]));
+		const positionById = new Map(orderedRecords.map((record, index) => [record.id, index]));
 		const childrenByParentId = new Map<string, Entity[]>();
 		const childIds = new Set<string>();
 
@@ -298,11 +362,12 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		const buildNode = (record: Entity, visitedIds: ReadonlySet<string>): IssueTreeNode => ({
 			children: (childrenByParentId.get(record.id) ?? [])
 				.filter((child) => !visitedIds.has(child.id))
+				.sort((left, right) => positionById.get(left.id)! - positionById.get(right.id)!)
 				.map((child) => buildNode(child, new Set([...visitedIds, child.id]))),
 			issue: record
 		});
 
-		return records.filter((record) => !childIds.has(record.id)).map((record) => buildNode(record, new Set([record.id])));
+		return orderedRecords.filter((record) => !childIds.has(record.id)).map((record) => buildNode(record, new Set([record.id])));
 	}
 
 	public renderRecordBrowser(
@@ -316,7 +381,8 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			treeContent?: (matchingRecords: Entity[]) => TemplateResult;
 		} = {}
 	) {
-		const filteredRecords = this.filterRecords(records, bundle);
+		const orderedRecords = title === "Issues" && bundle ? this.store?.sortIssuesByExpectedCompletion(records, bundle) ?? records : records;
+		const filteredRecords = this.filterRecords(orderedRecords, bundle);
 		const statuses = [...new Set(records.map((record) => record.status))].sort((left, right) => left.localeCompare(right));
 		const treeView = options.treeTab ? this.getRecordView(options.treeTab) === "tree" : false;
 
@@ -520,7 +586,11 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 
 	public renderIssueComment(comment: IssueComment): TemplateResult {
 		return html`
-		<article class="ai-comment">
+		<article
+			class="ai-comment"
+			data-comment-id=${comment.id}
+			tabindex="-1"
+		>
 			<div class="ai-comment-reference">${comment.reference}</div>
 			${when(
 				comment.tombstone,
@@ -542,26 +612,101 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 
 	public renderPlanEntry(entry: PlanEntry): TemplateResult {
 		const planEntries = this.store?.snapshot.get()?.planEntries ?? [];
-		const entryReferences = new Map(planEntries.map((candidate) => [candidate.id, candidate.reference]));
+		const entriesById = new Map(planEntries.map((candidate) => [candidate.id, candidate]));
+		const referencedEntities = entry.referencedEntityIds.map((id) => {
+			const entity = this.store?.entityForId(id);
+			return { entity, id };
+		});
+		const supersededEntries = entry.supersededEntryIds.map((id) => {
+			const supersededEntry = entriesById.get(id);
+			return {
+				id,
+				label: supersededEntry?.shortReference ?? supersededEntry?.reference ?? id,
+				reference: supersededEntry?.reference ?? id
+			};
+		});
 		return html`
-		<div class="ai-plan-entry">
-			<div class="ai-plan-entry-reference">${entry.reference}</div>
+		<article
+			class="ai-plan-entry"
+			data-plan-entry-id=${entry.id}
+			tabindex="-1"
+		>
+			<header class="ai-plan-entry-header">
+				<span
+					class="ai-plan-entry-reference"
+					title=${entry.reference}
+				>
+					${entry.shortReference ?? entry.reference}
+				</span>
+			</header>
 			${when(
 				entry.tombstone,
-				() => html`<div class="ai-plan-entry-deleted">Deleted</div>`,
+				() => html`<div class="ai-plan-entry-deleted">Deleted entry</div>`,
 				() => html`<div class="ai-plan-entry-body">${entry.body ?? ""}</div>`
 			)}
 			${when(
-				entry.referencedEntityIds.length > 0,
-				() => html`<div class="ai-plan-entry-links">References: ${entry.referencedEntityIds.join(", ")}</div>`,
+				referencedEntities.length > 0 || supersededEntries.length > 0,
+				() => html`
+				<footer class="ai-plan-entry-meta">
+				${when(
+					referencedEntities.length > 0,
+					() => html`
+					<div class="ai-plan-entry-meta-row">
+						<span class="ai-plan-entry-meta-label">References</span>
+						<span class="ai-plan-entry-link-list">
+							${repeat(
+								referencedEntities,
+								({ id }) => id,
+								({ entity, id }) => when(
+									entity !== null,
+									() => html`
+									<button
+										class="ai-plan-entry-link"
+										data-id=${id}
+										@click=${this.onSelectEntityClick}
+									>
+										${this.store?.shortRef(entity!)} ${entity!.title}
+									</button>
+									`,
+									() => html`<span class="ai-plan-entry-unresolved">${id}</span>`
+								)
+							)}
+						</span>
+					</div>
+					`,
+					() => nothing
+				)}
+				${when(
+					supersededEntries.length > 0,
+					() => html`
+					<div class="ai-plan-entry-meta-row">
+						<span class="ai-plan-entry-meta-label">Supersedes</span>
+						<span class="ai-plan-entry-link-list">
+							${repeat(
+								supersededEntries,
+								({ id }) => id,
+								({ id, label, reference }) => html`
+								<button
+									aria-label=${`Go to superseded Plan entry ${label}`}
+									class="ai-plan-entry-link"
+									data-plan-entry-id=${id}
+									title=${reference}
+									@click=${this.onPlanEntryJump}
+								>
+									${label}
+								</button>
+								`
+							)}
+						</span>
+					</div>
+					`,
+					() => nothing
+				)}
+				</footer>
+				`,
 				() => nothing
 			)}
-			${when(
-				entry.supersededEntryIds.length > 0,
-				() => html`<div class="ai-plan-entry-links">Supersedes: ${entry.supersededEntryIds.map((id) => entryReferences.get(id) ?? id).join(", ")}</div>`,
-				() => nothing
-			)}
-		</div>
+		</article>
 		`;
 	}
 
@@ -575,6 +720,9 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		const entity = store.entityForId(entityId);
 		if (!entity) {
 			return nothing;
+		}
+		if (store.selectedNestedTarget.get()?.type === "plan-entry") {
+			this.entityDetailTab = "plan";
 		}
 
 		const bundle = store.bundleForEntityId(entityId);
@@ -622,7 +770,6 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	}
 
 	static styles = [
-		issueBrowserTokenStyles,
 		issueBrowserTypographyStyles,
 		issueBrowserControlStyles,
 		css`
@@ -700,21 +847,22 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		}
 		.ai-subtabs {
 			display: flex;
+			flex-wrap: wrap;
 			gap: 18px;
 			margin-top: 22px;
 			border-bottom: 1px solid var(--border-muted);
-			overflow-x: auto;
 		}
 		.ai-subtab {
 			position: relative;
 			flex: 0 0 auto;
-			padding: 8px 20px 8px 2px;
+			padding: 8px 24px;
 			border: 0;
 			border-bottom: 2px solid transparent;
 			background: transparent;
 			color: var(--muted);
 			cursor: pointer;
 			font: inherit;
+			text-align: center;
 		}
 		.ai-subtab-count {
 			box-sizing: border-box;
@@ -873,6 +1021,13 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			border: 1px solid var(--border-muted);
 			border-radius: 6px;
 		}
+		.ai-comment:focus {
+			outline: 2px solid var(--focus-ring);
+			outline-offset: -2px;
+		}
+		.ai-comment.is-comment-target {
+			animation: plan-entry-target 1.8s ease-out;
+		}
 		.ai-comment-reference,
 		.ai-comment-references,
 		.ai-comment-provenance,
@@ -902,36 +1057,173 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			gap: 12px;
 		}
 		.ai-plan-group {
-			display: grid;
-			gap: 8px;
+			border-top: 1px solid var(--border-muted);
 		}
-		.ai-plan-group h3 {
-			margin: 0;
+		.ai-plan-group:last-of-type {
+			border-bottom: 1px solid var(--border-muted);
+		}
+		.ai-plan-group summary,
+		.ai-plan-history summary {
+			display: flex;
+			gap: 8px;
+			align-items: center;
+			justify-content: space-between;
+			padding: 10px 0;
+			font-size: 13px;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		.ai-plan-count {
+			min-width: 24px;
+			padding: 2px 7px;
+			border-radius: 999px;
+			background: var(--surface-strong);
 			color: var(--muted);
-			font-size: 12px;
+			font-size: 11px;
+			text-align: center;
+		}
+		.ai-plan-entries {
+			display: grid;
+			gap: 2px;
+			overflow: hidden;
+			margin-bottom: 12px;
+			border: 1px solid var(--border-muted);
+			border-radius: 6px;
+			background: var(--border-muted);
+		}
+		@supports (row-rule: 2px solid transparent) {
+			.ai-plan-entries {
+				background: transparent;
+				row-rule: 2px solid var(--border-muted);
+			}
+			.ai-plan-entries[data-plan-group="decisions"] {
+				row-rule: none;
+			}
+		}
+		.ai-plan-entries[data-plan-group="decisions"] {
+			gap: 12px;
+			overflow: visible;
+			padding: 10px;
+			border: 0;
+			border-radius: 0;
+			background: var(--surface-muted);
+		}
+		.ai-plan-entry {
+			display: grid;
+			gap: 10px;
+			padding: 14px 16px;
+			background: var(--surface);
+		}
+		.ai-plan-decision-pair {
+			display: grid;
+			overflow: hidden;
+			border: 1px solid var(--border-muted);
+			border-radius: 6px;
+			background: var(--surface);
+			box-shadow: 0 1px 2px rgba(31, 35, 40, 0.05);
+		}
+		.ai-plan-decision-question {
+			background: var(--surface-muted);
+		}
+		.ai-plan-decision-question .ai-plan-entry {
+			background: transparent;
+		}
+		.ai-plan-decision-answer {
+			border-top: 2px solid var(--border-muted);
+		}
+		.ai-plan-decision-pair-label {
+			padding: 12px 16px 0;
+			color: var(--muted);
+			font-size: 10px;
 			font-weight: 700;
 			letter-spacing: 0.04em;
 			text-transform: uppercase;
 		}
-		.ai-plan-entry {
-			padding: 10px 12px;
-			border: 1px solid var(--border-muted);
-			border-radius: 6px;
+		.ai-plan-entry:focus {
+			outline: 2px solid var(--focus-ring);
+			outline-offset: -2px;
 		}
-		.ai-plan-entry-reference,
-		.ai-plan-entry-links,
+		.ai-plan-entry.is-plan-entry-target {
+			animation: plan-entry-target 1.8s ease-out;
+		}
+		.ai-plan-entry-meta {
+			display: grid;
+			gap: 8px;
+			padding-top: 10px;
+			border-top: 1px solid var(--border-muted);
+			color: var(--muted);
+			font-size: 11px;
+		}
+		.ai-plan-entry-header {
+			display: flex;
+			align-items: center;
+		}
+		.ai-plan-entry-reference {
+			display: inline-flex;
+			width: max-content;
+			padding: 3px 8px;
+			border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+			border-radius: 999px;
+			background: var(--accent-soft);
+			color: var(--accent);
+			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+			font-size: 10px;
+			font-weight: 700;
+		}
+		.ai-plan-entry-meta-row {
+			display: grid;
+			grid-template-columns: 70px minmax(0, 1fr);
+			gap: 10px;
+			align-items: baseline;
+		}
+		.ai-plan-entry-link-list {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 5px 12px;
+			min-width: 0;
+			overflow-wrap: anywhere;
+		}
+		.ai-plan-entry-meta-label {
+			font-weight: 700;
+		}
+		.ai-plan-entry-link {
+			padding: 0;
+			border: 0;
+			background: transparent;
+			color: var(--accent);
+			cursor: pointer;
+			font: inherit;
+			font-weight: 600;
+			text-align: left;
+		}
+		.ai-plan-entry-link:hover {
+			text-decoration: underline;
+		}
+		.ai-plan-entry-link:focus-visible {
+			outline: 2px solid var(--focus-ring);
+			outline-offset: 2px;
+		}
+		.ai-plan-entry-unresolved {
+			overflow-wrap: anywhere;
+		}
 		.ai-plan-entry-deleted {
 			color: var(--muted);
-			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-			font-size: 12px;
+			font-style: italic;
 		}
 		.ai-plan-entry-body {
-			margin: 8px 0;
+			line-height: 1.55;
+			overflow-wrap: anywhere;
 			white-space: pre-wrap;
 		}
-		.ai-plan-entry-deleted {
-			margin: 8px 0;
-			font-style: italic;
+		@keyframes plan-entry-target {
+			0% {
+				background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+				box-shadow: inset 3px 0 0 var(--accent);
+			}
+			100% {
+				background: var(--surface);
+				box-shadow: inset 3px 0 0 transparent;
+			}
 		}
 		.ai-body {
 			max-width: 75ch;

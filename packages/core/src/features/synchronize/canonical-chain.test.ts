@@ -167,16 +167,16 @@ describe("mergeCanonicalChainBundles", () => {
 		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [ticket] })).toThrow("wayfinder-ticket");
 	});
 
-	it("rejects a parentless Plan", () => {
+	it("preserves a parentless legacy Plan", () => {
 		const plan = entityChain("Plan", 1);
 		plan.head.id = PLAN_STABLE_ID;
 		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);
 		plan.head.kind = "plan";
 
-		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [plan] })).toThrow("initiative parent");
+		expect(mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [plan] }).entities).toEqual([plan]);
 	});
 
-	it("rejects a Plan without an initiative parent", () => {
+	it("rejects a Plan under a non-Initiative parent", () => {
 		const plan = entityChain("Plan", 1);
 		plan.head.id = PLAN_STABLE_ID;
 		plan.head.reference = encodeCanonicalReference("plan", PLAN_STABLE_ID);

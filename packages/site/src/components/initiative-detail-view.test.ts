@@ -166,6 +166,43 @@ describe("initiative detail overview tab", () => {
 		expect(view.shadowRoot?.querySelector(".initiative-body .ai-body-source")).toBeNull();
 	});
 
+	it("renders initiative context summary Markdown in the subtitle", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const bundle = makeBundle(initiative);
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.snapshot.set(makeSnapshot({
+			contexts: {
+				initiatives: [{
+					context: {
+						createdAt: null,
+						exists: true,
+						key: initiative.id,
+						scopeEntityId: initiative.id,
+						scopeKind: "initiative",
+						scopeLabel: initiative.title,
+						summary: "## Purpose\n\nBuild the **viewer**.\n\n- Show records",
+						title: "Console Viewer Context",
+						updatedAt: null
+					},
+					terms: []
+				}],
+				shared: makeSnapshot().contexts.shared
+			},
+			initiatives: [bundle]
+		}));
+		store.selectInitiative(initiative.id);
+
+		const view = await mountView(store);
+		await view.updateComplete;
+		const subtitle = view.shadowRoot?.querySelector(".d-sub");
+
+		expect(subtitle?.tagName).toBe("DIV");
+		expect(subtitle?.querySelector("p")?.textContent?.trim()).toBe("Build the viewer.");
+		expect(subtitle?.querySelector("strong")?.textContent?.trim()).toBe("viewer");
+		expect(subtitle?.querySelector("li")?.textContent?.trim()).toBe("Show records");
+	});
+
 	it("renders the overview body flat, without a boxed collapsible section", async () => {
 		const initiative = makeEntity({
 			body: "Overview of the work.\n\n## Plan\n\nShip the **initiative** detail pane.",
@@ -206,6 +243,27 @@ describe("initiative detail overview tab", () => {
 		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('.record-tab-list .line[data-id="PRD1"]')).not.toBeNull();
 	});
 
+	it("shows initiative-owned Plans and restores the initiative after closing a plan", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "ready", title: "Viewer implementation" });
+		const bundle = makeBundle(initiative, { entities: [initiative, plan] });
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.snapshot.set(makeSnapshot({ entities: [initiative, plan], initiatives: [bundle] }));
+		store.selectInitiative(initiative.id);
+		const view = await mountView(store);
+
+		expect(tabLabels(view)).toEqual(["Overview", "Plans", "Graph"]);
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="plans"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-tab-list .line[data-id="PLAN1"]')).not.toBeNull();
+
+		store.selectEntity(plan.id);
+		store.closeEntity();
+		expect(store.activePage.get()).toBe("initiative");
+		expect(store.selectedInitiativeId.get()).toBe(initiative.id);
+	});
+
 	it("renders owned and resolved debt in distinct initiative sections", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const ownedDebt = makeEntity({ category: "technical", id: "DEBT1", kind: "debt", priority: "high", status: "open", title: "Replace legacy storage" });
@@ -234,6 +292,31 @@ describe("initiative detail overview tab", () => {
 });
 
 describe("initiative detail record tabs", () => {
+	it("orders issues by expected completion through their blockers", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const completedBlocker = makeEntity({ id: "ISS1", kind: "issue", status: "done", title: "Completed blocker" });
+		const completedIssue = makeEntity({ id: "ISS2", kind: "issue", status: "done", title: "Completed issue" });
+		const availableIssue = makeEntity({ id: "ISS3", kind: "issue", status: "todo", title: "Available issue" });
+		const blockedIssue = makeEntity({ id: "ISS4", kind: "issue", status: "blocked", title: "Blocked issue" });
+		const laterIssue = makeEntity({ id: "ISS5", kind: "issue", status: "blocked", title: "Later issue" });
+		const unfinishedBlocker = makeEntity({ id: "ISS6", kind: "issue", status: "todo", title: "Unfinished stale blocker" });
+		const bundle = makeBundle(initiative, {
+			blockerLinks: [
+				{ source: completedBlocker, target: completedIssue },
+				{ source: unfinishedBlocker, target: completedIssue },
+				{ source: availableIssue, target: blockedIssue },
+				{ source: blockedIssue, target: laterIssue }
+			],
+			issues: [laterIssue, blockedIssue, availableIssue, completedIssue, unfinishedBlocker, completedBlocker]
+		});
+		const view = await mountView(makeStore(bundle));
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS1", "ISS2", "ISS3", "ISS4", "ISS5", "ISS6"]);
+	});
+
 	it("ranks direct non-body field matches ahead of body matches", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const bodyMatch = makeEntity({ body: "This issue includes the priority phrase in its body.", id: "ISS1", kind: "issue", status: "todo", title: "Body match" });
@@ -341,7 +424,7 @@ describe("initiative detail record tabs", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
-		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS1", "ISS2"]);
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2", "ISS1"]);
 
 		updateRecordFilter(view, { query: "ship" });
 		await view.updateComplete;

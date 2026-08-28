@@ -1,4 +1,4 @@
-import { measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSnapshot, type RelationRecord, type StorageDriver } from "@agent-issues/core";
+import { measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
 import type { CanonicalChainBundle } from "@agent-issues/core";
 import { LocalSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import * as localSynchronizeStore from "./features/synchronize/canonical-chain-store.js";
@@ -19,6 +19,7 @@ import { LocalEntityStore } from "./features/entity-store/store.js";
 import * as localEntityStore from "./features/entity-store/store.js";
 import { LocalIssueCommentStore } from "./features/issue-comment/store.js";
 import { LocalPlanEntryStore } from "./features/plan-entry/store.js";
+import { LocalSearchStore } from "./features/search/search-store.js";
 
 export type OpenSqliteStoreResult = {
 	store: SqliteStore;
@@ -43,6 +44,7 @@ export class SqliteStore implements StorageDriver {
 		this.entityStore = new LocalEntityStore(executor);
 		this.issueCommentStore = new LocalIssueCommentStore(executor);
 		this.planEntryStore = new LocalPlanEntryStore(executor);
+		this.searchStore = new LocalSearchStore(executor);
 	}
 
 	protected executor: SqliteInternalConnection;
@@ -54,6 +56,7 @@ export class SqliteStore implements StorageDriver {
 	private readonly entityStore: LocalEntityStore;
 	protected readonly issueCommentStore: LocalIssueCommentStore;
 	protected readonly planEntryStore: LocalPlanEntryStore;
+	protected readonly searchStore: LocalSearchStore;
 
 	public get tenantId(): string {
 		return this.executor.tenantId;
@@ -68,7 +71,11 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async importCanonicalChains(bundle: CanonicalChainBundle) {
-		return this.executor.drizzle.transaction(() => localSynchronizeStore.importCanonicalChains(this.executor, bundle));
+		return this.executor.drizzle.transaction(() => {
+			const result = localSynchronizeStore.importCanonicalChains(this.executor, bundle);
+			this.searchStore.synchronizeSearchDocuments();
+			return result;
+		});
 	}
 
 	public async upsertUser(input: Parameters<StorageDriver["upsertUser"]>[0]) {
@@ -81,6 +88,18 @@ export class SqliteStore implements StorageDriver {
 
 	public async getHistoryDiagnostics() {
 		return measureHistory(await this.synchronizeStore.exportCanonicalChains(), await this.historyDiagnosticsStore.getMaterializationDepths());
+	}
+
+	public async getSearchCapability(): Promise<SearchCapability> {
+		return this.searchStore.getSearchCapability();
+	}
+
+	public async getSearchDiagnostics(): Promise<SearchDiagnostic[]> {
+		return this.searchStore.getSearchDiagnostics();
+	}
+
+	public async search(input: SearchRequest): Promise<SearchResponse> {
+		return this.searchStore.search(input);
 	}
 
 	public async createEntity(input: {
@@ -183,7 +202,11 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async applyRelations(relations: RelationRecord[]) {
-		return this.executor.drizzle.transaction(() => localEntityStore.applyRelations(this.executor, relations));
+		return this.executor.drizzle.transaction(() => {
+			const result = localEntityStore.applyRelations(this.executor, relations);
+			this.searchStore.synchronizeSearchDocuments();
+			return result;
+		});
 	}
 
 	public async listOrphans(kind?: string) {
@@ -317,7 +340,9 @@ export class SqliteStore implements StorageDriver {
 			const username = resolveLocalUsername();
 			const identity = this.actorIdentity ?? { userId: `local:${username}`, tenantId: this.tenantId, displayName: username };
 			const user = upsertUser(this.executor, { authenticationSubject: identity.userId, displayName: identity.displayName });
-			return operation(user.id);
+			const result = operation(user.id);
+			this.searchStore.synchronizeSearchDocuments();
+			return result;
 		});
 	}
 }

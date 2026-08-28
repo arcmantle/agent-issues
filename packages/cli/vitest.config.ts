@@ -6,7 +6,8 @@ export default defineConfig({
 	test: {
 		environment: "node",
 		include: ["src/**/*.test.ts"],
-		setupFiles: ["./src/vitest-setup.ts"]
+		setupFiles: ["./src/vitest-setup.ts"],
+		maxWorkers: 1
 	},
 	resolve: {
 		alias: {

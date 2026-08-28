@@ -76,7 +76,185 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
+});
+
+describe("global search request lifecycle", () => {
+	it("searches a one-character query after the debounce delay", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ results: [], state: "available" }), { status: 200 }));
+
+		store.setGlobalSearchQuery("a");
+		await vi.advanceTimersByTimeAsync(149);
+		expect(fetchMock).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/api/search?tenant=demo&project=PROJ1&query=a"),
+			expect.objectContaining({ cache: "no-store" })
+		);
+		expect(store.globalSearchResponse.get()).toEqual({ results: [], state: "available" });
+	});
+
+	it("searches all tenant projects with selected record-kind filters", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ results: [], state: "available" }), { status: 200 }));
+
+		store.setGlobalSearchScope("all-projects");
+		store.setGlobalSearchSourceTypes(["plan-entry", "context"]);
+		store.setGlobalSearchQuery("planning");
+		await vi.advanceTimersByTimeAsync(150);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/api/search?tenant=demo&project=PROJ1&query=planning&scope=all-projects&sourceTypes=plan-entry%2Ccontext"),
+			expect.objectContaining({ cache: "no-store" })
+		);
+	});
+
+	it("keeps the last valid results when a later query has a parse error", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				results: [{ id: "search-ISS1" }],
+				state: "available"
+			}), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				error: { end: 9, message: "Expected a term after OR.", start: 7 },
+				state: "parse-error"
+			}), { status: 200 }));
+
+		store.setGlobalSearchQuery("planning");
+		await vi.advanceTimersByTimeAsync(150);
+		store.setGlobalSearchQuery("planning OR");
+		await vi.advanceTimersByTimeAsync(150);
+
+		expect(store.globalSearchResponse.get()).toEqual({
+			error: { end: 9, message: "Expected a term after OR.", start: 7 },
+			state: "parse-error"
+		});
+		expect(store.globalSearchResults.get()).toEqual([{ id: "search-ISS1" }]);
+	});
+
+	it("keeps results from a newer query when an older request resolves later", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		let resolveFirstResponse: (response: Response) => void;
+		const firstResponse = new Promise<Response>((resolve) => {
+			resolveFirstResponse = resolve;
+		});
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockReturnValueOnce(firstResponse)
+			.mockResolvedValueOnce(new Response(JSON.stringify({ results: [], state: "available" }), { status: 200 }));
+
+		store.setGlobalSearchQuery("a");
+		await vi.advanceTimersByTimeAsync(150);
+		store.setGlobalSearchQuery("b");
+		await vi.advanceTimersByTimeAsync(150);
+		resolveFirstResponse!(new Response(JSON.stringify({ state: "rebuilding" }), { status: 200 }));
+		await vi.runAllTimersAsync();
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(store.globalSearchResponse.get()).toEqual({ results: [], state: "available" });
+	});
+
+	it("loads the typed provider capability for the selected tenant", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ state: "unsupported" }), { status: 200 }));
+
+		await store.reloadGlobalSearchCapability();
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/api/search/capability?tenant=demo"),
+			expect.objectContaining({ cache: "no-store" })
+		);
+		expect(store.globalSearchCapability.get()).toEqual({ state: "unsupported" });
+	});
+
+	it("delays progress feedback while a search request is pending", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise<Response>(() => {}));
+
+		store.setGlobalSearchQuery("a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(store.globalSearchProgress.get()).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(150);
+		expect(store.globalSearchProgress.get()).toBe(true);
+	});
+
+	it("retries the latest valid request after an operational error", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ results: [], state: "available" }), { status: 200 }));
+
+		store.setGlobalSearchQuery("a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(store.globalSearchResponse.get()).toEqual({ state: "operational-error" });
+
+		await store.retryGlobalSearch();
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(store.globalSearchResponse.get()).toEqual({ results: [], state: "available" });
+	});
+
+	it("cancels pending global search work when the store disconnects", async () => {
+		vi.useFakeTimers();
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise<Response>(() => {}));
+
+		store.setGlobalSearchQuery("a");
+		await vi.advanceTimersByTimeAsync(150);
+		const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
+
+		store.disconnect();
+
+		expect(signal.aborted).toBe(true);
+	});
+
+	it("stores recently opened global search record identities for the current project", () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.globalSearchQuery.set("private query text");
+
+		store.openSearchTarget({ entityId: "ISS1", type: "entity" });
+
+		expect(JSON.parse(window.localStorage.getItem("agent-issues-global-search-recents:demo:PROJ1") ?? "[]")).toEqual([
+			{ entityId: "ISS1", type: "entity" }
+		]);
+	});
 });
 
 describe("short entity references", () => {
@@ -576,6 +754,182 @@ describe("browser detail routes", () => {
 		window.location.hash = "";
 	});
 
+	it("retains a Plan-entry target during direct hash navigation", async () => {
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Search plan" });
+		const store = new AgentIssuesStore();
+		const planEntry = {
+			body: "Define result routes.",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			id: "ENTRY1",
+			planId: plan.id,
+			reference: "PLAN_ENTRY_1",
+			referencedEntityIds: [],
+			role: "decision" as const,
+			scopeDirection: null,
+			supersededEntryIds: [],
+			tombstone: false,
+			updatedAt: "2026-01-01T00:00:00.000Z"
+		};
+		store.snapshot.set(makeSnapshot({ entities: [plan], planEntries: [planEntry] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		window.location.hash = "tenant=demo&project=PROJ1&entity=PLAN1&target=plan-entry&target-id=ENTRY1";
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot({ entities: [plan], planEntries: [planEntry] }) }), { status: 200 })
+		);
+
+		await store.onBrowserNavigation();
+
+		expect(store.selectedId.get()).toBe("PLAN1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=PLAN1&target=plan-entry&target-id=ENTRY1");
+		fetchMock.mockRestore();
+	});
+
+	it("falls back to a Plan when its target entry is unavailable", () => {
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Search plan" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [plan] }));
+		window.location.hash = "tenant=demo&project=PROJ1&entity=PLAN1&target=plan-entry&target-id=ENTRY1";
+
+		store.onHashChange();
+
+		expect(store.selectedId.get()).toBe("PLAN1");
+		expect(store.selectedNestedTarget.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=PLAN1");
+	});
+
+	it("opens a Plan-entry target in its Plan", () => {
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Search plan" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [plan] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+
+		store.openSearchTarget({ type: "plan-entry", planId: "PLAN1", entryId: "ENTRY1" });
+
+		expect(store.selectedId.get()).toBe("PLAN1");
+		expect(store.selectedNestedTarget.get()).toEqual({ id: "ENTRY1", type: "plan-entry" });
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=PLAN1&target=plan-entry&target-id=ENTRY1");
+	});
+
+	it("opens an entity target without nested route data", () => {
+		const issue = makeEntity({ id: "ISS1", kind: "issue", title: "Search result" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [issue] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+
+		store.openSearchTarget({ type: "entity", entityId: issue.id });
+
+		expect(store.selectedId.get()).toBe(issue.id);
+		expect(store.selectedNestedTarget.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS1");
+	});
+
+	it("opens an issue-comment target in its issue", () => {
+		const issue = makeEntity({ id: "ISS1", kind: "issue", title: "Search discussion" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [issue] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+
+		store.openSearchTarget({ type: "issue-comment", issueId: "ISS1", commentId: "COMMENT1" });
+
+		expect(store.selectedId.get()).toBe("ISS1");
+		expect(store.selectedNestedTarget.get()).toEqual({ id: "COMMENT1", type: "issue-comment" });
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS1&target=issue-comment&target-id=COMMENT1");
+	});
+
+	it("opens a context-term target in its scoped context", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ initiatives: [makeBundle(initiative)] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+
+		store.openSearchTarget({ type: "context-term", scopeRef: "INIT1", term: "Search document" });
+
+		expect(store.activeSection.get()).toBe("context");
+		expect(store.contextTab.get()).toBe("initiatives");
+		expect(store.selectedContextInitiativeId.get()).toBe("INIT1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&section=context&target=context-term&target-id=Search%20document&target-scope=INIT1");
+	});
+
+	it("clears a nested target when navigating to another initiative", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Search plan" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [initiative, plan], initiatives: [makeBundle(initiative)] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.openSearchTarget({ type: "plan-entry", planId: plan.id, entryId: "ENTRY1" });
+
+		store.selectInitiative(initiative.id);
+
+		expect(store.selectedNestedTarget.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&initiative=INIT1");
+	});
+
+	it("clears a nested target when closing its owner detail", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Search plan" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({ entities: [initiative, plan], initiatives: [makeBundle(initiative, { entities: [initiative, plan] })] }));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.openSearchTarget({ type: "plan-entry", planId: plan.id, entryId: "ENTRY1" });
+
+		store.closeEntity();
+
+		expect(store.selectedNestedTarget.get()).toBeNull();
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&initiative=INIT1");
+	});
+
+	it("restores a scoped context-term target from a direct hash route", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({
+			contexts: {
+				initiatives: [{
+					context: {
+						createdAt: null,
+						exists: true,
+						key: initiative.id,
+						scopeEntityId: initiative.id,
+						scopeKind: "initiative",
+						scopeLabel: initiative.title,
+						summary: "Search terms.",
+						title: "Search Context",
+						updatedAt: null
+					},
+					terms: [{ avoid: [], createdAt: "", definition: "A search projection.", term: "Search document", updatedAt: "" }]
+				}],
+				shared: {
+					context: {
+						createdAt: null,
+						exists: false,
+						key: "shared",
+						scopeEntityId: null,
+						scopeKind: "default",
+						scopeLabel: "Shared",
+						summary: "",
+						title: "Shared Context",
+						updatedAt: null
+					},
+					terms: []
+				}
+			},
+			initiatives: [makeBundle(initiative)]
+		}));
+		window.location.hash = "tenant=demo&project=PROJ1&section=context&target=context-term&target-id=Search%20document&target-scope=INIT1";
+
+		store.onHashChange();
+
+		expect(store.activeSection.get()).toBe("context");
+		expect(store.contextTab.get()).toBe("initiatives");
+		expect(store.selectedContextInitiativeId.get()).toBe("INIT1");
+	});
+
 	it("removes legacy cascade state after direct hash navigation", async () => {
 		const store = new AgentIssuesStore();
 		store.snapshot.set(makeSnapshot({ entities: [makeEntity({ id: "ISS18" })] }));
@@ -740,6 +1094,9 @@ describe("tenant and project route scope", () => {
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("demo");
 		store.selectedProjectId.set("PROJ1");
+		store.globalSearchCapability.set({ state: "available" });
+		store.globalSearchQuery.set("search");
+		store.globalSearchResponse.set({ results: [], state: "available" });
 		store.selectedId.set("ISS1");
 		store.selectedInitiativeId.set("INIT1");
 		store.cascadePath.set(["INIT1", "ISS1"]);
@@ -756,6 +1113,9 @@ describe("tenant and project route scope", () => {
 		expect(store.selectedInitiativeId.get()).toBeNull();
 		expect(store.cascadePath.get()).toEqual([]);
 		expect(store.reRootTrail.get()).toEqual([]);
+		expect(store.globalSearchCapability.get()).toBeNull();
+		expect(store.globalSearchQuery.get()).toBe("");
+		expect(store.globalSearchResponse.get()).toBeNull();
 		expect(store.activeSection.get()).toBe("initiatives");
 		expect(window.location.hash).toBe("#tenant=content-hub");
 		fetchMock.mockRestore();
@@ -765,6 +1125,9 @@ describe("tenant and project route scope", () => {
 		const store = new AgentIssuesStore();
 		store.selectedTenant.set("demo");
 		store.selectedProjectId.set("PROJ1");
+		store.globalSearchCapability.set({ state: "available" });
+		store.globalSearchQuery.set("search");
+		store.globalSearchResponse.set({ results: [], state: "available" });
 		store.selectedId.set("ISS1");
 		store.selectedInitiativeId.set("INIT1");
 		store.cascadePath.set(["INIT1", "ISS1"]);
@@ -778,6 +1141,9 @@ describe("tenant and project route scope", () => {
 		expect(store.selectedId.get()).toBeNull();
 		expect(store.selectedInitiativeId.get()).toBeNull();
 		expect(store.cascadePath.get()).toEqual([]);
+		expect(store.globalSearchCapability.get()).toBeNull();
+		expect(store.globalSearchQuery.get()).toBe("");
+		expect(store.globalSearchResponse.get()).toBeNull();
 		expect(store.activeSection.get()).toBe("initiatives");
 		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2");
 		fetchMock.mockRestore();

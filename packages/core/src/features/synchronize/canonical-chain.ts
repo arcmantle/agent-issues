@@ -224,7 +224,7 @@ function assertCanonicalBundle(bundle: CanonicalChainBundle): void {
 			throw new Error(`Invalid canonical entity type ${chain.head.type} for ${chain.head.id}.`);
 		}
 		const parent = chain.head.parentId === null ? null : entitiesById.get(chain.head.parentId) ?? null;
-		if (chain.head.kind === "plan" && parent?.kind !== "initiative") {
+		if (chain.head.kind === "plan" && parent !== null && parent.kind !== "initiative") {
 			throw new Error(`Plan ${chain.head.id} requires an initiative parent.`);
 		}
 		if (chain.head.type === "wayfinder-map" && parent?.kind !== "initiative") {

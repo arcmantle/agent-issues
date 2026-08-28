@@ -1,12 +1,5 @@
 import { css } from "lit";
 
-export const issueBrowserTokenStyles = css`
-:host {
-	color: var(--text);
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-}
-`;
-
 export const issueBrowserTypographyStyles = css`
 button,
 input,

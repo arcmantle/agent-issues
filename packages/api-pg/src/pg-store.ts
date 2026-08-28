@@ -40,7 +40,7 @@ import type {
 	TenantSummary,
 	UnlinkResult
 } from "@agent-issues/core";
-import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT } from "@agent-issues/core";
+import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, type SearchCapability, type SearchRequest, type SearchResponse } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
@@ -190,6 +190,19 @@ export class PgStore implements StorageDriver {
 		return measureHistory(await this.exportCanonicalChains(), await this.historyDiagnosticsStore.getMaterializationDepths());
 	}
 
+	public async getSearchCapability(): Promise<SearchCapability> {
+		return { state: "unsupported" };
+	}
+
+	public async getSearchDiagnostics() {
+		return [];
+	}
+
+	public async search(input: SearchRequest): Promise<SearchResponse> {
+		void input;
+		return { state: "unsupported" };
+	}
+
 	public async createEntity(input: {
 		kind: string;
 		title: string;
@@ -211,6 +224,11 @@ export class PgStore implements StorageDriver {
 		const issue = await this.transaction((executor) => findProjectIssue(executor, details.entity.id));
 		if (!issue) {
 			if (this.projectIdentity !== undefined) {
+				const currentProject = await this.transaction((executor) => findCurrentProject(executor));
+				if (currentProject) {
+					throw new Error(`Entity not found in current project "${currentProject.title}" (${currentProject.reference}): ${entityId}`);
+				}
+
 				throw new Error(`Entity not found: ${entityId}`);
 			}
 			return { ...details, comments: { comments: [], total: 0, nextBefore: null } };
@@ -473,6 +491,18 @@ async function findProjectIssue(executor: TenantExecutor, issueId: string): Prom
 			AND (entities.id::text = ${issueId} OR entities.reference = ${issueId})
 	`);
 	return result.rows[0] as { id: string } | undefined;
+}
+
+async function findCurrentProject(executor: TenantExecutor): Promise<{ title: string; reference: string } | undefined> {
+	const result = await executor.execute(sql`
+		SELECT title, reference
+		FROM entities
+		WHERE tenant_id = ${executor.tenantId}
+			AND id = ${executor.currentProjectId}::uuid
+			AND kind = 'project'
+			AND tombstone = false
+	`);
+	return result.rows[0] as { title: string; reference: string } | undefined;
 }
 
 async function findProjectIssueComment(executor: TenantExecutor, commentId: string): Promise<{ id: string } | undefined> {

@@ -16,6 +16,8 @@ export * from "./features/storage-driver/entity-store.js";
 export * from "./features/storage-driver/context-store.js";
 export * from "./features/storage-driver/issue-comment-store.js";
 export * from "./features/storage-driver/plan-entry-store.js";
+export * from "./features/storage-driver/search-store.js";
+export * from "./features/storage-driver/search-query.js";
 export * from "./features/storage-driver/synchronize-store.js";
 export * from "./features/storage-driver/user-directory-store.js";
 export * from "./features/storage-driver/history-diagnostics-store.js";

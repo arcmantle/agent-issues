@@ -5,6 +5,7 @@ import { SynchronizeConflictError } from "../synchronize/canonical-chain.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
 import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import { DaemonDbPathMismatchError, DaemonHandshakeMismatchError, DaemonVersionMismatchError, HttpStore } from "./http-store.js";
+import type { SearchCapability, SearchResponse } from "./search-store.js";
 import type { StorageDriver } from "./storage-driver.js";
 
 describe("HttpStore Plan entry transport", () => {
@@ -41,6 +42,62 @@ describe("HttpStore Plan entry transport", () => {
 		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
 
 		await expect(client.createPlanEntry({ planId: "plan-id", role: "question", body: "Which backend stores entries?" })).resolves.toMatchObject({ id: "entry-id" });
+	});
+});
+
+describe("HttpStore search transport", () => {
+	it("returns an available capability and final ordered search results", async () => {
+		const requests: Array<{ method: string; params: unknown }> = [];
+		const fetchImpl: typeof fetch = async (_input, init) => {
+			const { method, params } = JSON.parse(String(init?.body)) as { method: string; params: unknown };
+			requests.push({ method, params });
+			const result: SearchCapability | SearchResponse = method === "getSearchCapability"
+				? { state: "available" }
+				: {
+					state: "available",
+					results: [{
+						id: "result-1",
+						identity: {
+							sourceType: "entity",
+							sourceId: "entity-1",
+							reference: "ISS_00000000000000000000000000",
+							shortReference: "ISS_000000"
+						},
+						title: "First result",
+						projectId: "project-1",
+						projectLabel: "Test project",
+						updatedAt: "2026-08-28T00:00:00.000Z",
+						navigationTarget: { type: "entity", entityId: "entity-1" },
+						match: { field: "title" }
+					}]
+				};
+			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result }), { status: 200, headers: { "content-type": "application/json" } });
+		};
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.getSearchCapability()).resolves.toEqual({ state: "available" });
+		await expect(client.search({ query: "first", scope: { type: "current-project", projectId: "project-1" } })).resolves.toEqual({
+			state: "available",
+			results: [{
+				id: "result-1",
+				identity: {
+					sourceType: "entity",
+					sourceId: "entity-1",
+					reference: "ISS_00000000000000000000000000",
+					shortReference: "ISS_000000"
+				},
+				title: "First result",
+				projectId: "project-1",
+				projectLabel: "Test project",
+				updatedAt: "2026-08-28T00:00:00.000Z",
+				navigationTarget: { type: "entity", entityId: "entity-1" },
+				match: { field: "title" }
+			}]
+		});
+		expect(requests).toEqual([
+			{ method: "getSearchCapability", params: undefined },
+			{ method: "search", params: { query: "first", scope: { type: "current-project", projectId: "project-1" } } }
+		]);
 	});
 });
 

@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { createJsonRpcApp, LocalAuthProvider, type StorageDriver } from "@agent-issues/core";
+import { createJsonRpcApp, DEFAULT_PROJECT_ID, LocalAuthProvider, type StorageDriver } from "@agent-issues/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
-import { openSqliteStore } from "../sqlite-store.js";
+import { openSqliteStore, SqliteStore } from "../sqlite-store.js";
 
 /**
  * Proves the gate is generic over any `StorageDriver`, not hardcoded to
@@ -54,6 +54,171 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 		expect(response.body.result).toMatchObject({ kind: "initiative", title: "Ship the daemon" });
 
 		for (const store of openedStores) {
+			await store.close();
+		}
+	});
+
+	it("dispatches typed available search responses through SqliteStore", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "sqlite-tenant";
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const stores: StorageDriver[] = [];
+		const app = createJsonRpcApp({
+			authProvider,
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const capabilityResponse = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "getSearchCapability" });
+		const searchResponse = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 2, method: "search", params: { query: "project", scope: { type: "all-projects" } } });
+
+		expect(capabilityResponse.body.result).toEqual({ state: "available" });
+		expect(searchResponse.body.result).toEqual({ state: "available", results: [] });
+
+		for (const store of stores) {
+			await store.close();
+		}
+	});
+
+	it("forwards current-project scope and source-type filters through SqliteStore", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "sqlite-tenant";
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const stores: StorageDriver[] = [];
+		const app = createJsonRpcApp({
+			authProvider,
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const created = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Current project search result" } });
+		const searchResponse = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({
+				jsonrpc: "2.0",
+				id: 2,
+				method: "search",
+				params: {
+					query: created.body.result.reference,
+					scope: { type: "current-project", projectId: DEFAULT_PROJECT_ID },
+					filters: { sourceTypes: ["entity"] }
+				}
+			});
+
+		expect(searchResponse.body.result).toEqual(expect.objectContaining({
+			state: "available",
+			results: [expect.objectContaining({
+				identity: expect.objectContaining({ sourceId: created.body.result.id, sourceType: "entity" }),
+				navigationTarget: { type: "entity", entityId: created.body.result.id }
+			})]
+		}));
+
+		for (const store of stores) {
+			await store.close();
+		}
+	});
+
+	it("returns a typed parse error through SqliteStore", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "sqlite-tenant";
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const stores: StorageDriver[] = [];
+		const app = createJsonRpcApp({
+			authProvider,
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const response = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "search", params: { query: "search OR", scope: { type: "all-projects" } } });
+
+		expect(response.body.result).toEqual({
+			state: "parse-error",
+			error: { message: "Expected a search term.", start: 9, end: 9 }
+		});
+
+		for (const store of stores) {
+			await store.close();
+		}
+	});
+
+	it("preserves typed rebuilding responses through the JSON-RPC gate", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "sqlite-tenant";
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const stores: StorageDriver[] = [];
+		vi.spyOn(SqliteStore.prototype, "getSearchCapability").mockResolvedValue({ state: "rebuilding" });
+		vi.spyOn(SqliteStore.prototype, "search").mockResolvedValue({ state: "rebuilding" });
+		const app = createJsonRpcApp({
+			authProvider,
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const capabilityResponse = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "getSearchCapability" });
+		const searchResponse = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 2, method: "search", params: { query: "project", scope: { type: "all-projects" } } });
+
+		expect(capabilityResponse.body.result).toEqual({ state: "rebuilding" });
+		expect(searchResponse.body.result).toEqual({ state: "rebuilding" });
+
+		for (const store of stores) {
+			await store.close();
+		}
+	});
+
+	it("preserves typed operational-error responses through the JSON-RPC gate", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const tenantId = "sqlite-tenant";
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const stores: StorageDriver[] = [];
+		vi.spyOn(SqliteStore.prototype, "search").mockResolvedValue({ state: "operational-error" });
+		const app = createJsonRpcApp({
+			authProvider,
+			createStore: async (identity) => {
+				const { store } = await openSqliteStore(dbPath, { tenant: identity.tenantId });
+				stores.push(store);
+				return store;
+			}
+		});
+
+		const response = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "search", params: { query: "project", scope: { type: "all-projects" } } });
+
+		expect(response.body.result).toEqual({ state: "operational-error" });
+
+		for (const store of stores) {
 			await store.close();
 		}
 	});

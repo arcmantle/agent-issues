@@ -6,6 +6,7 @@ import {
 	computeIssueCommentContentHash,
 	createReverseFieldPatch,
 	encodeCanonicalReference,
+	encodeIssueCommentRecordKey,
 	ISSUE_COMMENT_REVERSE_PATCH_REGISTRY,
 	IssueCommentConflictError,
 	materializeIssueCommentFromPatches,
@@ -17,7 +18,7 @@ import {
 	type IssueCommentSummary
 } from "@agent-issues/core";
 import { getSqliteEntityOrThrow, type SqliteExecutor } from "../../db/sqlite-executor.js";
-import { exportCanonicalChains, importCanonicalChains } from "../synchronize/canonical-chain-store.js";
+import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 
 type IssueCommentRow = {
 	id: string;
@@ -37,6 +38,23 @@ type IssueCommentRow = {
 type CommentCursor = {
 	createdAt: string;
 	reference: string;
+};
+
+type IssueCommentState = {
+	body: string;
+	referencedIssueIds: string[];
+	tombstone: boolean;
+};
+
+type LedgerRow = {
+	revision: number;
+	author: string;
+	patch_format: number;
+	reverse_patch: Uint8Array;
+	source_hash: Uint8Array;
+	target_hash: Uint8Array;
+	restored_from_revision: number | null;
+	created_at: string;
 };
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -63,34 +81,14 @@ export function createIssueComment(
 	const shortReference = allocateShortReference(executor, id);
 	const createdAt = new Date().toISOString();
 	const state = { body, referencedIssueIds, tombstone: false };
-	const current = exportCanonicalChains(executor);
-	importCanonicalChains(executor, {
-		...current,
-		issueComments: [
-			...current.issueComments,
-			{
-				head: {
-					id,
-					reference,
-					shortReference,
-					issueId: issue.id,
-					createdBy: actorId,
-					updatedBy: actorId,
-					...state,
-					revision: 1,
-					contentHash: computeIssueCommentContentHash(body, referencedIssueIds, false),
-					createdAt,
-					updatedAt: createdAt
-				},
-				deltas: [{
-					id: randomUUID(),
-					revision: 1,
-					author: actorId,
-					createdAt,
-					...createReverseFieldPatch(state, state, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY)
-				}]
-			}
-		]
+	const contentHash = computeIssueCommentContentHash(body, referencedIssueIds, false);
+	executor.drizzle.transaction((tx) => {
+		tx.run(sql`INSERT INTO issue_comments (tenant_id, id, reference, short_reference, issue_id, created_by, updated_by, body, revision, content_hash, tombstone, created_at, updated_at)
+			VALUES (${executor.tenantId}, ${id}, ${reference}, ${shortReference}, ${issue.id}, ${actorId}, ${actorId}, ${body}, 1, ${contentHash}, 0, ${createdAt}, ${createdAt})`);
+		for (const [position, referencedIssueId] of referencedIssueIds.entries()) {
+			tx.run(sql`INSERT INTO issue_comment_references (tenant_id, comment_id, issue_id, position) VALUES (${executor.tenantId}, ${id}, ${referencedIssueId}, ${position})`);
+		}
+		appendIssueCommentDelta(executor, id, 1, state, state, actorId, createdAt);
 	});
 
 	return getIssueComment(executor, id);
@@ -145,42 +143,19 @@ export function updateIssueComment(
 	const referencedIssueIds = input.referencedIssueIds === undefined
 		? existing.referencedIssueIds
 		: validateReferencedIssueIds(executor, input.referencedIssueIds);
-	const current = exportCanonicalChains(executor);
-	const chain = current.issueComments.find((candidate) => candidate.head.id === existing.id);
-	if (!chain) {
-		throw new Error(`Issue comment not found: ${input.commentId}`);
-	}
-
 	const updatedAt = new Date().toISOString();
 	const successor = { body: input.body, referencedIssueIds, tombstone: false };
 	const predecessor = { body: existing.body!, referencedIssueIds: existing.referencedIssueIds, tombstone: false };
 	const revision = existing.revision + 1;
-	importCanonicalChains(executor, {
-		...current,
-		issueComments: current.issueComments.map((candidate) => candidate.head.id === existing.id
-			? {
-				...candidate,
-				head: {
-					...candidate.head,
-					...successor,
-					updatedBy: actorId,
-					revision,
-					contentHash: computeIssueCommentContentHash(successor.body, successor.referencedIssueIds, successor.tombstone),
-					updatedAt
-				},
-				deltas: [
-					...candidate.deltas,
-					{
-						id: randomUUID(),
-						revision,
-						author: actorId,
-						createdAt: updatedAt,
-						...createReverseFieldPatch(successor, predecessor, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY)
-					}
-				]
-			}
-			: candidate)
-	});
+	const contentHash = computeIssueCommentContentHash(successor.body, successor.referencedIssueIds, successor.tombstone);
+	const result = executor.drizzle.run(sql`UPDATE issue_comments SET body = ${successor.body}, updated_by = ${actorId}, revision = ${revision}, content_hash = ${contentHash}, updated_at = ${updatedAt}
+		WHERE tenant_id = ${executor.tenantId} AND id = ${existing.id} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash} AND tombstone = 0`);
+	if (result.changes === 0) {
+		const current = getIssueComment(executor, existing.id);
+		throw new IssueCommentConflictError(current.id, current.revision, current.contentHash);
+	}
+	replaceIssueCommentReferences(executor, existing.id, referencedIssueIds);
+	appendIssueCommentDelta(executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
 
 	return getIssueComment(executor, existing.id);
 }
@@ -198,37 +173,18 @@ export function deleteIssueComment(
 		throw new IssueCommentConflictError(existing.id, existing.revision, existing.contentHash);
 	}
 
-	const current = exportCanonicalChains(executor);
 	const updatedAt = new Date().toISOString();
 	const successor = { body: existing.body!, referencedIssueIds: existing.referencedIssueIds, tombstone: true };
 	const predecessor = { ...successor, tombstone: false };
 	const revision = existing.revision + 1;
-	importCanonicalChains(executor, {
-		...current,
-		issueComments: current.issueComments.map((candidate) => candidate.head.id === existing.id
-			? {
-				...candidate,
-				head: {
-					...candidate.head,
-					...successor,
-					updatedBy: actorId,
-					revision,
-					contentHash: computeIssueCommentContentHash(successor.body, successor.referencedIssueIds, successor.tombstone),
-					updatedAt
-				},
-				deltas: [
-					...candidate.deltas,
-					{
-						id: randomUUID(),
-						revision,
-						author: actorId,
-						createdAt: updatedAt,
-						...createReverseFieldPatch(successor, predecessor, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY)
-					}
-				]
-			}
-			: candidate)
-	});
+	const contentHash = computeIssueCommentContentHash(successor.body, successor.referencedIssueIds, successor.tombstone);
+	const result = executor.drizzle.run(sql`UPDATE issue_comments SET updated_by = ${actorId}, revision = ${revision}, content_hash = ${contentHash}, tombstone = 1, updated_at = ${updatedAt}
+		WHERE tenant_id = ${executor.tenantId} AND id = ${existing.id} AND revision = ${input.expectedRevision} AND content_hash = ${input.expectedContentHash} AND tombstone = 0`);
+	if (result.changes === 0) {
+		const current = getIssueComment(executor, existing.id);
+		throw new IssueCommentConflictError(current.id, current.revision, current.contentHash);
+	}
+	appendIssueCommentDelta(executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
 
 	return getIssueComment(executor, existing.id);
 }
@@ -244,23 +200,28 @@ export function listIssueCommentHistory(executor: SqliteExecutor, input: { comme
 		return [];
 	}
 
-	const current = exportCanonicalChains(executor);
-	const chain = current.issueComments.find((candidate) => candidate.head.id === comment.id);
-	if (!chain) {
-		return [];
-	}
-	return Array.from({ length: chain.head.revision }, (_, index) => {
+	const patches = executor.drizzle.all(sql`SELECT revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at
+		FROM revision_entries WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND record_kind = 'issue-comment' AND record_key = ${encodeIssueCommentRecordKey(comment.id)} ORDER BY revision`) as LedgerRow[];
+	const head = executor.drizzle.all(sql`SELECT * FROM issue_comments WHERE tenant_id = ${executor.tenantId} AND id = ${comment.id}`)[0] as IssueCommentRow;
+	const referencedIssueIds = executor.drizzle.all(sql`SELECT issue_id FROM issue_comment_references WHERE tenant_id = ${executor.tenantId} AND comment_id = ${comment.id} ORDER BY position`) as Array<{ issue_id: string }>;
+	return Array.from({ length: head.revision }, (_, index) => {
 		const targetRevision = index + 1;
-		const state = materializeIssueCommentFromPatches(chain.head, chain.deltas, targetRevision);
-		const delta = chain.deltas.find((candidate) => candidate.revision === targetRevision)!;
+		const state = materializeIssueCommentFromPatches({
+			body: head.body,
+			referencedIssueIds: referencedIssueIds.map((reference) => reference.issue_id),
+			tombstone: head.tombstone !== 0,
+			revision: head.revision,
+			createdAt: head.created_at
+		}, patches.map(toIssueCommentDelta), targetRevision);
+		const delta = patches.find((candidate) => candidate.revision === targetRevision)!;
 		return {
-			commentId: chain.head.id,
+			commentId: head.id,
 			targetRevision,
-			headRevision: chain.head.revision,
+			headRevision: head.revision,
 			...state,
 			author: delta.author,
-			createdAt: delta.createdAt,
-			restoredFromRevision: delta.restoredFromRevision ?? null
+			createdAt: delta.created_at,
+			restoredFromRevision: delta.restored_from_revision ?? null
 		};
 	});
 }
@@ -338,6 +299,33 @@ function toIssueCommentRecord(executor: SqliteExecutor, row: IssueCommentRow): I
 		contentHash: row.content_hash,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
+	};
+}
+
+function replaceIssueCommentReferences(executor: SqliteExecutor, commentId: string, referencedIssueIds: string[]): void {
+	executor.drizzle.run(sql`DELETE FROM issue_comment_references WHERE tenant_id = ${executor.tenantId} AND comment_id = ${commentId}`);
+	for (const [position, referencedIssueId] of referencedIssueIds.entries()) {
+		executor.drizzle.run(sql`INSERT INTO issue_comment_references (tenant_id, comment_id, issue_id, position) VALUES (${executor.tenantId}, ${commentId}, ${referencedIssueId}, ${position})`);
+	}
+}
+
+function appendIssueCommentDelta(executor: SqliteExecutor, commentId: string, revision: number, successor: IssueCommentState, predecessor: IssueCommentState, actorId: string, createdAt: string): void {
+	const delta = createReverseFieldPatch(successor, predecessor, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY);
+	const issue = getIssueComment(executor, commentId);
+	executor.drizzle.run(sql`INSERT INTO revision_entries (id, tenant_id, project_id, record_kind, record_key, revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
+		VALUES (${randomUUID()}, ${executor.tenantId}, ${getSqliteEntityOrThrow(executor, issue.issueId).projectId}, 'issue-comment', ${encodeIssueCommentRecordKey(commentId)}, ${revision}, ${actorId}, ${delta.patchFormat}, ${Buffer.from(delta.reversePatch)}, ${encodeRevisionPatchHash(delta.sourceHash)}, ${encodeRevisionPatchHash(delta.targetHash)}, NULL, ${createdAt})`);
+}
+
+function toIssueCommentDelta(delta: LedgerRow) {
+	return {
+		revision: delta.revision,
+		author: delta.author,
+		patchFormat: delta.patch_format,
+		reversePatch: delta.reverse_patch,
+		sourceHash: decodeRevisionPatchHash(delta.source_hash),
+		targetHash: decodeRevisionPatchHash(delta.target_hash),
+		createdAt: delta.created_at,
+		...(delta.restored_from_revision !== null && { restoredFromRevision: delta.restored_from_revision })
 	};
 }
 

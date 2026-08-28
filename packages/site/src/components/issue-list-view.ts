@@ -5,7 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { when } from "lit/directives/when.js";
 import type { Entity, InitiativeBundle, RootTab } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
-import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
+import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
 class IssueListView extends SignalWatcher(LitElement) {
 	static properties = {
@@ -219,7 +219,6 @@ class IssueListView extends SignalWatcher(LitElement) {
 	}
 
 	static styles = [
-		issueBrowserTokenStyles,
 		issueBrowserTypographyStyles,
 		issueBrowserControlStyles,
 		css`

@@ -12,9 +12,14 @@ import { shortEntityReferenceMigration } from "./short-entity-reference.js";
 import { shortRecordReferenceMigration } from "./short-record-reference.js";
 import { planEntriesMigration } from "./plan-entries.js";
 import { planEntrySupersessionPositionMigration } from "./plan-entry-supersession-position.js";
+import { entitySearchMigration } from "./entity-search.js";
+import { recordSearchMigration } from "./record-search.js";
+import { tokenSearchMigration } from "./token-search.js";
+import { trigramSearchMigration } from "./trigram-search.js";
+import { searchTypoVocabularyMigration } from "./search-typo-vocabulary.js";
 
 /**
  * Approved runner migrations for an empty SQLite source profile. Legacy v7
  * sources use the direct transformer and do not replay historical migrations.
  */
-export const migrations: Migration[] = [finalBaselineMigration, adrStatusMigration, userDirectoryMigration, recordProvenanceMigration, contextTermProvenanceMigration, relationProvenanceMigration, issueCommentsMigration, debtMetadataMigration, entityTypeMigration, shortEntityReferenceMigration, shortRecordReferenceMigration, planEntriesMigration, planEntrySupersessionPositionMigration];
+export const migrations: Migration[] = [finalBaselineMigration, adrStatusMigration, userDirectoryMigration, recordProvenanceMigration, contextTermProvenanceMigration, relationProvenanceMigration, issueCommentsMigration, debtMetadataMigration, entityTypeMigration, shortEntityReferenceMigration, shortRecordReferenceMigration, planEntriesMigration, planEntrySupersessionPositionMigration, entitySearchMigration, recordSearchMigration, tokenSearchMigration, trigramSearchMigration, searchTypoVocabularyMigration];

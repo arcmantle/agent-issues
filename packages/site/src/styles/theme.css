@@ -1,5 +1,6 @@
 :root {
 	color-scheme: light;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
 	--page-bg: #f6f8fa;
 	--surface: #ffffff;
 	--surface-muted: #f6f8fa;

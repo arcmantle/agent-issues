@@ -117,6 +117,331 @@ afterEach(() => {
 });
 
 describe("three-pane console shell", () => {
+	it("opens the global search dialog from the app-shell trigger", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+
+		const trigger = app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]");
+		expect(trigger).not.toBeNull();
+		trigger?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		const dialog = overlay?.shadowRoot?.querySelector<HTMLElement>('[role="dialog"]');
+		const input = dialog?.querySelector<HTMLInputElement>("input");
+		expect(dialog?.getAttribute("aria-modal")).toBe("true");
+		expect(overlay?.shadowRoot?.activeElement).toBe(input);
+	});
+
+	it("opens the global search dialog with Command+K", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }));
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).not.toBeNull();
+	});
+
+	it("opens the global search dialog with Control+K", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+
+		window.dispatchEvent(new KeyboardEvent("keydown", { ctrlKey: true, key: "k" }));
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).not.toBeNull();
+	});
+
+	it("closes global search with Escape and restores focus to its trigger", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		const trigger = app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]");
+		trigger?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		overlay?.shadowRoot?.querySelector<HTMLElement>('[role="dialog"]')?.dispatchEvent(
+			new KeyboardEvent("keydown", { bubbles: true, composed: true, key: "Escape" })
+		);
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+		expect(app.shadowRoot?.activeElement).toBe(trigger);
+	});
+
+	it("closes global search when Escape is pressed outside the input", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		const trigger = app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]");
+		trigger?.click();
+		await app.updateComplete;
+
+		window.dispatchEvent(new KeyboardEvent("keydown", { cancelable: true, key: "Escape" }));
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+		expect(app.shadowRoot?.activeElement).toBe(trigger);
+	});
+
+	it("closes global search when the backdrop is pressed", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		const trigger = app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]");
+		trigger?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		overlay?.shadowRoot?.querySelector<HTMLElement>(".backdrop")?.dispatchEvent(
+			new PointerEvent("pointerdown", { bubbles: true, composed: true })
+		);
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+		expect(app.shadowRoot?.activeElement).toBe(trigger);
+	});
+
+	it("keeps Tab focus in the global search dialog", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		const dialog = overlay?.shadowRoot?.querySelector<HTMLElement>('[role="dialog"]');
+		const lastFocusable = [...(overlay?.shadowRoot?.querySelectorAll<HTMLElement>("button, input, select") ?? [])].at(-1);
+		lastFocusable?.focus();
+		const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, composed: true, key: "Tab" });
+		dialog?.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true);
+		expect(overlay?.shadowRoot?.activeElement).toBe(overlay?.shadowRoot?.querySelector("input"));
+	});
+
+	it("renders the active global search result and opens its target with Enter", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const resultEntity = makeEntity({ id: "ISS1", kind: "issue", shortReference: "ISS_ABC123", status: "todo", title: "Apply search results" });
+		const store = makeStore(makeConfig(), makeSnapshot({ entities: [resultEntity] }));
+		store.globalSearchResponse.set({
+			results: [{
+				id: "search-ISS1",
+				identity: { reference: "ISS_ABC123", shortReference: "ISS_ABC123", sourceId: resultEntity.id, sourceType: "entity" },
+				match: { field: "title" },
+				navigationTarget: { entityId: resultEntity.id, type: "entity" },
+				projectId: "PROJ1",
+				projectLabel: "Demo project",
+				snippet: { highlights: [{ end: 5, start: 0 }], text: "Apply search results" },
+				statusOrRole: "todo",
+				title: resultEntity.title,
+				updatedAt: resultEntity.updatedAt
+			}],
+			state: "available"
+		});
+		const app = await mountApp(store);
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("Apply search results");
+		expect(overlay?.shadowRoot?.textContent).toContain("ISS_ABC123");
+
+		overlay?.shadowRoot?.querySelector<HTMLElement>('[role="dialog"]')?.dispatchEvent(
+			new KeyboardEvent("keydown", { bubbles: true, composed: true, key: "Enter" })
+		);
+		await app.updateComplete;
+
+		expect(store.selectedId.get()).toBe(resultEntity.id);
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+	});
+
+	it("changes the active global search result with Arrow keys and opens it by mouse", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const firstEntity = makeEntity({ id: "ISS1", kind: "issue", shortReference: "ISS_ABC123", title: "First result" });
+		const secondEntity = makeEntity({ id: "ISS2", kind: "issue", shortReference: "ISS_DEF456", title: "Second result" });
+		const store = makeStore(makeConfig(), makeSnapshot({ entities: [firstEntity, secondEntity] }));
+		store.globalSearchResponse.set({
+			results: [firstEntity, secondEntity].map((entity) => ({
+				id: `search-${entity.id}`,
+				identity: { reference: entity.shortReference!, shortReference: entity.shortReference!, sourceId: entity.id, sourceType: "entity" as const },
+				match: { field: "title" as const },
+				navigationTarget: { entityId: entity.id, type: "entity" as const },
+				projectId: "PROJ1",
+				projectLabel: "Demo project",
+				title: entity.title,
+				updatedAt: entity.updatedAt
+			})),
+			state: "available"
+		});
+		const app = await mountApp(store);
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		const dialog = overlay?.shadowRoot?.querySelector<HTMLElement>('[role="dialog"]');
+		dialog?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, composed: true, key: "ArrowDown" }));
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.querySelectorAll(".result")[1]?.getAttribute("aria-selected")).toBe("true");
+
+		(overlay?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".result")[1])?.click();
+		await app.updateComplete;
+
+		expect(store.selectedId.get()).toBe(secondEntity.id);
+		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+	});
+
+	it("updates global search scope and record-kind filters", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		const scope = overlay?.shadowRoot?.querySelector<HTMLInputElement>("[data-global-search-scope]");
+		const sourceType = overlay?.shadowRoot?.querySelector<HTMLButtonElement>("[data-source-type='plan-entry']");
+		scope!.checked = true;
+		scope?.dispatchEvent(new Event("change"));
+		sourceType?.click();
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+
+		expect(app.store.globalSearchScope.get()).toBe("all-projects");
+		expect(app.store.globalSearchSourceTypes.get()).not.toContain("plan-entry");
+		expect(sourceType?.getAttribute("aria-pressed")).toBe("false");
+	});
+
+	it("shows empty and retry states before later search results", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const resultEntity = makeEntity({ id: "ISS1", kind: "issue", shortReference: "ISS_ABC123", title: "Recovered result" });
+		const store = makeStore(makeConfig(), makeSnapshot({ entities: [resultEntity] }));
+		store.globalSearchResponse.set({ state: "operational-error" });
+		const app = await mountApp(store);
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("Unable to search records");
+
+		store.globalSearchResponse.set({ results: [], state: "available" });
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("No matching records");
+
+		store.globalSearchResponse.set({
+			results: [{
+				id: "search-ISS1",
+				identity: { reference: "ISS_ABC123", shortReference: "ISS_ABC123", sourceId: resultEntity.id, sourceType: "entity" },
+				match: { field: "title" },
+				navigationTarget: { entityId: resultEntity.id, type: "entity" },
+				projectId: "PROJ1",
+				projectLabel: "Demo project",
+				title: resultEntity.title,
+				updatedAt: resultEntity.updatedAt
+			}],
+			state: "available"
+		});
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("Recovered result");
+	});
+
+	it("shows a parse error while keeping the last valid global search result", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const resultEntity = makeEntity({ id: "ISS1", kind: "issue", shortReference: "ISS_ABC123", title: "Valid result" });
+		const store = makeStore(makeConfig(), makeSnapshot({ entities: [resultEntity] }));
+		store.globalSearchResults.set([{
+			id: "search-ISS1",
+			identity: { reference: "ISS_ABC123", shortReference: "ISS_ABC123", sourceId: resultEntity.id, sourceType: "entity" },
+			match: { field: "title" },
+			navigationTarget: { entityId: resultEntity.id, type: "entity" },
+			projectId: "PROJ1",
+			projectLabel: "Demo project",
+			title: resultEntity.title,
+			updatedAt: resultEntity.updatedAt
+		}]);
+		store.globalSearchResponse.set({
+			error: { end: 11, message: "Expected a term after OR.", start: 9 },
+			state: "parse-error"
+		});
+		const app = await mountApp(store);
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("Expected a term after OR.");
+		expect(overlay?.shadowRoot?.textContent).toContain("Valid result");
+	});
+
+	it("limits global search to twenty results and asks the user to refine", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const store = makeStore(makeConfig(), makeSnapshot());
+		const results = Array.from({ length: 21 }, (_, index) => ({
+				id: `search-ISS${index}`,
+				identity: { reference: `ISS_${index}`, shortReference: `ISS_${index}`, sourceId: `ISS${index}`, sourceType: "entity" as const },
+				match: { field: "title" as const },
+				navigationTarget: { entityId: `ISS${index}`, type: "entity" as const },
+				projectId: "PROJ1",
+				projectLabel: "Demo project",
+				title: `Result ${index}`,
+				updatedAt: "2026-01-01T00:00:00.000Z"
+			}));
+		store.globalSearchResults.set(results);
+		store.globalSearchResponse.set({ results, state: "available" });
+		const app = await mountApp(store);
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.querySelectorAll(".result")).toHaveLength(20);
+		expect(overlay?.shadowRoot?.textContent).toContain("Refine the query to narrow the results.");
+	});
+
+	it("shows current-project recent records and excludes missing records", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const recentEntity = makeEntity({ id: "ISS1", kind: "issue", title: "Recent issue" });
+		window.localStorage.setItem("agent-issues-global-search-recents:demo:PROJ1", JSON.stringify([
+			{ entityId: "ISS1", type: "entity" },
+			{ entityId: "REMOVED", type: "entity" }
+		]));
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot({ entities: [recentEntity] })));
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("Recently opened");
+		expect(overlay?.shadowRoot?.textContent).toContain("Recent issue");
+		expect(overlay?.shadowRoot?.textContent).not.toContain("REMOVED");
+	});
+
+	it("shows compact syntax help and an empty-search hint", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
+		await app.updateComplete;
+
+		const overlay = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-global-search-overlay");
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("Use quotes for phrases or * for a prefix.");
+		overlay?.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-help]")?.click();
+		await (overlay as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+		expect(overlay?.shadowRoot?.textContent).toContain("AND, OR, NOT, parentheses, and NEAR");
+	});
+
+	it("uses an icon trigger on narrow screens", async () => {
+		vi.stubGlobal("innerWidth", 390);
+		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));
+
+		expect(app.shadowRoot?.querySelector(".global-search-trigger")).toBeNull();
+		expect(app.shadowRoot?.querySelector(".global-search-icon-trigger")).not.toBeNull();
+	});
+
 	it("uses a header rail with side-by-side master and detail panes at medium widths", async () => {
 		vi.stubGlobal("innerWidth", 1080);
 		const initiative = makeEntity({ id: "INIT1", title: "Console Viewer" });
@@ -888,6 +1213,34 @@ describe("project context section", () => {
 		expect(text).toContain("settings");
 	});
 
+	it("focuses and highlights a deep-linked shared context summary", async () => {
+		const shared = makeSharedContext();
+		shared.context.exists = true;
+		shared.context.summary = "Shared search language.";
+		const store = makeStore(makeConfig(), makeSnapshot({ contexts: { initiatives: [], shared } }));
+		store.openSearchTarget({ type: "context" });
+
+		const app = await mountApp(store);
+
+		const target = app.shadowRoot?.querySelector<HTMLElement>('[data-context-scope="shared"]');
+		expect(target?.classList.contains("is-context-target")).toBe(true);
+		expect(app.shadowRoot?.activeElement).toBe(target);
+	});
+
+	it("focuses and highlights a deep-linked shared context term", async () => {
+		const shared = makeSharedContext();
+		shared.context.exists = true;
+		shared.terms = [{ avoid: [], createdAt: "", definition: "Searchable content.", term: "Search document", updatedAt: "" }];
+		const store = makeStore(makeConfig(), makeSnapshot({ contexts: { initiatives: [], shared } }));
+		store.openSearchTarget({ type: "context-term", term: "Search document" });
+
+		const app = await mountApp(store);
+
+		const target = app.shadowRoot?.querySelector<HTMLElement>("agent-issues-context-view")?.shadowRoot?.querySelector<HTMLElement>('[data-term="Search document"]');
+		expect(target?.classList.contains("is-context-term-target")).toBe(true);
+		expect(app.shadowRoot?.querySelector("agent-issues-context-view")?.shadowRoot?.activeElement).toBe(target);
+	});
+
 	it("renders initiative-scoped discovery and duplicate warnings in the detail pane", async () => {
 		const shared = makeSharedContext();
 		shared.context.title = "Content Hub";
@@ -1060,6 +1413,82 @@ describe("project context section", () => {
 		const filteredText = app.shadowRoot?.querySelector(".ctx-block")?.textContent ?? "";
 		expect(filteredText).toContain("Shipment batch");
 		expect(filteredText).not.toContain("Settlement");
+	});
+
+	it("focuses and highlights a deep-linked scoped context term", async () => {
+		const shared = makeSharedContext();
+		const initiative = makeEntity({ id: "INIT_PAYMENTS", kind: "initiative", status: "active", title: "Payments" });
+		const store = makeStore(
+			makeConfig(),
+			makeSnapshot({
+				contexts: {
+					shared,
+					initiatives: [{
+						context: {
+							createdAt: null,
+							exists: true,
+							key: initiative.id,
+							scopeEntityId: initiative.id,
+							scopeKind: "initiative",
+							scopeLabel: initiative.title,
+							summary: "Payments terms.",
+							title: "Payments Context",
+							updatedAt: null
+						},
+						terms: [{ avoid: [], createdAt: "", definition: "Captured funds.", term: "Settlement", updatedAt: "" }]
+					}]
+				},
+				initiatives: [makeBundle(initiative)]
+			})
+		);
+		store.openSearchTarget({ type: "context-term", scopeRef: initiative.id, term: "Settlement" });
+
+		const app = await mountApp(store);
+
+		const target = app.shadowRoot?.querySelector<HTMLElement>('[data-term="Settlement"]');
+		expect(target?.classList.contains("is-context-term-target")).toBe(true);
+		expect(app.shadowRoot?.activeElement).toBe(target);
+
+		store.selectSection("context");
+		await app.updateComplete;
+
+		const clearedTarget = app.shadowRoot?.querySelector<HTMLElement>('[data-term="Settlement"]');
+		expect(clearedTarget?.classList.contains("is-context-term-target")).toBe(false);
+	});
+
+	it("focuses and highlights a deep-linked initiative context summary", async () => {
+		const shared = makeSharedContext();
+		const initiative = makeEntity({ id: "INIT_PAYMENTS", kind: "initiative", status: "active", title: "Payments" });
+		const store = makeStore(
+			makeConfig(),
+			makeSnapshot({
+				contexts: {
+					shared,
+					initiatives: [{
+						context: {
+							createdAt: null,
+							exists: true,
+							key: initiative.id,
+							scopeEntityId: initiative.id,
+							scopeKind: "initiative",
+							scopeLabel: initiative.title,
+							summary: "Payments search language.",
+							title: "Payments Context",
+							updatedAt: null
+						},
+						terms: []
+					}]
+				},
+				initiatives: [makeBundle(initiative)]
+			})
+		);
+		store.openSearchTarget({ type: "context", scopeRef: initiative.id });
+
+		const app = await mountApp(store);
+
+		const target = app.shadowRoot?.querySelector<HTMLElement>(`[data-context-scope="${initiative.id}"]`);
+		expect(target?.classList.contains("is-context-target")).toBe(true);
+		expect(app.shadowRoot?.activeElement).toBe(target);
 	});
 });
 

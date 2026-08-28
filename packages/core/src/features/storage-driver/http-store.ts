@@ -19,6 +19,7 @@ import { ContextConflictError, ContextRevisionError, ContextTermConflictError } 
 import { IssueCommentConflictError } from "./issue-comment-store.js";
 import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "./storage-driver.js";
+import type { SearchCapability, SearchDiagnostic, SearchRequest, SearchResponse } from "./search-store.js";
 import type { AuthIdentity } from "../../auth/auth-provider.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
 import {
@@ -286,6 +287,18 @@ export class HttpStore implements StorageDriver {
 
 	public getHistoryDiagnostics(): Promise<HistoryDiagnostics> {
 		return this.call("getHistoryDiagnostics");
+	}
+
+	public getSearchCapability(): Promise<SearchCapability> {
+		return this.call("getSearchCapability");
+	}
+
+	public getSearchDiagnostics(): Promise<SearchDiagnostic[]> {
+		return this.call("getSearchDiagnostics");
+	}
+
+	public search(input: SearchRequest): Promise<SearchResponse> {
+		return this.call("search", input);
 	}
 
 	protected async call<T>(method: string, params?: unknown): Promise<T> {

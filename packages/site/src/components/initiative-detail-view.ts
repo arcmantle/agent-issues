@@ -14,7 +14,7 @@ import "./relationship-graph.js";
 import "./relationship-graph-filters.js";
 import type { Entity, InitiativeBundle, InitiativeTab, ProjectGraphKind } from "../models.js";
 import type { AgentIssuesStore } from "../services/agent-issues-store.js";
-import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
+import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
 function renderMarkdownBody(markdown: string): string {
 	const rawHtml = marked.parse(markdown, { async: false });
@@ -38,6 +38,7 @@ type InitiativeTabDefinition = {
 const INITIATIVE_GRAPH_KINDS: ProjectGraphKind[] = ["initiative", "plan", "prd", "adr", "story", "issue", "debt"];
 const INITIATIVE_TAB_DETAILS: Array<[Exclude<InitiativeTab, "overview">, string]> = [
 	["issues", "Issues"],
+	["plans", "Plans"],
 	["prds", "PRDs"],
 	["adrs", "ADRs"],
 	["graph", "Graph"],
@@ -421,7 +422,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	}
 
 	protected issueTreeForRecords(bundle: InitiativeBundle, records: Entity[]): IssueTreeNode[] {
-		const recordsById = new Map(records.map((record) => [record.id, record]));
+		const orderedRecords = this.store?.sortIssuesByExpectedCompletion(records, bundle) ?? records;
+		const recordsById = new Map(orderedRecords.map((record) => [record.id, record]));
+		const positionById = new Map(orderedRecords.map((record, index) => [record.id, index]));
 		const childrenByParentId = new Map<string, Entity[]>();
 		const childIds = new Set<string>();
 
@@ -439,11 +442,12 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const buildNode = (record: Entity, visitedIds: ReadonlySet<string>): IssueTreeNode => ({
 			children: (childrenByParentId.get(record.id) ?? [])
 				.filter((child) => !visitedIds.has(child.id))
+				.sort((left, right) => positionById.get(left.id)! - positionById.get(right.id)!)
 				.map((child) => buildNode(child, new Set([...visitedIds, child.id]))),
 			issue: record
 		});
 
-		return records.filter((record) => !childIds.has(record.id)).map((record) => buildNode(record, new Set([record.id])));
+		return orderedRecords.filter((record) => !childIds.has(record.id)).map((record) => buildNode(record, new Set([record.id])));
 	}
 
 	protected renderIssueTreeTab(bundle: InitiativeBundle, matchingRecords: Entity[]) {
@@ -489,7 +493,8 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		bundle: InitiativeBundle,
 		options: { treeTab?: RecordTreeTab; treeContent?: (matchingRecords: Entity[]) => TemplateResult } = {}
 	) {
-		const filteredRecords = this.filterRecords(records, bundle);
+		const orderedRecords = title === "Issues" ? this.store?.sortIssuesByExpectedCompletion(records, bundle) ?? records : records;
+		const filteredRecords = this.filterRecords(orderedRecords, bundle);
 		const statuses = [...new Set(records.map((record) => record.status))].sort((left, right) => left.localeCompare(right));
 		const treeView = options.treeTab ? this.getRecordView(options.treeTab) === "tree" : false;
 
@@ -608,12 +613,16 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const graph = graphFilterActive ? store.buildInitiativeGraph(bundle, visibleGraphKinds) : baseGraph;
 		const debtSections = store.debtRecordSectionsFor(bundle.initiative.id);
 		const debtRecords = [...new Map(debtSections.flatMap((section) => section.records).map((record) => [record.id, record])).values()];
+		const plans = bundle.entities
+			.filter((entity) => entity.kind === "plan")
+			.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime() || left.id.localeCompare(right.id));
 			const tabCounts: Partial<Record<InitiativeTab, number>> = {
 				adrs: bundle.adrs.length,
 				context: context?.terms.length ?? 0,
 				debt: debtRecords.length,
 				graph: baseGraph.nodes.length,
 				issues: bundle.issues.length,
+				plans: plans.length,
 				prds: bundle.prds.length,
 				userStories: bundle.userStories.length
 			};
@@ -636,7 +645,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				${bundle.initiative.title}
 				<span class=${`badge ${store.badgeTone(bundle.initiative.status)}`}>${bundle.initiative.status}</span>
 			</h1>
-			<p class="d-sub">${context?.context.summary ?? "No initiative-specific context is available yet."}</p>
+			<div class="d-sub">
+				${unsafeHTML(renderMarkdownBody(context?.context.summary ?? "No initiative-specific context is available yet."))}
+			</div>
 
 			<div class="kpis">
 				<div class="kpi">
@@ -678,10 +689,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					@click=${this.onSetTab}
 					role="tab"
 				>
-					<span
-						class="subtab-label"
-						data-label=${label}
-					>
+					<span class="subtab-label">
 						<span class="subtab-label-text">${label}</span>
 					</span>
 					${when(recordCount !== undefined, () => html`<span aria-hidden="true" class="subtab-count">${recordCount}</span>`, () => nothing)}
@@ -727,6 +735,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 						treeContent: (matchingRecords) => this.renderIssueTreeTab(bundle, matchingRecords),
 						treeTab: "issues"
 					})],
+					["plans", () => this.renderRecordTab("Plans", plans, "No Plans attached.", bundle)],
 					["prds", () => this.renderRecordTab("PRDs", bundle.prds, "No PRDs attached.", bundle)],
 					["adrs", () => this.renderRecordTab("ADRs", bundle.adrs, "No ADRs recorded.", bundle)],
 					["context", () => html`
@@ -771,7 +780,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	}
 
 	static styles = [
-		issueBrowserTokenStyles,
 		issueBrowserTypographyStyles,
 		issueBrowserControlStyles,
 		css`
@@ -798,6 +806,24 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			max-width: 70ch;
 			margin: 10px 0 0;
 			color: var(--muted);
+		}
+		.d-sub > :first-child {
+			margin-top: 0;
+		}
+		.d-sub > :last-child {
+			margin-bottom: 0;
+		}
+		.d-sub h1,
+		.d-sub h2,
+		.d-sub h3 {
+			margin-bottom: 6px;
+			font-size: 16px;
+			line-height: 1.4;
+		}
+		.d-sub p,
+		.d-sub ul,
+		.d-sub ol {
+			margin: 6px 0;
 		}
 		.kpis {
 			display: grid;
@@ -836,10 +862,11 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 		.subtabs {
 			display: flex;
-			gap: 18px;
+			flex-wrap: wrap;
+			column-gap: 18px;
+			row-gap: 4px;
 			margin-top: 22px;
 			border-bottom: 1px solid var(--border-muted);
-			overflow-x: auto;
 		}
 		.subtab {
 			position: relative;
@@ -854,21 +881,14 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				text-align: center;
 		}
 		.subtab-label {
-			display: inline-grid;
-		}
-		.subtab-label::before,
-		.subtab-label-text {
-			grid-area: 1 / 1;
-		}
-		.subtab-label::before {
-			visibility: hidden;
-			content: attr(data-label);
-			font-weight: 600;
+			display: inline-block;
 		}
 		.subtab.active {
 			border-bottom-color: #fd8c73;
 			color: var(--text);
-			font-weight: 600;
+		}
+		.subtab.active .subtab-label-text {
+			text-shadow: -0.25px 0 currentColor, 0.25px 0 currentColor;
 		}
 		.record-tab {
 			margin-top: 18px;

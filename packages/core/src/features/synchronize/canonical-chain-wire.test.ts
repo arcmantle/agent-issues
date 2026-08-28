@@ -186,12 +186,12 @@ describe("canonical chain wire encoding", () => {
 		expect(decodedPatch).toEqual(sourcePatch);
 	});
 
-	it("rejects a wire bundle with a parentless Plan", () => {
+	it("decodes a wire bundle with a parentless legacy Plan", () => {
 		const plan = planChain();
 		plan.head.parentId = null;
 		const bundle = encodeCanonicalChainBundle({ ...bundleWithIssue(), entities: [plan] });
 
-		expect(() => decodeCanonicalChainBundle(bundle)).toThrow("initiative parent");
+		expect(decodeCanonicalChainBundle(bundle).entities).toEqual([plan]);
 	});
 
 	it("rejects a wire bundle with an issue-owned Plan", () => {

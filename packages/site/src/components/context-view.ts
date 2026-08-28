@@ -2,21 +2,51 @@ import { LitElement, css, html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { when } from "lit/directives/when.js";
 import type { ContextDetails, ContextTermRecord } from "../models.js";
-import { issueBrowserTokenStyles, issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
+import { issueBrowserTypographyStyles } from "../styles/issue-browser-shared-styles.js";
 
 class ContextView extends LitElement {
 	static properties = {
 		context: { attribute: false },
-		emptyMessage: { attribute: false }
+		emptyMessage: { attribute: false },
+		targetTerm: { attribute: false }
 	};
 
 	public context: ContextDetails | null = null;
 
 	public emptyMessage = "No context has been defined yet.";
 
+	public targetTerm: string | null = null;
+
+	protected focusTargetTerm() {
+		const elements = [...this.renderRoot.querySelectorAll<HTMLElement>(".term")];
+		for (const element of elements) {
+			element.classList.remove("is-context-term-target");
+		}
+
+		const target = elements.find((element) => element.dataset.term === this.targetTerm);
+		if (!target) {
+			return;
+		}
+
+		void target.offsetWidth;
+		target.classList.add("is-context-term-target");
+		target.focus({ preventScroll: true });
+		if (typeof target.scrollIntoView === "function") {
+			target.scrollIntoView({ behavior: "smooth", block: "center" });
+		}
+	}
+
+	protected override updated() {
+		this.focusTargetTerm();
+	}
+
 	protected renderTerm(term: ContextTermRecord) {
 		return html`
-		<div class="term">
+		<div
+			class="term"
+			data-term=${term.term}
+			tabindex="-1"
+		>
 			<div class="term-name">${term.term}</div>
 			<p class="term-def">${term.definition}</p>
 			${when(
@@ -61,7 +91,6 @@ class ContextView extends LitElement {
 	}
 
 	static styles = [
-		issueBrowserTokenStyles,
 		issueBrowserTypographyStyles,
 		css`
 		:host {
@@ -96,6 +125,29 @@ class ContextView extends LitElement {
 			border: 1px solid var(--border);
 			border-radius: 10px;
 			background: var(--surface);
+		}
+		.term:focus {
+			outline: 2px solid var(--focus-ring);
+			outline-offset: -2px;
+		}
+		.term.is-context-term-target {
+			animation: context-term-target 1.8s ease-out;
+		}
+		@keyframes context-term-target {
+			0% {
+				background: var(--accent-soft);
+				box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
+			}
+			100% {
+				background: var(--surface);
+				box-shadow: 0 0 0 0 transparent;
+			}
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.term.is-context-term-target {
+				animation: none;
+				outline: 2px solid var(--focus-ring);
+			}
 		}
 		.term-name {
 			font-weight: 600;

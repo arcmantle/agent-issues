@@ -6,13 +6,14 @@ import { map } from "lit/directives/map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { when } from "lit/directives/when.js";
 import "./components/context-view.js";
+import "./components/global-search-overlay.js";
 import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
 import "./components/relationship-graph.js";
 import "./components/relationship-graph-filters.js";
 import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, DebtFilter, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
-import { issueBrowserControlStyles, issueBrowserTokenStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
+import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
 const SWITCHER_MENU_ID = "tenant-switcher-menu";
 const THEME_STORAGE_KEY = "agent-issues-theme";
@@ -25,6 +26,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 	protected narrow = false;
 	protected mobileMasterOpen = false;
 	protected theme: SiteTheme = "light";
+	protected globalSearchTrigger: HTMLElement | null = null;
 
 	protected onSelectTenant = (event: Event) => {
 		const tenantId = (event.currentTarget as HTMLElement).dataset.tenant;
@@ -83,6 +85,44 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	protected onSearchInput = (event: Event) => {
 		this.store.search.set((event.target as HTMLInputElement).value);
+	};
+
+	protected onOpenGlobalSearch = (event: Event) => {
+		this.globalSearchTrigger = event.currentTarget as HTMLElement;
+		this.store.openGlobalSearch();
+	};
+
+	protected onCloseGlobalSearch = () => {
+		this.store.closeGlobalSearch();
+		this.globalSearchTrigger?.focus();
+	};
+
+	protected onOpenGlobalSearchTarget = (event: Event) => {
+		this.store.openSearchTarget((event as CustomEvent<import("@agent-issues/core").SearchNavigationTarget>).detail);
+		this.onCloseGlobalSearch();
+	};
+
+	protected onRetryGlobalSearch = () => {
+		void this.store.retryGlobalSearch();
+	};
+
+	protected onWindowKeyDown = (event: KeyboardEvent) => {
+		const target = event.target as HTMLElement | null;
+		if (
+			event.key.toLowerCase() !== "k" ||
+			(!event.metaKey && !event.ctrlKey) ||
+			target instanceof HTMLInputElement ||
+			target instanceof HTMLTextAreaElement ||
+			target?.isContentEditable
+		) {
+			return;
+		}
+
+		event.preventDefault();
+		this.globalSearchTrigger = document.activeElement instanceof HTMLElement
+			? document.activeElement
+			: this.shadowRoot?.querySelector<HTMLElement>("[data-global-search-trigger]") ?? null;
+		this.store.openGlobalSearch();
 	};
 
 	protected onToggleRail = () => {
@@ -191,17 +231,52 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		this.store.selectProjectGraphEntity(id, kind);
 	};
 
+	protected focusContextTarget() {
+		for (const element of this.renderRoot.querySelectorAll<HTMLElement>(".is-context-target, .is-context-term-target")) {
+			element.classList.remove("is-context-target", "is-context-term-target");
+		}
+
+		const target = this.store.selectedNestedTarget.get();
+		if (!target || (target.type !== "context" && target.type !== "context-term")) {
+			return;
+		}
+
+		const element = target.type === "context"
+			? [...this.renderRoot.querySelectorAll<HTMLElement>(".ctx-context-summary")]
+				.find((candidate) => candidate.dataset.contextScope === (target.scopeRef ?? "shared"))
+			: [...this.renderRoot.querySelectorAll<HTMLElement>(".ctx-term")]
+				.find((candidate) => candidate.dataset.term === target.id);
+		if (!element) {
+			return;
+		}
+
+		const targetClass = target.type === "context" ? "is-context-target" : "is-context-term-target";
+		element.classList.remove(targetClass);
+		void element.offsetWidth;
+		element.classList.add(targetClass);
+		element.focus({ preventScroll: true });
+		if (typeof element.scrollIntoView === "function") {
+			element.scrollIntoView({ behavior: "smooth", block: "center" });
+		}
+	}
+
+	protected override updated() {
+		this.focusContextTarget();
+	}
+
 	connectedCallback(): void {
 		super.connectedCallback();
 		const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 		this.setTheme(storedTheme === "dark" ? "dark" : "light");
 		this.updateNarrowMode();
 		window.addEventListener("resize", this.updateNarrowMode);
+		window.addEventListener("keydown", this.onWindowKeyDown);
 		this.store.connect();
 	}
 
 	disconnectedCallback(): void {
 		window.removeEventListener("resize", this.updateNarrowMode);
+		window.removeEventListener("keydown", this.onWindowKeyDown);
 		this.store.disconnect();
 		super.disconnectedCallback();
 	}
@@ -336,6 +411,32 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				</div>
 				${this.renderSwitcherMenu()}
 			</div>
+			${when(
+				!this.narrow,
+				() => html`
+				<button
+					aria-label="Open global search"
+					class="global-search-trigger"
+					data-global-search-trigger
+					@click=${this.onOpenGlobalSearch}
+					type="button"
+				>
+					<span>Search records</span>
+					<kbd>⌘ K</kbd>
+				</button>
+				`,
+				() => html`
+				<button
+					aria-label="Open global search"
+					class="global-search-icon-trigger"
+					data-global-search-trigger
+					@click=${this.onOpenGlobalSearch}
+					type="button"
+				>
+					⌕
+				</button>
+				`
+			)}
 			<nav class="rail-nav">
 				<div class="nav-group-label">Plan</div>
 				${map(
@@ -623,6 +724,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		<article
 			class="ctx-term"
 			data-term=${entry.term}
+			tabindex="-1"
 		>
 			<div class="ctx-top">
 				<span class="ctx-name">${entry.term}</span>
@@ -641,6 +743,8 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 	}
 
 	protected renderSharedContextPanel() {
+		const target = this.store.selectedNestedTarget.get();
+		const targetTerm = target?.type === "context-term" && !target.scopeRef ? target.id : null;
 		return html`
 		<section class="ctx-block">
 			<div class="ctx-section-head">
@@ -649,10 +753,17 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					<p class="ctx-section-copy">Project-canonical terms and preferred language that should be safe anywhere in this tenant.</p>
 				</div>
 			</div>
-			<agent-issues-context-view
-				.context=${this.store.filteredSharedContext.get()}
-				.emptyMessage=${"No shared context matches the current search."}
-			></agent-issues-context-view>
+			<div
+				class="ctx-context-summary"
+				data-context-scope="shared"
+				tabindex="-1"
+			>
+				<agent-issues-context-view
+					.context=${this.store.filteredSharedContext.get()}
+					.emptyMessage=${"No shared context matches the current search."}
+					.targetTerm=${targetTerm}
+				></agent-issues-context-view>
+			</div>
 		</section>
 		`;
 	}
@@ -667,6 +778,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const contextInitiatives = store.projectInitiatives.get();
 		const initiativeCount = contextInitiatives.length;
 		const selectedInitiativeId = store.selectedContextInitiativeId.get();
+		const selectedContext = selectedInitiativeId ? store.getContextForInitiative(selectedInitiativeId) : null;
 		const stats = [
 			`${totalTerms} discovered terms`,
 			`${initiativeCount} initiative contexts`,
@@ -716,6 +828,27 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					)}
 				</div>
 				`,
+				() => nothing
+			)}
+			${when(
+				selectedContext !== null,
+				() => {
+					const context = selectedContext;
+					if (!context) {
+						return nothing;
+					}
+
+					return html`
+				<div
+					class="ctx-context-summary"
+					data-context-scope=${context.context.scopeEntityId ?? context.context.key}
+					tabindex="-1"
+				>
+					<h3 class="ctx-context-title">${context.context.title}</h3>
+					<p class="ctx-context-copy">${context.context.summary}</p>
+				</div>
+					`;
+				},
 				() => nothing
 			)}
 			${when(
@@ -984,12 +1117,23 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			${this.renderRail()}
 			${when(!wide, () => this.renderMaster(), () => nothing)}
 			${this.renderDetail()}
+			${when(
+				store.globalSearchOpen.get(),
+				() => html`
+				<agent-issues-global-search-overlay
+					.store=${store}
+					@global-search-close=${this.onCloseGlobalSearch}
+					@global-search-open-target=${this.onOpenGlobalSearchTarget}
+					@global-search-retry=${this.onRetryGlobalSearch}
+				></agent-issues-global-search-overlay>
+				`,
+				() => nothing
+			)}
 		</div>
 		`;
 	}
 
 	static styles = [
-		issueBrowserTokenStyles,
 		issueBrowserTypographyStyles,
 		issueBrowserControlStyles,
 		css`
@@ -1067,6 +1211,35 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			position: relative;
 			padding: 12px;
 			border-bottom: 1px solid var(--border-muted);
+		}
+		.global-search-trigger {
+			display: flex;
+			gap: 8px;
+			align-items: center;
+			justify-content: space-between;
+			margin: 0 12px 8px;
+			padding: 8px 10px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--muted);
+			cursor: pointer;
+			font: inherit;
+			font-size: 13px;
+		}
+		.global-search-trigger:hover {
+			border-color: var(--accent);
+			color: var(--text);
+		}
+		.global-search-trigger kbd {
+			padding: 1px 4px;
+			border: 1px solid var(--border-muted);
+			border-radius: 3px;
+			font: inherit;
+			font-size: 11px;
+		}
+		.global-search-icon-trigger {
+			display: none;
 		}
 		.switcher-actions {
 			display: flex;
@@ -1410,6 +1583,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 		.detail {
 			overflow-y: auto;
+			scrollbar-gutter: stable;
 		}
 		.detail-inner {
 			max-width: 920px;
@@ -1516,6 +1690,37 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			border: 1px solid var(--border);
 			border-radius: 10px;
 			background: var(--surface-muted);
+		}
+		.ctx-term:focus {
+			outline: 2px solid var(--focus-ring);
+			outline-offset: -2px;
+		}
+		.ctx-term.is-context-term-target {
+			animation: context-term-target 1.8s ease-out;
+		}
+		.ctx-context-summary:focus {
+			outline: 2px solid var(--focus-ring);
+			outline-offset: 4px;
+		}
+		.ctx-context-summary.is-context-target {
+			animation: context-term-target 1.8s ease-out;
+		}
+		@keyframes context-term-target {
+			0% {
+				background: var(--accent-soft);
+				box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
+			}
+			100% {
+				background: var(--surface-muted);
+				box-shadow: 0 0 0 0 transparent;
+			}
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.ctx-context-summary.is-context-target,
+			.ctx-term.is-context-term-target {
+				animation: none;
+				outline: 2px solid var(--focus-ring);
+			}
 		}
 		.ctx-top {
 			display: flex;
@@ -1798,6 +2003,22 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				border-right: 0;
 				border-bottom: 0;
 				border-radius: 0;
+			}
+			.console.narrow .global-search-icon-trigger {
+				display: inline-flex;
+				flex: 0 0 40px;
+				align-items: center;
+				justify-content: center;
+				align-self: stretch;
+				width: 40px;
+				padding: 0;
+				border: 0;
+				border-right: 1px solid var(--border);
+				background: var(--surface);
+				color: var(--text);
+				cursor: pointer;
+				font: inherit;
+				font-size: 20px;
 			}
 			.console.narrow .switcher-button {
 				width: 36px;

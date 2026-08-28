@@ -60,6 +60,18 @@ describe("kind-specific entity types", () => {
 	});
 });
 
+describe("issue comments", () => {
+	it("does not reject a comment because an unrelated legacy Plan has no Initiative parent", async () => {
+		const db = await openTestDatabase();
+		const initiative = createEntity(db, { kind: "initiative", title: "Plan owner" });
+		const plan = createEntity(db, { kind: "plan", parentId: initiative.id, title: "Legacy Plan" });
+		const issue = createEntity(db, { kind: "issue", title: "Comment target" });
+		db.drizzle.run(sql`DELETE FROM relations WHERE tenant_id = ${db.tenantId} AND from_id = ${initiative.id} AND to_id = ${plan.id} AND type = 'owns'`);
+
+		expect(createIssueComment(db, { issueId: issue.reference, body: "Valid comment." }, "author")).toMatchObject({ issueId: issue.id, body: "Valid comment." });
+	});
+});
+
 describe("project-scoped ADRs", () => {
 	it("exposes a parentless ADR as a project-scoped ADR in the snapshot", async () => {
 		const db = await openTestDatabase();

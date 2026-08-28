@@ -5,6 +5,7 @@ import type { EntityStore } from "./entity-store.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
 import type { IssueCommentStore } from "./issue-comment-store.js";
 import type { PlanEntryStore } from "./plan-entry-store.js";
+import type { SearchStore } from "./search-store.js";
 import type { SynchronizeStore } from "./synchronize-store.js";
 import type { UserDirectoryStore } from "./user-directory-store.js";
 
@@ -21,7 +22,7 @@ import type { UserDirectoryStore } from "./user-directory-store.js";
  * `SynchronizeStore` and the fourth feature, history diagnostics (which has
  * no public seam of its own - see `HistoryDiagnosticsStore`'s doc comment).
  */
-export interface StorageDriver extends EntityStore, ContextStore, IssueCommentStore, PlanEntryStore, SynchronizeStore, UserDirectoryStore {
+export interface StorageDriver extends EntityStore, ContextStore, IssueCommentStore, PlanEntryStore, SearchStore, SynchronizeStore, UserDirectoryStore {
 	readonly tenantId: string;
 	withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver;
 	getHistoryDiagnostics(): Promise<HistoryDiagnostics>;

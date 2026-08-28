@@ -44,7 +44,10 @@ const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	"9e7cc62c0dcf87198c8bcbe5dd1c91a141c978dcfb88d0d8af98628ef47bfbb6",
 	"dc0ab9d8b8e93223dd9fd87bc3416adbf5d9a814c0d3494979c6ab4244d823bb",
 	"56088fdda6180c9343496577f60e217fa53510c83b9b2fa3372b8d3d55e3e002",
-	"8d7d1a1254ac3e5737f2385c3fc30ee4fa195b63a6b951d8ec4274700afd02ff"
+	"8d7d1a1254ac3e5737f2385c3fc30ee4fa195b63a6b951d8ec4274700afd02ff",
+	"6c4e5d5e7b55c93c9131d9a58a52329331225e7ea7931e4be95c85aaeef5a1d3",
+	"77424dc75798c6a57ef3e08c17e4e29afe1948cc2650e347731ac92d3f2e9c50",
+	"bbcb57583c51629c48796a92d5eeb462e014688821c770549b199f36d72b8a1b"
 ]);
 const DIRECT_FINAL_SCHEMA_SIGNATURE = "892a43c929f85fd4f71f334c02aa664bc7e8a5f2203929654a10e11229d541ff";
 const DIRECT_USER_DIRECTORY_SCHEMA_SIGNATURE = "8b16a9b6f6ed70905c50813482a2301d7dc9859775abba2c2dfc2300f8b225fe";
@@ -55,6 +58,8 @@ const DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE = "90281f8991142883e09fd636
 const DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE = "ab486dcf006ef3262da07bf2f2daf302701b970d1edbddadf1d97539ad2bd3e5";
 const DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE = "b72cabb9c3106db9f0713ebeab15e28580bc721cbb74addeb3a6f97ec54605c7";
 const DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE = "56088fdda6180c9343496577f60e217fa53510c83b9b2fa3372b8d3d55e3e002";
+const DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE = "a5685140b1f0685a54f0caf479065b9682c361c06ebcab9558b59d35168ef27b";
+const DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE = "a713c980aa71dcceb950c10a6ccb818e1871a0e9a1203e95074d84aed2a84504";
 
 export function inspectSqliteSourceProfile(database: SqliteInternalConnection, expectedLedgerIds: string[]): SourceProfileResult {
 	const schemaObjects = database.drizzle.all<SchemaObject>(
@@ -102,7 +107,7 @@ export function inspectSqliteSourceProfile(database: SqliteInternalConnection, e
 		&& ledgerIds[0] === "legacy-v7-direct") {
 		return { evidence, profile: "current-final", supported: true };
 	}
-	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE)
+	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE)
 		&& ledgerIds.length === expectedLedgerIds.length + 1
 		&& ledgerIds[0] === "legacy-v7-direct"
 		&& ledgerIds.slice(1).every((id, index) => id === expectedLedgerIds[index])) {

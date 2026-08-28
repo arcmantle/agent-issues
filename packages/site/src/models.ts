@@ -142,6 +142,7 @@ export type IssueCommentPage = {
 export type PlanEntry = {
 	id: string;
 	reference: string;
+	shortReference?: string;
 	planId: string;
 	role: "question" | "decision" | "scope" | "constraint" | "preference" | "consideration";
 	body?: string;
@@ -216,7 +217,7 @@ export function isConsoleSection(value: string | null): value is ConsoleSection 
 
 export type DebtFilter = "lifecycle" | "category" | "priority";
 
-export type InitiativeTab = "overview" | "issues" | "prds" | "adrs" | "context" | "userStories" | "debt" | "graph";
+export type InitiativeTab = "overview" | "issues" | "plans" | "prds" | "adrs" | "context" | "userStories" | "debt" | "graph";
 
 export type GraphStatus = "idle" | "loading" | "ready" | "error";
 
