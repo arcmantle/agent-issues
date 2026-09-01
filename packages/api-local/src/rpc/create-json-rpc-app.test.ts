@@ -58,6 +58,22 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 		}
 	});
 
+	it("answers authenticated daemon health checks without opening a store", async () => {
+		const tenantId = "sqlite-tenant";
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const createStore = vi.fn<() => Promise<StorageDriver>>();
+		const app = createJsonRpcApp({ authProvider, createStore });
+
+		const response = await request(app)
+			.post("/rpc")
+			.set("authorization", `Bearer ${token}`)
+			.send({ jsonrpc: "2.0", id: 1, method: "daemonHealth" });
+
+		expect(response.status).toBe(200);
+		expect(response.body.result).toEqual({ ready: true });
+		expect(createStore).not.toHaveBeenCalled();
+	});
+
 	it("dispatches typed available search responses through SqliteStore", async () => {
 		const dbPath = path.join(tempDir, "test.db");
 		const tenantId = "sqlite-tenant";

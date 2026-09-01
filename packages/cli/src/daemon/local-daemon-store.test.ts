@@ -168,6 +168,62 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 		})).rejects.toThrow("Local daemon request timed out after 20ms.");
 	});
 
+	it("does not apply the startup timeout to requests after the health check", async () => {
+		await saveDaemonToken("real-token", credentialStoreOptions);
+		const server = createServer((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => (body += chunk));
+			request.on("end", () => {
+				const method = (JSON.parse(body) as { method: string }).method;
+				const send = () => {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(JSON.stringify({ jsonrpc: "2.0", id: "1", result: method === "daemonHealth" ? { ready: true } : [] }));
+				};
+				if (method === "daemonHealth") {
+					send();
+				} else {
+					setTimeout(send, 50);
+				}
+			});
+		});
+		servers.push(server);
+		const port = await new Promise<number>((resolve) => {
+			server.listen(0, "127.0.0.1", () => {
+				const address = server.address();
+				resolve(typeof address === "object" && address !== null ? address.port : 0);
+			});
+		});
+		saveDaemonState({ pid: process.pid, port }, { homeDirectory });
+
+		const store = await openLocalDaemonStore({
+			homeDirectory,
+			credentialStoreOptions,
+			requestTimeoutMs: 20,
+			spawn: vi.fn()
+		});
+
+		await expect(store.listEntities("initiative")).resolves.toEqual([]);
+	});
+
+	it("refreshes the token when daemon discovery changes to a replacement port", async () => {
+		await saveDaemonToken("first-token", credentialStoreOptions);
+		const firstPort = await listenFakeDaemon((headers) => ({
+			status: headers.authorization === "Bearer first-token" ? 200 : 401,
+			body: { jsonrpc: "2.0", id: "1", result: [] }
+		}));
+		saveDaemonState({ pid: process.pid, port: firstPort }, { homeDirectory });
+		const store = await openLocalDaemonStore({ homeDirectory, credentialStoreOptions, spawn: vi.fn() });
+
+		await saveDaemonToken("replacement-token", credentialStoreOptions);
+		const replacementPort = await listenFakeDaemon((headers) => ({
+			status: headers.authorization === "Bearer replacement-token" ? 200 : 401,
+			body: { jsonrpc: "2.0", id: "1", result: [] }
+		}));
+		saveDaemonState({ pid: process.pid + 1, port: replacementPort }, { homeDirectory });
+
+		await expect(store.listEntities("initiative")).resolves.toEqual([]);
+	});
+
 	it("retries once against a freshly-spawned daemon when the current one reports a db-path mismatch (ISS190)", async () => {
 		await saveDaemonToken("real-token", { ...credentialStoreOptions, dbPath: "/tmp/new.db" });
 		const oldPort = await listenFakeDaemon(() => {

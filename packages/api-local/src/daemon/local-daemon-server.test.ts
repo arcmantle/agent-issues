@@ -13,8 +13,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readBuildContentHash } from "./build-info.js";
-import { readDaemonState } from "./daemon-state.js";
-import { readDaemonToken } from "../auth/daemon-token.js";
+import { readDaemonState, saveDaemonState } from "./daemon-state.js";
+import { readDaemonToken, saveDaemonToken } from "../auth/daemon-token.js";
 import { createLocalDaemonServer, type LocalDaemonServerHandle } from "./local-daemon-server.js";
 import { openSqliteStore } from "../sqlite-store.js";
 
@@ -394,6 +394,25 @@ describe("local daemon default auth via its own minted token (ISS184)", () => {
 		handle = undefined;
 
 		await expect(readDaemonToken({ ...credentialStoreOptions, dbPath })).resolves.toBeUndefined();
+	});
+
+	it("does not clear a replacement daemon's state or token when an older daemon closes", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		handle = createLocalDaemonServer({
+			dbPath,
+			port: 0,
+			homeDirectory,
+			credentialStoreOptions
+		});
+		await new Promise<void>((resolve) => handle?.server.once("listening", resolve));
+		saveDaemonState({ pid: process.pid + 1, port: 54321 }, { homeDirectory, dbPath });
+		await saveDaemonToken("replacement-token", { ...credentialStoreOptions, dbPath });
+
+		await handle.close();
+		handle = undefined;
+
+		expect(readDaemonState({ homeDirectory, dbPath })).toEqual({ pid: process.pid + 1, port: 54321 });
+		await expect(readDaemonToken({ ...credentialStoreOptions, dbPath })).resolves.toBe("replacement-token");
 	});
 });
 

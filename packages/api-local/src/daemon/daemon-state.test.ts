@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { clearDaemonState, readDaemonState, saveDaemonState } from "./daemon-state.js";
+import { clearDaemonState, clearDaemonStateIfOwned, readDaemonState, saveDaemonState } from "./daemon-state.js";
 
 describe("daemon state file (ISS189)", () => {
 	let homeDirectory: string;
@@ -36,6 +36,15 @@ describe("daemon state file (ISS189)", () => {
 
 	it("does not throw when clearing state that was never saved", () => {
 		expect(() => clearDaemonState({ homeDirectory })).not.toThrow();
+	});
+
+	it("clears state only when the caller still owns the daemon slot", () => {
+		saveDaemonState({ pid: 42, port: 1234 }, { homeDirectory });
+
+		expect(clearDaemonStateIfOwned(41, { homeDirectory })).toBe(false);
+		expect(readDaemonState({ homeDirectory })).toEqual({ pid: 42, port: 1234 });
+		expect(clearDaemonStateIfOwned(42, { homeDirectory })).toBe(true);
+		expect(readDaemonState({ homeDirectory })).toBeUndefined();
 	});
 
 	it("treats a corrupt state file as absent rather than throwing", () => {

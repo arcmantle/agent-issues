@@ -24,28 +24,38 @@ type ResolvedLocalDaemonStoreOptions = LocalDaemonStoreOptions & Pick<CallDaemon
 export class LocalDaemonStore extends HttpStore {
 	public constructor(lifecycleOptions: ResolvedLocalDaemonStoreOptions, httpOptions: Omit<HttpStoreOptions, "baseUrl">) {
 		const requestTimeoutMs = lifecycleOptions.requestTimeoutMs ?? DEFAULT_DAEMON_REQUEST_TIMEOUT_MS;
+		const timeoutFetch = createStartupTimeoutFetch(httpOptions.fetchImpl ?? fetch, requestTimeoutMs);
 		super({
 			...httpOptions,
 			baseUrl: "http://127.0.0.1:0",
-			fetchImpl: createTimeoutFetch(httpOptions.fetchImpl ?? fetch, requestTimeoutMs)
+			fetchImpl: timeoutFetch.fetch
 		});
 		this.lifecycleOptions = lifecycleOptions;
 		this.requestTimeoutMs = requestTimeoutMs;
+		this.disableRequestTimeout = timeoutFetch.disable;
 	}
 
 	protected lifecycleOptions: ResolvedLocalDaemonStoreOptions;
 	protected requestTimeoutMs: number;
+	protected disableRequestTimeout: () => void;
+	protected daemonPort: number | undefined;
+
+	public async confirmReady(): Promise<void> {
+		await this.call("daemonHealth");
+		this.disableRequestTimeout();
+	}
 
 	protected override async call<T>(method: string, params?: unknown): Promise<T> {
 		const dbPath = this.lifecycleOptions.dbPath;
 		let attempt = 0;
 		try {
 			return await callDaemonWithVersionHandshakeRetry(this.lifecycleOptions, async (port) => {
-				if (attempt > 0) {
+				if (attempt > 0 || (this.daemonPort !== undefined && this.daemonPort !== port)) {
 					const freshToken = await readDaemonToken({ ...this.lifecycleOptions.credentialStoreOptions, dbPath });
 					if (freshToken) this.options.bearerToken = freshToken;
 				}
 				attempt++;
+				this.daemonPort = port;
 				this.options.baseUrl = `http://127.0.0.1:${port}`;
 				return super.call<T>(method, params);
 			});
@@ -79,7 +89,7 @@ export async function openLocalDaemonStore(options: LocalDaemonStoreOptions): Pr
 		workspaceRoot: options.workspaceRoot
 	});
 	try {
-		await store.getSnapshotSignature();
+		await store.confirmReady();
 		return store;
 	} catch (error) {
 		await store.close();
@@ -87,10 +97,19 @@ export async function openLocalDaemonStore(options: LocalDaemonStoreOptions): Pr
 	}
 }
 
-function createTimeoutFetch(fetchImpl: typeof fetch, timeoutMs: number): typeof fetch {
-	return ((input: RequestInfo | URL, init?: RequestInit) => {
-		const timeoutSignal = AbortSignal.timeout(timeoutMs);
-		const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
-		return fetchImpl(input, { ...init, signal });
-	}) as typeof fetch;
+function createStartupTimeoutFetch(fetchImpl: typeof fetch, timeoutMs: number): { fetch: typeof fetch; disable: () => void } {
+	let enabled = true;
+	return {
+		fetch: ((input: RequestInfo | URL, init?: RequestInit) => {
+			if (!enabled) {
+				return fetchImpl(input, init);
+			}
+			const timeoutSignal = AbortSignal.timeout(timeoutMs);
+			const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+			return fetchImpl(input, { ...init, signal });
+		}) as typeof fetch,
+		disable: () => {
+			enabled = false;
+		}
+	};
 }

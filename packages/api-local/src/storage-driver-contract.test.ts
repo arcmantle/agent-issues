@@ -260,7 +260,7 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 
 		try {
 			const entity = await store.createEntity({ kind: "initiative", title: "Searchable initiative", body: "The retrieval system ranks records." });
-			const mistypedReference = `${entity.reference.slice(0, -1)}X`;
+			const mistypedReference = `${entity.reference.slice(0, -1)}${entity.reference.endsWith("X") ? "Y" : "X"}`;
 
 			await expect(store.search({ query: '"retrival"', scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
 			await expect(store.search({ query: "retrival*", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
@@ -566,6 +566,64 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 		}
 	});
 
+	it("does not rebuild Search documents for Plan-entry issue links", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-plan-entry-link-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const { store } = await openSqliteStore(dbPath, { tenant: "test" });
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const plan = await store.createEntity({ kind: "plan", title: "Search Plan", parentId: initiative.id });
+			const issue = await store.createEntity({ kind: "issue", title: "Search Issue", parentId: initiative.id });
+			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Index this Plan entry." });
+			const inspection = new Database(dbPath, { readonly: true, fileMustExist: true });
+			const rowIdBefore = (inspection.prepare("SELECT rowid FROM search_documents WHERE tenant_id = ? AND source_type = 'entity' AND source_id = ?").get("test", issue.id) as { rowid: number }).rowid;
+
+			await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+			await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+
+			const rowIdAfter = (inspection.prepare("SELECT rowid FROM search_documents WHERE tenant_id = ? AND source_type = 'entity' AND source_id = ?").get("test", issue.id) as { rowid: number }).rowid;
+			inspection.close();
+			expect(rowIdAfter).toBe(rowIdBefore);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("updates only the affected Plan-entry Search document", async () => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-plan-entry-search-"));
+		const dbPath = path.join(tempDir, "test.db");
+		const { store } = await openSqliteStore(dbPath, { tenant: "test" });
+
+		try {
+			const initiative = await store.createEntity({ kind: "initiative", title: "Search Initiative" });
+			const plan = await store.createEntity({ kind: "plan", title: "Search Plan", parentId: initiative.id });
+			const issue = await store.createEntity({ kind: "issue", title: "Stable Search Issue", parentId: initiative.id });
+			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Initial indexed decision." });
+			const inspection = new Database(dbPath, { readonly: true, fileMustExist: true });
+			const unrelatedRowId = (inspection.prepare("SELECT rowid FROM search_documents WHERE tenant_id = ? AND source_type = 'entity' AND source_id = ?").get("test", issue.id) as { rowid: number }).rowid;
+
+			const updated = await store.updatePlanEntry({
+				entryId: entry.id,
+				body: "Updated indexed decision.",
+				expectedRevision: entry.revision,
+				expectedContentHash: entry.contentHash
+			});
+			await expect(store.search({ query: "Initial indexed decision", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			await expect(store.search({ query: "Updated indexed decision", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entry.id }) })]
+			}));
+			expect((inspection.prepare("SELECT rowid FROM search_documents WHERE tenant_id = ? AND source_type = 'entity' AND source_id = ?").get("test", issue.id) as { rowid: number }).rowid).toBe(unrelatedRowId);
+
+			await store.deletePlanEntry({ entryId: entry.id, expectedRevision: updated.revision, expectedContentHash: updated.contentHash });
+			await expect(store.search({ query: "Updated indexed decision", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+			inspection.close();
+		} finally {
+			await store.close();
+		}
+	});
+
 	it("removes and restores a context-term Search document", async () => {
 		const store = await openTestStore();
 
@@ -623,6 +681,59 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 			await store.deleteEntity({ entityId: updated.id });
 
 			await expect(store.search({ query: "Updated title", scope: { type: "all-projects" } })).resolves.toEqual({ state: "available", results: [] });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("refreshes dependent Search documents for entity label and parent changes", async () => {
+		const store = await openTestStore();
+
+		try {
+			const firstInitiative = await store.createEntity({ kind: "initiative", title: "First Initiative" });
+			const secondInitiative = await store.createEntity({ kind: "initiative", title: "Second Initiative" });
+			const plan = await store.createEntity({ kind: "plan", title: "Initial Plan", parentId: firstInitiative.id });
+			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Dependent Plan entry." });
+			const issue = await store.createEntity({ kind: "issue", title: "Initial Issue", parentId: firstInitiative.id });
+			const comment = await store.createIssueComment({ issueId: issue.id, body: "Dependent comment body." });
+			const renamedInitiative = await store.updateEntity({
+				entityId: firstInitiative.id,
+				title: "Renamed Initiative",
+				expectedRevision: firstInitiative.revision,
+				expectedContentHash: firstInitiative.contentHash
+			});
+			await expect(store.search({ query: issue.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ parentLabel: renamedInitiative.title })]
+			}));
+
+			const renamedIssue = await store.updateEntity({
+				entityId: issue.id,
+				title: "Renamed Issue",
+				expectedRevision: issue.revision,
+				expectedContentHash: issue.contentHash
+			});
+			await expect(store.search({ query: comment.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ title: renamedIssue.title })]
+			}));
+			const currentPlan = (await store.getEntityDetails(plan.id)).entity;
+			const renamedPlan = await store.updateEntity({
+				entityId: currentPlan.id,
+				title: "Renamed Plan",
+				expectedRevision: currentPlan.revision,
+				expectedContentHash: currentPlan.contentHash
+			});
+			await expect(store.search({ query: entry.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ title: renamedPlan.title, parentLabel: renamedPlan.title })]
+			}));
+
+			await store.moveEntity({ entityId: issue.id, newParentId: secondInitiative.id });
+			await expect(store.search({ query: issue.reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ parentLabel: secondInitiative.title })]
+			}));
 		} finally {
 			await store.close();
 		}

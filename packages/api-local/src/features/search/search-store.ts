@@ -48,6 +48,15 @@ type TypoVocabularyDocumentRow = {
 	body: string;
 };
 
+type SearchDocumentIdentityRow = {
+	rowid: number;
+};
+
+type SearchDocumentKeyRow = {
+	source_type: SearchSourceType;
+	source_id: string;
+};
+
 type TypoVocabularyMatchRow = SearchDocumentRow & {
 	matched_term: string;
 };
@@ -285,6 +294,186 @@ export class LocalSearchStore {
 		this.synchronizeTypoVocabulary();
 	}
 
+	public synchronizePlanEntrySearchDocument(sourceId: string): void {
+		this.replaceSearchDocument("plan-entry", sourceId, () => {
+			this.executor.drizzle.run(sql`INSERT INTO search_documents (
+				tenant_id, source_type, source_id, project_id, project_label, reference,
+				short_reference, title, body, status_or_role, parent_id, parent_label, updated_at
+			)
+			SELECT entry.tenant_id, 'plan-entry', entry.id, plan.project_id, project.title,
+				entry.reference, entry.short_reference, plan.title, entry.body, entry.role,
+				plan.id, plan.title, entry.updated_at
+			FROM plan_entries AS entry
+			JOIN entities AS plan
+				ON plan.tenant_id = entry.tenant_id
+				AND plan.id = entry.plan_id
+			JOIN entities AS project
+				ON project.tenant_id = entry.tenant_id
+				AND project.id = plan.project_id
+				AND project.kind = 'project'
+			WHERE entry.tenant_id = ${this.executor.tenantId} AND entry.id = ${sourceId} AND entry.tombstone = 0`);
+		});
+	}
+
+	public synchronizeEntitySearchDocumentsForChange(sourceId: string): void {
+		this.synchronizeSearchDocumentsByKey(this.findEntitySearchDocumentsForChange(sourceId));
+	}
+
+	public prepareEntitySearchDocumentsForChange(sourceId: string): () => void {
+		const affectedDocuments = this.findEntitySearchDocumentsForChange(sourceId);
+		return () => this.synchronizeSearchDocumentsByKey(affectedDocuments);
+	}
+
+	protected findEntitySearchDocumentsForChange(sourceId: string): SearchDocumentKeyRow[] {
+		const affectedDocuments = this.executor.drizzle.all<SearchDocumentKeyRow>(sql`
+			WITH RECURSIVE subtree(id) AS (
+				SELECT ${sourceId}
+				UNION
+				SELECT relation.to_id
+				FROM relations AS relation
+				JOIN subtree ON subtree.id = relation.from_id
+				WHERE relation.tenant_id = ${this.executor.tenantId}
+					AND relation.type IN ('contains', 'owns', 'records', 'tracks', 'creates', 'decomposes')
+			)
+			SELECT source_type, source_id
+			FROM search_documents
+			WHERE tenant_id = ${this.executor.tenantId}
+				AND (
+					source_id IN (SELECT id FROM subtree)
+					OR parent_id IN (SELECT id FROM subtree)
+					OR project_id = ${sourceId}
+					OR source_id IN (
+						SELECT relation.from_id
+						FROM relations AS relation
+						WHERE relation.tenant_id = ${this.executor.tenantId}
+							AND relation.to_id = ${sourceId}
+							AND relation.type = 'handsOff'
+					)
+				)
+		`);
+		affectedDocuments.push({ source_type: "entity", source_id: sourceId });
+		return affectedDocuments;
+	}
+
+	protected synchronizeSearchDocumentsByKey(affectedDocuments: SearchDocumentKeyRow[]): void {
+		const seen = new Set<string>();
+		for (const document of affectedDocuments) {
+			const key = `${document.source_type}:${document.source_id}`;
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			this.synchronizeSearchDocument(document.source_type, document.source_id);
+		}
+	}
+
+	public synchronizeEntitySearchDocument(sourceId: string): void {
+		this.replaceSearchDocument("entity", sourceId, () => {
+			this.executor.drizzle.run(sql`INSERT INTO search_documents (
+				tenant_id, source_type, source_id, project_id, project_label, reference,
+				short_reference, title, body, status_or_role, parent_id, parent_label, updated_at
+			)
+			SELECT entity.tenant_id, 'entity', entity.id, entity.project_id, project.title,
+				entity.reference, entity.short_reference, entity.title, entity.body, entity.status,
+				parent.id, parent.title, entity.updated_at
+			FROM entities AS entity
+			JOIN entities AS project
+				ON project.tenant_id = entity.tenant_id
+				AND project.id = entity.project_id
+				AND project.kind = 'project'
+			LEFT JOIN entities AS parent
+				ON parent.tenant_id = entity.tenant_id
+				AND parent.id = (
+					SELECT relation.from_id
+					FROM relations AS relation
+					WHERE relation.tenant_id = entity.tenant_id
+						AND relation.to_id = entity.id
+						AND relation.type IN ('owns', 'tracks', 'decomposes', 'creates', 'records')
+					ORDER BY relation.from_id
+					LIMIT 1
+				)
+			WHERE entity.tenant_id = ${this.executor.tenantId} AND entity.id = ${sourceId} AND entity.tombstone = 0`);
+		});
+	}
+
+	public synchronizeIssueCommentSearchDocument(sourceId: string): void {
+		this.replaceSearchDocument("issue-comment", sourceId, () => {
+			this.executor.drizzle.run(sql`INSERT INTO search_documents (
+				tenant_id, source_type, source_id, project_id, project_label, reference,
+				short_reference, title, body, status_or_role, parent_id, parent_label, updated_at
+			)
+			SELECT comment.tenant_id, 'issue-comment', comment.id, issue.project_id, project.title,
+				comment.reference, comment.short_reference, issue.title, comment.body, NULL,
+				issue.id, issue.title, comment.updated_at
+			FROM issue_comments AS comment
+			JOIN entities AS issue
+				ON issue.tenant_id = comment.tenant_id
+				AND issue.id = comment.issue_id
+			JOIN entities AS project
+				ON project.tenant_id = comment.tenant_id
+				AND project.id = issue.project_id
+				AND project.kind = 'project'
+			WHERE comment.tenant_id = ${this.executor.tenantId} AND comment.id = ${sourceId} AND comment.tombstone = 0`);
+		});
+	}
+
+	public synchronizeContextSearchDocument(sourceId: string): void {
+		const defaultProjectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
+		this.replaceSearchDocument("context", sourceId, () => {
+			this.executor.drizzle.run(sql`INSERT INTO search_documents (
+				tenant_id, source_type, source_id, project_id, project_label, reference,
+				short_reference, title, body, status_or_role, parent_id, parent_label, updated_at
+			)
+			SELECT context.tenant_id, 'context', context.id, project.id, project.title,
+				context.reference, context.short_reference, context.title, context.summary, NULL,
+				scope.id, scope.title, context.updated_at
+			FROM contexts AS context
+			LEFT JOIN entities AS scope
+				ON scope.tenant_id = context.tenant_id
+				AND scope.id = context.scope_entity_id
+			JOIN entities AS project
+				ON project.tenant_id = context.tenant_id
+				AND project.id = COALESCE(scope.project_id, ${defaultProjectId})
+				AND project.kind = 'project'
+			WHERE context.tenant_id = ${this.executor.tenantId} AND context.id = ${sourceId}`);
+		});
+	}
+
+	public synchronizeContextTermSearchDocument(sourceId: string): void {
+		const defaultProjectId = deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId;
+		this.replaceSearchDocument("context-term", sourceId, () => {
+			const row = this.executor.drizzle.all<ContextTermSearchRow>(sql`
+				SELECT term.id, term.short_reference, term.term, term.definition, term.updated_at,
+					project.id AS project_id, project.title AS project_label,
+					scope.id AS scope_entity_id, scope.title AS scope_label
+				FROM context_terms AS term
+				JOIN contexts AS context
+					ON context.tenant_id = term.tenant_id
+					AND context.key = term.context_key
+				LEFT JOIN entities AS scope
+					ON scope.tenant_id = context.tenant_id
+					AND scope.id = context.scope_entity_id
+				JOIN entities AS project
+					ON project.tenant_id = context.tenant_id
+					AND project.id = COALESCE(scope.project_id, ${defaultProjectId})
+					AND project.kind = 'project'
+				WHERE term.tenant_id = ${this.executor.tenantId} AND term.id = ${sourceId} AND term.tombstone = 0
+			`)[0];
+			if (!row) {
+				return;
+			}
+			this.executor.drizzle.run(sql`INSERT INTO search_documents (
+				tenant_id, source_type, source_id, project_id, project_label, reference,
+				short_reference, title, body, status_or_role, parent_id, parent_label, updated_at
+			)
+			VALUES (
+				${this.executor.tenantId}, 'context-term', ${row.id}, ${row.project_id}, ${row.project_label},
+				${encodeCanonicalReference("contextTerm", row.id)}, ${row.short_reference}, ${row.term}, ${row.definition}, NULL,
+				${row.scope_entity_id}, ${row.scope_label}, ${row.updated_at}
+			)`);
+		});
+	}
+
 	public synchronizePlanEntrySearchDocuments(): void {
 		this.executor.drizzle.run(sql`DELETE FROM search_documents WHERE tenant_id = ${this.executor.tenantId} AND source_type = 'plan-entry'`);
 		this.executor.drizzle.run(sql`INSERT INTO search_documents (
@@ -408,6 +597,62 @@ export class LocalSearchStore {
 		for (const document of documents) {
 			this.insertTypoVocabularyTerms(document, document.title, document.source_type === "context-term" ? "term" : "title");
 			this.insertTypoVocabularyTerms(document, document.body, document.source_type === "context-term" ? "definition" : "body");
+		}
+	}
+
+	protected replaceSearchDocument(sourceType: SearchSourceType, sourceId: string, insertDocument: () => void): void {
+		const existing = this.executor.drizzle.all<SearchDocumentIdentityRow>(sql`
+			SELECT rowid
+			FROM search_documents
+			WHERE tenant_id = ${this.executor.tenantId} AND source_type = ${sourceType} AND source_id = ${sourceId}
+		`)[0];
+		if (existing) {
+			this.executor.drizzle.run(sql`DELETE FROM search_typo_vocabulary_documents
+				WHERE tenant_id = ${this.executor.tenantId} AND document_rowid = ${existing.rowid}`);
+		}
+		this.executor.drizzle.run(sql`DELETE FROM search_documents
+			WHERE tenant_id = ${this.executor.tenantId} AND source_type = ${sourceType} AND source_id = ${sourceId}`);
+
+		insertDocument();
+		const document = this.executor.drizzle.all<TypoVocabularyDocumentRow>(sql`
+			SELECT rowid, source_type, title, body
+			FROM search_documents
+			WHERE tenant_id = ${this.executor.tenantId} AND source_type = ${sourceType} AND source_id = ${sourceId}
+		`)[0];
+		if (document) {
+			const body = toVisibleMarkdownText(document.body);
+			this.executor.drizzle.run(sql`UPDATE search_documents SET body = ${body}
+				WHERE tenant_id = ${this.executor.tenantId} AND source_type = ${sourceType} AND source_id = ${sourceId}`);
+			this.insertTypoVocabularyTerms({ ...document, body }, document.title, sourceType === "context-term" ? "term" : "title");
+			this.insertTypoVocabularyTerms({ ...document, body }, body, sourceType === "context-term" ? "definition" : "body");
+		}
+
+		this.executor.drizzle.run(sql`DELETE FROM search_typo_vocabulary
+			WHERE tenant_id = ${this.executor.tenantId}
+				AND NOT EXISTS (
+					SELECT 1 FROM search_typo_vocabulary_documents AS membership
+					WHERE membership.tenant_id = search_typo_vocabulary.tenant_id
+						AND membership.term = search_typo_vocabulary.term
+				)`);
+	}
+
+	protected synchronizeSearchDocument(sourceType: SearchSourceType, sourceId: string): void {
+		switch (sourceType) {
+			case "entity":
+				this.synchronizeEntitySearchDocument(sourceId);
+				break;
+			case "plan-entry":
+				this.synchronizePlanEntrySearchDocument(sourceId);
+				break;
+			case "issue-comment":
+				this.synchronizeIssueCommentSearchDocument(sourceId);
+				break;
+			case "context":
+				this.synchronizeContextSearchDocument(sourceId);
+				break;
+			case "context-term":
+				this.synchronizeContextTermSearchDocument(sourceId);
+				break;
 		}
 	}
 

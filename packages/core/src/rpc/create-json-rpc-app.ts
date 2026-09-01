@@ -188,6 +188,11 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			response.status(400).json({ error: "Malformed JSON-RPC request: expected { jsonrpc: \"2.0\", method, id }." });
 			return;
 		}
+		if (rpcRequest.method === "daemonHealth") {
+			const successResponse: JsonRpcSuccessResponse = { jsonrpc: "2.0", id: rpcRequest.id, result: { ready: true } };
+			response.status(200).json(successResponse);
+			return;
+		}
 
 		const handler = rpcMethods[rpcRequest.method];
 		if (!handler) {

@@ -6,7 +6,7 @@ import { readBuildContentHash } from "./build-info.js";
 import { resolveDatabasePath, resolveTenantRootPath } from "../db/database.js";
 import { clearDaemonToken, mintDaemonToken, saveDaemonToken, type DaemonTokenStoreOptions } from "../auth/daemon-token.js";
 import { DaemonTokenAuthProvider } from "../auth/daemon-token-auth-provider.js";
-import { clearDaemonState, saveDaemonState, type DaemonStateStoreOptions } from "./daemon-state.js";
+import { clearDaemonStateIfOwned, saveDaemonState, type DaemonStateStoreOptions } from "./daemon-state.js";
 import { openSqliteStore } from "../sqlite-store.js";
 
 type OpenDaemonStore = typeof openSqliteStore;
@@ -125,11 +125,10 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 	let shuttingDown = false;
 	async function cleanupResources(): Promise<void> {
 		await closeAllStores();
-		// Passes the fully-resolved `dbPath` (not the possibly-relative or
-		// omitted raw `options.dbPath`), so this always keys the SAME
-		// discovery slot a client's own resolved `dbPath` does (ISS192).
-		clearDaemonState({ ...options, dbPath });
-		if (mintedToken !== undefined) await clearDaemonToken({ ...options.credentialStoreOptions, dbPath });
+		const clearedOwnedState = clearDaemonStateIfOwned(process.pid, { ...options, dbPath });
+		if (clearedOwnedState && mintedToken !== undefined) {
+			await clearDaemonToken({ ...options.credentialStoreOptions, dbPath });
+		}
 	}
 
 	async function selfExit(): Promise<void> {

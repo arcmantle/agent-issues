@@ -1,4 +1,4 @@
-import { isDirectEntitySelector, measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSummary, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
+import { isDirectEntitySelector, isStructuralRelationType, measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSummary, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
 import type { CanonicalChainBundle } from "@agent-issues/core";
 import { LocalSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import * as localSynchronizeStore from "./features/synchronize/canonical-chain-store.js";
@@ -122,7 +122,10 @@ export class SqliteStore implements StorageDriver {
 		for (const link of input.links ?? []) {
 			this.assertSelectedProjectEntity(link.targetId);
 		}
-		return toEntitySummary(await this.mutate((actorId) => localEntityStore.createEntity(this.executor, input, actorId)));
+		return toEntitySummary(await this.mutate(
+			(actorId) => localEntityStore.createEntity(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeEntitySearchDocumentsForChange(result.id) }
+		));
 	}
 
 	public async getEntityDetails(entityId: string) {
@@ -156,15 +159,24 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async createIssueComment(input: Parameters<StorageDriver["createIssueComment"]>[0]) {
-		return this.mutate((actorId) => this.issueCommentStore.createIssueComment(input, actorId));
+		return this.mutate(
+			(actorId) => this.issueCommentStore.createIssueComment(input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeIssueCommentSearchDocument(result.id) }
+		);
 	}
 
 	public async updateIssueComment(input: Parameters<StorageDriver["updateIssueComment"]>[0]) {
-		return this.mutate((actorId) => this.issueCommentStore.updateIssueComment(input, actorId));
+		return this.mutate(
+			(actorId) => this.issueCommentStore.updateIssueComment(input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeIssueCommentSearchDocument(result.id) }
+		);
 	}
 
 	public async deleteIssueComment(input: Parameters<StorageDriver["deleteIssueComment"]>[0]) {
-		return this.mutate((actorId) => this.issueCommentStore.deleteIssueComment(input, actorId));
+		return this.mutate(
+			(actorId) => this.issueCommentStore.deleteIssueComment(input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeIssueCommentSearchDocument(result.id) }
+		);
 	}
 
 	public async listIssueComments(input: Parameters<StorageDriver["listIssueComments"]>[0]) {
@@ -176,7 +188,10 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async createPlanEntry(input: Parameters<StorageDriver["createPlanEntry"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.createPlanEntry(input, actorId));
+		return this.mutate(
+			(actorId) => this.planEntryStore.createPlanEntry(input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizePlanEntrySearchDocument(result.id) }
+		);
 	}
 
 	public async getPlanEntry(input: Parameters<StorageDriver["getPlanEntry"]>[0]) {
@@ -192,19 +207,25 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async updatePlanEntry(input: Parameters<StorageDriver["updatePlanEntry"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.updatePlanEntry(input, actorId));
+		return this.mutate(
+			(actorId) => this.planEntryStore.updatePlanEntry(input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizePlanEntrySearchDocument(result.id) }
+		);
 	}
 
 	public async deletePlanEntry(input: Parameters<StorageDriver["deletePlanEntry"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.deletePlanEntry(input, actorId));
+		return this.mutate(
+			(actorId) => this.planEntryStore.deletePlanEntry(input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizePlanEntrySearchDocument(result.id) }
+		);
 	}
 
 	public async linkPlanEntryIssue(input: Parameters<StorageDriver["linkPlanEntryIssue"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.linkPlanEntryIssue(input, actorId));
+		return this.mutate((actorId) => this.planEntryStore.linkPlanEntryIssue(input, actorId), { synchronizeSearch: false });
 	}
 
 	public async unlinkPlanEntryIssue(input: Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.unlinkPlanEntryIssue(input, actorId));
+		return this.mutate((actorId) => this.planEntryStore.unlinkPlanEntryIssue(input, actorId), { synchronizeSearch: false });
 	}
 
 	public async listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]) {
@@ -237,17 +258,26 @@ export class SqliteStore implements StorageDriver {
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }) {
 		this.assertSelectedProjectEntity(input.entityId);
-		return this.mutate((actorId) => localEntityStore.updateEntityStatus(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.updateEntityStatus(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeEntitySearchDocumentsForChange(result.entity.id) }
+		);
 	}
 
 	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; author?: string; expectedRevision: number; expectedContentHash: string }) {
 		this.assertSelectedProjectEntity(input.entityId);
-		return this.mutate((actorId) => localEntityStore.updateEntity(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.updateEntity(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeEntitySearchDocumentsForChange(result.id) }
+		);
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }) {
 		this.assertSelectedProjectEntity(input.entityId);
-		return this.mutate((actorId) => localEntityStore.setEntityBody(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.setEntityBody(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeEntitySearchDocumentsForChange(result.id) }
+		);
 	}
 
 	public async materializeEntityRevision(input: { entityId: string; revision: number }) {
@@ -256,35 +286,66 @@ export class SqliteStore implements StorageDriver {
 
 	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
 		this.assertSelectedProjectEntity(input.entityId, true);
-		return this.mutate((actorId) => localEntityStore.restoreEntityRevision(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.restoreEntityRevision(this.executor, input, actorId),
+			{ synchronizeSearch: () => this.searchStore.synchronizeEntitySearchDocumentsForChange(input.entityId) }
+		);
 	}
 
 	public async archiveEntity(input: { entityId: string }) {
 		this.assertSelectedProjectEntity(input.entityId);
-		return this.mutate((actorId) => localEntityStore.archiveEntity(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.archiveEntity(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeEntitySearchDocumentsForChange(result.entity.id) }
+		);
 	}
 
 	public async deleteEntity(input: { entityId: string }) {
 		this.assertSelectedProjectEntity(input.entityId);
-		return this.mutate((actorId) => localEntityStore.deleteEntity(this.executor, input, actorId));
+		const synchronizeSearch = this.searchStore.prepareEntitySearchDocumentsForChange(input.entityId);
+		return this.mutate(
+			(actorId) => localEntityStore.deleteEntity(this.executor, input, actorId),
+			{ synchronizeSearch: () => synchronizeSearch() }
+		);
 	}
 
 	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }) {
 		this.assertSelectedProjectEntity(input.entityId);
 		this.assertSelectedProjectEntity(input.newParentId);
-		return this.mutate((actorId) => localEntityStore.moveEntity(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.moveEntity(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeEntitySearchDocumentsForChange(result.entity.id) }
+		);
 	}
 
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }) {
 		this.assertSelectedProjectEntity(input.fromId);
 		this.assertSelectedProjectEntity(input.toId);
-		return this.mutate((actorId) => localEntityStore.linkEntities(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localEntityStore.linkEntities(this.executor, input, actorId),
+			{
+				synchronizeSearch: (result) => {
+					if (result.created && isStructuralRelationType(result.relation.type)) {
+						this.searchStore.synchronizeEntitySearchDocumentsForChange(result.relation.toId);
+					}
+				}
+			}
+		);
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }) {
 		this.assertSelectedProjectEntity(input.fromId);
 		this.assertSelectedProjectEntity(input.toId);
-		return this.mutate(() => localEntityStore.unlinkEntities(this.executor, input));
+		return this.mutate(
+			() => localEntityStore.unlinkEntities(this.executor, input),
+			{
+				synchronizeSearch: (result) => {
+					if (result.removed && isStructuralRelationType(result.relation.type)) {
+						this.searchStore.synchronizeEntitySearchDocumentsForChange(result.relation.toId);
+					}
+				}
+			}
+		);
 	}
 
 	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
@@ -334,15 +395,31 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async upsertContext(input: { scopeRef?: string; title: string; summary: string; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
-		return toContextWriteResult(await this.mutate((actorId) => localContextStore.upsertContext(this.executor, input, actorId)));
+		return toContextWriteResult(await this.mutate(
+			(actorId) => localContextStore.upsertContext(this.executor, input, actorId),
+			{
+				synchronizeSearch: (result) => {
+					if (result.context.id) {
+						this.searchStore.synchronizeContextSearchDocument(result.context.id);
+					}
+				}
+			}
+		));
 	}
 
 	public async defineContextTerm(input: { scopeRef?: string; term: string; definition: string; avoid?: string[]; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
-		return toDefineContextTermAcknowledgement(await this.mutate((actorId) => localContextStore.defineContextTerm(this.executor, input, actorId)));
+		return toDefineContextTermAcknowledgement(await this.mutate(
+			(actorId) => localContextStore.defineContextTerm(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeContextTermSearchDocument(result.term.id) }
+		));
 	}
 
 	public async forgetContextTerm(input: { scopeRef?: string; term: string; author?: string; expectedRevision?: number; expectedContentHash?: string }) {
-		return this.mutate((actorId) => localContextStore.forgetContextTerm(this.executor, input, actorId));
+		const termId = (await this.contextStore.getContextDetails({ scopeRef: input.scopeRef })).terms.find((term) => term.term === input.term.trim())?.id;
+		return this.mutate(
+			(actorId) => localContextStore.forgetContextTerm(this.executor, input, actorId),
+			{ synchronizeSearch: termId ? () => this.searchStore.synchronizeContextTermSearchDocument(termId) : false }
+		);
 	}
 
 	public async materializeContextRevision(input: { scopeRef?: string; revision: number }) {
@@ -354,11 +431,24 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async restoreContextRevision(input: { scopeRef?: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		return this.mutate((actorId) => localContextStore.restoreContextRevision(this.executor, input, actorId));
+		const context = (await this.contextStore.getContextDetails({ scopeRef: input.scopeRef })).context;
+		return this.mutate(
+			(actorId) => localContextStore.restoreContextRevision(this.executor, input, actorId),
+			{
+				synchronizeSearch: () => {
+					if (context.id) {
+						this.searchStore.synchronizeContextSearchDocument(context.id);
+					}
+				}
+			}
+		);
 	}
 
 	public async restoreContextTermRevision(input: { scopeRef?: string; term: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		return this.mutate((actorId) => localContextStore.restoreContextTermRevision(this.executor, input, actorId));
+		return this.mutate(
+			(actorId) => localContextStore.restoreContextTermRevision(this.executor, input, actorId),
+			{ synchronizeSearch: (result) => this.searchStore.synchronizeContextTermSearchDocument(result.id) }
+		);
 	}
 
 	public async listTenants() {
@@ -388,13 +478,17 @@ export class SqliteStore implements StorageDriver {
 		}
 	}
 
-	protected mutate<T>(operation: (actorId: string) => T): T {
+	protected mutate<T>(operation: (actorId: string) => T, options: { synchronizeSearch?: false | ((result: T) => void) } = {}): T {
 		return this.executor.drizzle.transaction(() => {
 			const username = resolveLocalUsername();
 			const identity = this.actorIdentity ?? { userId: `local:${username}`, tenantId: this.tenantId, displayName: username };
 			const user = upsertUser(this.executor, { authenticationSubject: identity.userId, displayName: identity.displayName });
 			const result = operation(user.id);
-			this.searchStore.synchronizeSearchDocuments();
+			if (typeof options.synchronizeSearch === "function") {
+				options.synchronizeSearch(result);
+			} else if (options.synchronizeSearch !== false) {
+				this.searchStore.synchronizeSearchDocuments();
+			}
 			return result;
 		});
 	}

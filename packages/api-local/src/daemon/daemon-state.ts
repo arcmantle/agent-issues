@@ -99,3 +99,11 @@ export function clearDaemonState(options?: DaemonStateStoreOptions): void {
 		unlinkSync(filePath);
 	}
 }
+
+export function clearDaemonStateIfOwned(pid: number, options?: DaemonStateStoreOptions): boolean {
+	if (readDaemonState(options)?.pid !== pid) {
+		return false;
+	}
+	clearDaemonState(options);
+	return true;
+}
