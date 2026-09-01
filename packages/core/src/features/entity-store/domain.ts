@@ -8,7 +8,7 @@ export const ENTITY_CATEGORIES = ["technical", "product", "operational", "securi
 export const ENTITY_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 
 export const ENTITY_TYPES = {
-	issue: ["wayfinder-map", "wayfinder-ticket"]
+	issue: ["pioneer-map", "pioneer-ticket"]
 } as const;
 
 export const BODY_SOURCES = ["authored", "generated"] as const;

@@ -10,7 +10,7 @@ type EntityRevisionState = {
 	bodySource: BodySource;
 	category: "technical" | "security" | null;
 	priority: "low" | "critical" | null;
-	type: "wayfinder-map" | "wayfinder-ticket" | null;
+	type: "pioneer-map" | "pioneer-ticket" | null;
 	status: string;
 	parentId: string | null;
 	tombstone: boolean;

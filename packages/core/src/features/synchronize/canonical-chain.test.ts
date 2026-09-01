@@ -160,11 +160,11 @@ function planEntryChain(body: string, referencedEntityIds: string[], revision: n
 }
 
 describe("mergeCanonicalChainBundles", () => {
-	it("rejects a Wayfinder ticket without a Wayfinder map parent", () => {
+	it("rejects a Pioneer ticket without a Pioneer map parent", () => {
 		const ticket = entityChain("Ticket", 1);
-		ticket.head.type = "wayfinder-ticket";
+		ticket.head.type = "pioneer-ticket";
 
-		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [ticket] })).toThrow("wayfinder-ticket");
+		expect(() => mergeCanonicalChainBundles(emptyBundle(), { ...emptyBundle(), entities: [ticket] })).toThrow("pioneer-ticket");
 	});
 
 	it("preserves a parentless legacy Plan", () => {

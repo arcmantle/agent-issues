@@ -1,5 +1,5 @@
 ---
-name: ai-wayfinder
+name: ai-pioneer
 description: Plan a huge chunk of work — more than one agent session can hold — as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.
 disable-model-invocation: true
 ---
@@ -7,13 +7,13 @@ disable-model-invocation: true
 Follow the shared [language standard](../agent-issues-language.md).
 Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
 
-A loose idea has arrived — too big for one agent session, and wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfinding is about finding that way, not charging at the destination. This skill charts the way as a **shared map** in `agent-issues`, then works its **decision tickets** — questions whose resolution is a decision, not slices of a build to execute — one at a time until the route is clear.
+A loose idea has arrived — too big for one agent session, and wrapped in fog: the way from here to the **destination** isn't visible yet. Pioneering is about finding that way, not charging at the destination. This skill charts the way as a **shared map** in `agent-issues`, then works its **decision tickets** — questions whose resolution is a decision, not slices of a build to execute — one at a time until the route is clear.
 
 The destination varies per effort, and naming it is the first act of charting — it shapes every ticket. It might be a spec to hand off and iterate on, a decision to lock before planning starts, or a change made in place like a data-structure migration. The map is domain-agnostic — engineering work, course content, whatever fits the shape.
 
 ## Plan, don't do
 
-Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear — nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes** — carrying execution into the map itself — but absent that, produce decisions, not deliverables.
+Pioneer is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear — nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes** — carrying execution into the map itself — but absent that, produce decisions, not deliverables.
 
 ## Refer by title
 
@@ -25,17 +25,17 @@ The map is a single `agent-issues` issue under the active initiative — the can
 
 The map is an **index**, not a store. It lists the decisions made and points at the tickets that hold their detail; a decision lives in exactly one place — its ticket — so the map never restates it, only gists it and links.
 
-Use `agent-issues` as the source of truth. Run the **Entity Create And Edit** recipe to create the map as a `wayfinder-map` issue under the initiative and each ticket as a `wayfinder-ticket` child of the map. Run the **Entity Relations** recipe to add dependencies after creation with `blocks` relations.
+Use `agent-issues` as the source of truth. Run the **Entity Create And Edit** recipe to create the map as a `pioneer-map` issue under the initiative and each ticket as a `pioneer-ticket` child of the map. Run the **Entity Relations** recipe to add dependencies after creation with `blocks` relations.
 
 ### The map body
 
 The whole map at low resolution, loaded once per session. Open tickets are **not** listed — run the **Entity List** recipe for child issues under the map when needed.
-Use the [Wayfinder Map recipe](../recipes/wayfinder-map.md). It preserves the current map format.
+Use the [Pioneer Map recipe](../recipes/pioneer-map.md). It preserves the current map format.
 
 ### Tickets
 
 Each ticket is a **child issue** of the map. Its body contains one question, sized to one 100K token agent session:
-Use the [Wayfinder Ticket recipe](../recipes/wayfinder-ticket.md). It preserves the current ticket format.
+Use the [Pioneer Ticket recipe](../recipes/pioneer-ticket.md). It preserves the current ticket format.
 
 The `## Ticket type` value is one of `research`, `prototype`, `grilling`, or `task`; see Ticket Types below.
 
@@ -49,7 +49,7 @@ Run the **Entity Create And Edit** recipe to record the answer in `## Resolution
 
 For a grilling ticket, give `ai-plan` the complete ticket reference. It runs the **Entity Create And Edit** recipe to create an initiative-owned Plan for a new effort, or resumes only an explicit Plan reference. Every Plan entry from that session uses the **Plan Entry Write** recipe to link back to the ticket reference.
 
-The Plan is the canonical detailed resolution. When the ticket is done, retain its Question and status, and use a concise Resolution link to the Plan. Do not copy the detailed reasoning into the ticket. A Plan does not inform a Wayfinder map.
+The Plan is the canonical detailed resolution. When the ticket is done, retain its Question and status, and use a concise Resolution link to the Plan. Do not copy the detailed reasoning into the ticket. A Plan does not inform a Pioneer map.
 
 ## Ticket Types
 
@@ -92,8 +92,8 @@ User invokes with a loose idea.
 1. **Resolve the tracked scope.** Run the **Entity Read** recipe and the **Context Read** recipe to find the active initiative and read its context. For a new feature, run the **Entity Create And Edit** recipe to create a new initiative by default. Do not create a map outside an initiative.
 2. **Name the destination.** Run `ai-plan` with `ai-domain-modeling` active to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so settle it first.
 3. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surface the open decisions and the first steps that are possible now. **If this finds no fog** — the way to the destination is already clear and small enough for one session — do not create a map. Ask the user how to proceed.
-4. **Create the map** as a `wayfinder-map` child issue of the initiative: Destination and Notes filled in, Decisions-so-far empty, and the fog recorded in **Not yet specified**.
-5. **Create the tickets you can specify now** as `wayfinder-ticket` child issues of the map. Then wire `blocks` relations in a second pass, because issues need references before they can link to each other. This separates the frontier from blocked tickets. Keep everything you cannot yet specify in **Not yet specified**.
+4. **Create the map** as a `pioneer-map` child issue of the initiative: Destination and Notes filled in, Decisions-so-far empty, and the fog recorded in **Not yet specified**.
+5. **Create the tickets you can specify now** as `pioneer-ticket` child issues of the map. Then wire `blocks` relations in a second pass, because issues need references before they can link to each other. This separates the frontier from blocked tickets. Keep everything you cannot yet specify in **Not yet specified**.
 6. **Start research subagents.** For each new `research` ticket, start a read-only research subagent. It returns its findings to the current agent, which records the resolution and updates the ticket. Do not create a branch unless the research needs a prototype or another tracked artifact.
 7. Stop — charting is one session's work; it does not resolve a HITL ticket.
 

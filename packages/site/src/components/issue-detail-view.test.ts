@@ -624,12 +624,12 @@ describe("entity detail pane", () => {
 	});
 
 	it("renders a specialized issue type", async () => {
-		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Choose architecture", type: "wayfinder-map" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Choose architecture", type: "pioneer-map" });
 		const store = makeStore(makeSnapshot({ entities: [issue] }));
 		store.selectEntity(issue.id);
 		const view = await mountDetail(store);
 
-		expect(view.shadowRoot?.querySelector(".ai-meta")?.textContent).toContain("wayfinder-map");
+		expect(view.shadowRoot?.querySelector(".ai-meta")?.textContent).toContain("pioneer-map");
 	});
 
 	it("shows directly owned debt in a project detail without a resolver section", async () => {

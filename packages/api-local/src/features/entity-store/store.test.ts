@@ -35,28 +35,28 @@ afterEach(() => {
 });
 
 describe("kind-specific entity types", () => {
-	it("stores typed Wayfinder issues and rejects invalid kinds and parents", async () => {
+	it("stores typed Pioneer issues and rejects invalid kinds and parents", async () => {
 		const db = await openTestDatabase();
-		const initiative = createEntity(db, { kind: "initiative", title: "Wayfinder work" });
+		const initiative = createEntity(db, { kind: "initiative", title: "Pioneer work" });
 		const ordinaryIssue = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ordinary issue" });
-		const map = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Wayfinder map", type: "wayfinder-map" });
-		const ticket = createEntity(db, { kind: "issue", parentId: map.id, title: "Wayfinder ticket", type: "wayfinder-ticket" });
+		const map = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Pioneer map", type: "pioneer-map" });
+		const ticket = createEntity(db, { kind: "issue", parentId: map.id, title: "Pioneer ticket", type: "pioneer-ticket" });
 
 		expect(ordinaryIssue.type).toBeNull();
-		expect(map.type).toBe("wayfinder-map");
-		expect(ticket.type).toBe("wayfinder-ticket");
-		expect(() => createEntity(db, { kind: "initiative", title: "Invalid specialized kind", type: "wayfinder-map" })).toThrow("Invalid entity type: wayfinder-map");
-		expect(() => createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ticket without map", type: "wayfinder-ticket" })).toThrow("wayfinder-ticket requires a wayfinder-map parent.");
-		expect(() => updateEntity(db, { entityId: ordinaryIssue.id, type: "wayfinder-ticket", expectedRevision: ordinaryIssue.revision, expectedContentHash: ordinaryIssue.contentHash })).toThrow("wayfinder-ticket requires a wayfinder-map parent.");
-		expect(() => updateEntity(db, { entityId: map.id, type: null, expectedRevision: map.revision, expectedContentHash: map.contentHash })).toThrow("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
-		expect(() => moveEntity(db, { entityId: map.id, newParentId: ordinaryIssue.id })).toThrow("wayfinder-map requires an initiative parent.");
-		expect(() => moveEntity(db, { entityId: ticket.id, newParentId: ordinaryIssue.id })).toThrow("wayfinder-ticket requires a wayfinder-map parent.");
+		expect(map.type).toBe("pioneer-map");
+		expect(ticket.type).toBe("pioneer-ticket");
+		expect(() => createEntity(db, { kind: "initiative", title: "Invalid specialized kind", type: "pioneer-map" })).toThrow("Invalid entity type: pioneer-map");
+		expect(() => createEntity(db, { kind: "issue", parentId: initiative.id, title: "Ticket without map", type: "pioneer-ticket" })).toThrow("pioneer-ticket requires a pioneer-map parent.");
+		expect(() => updateEntity(db, { entityId: ordinaryIssue.id, type: "pioneer-ticket", expectedRevision: ordinaryIssue.revision, expectedContentHash: ordinaryIssue.contentHash })).toThrow("pioneer-ticket requires a pioneer-map parent.");
+		expect(() => updateEntity(db, { entityId: map.id, type: null, expectedRevision: map.revision, expectedContentHash: map.contentHash })).toThrow("Cannot remove pioneer-map type while it has pioneer-ticket children.");
+		expect(() => moveEntity(db, { entityId: map.id, newParentId: ordinaryIssue.id })).toThrow("pioneer-map requires an initiative parent.");
+		expect(() => moveEntity(db, { entityId: ticket.id, newParentId: ordinaryIssue.id })).toThrow("pioneer-ticket requires a pioneer-map parent.");
 
-		const restorableMap = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Restorable map", type: "wayfinder-map" });
+		const restorableMap = createEntity(db, { kind: "issue", parentId: initiative.id, title: "Restorable map", type: "pioneer-map" });
 		const removedType = updateEntity(db, { entityId: restorableMap.id, type: null, expectedRevision: restorableMap.revision, expectedContentHash: restorableMap.contentHash });
 		const restored = restoreEntityRevision(db, { entityId: restorableMap.id, revision: 1, expectedRevision: removedType.revision, expectedContentHash: removedType.contentHash });
-		expect(restored.type).toBe("wayfinder-map");
-		expect(getEntityDetails(db, restorableMap.id).entity.type).toBe("wayfinder-map");
+		expect(restored.type).toBe("pioneer-map");
+		expect(getEntityDetails(db, restorableMap.id).entity.type).toBe("pioneer-map");
 	});
 });
 

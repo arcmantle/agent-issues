@@ -25,12 +25,12 @@ describe("skill installer", () => {
 		const installedPlan = installResult.installed.find(({ installedName }) => installedName === "ai-plan");
 		const installedNextWork = installResult.installed.find(({ installedName }) => installedName === "ai-next-work");
 		const installedPrototype = installResult.installed.find(({ installedName }) => installedName === "ai-prototype");
-		const installedWayfinder = installResult.installed.find(({ installedName }) => installedName === "ai-wayfinder");
+		const installedPioneer = installResult.installed.find(({ installedName }) => installedName === "ai-pioneer");
 		expect(installedDomainModeling?.status).toBe("installed");
 		expect(installedPlan?.status).toBe("installed");
 		expect(installedNextWork?.status).toBe("installed");
 		expect(installedPrototype?.status).toBe("installed");
-		expect(installedWayfinder?.status).toBe("installed");
+		expect(installedPioneer?.status).toBe("installed");
 
 		const languageFile = path.join(targetDir, "agent-issues-language.md");
 		const operatingContractFile = path.join(targetDir, "agent-issues-operating-contract.md");
@@ -88,6 +88,25 @@ describe("skill installer", () => {
 		expect(existsSync(recipeCatalog)).toBe(false);
 	});
 
+	it("replaces an installed ai-wayfinder skill and its recipes with Pioneer", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
+		const legacySkillDirectory = path.join(targetDir, "ai-wayfinder");
+		const recipesDirectory = path.join(targetDir, "recipes");
+		mkdirSync(legacySkillDirectory, { recursive: true });
+		mkdirSync(recipesDirectory, { recursive: true });
+		writeFileSync(path.join(legacySkillDirectory, "SKILL.md"), "---\nname: ai-wayfinder\n---\n");
+		writeFileSync(path.join(recipesDirectory, "wayfinder-map.md"), "# Wayfinder Map Recipe\n");
+
+		const result = installSkills({ targetDir });
+
+		expect(existsSync(legacySkillDirectory)).toBe(false);
+		expect(result.installed.find(({ installedName }) => installedName === "ai-pioneer")?.status).toBe("installed");
+		expect(existsSync(path.join(targetDir, "ai-pioneer", "SKILL.md"))).toBe(true);
+		expect(existsSync(path.join(recipesDirectory, "wayfinder-map.md"))).toBe(false);
+		expect(existsSync(path.join(recipesDirectory, "pioneer-map.md"))).toBe(true);
+		expect(readFileSync(path.join(targetDir, "agent-issues-operating-contract.md"), "utf8")).toContain("Pioneer records");
+	});
+
 	it("installs the preview-first Recipe migration skill", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
 
@@ -114,19 +133,19 @@ describe("skill installer", () => {
 		expect(skill).toContain("direct body text");
 	});
 
-	it("installs typed Wayfinder Plan workflow guidance", () => {
+	it("installs typed Pioneer Plan workflow guidance", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-skills-"));
 
 		installSkills({ targetDir });
-		const skill = readFileSync(path.join(targetDir, "ai-wayfinder", "SKILL.md"), "utf8");
+		const skill = readFileSync(path.join(targetDir, "ai-pioneer", "SKILL.md"), "utf8");
 
-		expect(skill).toContain("**Entity Create And Edit** recipe to create the map as a `wayfinder-map` issue");
-		expect(skill).toContain("each ticket as a `wayfinder-ticket` child");
+		expect(skill).toContain("**Entity Create And Edit** recipe to create the map as a `pioneer-map` issue");
+		expect(skill).toContain("each ticket as a `pioneer-ticket` child");
 		expect(skill).toContain("**Entity Create And Edit** recipe to create an initiative-owned Plan");
 		expect(skill).toContain("resumes only an explicit Plan reference");
 		expect(skill).toContain("**Plan Entry Write** recipe to link back to the ticket reference");
 		expect(skill).toContain("canonical detailed resolution");
-		expect(skill).toContain("does not inform a Wayfinder map");
+		expect(skill).toContain("does not inform a Pioneer map");
 		expect(skill).toContain("update only `## Resolution`");
 	});
 

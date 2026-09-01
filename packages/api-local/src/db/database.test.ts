@@ -209,7 +209,8 @@ describe("tenant resolution", () => {
 				{ id: "record-search" },
 				{ id: "token-search" },
 				{ id: "trigram-search" },
-				{ id: "search-typo-vocabulary" }
+				{ id: "search-typo-vocabulary" },
+				{ id: "pioneer-entity-types" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -318,7 +319,8 @@ describe("tenant resolution", () => {
 				{ id: "record-search" },
 				{ id: "token-search" },
 				{ id: "trigram-search" },
-				{ id: "search-typo-vocabulary" }
+				{ id: "search-typo-vocabulary" },
+				{ id: "pioneer-entity-types" }
 			]);
 		} finally {
 			upgraded.db.close();

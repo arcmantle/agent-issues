@@ -1,6 +1,6 @@
-# Wayfinder Map Recipe
+# Pioneer Map Recipe
 
-Use this recipe for the canonical Wayfinder issue under an initiative. It is an index for the route to a destination and has child decision tickets.
+Use this recipe for the canonical Pioneer issue under an initiative. It is an index for the route to a destination and has child decision tickets.
 
 ```markdown
 ## Destination

@@ -1,6 +1,6 @@
-# Wayfinder Ticket Recipe
+# Pioneer Ticket Recipe
 
-Use this recipe for a child issue of a Wayfinder map. A ticket resolves one decision or investigation.
+Use this recipe for a child issue of a Pioneer map. A ticket resolves one decision or investigation.
 
 ```markdown
 ## Ticket type

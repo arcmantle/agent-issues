@@ -15,10 +15,10 @@ describe("Plans", () => {
 
 describe("kind-specific entity types", () => {
 	it("allows only declared specialized types for an entity kind", () => {
-		expect(isEntityType("issue", "wayfinder-map")).toBe(true);
-		expect(isEntityType("issue", "wayfinder-ticket")).toBe(true);
+		expect(isEntityType("issue", "pioneer-map")).toBe(true);
+		expect(isEntityType("issue", "pioneer-ticket")).toBe(true);
 		expect(isEntityType("issue", "unknown")).toBe(false);
-		expect(isEntityType("initiative", "wayfinder-map")).toBe(false);
+		expect(isEntityType("initiative", "pioneer-map")).toBe(false);
 	});
 });
 

@@ -25,7 +25,7 @@ describe("api migrations chain", () => {
 	});
 
 	it("registers the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position"]);
+		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "pioneer-entity-types"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -298,7 +298,8 @@ describe("api migrations chain", () => {
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
-				{ id: "plan-entry-supersession-position" }
+				{ id: "plan-entry-supersession-position" },
+				{ id: "pioneer-entity-types" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -328,8 +329,25 @@ describe("api migrations chain", () => {
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
-				{ id: "plan-entry-supersession-position" }
+				{ id: "plan-entry-supersession-position" },
+				{ id: "pioneer-entity-types" }
 			]);
+		} finally {
+			await schemaPool.end();
+			await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
+		}
+	});
+
+	it("upgrades the current schema when only the latest data migration is pending", async () => {
+		const schemaName = `latest_data_migration_${randomUUID().replace(/-/g, "_")}`;
+		await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+		const schemaPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
+
+		try {
+			await runMigrations(schemaPool, productionMigrations.slice(0, -1));
+			await migratePgDatabase(schemaPool);
+
+			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "pioneer-entity-types" });
 		} finally {
 			await schemaPool.end();
 			await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
@@ -395,6 +413,7 @@ describe("api migrations chain", () => {
 				{ id: "final-baseline" },
 				{ id: "issue-comments" },
 				{ id: "legacy-v7-direct" },
+				{ id: "pioneer-entity-types" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
 				{ id: "record-provenance" },
@@ -1257,7 +1276,8 @@ describe("api migrations chain", () => {
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
-				{ id: "plan-entry-supersession-position" }
+				{ id: "plan-entry-supersession-position" },
+				{ id: "pioneer-entity-types" }
 			]);
 
 			const { rows: identityColumns } = await schemaPool.query(

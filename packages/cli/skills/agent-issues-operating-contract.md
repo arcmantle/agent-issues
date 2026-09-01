@@ -173,7 +173,7 @@ These operations have no MCP equivalent. Use the CLI: `install-mcp`, `list-mcp`,
 
 Before you create or replace authored body content, identify the record type and read its matching recipe in [`recipes`](./recipes/README.md).
 
-- When the catalog has a recipe for the record type, use that recipe for the body. This applies to context summaries, context terms, entities, handoffs, issue comments, and Wayfinder records.
+- When the catalog has a recipe for the record type, use that recipe for the body. This applies to context summaries, context terms, entities, handoffs, issue comments, and Pioneer records.
 - Do this before the **Entity Create And Edit** recipe, **Context Write** recipe, **Plan Entry Write** recipe, **Issue Comment Write** recipe, or **Handoff Write** recipe creates or replaces a body.
 - Tracker actions that do not create or replace a body do not need a recipe.
 

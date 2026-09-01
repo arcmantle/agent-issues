@@ -25,5 +25,5 @@ Use the recipe for the record that you create or edit.
 - [ADR](./adr.md)
 - [Handoff](./handoff.md)
 - [Issue Comment](./issue-comment.md)
-- [Wayfinder Map](./wayfinder-map.md)
-- [Wayfinder Ticket](./wayfinder-ticket.md)
+- [Pioneer Map](./pioneer-map.md)
+- [Pioneer Ticket](./pioneer-ticket.md)

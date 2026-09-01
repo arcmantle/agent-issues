@@ -1006,11 +1006,11 @@ export async function createEntity(
 	if (parent && !relationType) {
 		throw new Error(`Cannot create ${kind} under ${parent.kind}.`);
 	}
-	if (entityType === "wayfinder-map" && parent?.kind !== "initiative") {
-		throw new Error("wayfinder-map requires an initiative parent.");
+	if (entityType === "pioneer-map" && parent?.kind !== "initiative") {
+		throw new Error("pioneer-map requires an initiative parent.");
 	}
-	if (entityType === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
-		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	if (entityType === "pioneer-ticket" && (parent?.kind !== "issue" || parent.type !== "pioneer-map")) {
+		throw new Error("pioneer-ticket requires a pioneer-map parent.");
 	}
 
 	const identity = generateCanonicalIdentity(kind);
@@ -1674,14 +1674,14 @@ export async function updateEntity(
 	}
 	const parentId = (await getStructuralParentRelations(executor, current.id))[0]?.fromId;
 	const parent = parentId ? await getEntityOrThrow(executor, parentId) : null;
-	if (current.type === "wayfinder-map" && entityType !== "wayfinder-map" && (await getEntityDetails(executor, current.id)).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "wayfinder-ticket")) {
-		throw new Error("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+	if (current.type === "pioneer-map" && entityType !== "pioneer-map" && (await getEntityDetails(executor, current.id)).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "pioneer-ticket")) {
+		throw new Error("Cannot remove pioneer-map type while it has pioneer-ticket children.");
 	}
-	if (entityType === "wayfinder-map" && parent?.kind !== "initiative") {
-		throw new Error("wayfinder-map requires an initiative parent.");
+	if (entityType === "pioneer-map" && parent?.kind !== "initiative") {
+		throw new Error("pioneer-map requires an initiative parent.");
 	}
-	if (entityType === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
-		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	if (entityType === "pioneer-ticket" && (parent?.kind !== "issue" || parent.type !== "pioneer-map")) {
+		throw new Error("pioneer-ticket requires a pioneer-map parent.");
 	}
 	const newRevision = current.revision + 1;
 	const newContentHash = computeEntityContentHash(title, body);
@@ -1796,14 +1796,14 @@ export async function restoreEntityRevision(
 			throw new Error(`Cannot restore ${current.id} under ${restoredParent.id} because that would create a cycle.`);
 		}
 	}
-	if (source.type === "wayfinder-map" && restoredParent?.kind !== "initiative") {
-		throw new Error("wayfinder-map requires an initiative parent.");
+	if (source.type === "pioneer-map" && restoredParent?.kind !== "initiative") {
+		throw new Error("pioneer-map requires an initiative parent.");
 	}
-	if (source.type === "wayfinder-ticket" && (restoredParent?.kind !== "issue" || restoredParent.type !== "wayfinder-map")) {
-		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	if (source.type === "pioneer-ticket" && (restoredParent?.kind !== "issue" || restoredParent.type !== "pioneer-map")) {
+		throw new Error("pioneer-ticket requires a pioneer-map parent.");
 	}
-	if (current.type === "wayfinder-map" && source.type !== "wayfinder-map" && (await getEntityDetails(executor, current.id)).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "wayfinder-ticket")) {
-		throw new Error("Cannot remove wayfinder-map type while it has wayfinder-ticket children.");
+	if (current.type === "pioneer-map" && source.type !== "pioneer-map" && (await getEntityDetails(executor, current.id)).outgoing.some(({ entity, relationType }) => relationType === "decomposes" && entity.type === "pioneer-ticket")) {
+		throw new Error("Cannot remove pioneer-map type while it has pioneer-ticket children.");
 	}
 
 	const updatedAt = new Date().toISOString();
@@ -1865,11 +1865,11 @@ export async function moveEntity(
 	if (!relationType || !isStructuralRelationType(relationType)) {
 		throw new Error(`Cannot move ${entity.kind} under ${newParent.kind}.`);
 	}
-	if (entity.type === "wayfinder-map" && newParent.kind !== "initiative") {
-		throw new Error("wayfinder-map requires an initiative parent.");
+	if (entity.type === "pioneer-map" && newParent.kind !== "initiative") {
+		throw new Error("pioneer-map requires an initiative parent.");
 	}
-	if (entity.type === "wayfinder-ticket" && (newParent.kind !== "issue" || newParent.type !== "wayfinder-map")) {
-		throw new Error("wayfinder-ticket requires a wayfinder-map parent.");
+	if (entity.type === "pioneer-ticket" && (newParent.kind !== "issue" || newParent.type !== "pioneer-map")) {
+		throw new Error("pioneer-ticket requires a pioneer-map parent.");
 	}
 
 	const currentParentRelations = await getStructuralParentRelations(executor, entity.id);

@@ -227,11 +227,11 @@ function assertCanonicalBundle(bundle: CanonicalChainBundle): void {
 		if (chain.head.kind === "plan" && parent !== null && parent.kind !== "initiative") {
 			throw new Error(`Plan ${chain.head.id} requires an initiative parent.`);
 		}
-		if (chain.head.type === "wayfinder-map" && parent?.kind !== "initiative") {
-			throw new Error(`wayfinder-map ${chain.head.id} requires an initiative parent.`);
+		if (chain.head.type === "pioneer-map" && parent?.kind !== "initiative") {
+			throw new Error(`pioneer-map ${chain.head.id} requires an initiative parent.`);
 		}
-		if (chain.head.type === "wayfinder-ticket" && (parent?.kind !== "issue" || parent.type !== "wayfinder-map")) {
-			throw new Error(`wayfinder-ticket ${chain.head.id} requires a wayfinder-map parent.`);
+		if (chain.head.type === "pioneer-ticket" && (parent?.kind !== "issue" || parent.type !== "pioneer-map")) {
+			throw new Error(`pioneer-ticket ${chain.head.id} requires a pioneer-map parent.`);
 		}
 	}
 	for (const chain of bundle.contexts) {

@@ -31,8 +31,8 @@ it("links each current recipe from the catalog index", () => {
 	expect(catalog).toContain("[Context Summary](./context-summary.md)");
 	expect(catalog).toContain("[Context Term](./context-term.md)");
 	expect(catalog).toContain("[Issue Comment](./issue-comment.md)");
-	expect(catalog).toContain("[Wayfinder Map](./wayfinder-map.md)");
-	expect(catalog).toContain("[Wayfinder Ticket](./wayfinder-ticket.md)");
+	expect(catalog).toContain("[Pioneer Map](./pioneer-map.md)");
+	expect(catalog).toContain("[Pioneer Ticket](./pioneer-ticket.md)");
 });
 
 it("links each management recipe from the catalog index", () => {
@@ -221,9 +221,9 @@ it("provides an issue-comment recipe with optional supporting sections", () => {
 	expect(recipe).toContain("optional");
 });
 
-it("provides a Wayfinder map recipe with its current headings", () => {
+it("provides a Pioneer map recipe with its current headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/wayfinder-map.md", import.meta.url)),
+		fileURLToPath(new URL("../skills/recipes/pioneer-map.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -234,9 +234,9 @@ it("provides a Wayfinder map recipe with its current headings", () => {
 	expect(recipe).toContain("## Out of scope");
 });
 
-it("provides a Wayfinder ticket recipe with its current headings", () => {
+it("provides a Pioneer ticket recipe with its current headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/wayfinder-ticket.md", import.meta.url)),
+		fileURLToPath(new URL("../skills/recipes/pioneer-ticket.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -254,7 +254,7 @@ it("links each body-writing skill to only its applicable recipes", () => {
 			["ai-prototype/SKILL.md", ["issue.md"]],
 		["ai-to-issues/SKILL.md", ["issue.md"]],
 		["ai-to-prd/SKILL.md", ["prd.md", "user-story.md"]],
-			["ai-wayfinder/SKILL.md", ["wayfinder-map.md", "wayfinder-ticket.md"]]
+			["ai-pioneer/SKILL.md", ["pioneer-map.md", "pioneer-ticket.md"]]
 	]);
 
 	for (const [skillFile, expectedRecipes] of expectedRecipesByFile) {

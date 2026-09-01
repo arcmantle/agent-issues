@@ -22,12 +22,13 @@ const SKILL_NAMES = [
 	"ai-tdd",
 	"ai-to-issues",
 	"ai-to-prd",
-	"ai-wayfinder"
+	"ai-pioneer"
 ] as const;
 
 const SHARED_SKILL_FILES = ["agent-issues-language.md", "agent-issues-operating-contract.md"] as const;
 const SHARED_FILES_MANIFEST = ".agent-issues-shared-files.json";
 const RECIPES_DIRECTORY_NAME = "recipes";
+const LEGACY_PIONEER_SKILL_NAME = "ai-wayfinder";
 
 const SKILL_INSTALLS = SKILL_NAMES.map((name) => ({ sourceDir: name, installedName: name }));
 
@@ -67,16 +68,21 @@ export function installSkills(input: { targetDir?: string; force?: boolean }): I
 	}
 
 	mkdirSync(targetDir, { recursive: true });
+	const legacyPioneerSkillDirectory = path.join(targetDir, LEGACY_PIONEER_SKILL_NAME);
+	const isPioneerRenameUpgrade = existsSync(path.join(legacyPioneerSkillDirectory, "SKILL.md"));
+	if (isPioneerRenameUpgrade) {
+		rmSync(legacyPioneerSkillDirectory, { force: true, recursive: true });
+	}
 	const ownedSharedFiles = readOwnedSharedFiles(targetDir);
 	for (const fileName of SHARED_SKILL_FILES) {
 		const destinationFile = path.join(targetDir, fileName);
-		if (input.force || !existsSync(destinationFile)) {
+		if (input.force || isPioneerRenameUpgrade || !existsSync(destinationFile)) {
 			cpSync(path.join(sourceRoot, fileName), destinationFile);
 			ownedSharedFiles.add(fileName);
 		}
 	}
 	writeOwnedSharedFiles(targetDir, ownedSharedFiles);
-	if (input.force || !existsSync(destinationRecipesDirectory)) {
+	if (input.force || isPioneerRenameUpgrade || !existsSync(destinationRecipesDirectory)) {
 		if (existsSync(destinationRecipesDirectory)) {
 			rmSync(destinationRecipesDirectory, { force: true, recursive: true });
 		}

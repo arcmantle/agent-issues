@@ -108,6 +108,7 @@ export class SqliteStore implements StorageDriver {
 		parentId?: string;
 		status?: string;
 		body?: string;
+		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}) {

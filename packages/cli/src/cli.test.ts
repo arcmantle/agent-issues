@@ -885,24 +885,24 @@ describe("cli", () => {
 		expect(JSON.parse(detailsOutput.read())).toMatchObject({ entity: { reference: expect.stringMatching(/^DEBT_/), category: "technical", priority: "high" } });
 	});
 
-	it("creates typed Wayfinder issues through the CLI", async () => {
+	it("creates typed Pioneer issues through the CLI", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const { db, executor } = await ensureDatabase(dbPath);
-		const initiative = createEntity(executor, { kind: "initiative", title: "Wayfinder" });
+		const initiative = createEntity(executor, { kind: "initiative", title: "Pioneer" });
 		db.close();
 		const stdout = createCapture();
 
 		const exitCode = await runCli([
 			"create", "issue", "--title", "Choose architecture", "--parent", initiative.reference,
-			"--type", "wayfinder-map", "--db", dbPath, "--json"
+			"--type", "pioneer-map", "--db", dbPath, "--json"
 		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
 
 		expect(exitCode).toBe(0);
 		const created = JSON.parse(stdout.read()) as { reference: string };
 		const detailsOutput = createCapture();
 		await runCli(["show", created.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: detailsOutput.stream });
-		expect(JSON.parse(detailsOutput.read())).toMatchObject({ entity: { type: "wayfinder-map" } });
+		expect(JSON.parse(detailsOutput.read())).toMatchObject({ entity: { type: "pioneer-map" } });
 	});
 
 	it("rejects debt creation without all required metadata through the CLI", async () => {
@@ -1587,12 +1587,12 @@ describe("cli", () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const { db, executor } = await ensureDatabase(dbPath);
-		const initiative = createEntity(executor, { kind: "initiative", title: "Wayfinder owner" });
+		const initiative = createEntity(executor, { kind: "initiative", title: "Pioneer owner" });
 		const issue = createEntity(executor, {
 			kind: "issue",
 			parentId: initiative.id,
 			title: "Choose architecture",
-			type: "wayfinder-map"
+			type: "pioneer-map"
 		});
 		db.close();
 		const stdout = createCapture();
@@ -1603,7 +1603,7 @@ describe("cli", () => {
 		);
 
 		expect(exitCode).toBe(0);
-		expect(stdout.read()).toContain(`${issue.reference} issue wayfinder-map todo Choose architecture`);
+		expect(stdout.read()).toContain(`${issue.reference} issue pioneer-map todo Choose architecture`);
 	});
 
 	it("keeps ordinary issue detail output unchanged", async () => {

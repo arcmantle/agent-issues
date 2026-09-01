@@ -111,11 +111,11 @@ describe("HttpStore entity-type transport", () => {
 		};
 		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
 
-		await client.createEntity({ kind: "issue", title: "Wayfinder map", type: "wayfinder-map" });
+		await client.createEntity({ kind: "issue", title: "Pioneer map", type: "pioneer-map" });
 		await client.updateEntity({ entityId: "issue-id", type: null, expectedRevision: 1, expectedContentHash: "current-hash" });
 
 		expect(requests).toEqual([
-			{ method: "createEntity", params: { kind: "issue", title: "Wayfinder map", type: "wayfinder-map" } },
+			{ method: "createEntity", params: { kind: "issue", title: "Pioneer map", type: "pioneer-map" } },
 			{ method: "updateEntity", params: { entityId: "issue-id", type: null, expectedRevision: 1, expectedContentHash: "current-hash" } }
 		]);
 		expectTypeOf<Parameters<HttpStore["createEntity"]>[0]>().toEqualTypeOf<Parameters<StorageDriver["createEntity"]>[0]>();
