@@ -971,6 +971,10 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await store.createEntity({ kind: "issue", title: "Done issue", parentId: initiative.id, status: "done" });
 				const prd = await store.createEntity({ kind: "prd", title: "Summary PRD", parentId: initiative.id });
 				await store.createEntity({ kind: "userStory", title: "Summary story", parentId: prd.id });
+				await store.createEntity({ kind: "plan", title: "Summary Plan", parentId: initiative.id });
+				await store.createEntity({ kind: "adr", title: "Summary ADR", parentId: initiative.id });
+				await store.createEntity({ category: "technical", kind: "debt", priority: "high", title: "Summary debt", parentId: initiative.id });
+				await store.defineContextTerm({ scopeRef: initiative.id, term: "Summary", definition: "Project Summary context." });
 				const otherProject = await store.createEntity({ kind: "project", title: "Other project" });
 				const otherEpic = await store.createEntity({ kind: "epic", title: "Other epic", parentId: otherProject.id });
 				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative", parentId: otherEpic.id });
@@ -984,8 +988,13 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 						epic: expect.objectContaining({ id: epic.id }),
 						initiatives: [expect.objectContaining({
 							initiative: expect.objectContaining({ id: initiative.id }),
+							adrCount: 1,
+							contextTermCount: 1,
+							debtCount: 1,
 							issueCount: 2,
 								completedIssueCount: 1,
+							planCount: 1,
+							prdCount: 1,
 								userStoryCount: 1
 						})]
 					})],
@@ -1545,7 +1554,11 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await store.createEntity({ kind: "issue", title: "Done issue", parentId: initiative.id, status: "done" });
 				const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
 				await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
+				await store.createEntity({ kind: "plan", title: "Plan", parentId: initiative.id });
+				await store.createEntity({ kind: "adr", title: "ADR", parentId: initiative.id });
+				await store.createEntity({ category: "technical", kind: "debt", priority: "high", title: "Debt", parentId: initiative.id });
 				await store.upsertContext({ scopeRef: initiative.id, title: "Initiative Context", summary: "Initiative glossary" });
+				await store.defineContextTerm({ scopeRef: initiative.id, term: "Overview", definition: "Initiative overview." });
 
 				const overview = await store.getInitiativeTab({ initiativeId: initiative.id, tab: "overview" });
 				const context = await store.getInitiativeTab({ initiativeId: initiative.id, tab: "context" });
@@ -1553,7 +1566,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				expect(overview).toMatchObject({
 					records: [],
 					relations: [],
-					rollup: { issueCount: 1, completedIssueCount: 1, userStoryCount: 1 }
+					rollup: { adrCount: 1, completedIssueCount: 1, contextTermCount: 1, debtCount: 1, issueCount: 1, planCount: 1, prdCount: 1, userStoryCount: 1 }
 				});
 				expect(context).toMatchObject({
 					records: [],

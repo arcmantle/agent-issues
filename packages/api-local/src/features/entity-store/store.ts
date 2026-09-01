@@ -1022,8 +1022,13 @@ export function getInitiativeTab(
 				relations: [],
 				rollup: {
 					initiative: toEntitySummary(bundle.initiative),
+					adrCount: bundle.adrs.length,
+					contextTermCount: getContextDetails(executor, { scopeRef: bundle.initiative.id }).terms.length,
+					debtCount: bundle.entities.filter((entity) => entity.kind === "debt").length,
 					issueCount: bundle.issues.length,
 					completedIssueCount: bundle.issues.filter((issue) => issue.status === "done").length,
+					planCount: bundle.entities.filter((entity) => entity.kind === "plan").length,
+					prdCount: bundle.prds.length,
 					userStoryCount: bundle.userStories.length
 				}
 			};
@@ -1463,6 +1468,14 @@ export function getProjectSummary(executor: SqliteExecutor, input: { projectId: 
 	try {
 		const entities = getAllDerivedEntities(executor);
 		const relations = getAllRelations(executor);
+		const contextTermCountByInitiativeId = new Map(
+			(executor.drizzle.all(sql`SELECT contexts.scope_entity_id AS initiative_id, COUNT(context_terms.id) AS term_count
+				FROM contexts
+				LEFT JOIN context_terms ON context_terms.tenant_id = contexts.tenant_id AND context_terms.context_key = contexts.key AND context_terms.tombstone = FALSE
+				WHERE contexts.tenant_id = ${executor.tenantId} AND contexts.scope_entity_id IS NOT NULL
+				GROUP BY contexts.scope_entity_id`) as Array<{ initiative_id: string; term_count: number }>)
+				.map((row) => [row.initiative_id, row.term_count])
+		);
 		const structuralRelations = relations.filter((relation) => isStructuralRelationType(relation.type));
 		const projectEpicIds = new Set(
 			relations
@@ -1476,12 +1489,18 @@ export function getProjectSummary(executor: SqliteExecutor, input: { projectId: 
 				.filter((entity) => entity.kind === "initiative" && relations.some((relation) => relation.type === "contains" && relation.fromId === epic.id && relation.toId === entity.id))
 				.map((initiative) => {
 					const reachableIds = collectReachableIds(structuralRelations, initiative.id);
+					const reachableEntities = entities.filter((entity) => reachableIds.has(entity.id));
 					const issues = entities.filter((entity) => entity.kind === "issue" && reachableIds.has(entity.id));
 					return {
 						initiative: toEntitySummary(initiative),
+						adrCount: reachableEntities.filter((entity) => entity.kind === "adr").length,
+						contextTermCount: contextTermCountByInitiativeId.get(initiative.id) ?? 0,
+						debtCount: reachableEntities.filter((entity) => entity.kind === "debt").length,
 						issueCount: issues.length,
 						completedIssueCount: issues.filter((issue) => issue.status === "done").length,
-						userStoryCount: entities.filter((entity) => entity.kind === "userStory" && reachableIds.has(entity.id)).length
+						planCount: reachableEntities.filter((entity) => entity.kind === "plan").length,
+						prdCount: reachableEntities.filter((entity) => entity.kind === "prd").length,
+						userStoryCount: reachableEntities.filter((entity) => entity.kind === "userStory").length
 					};
 				})
 		}));

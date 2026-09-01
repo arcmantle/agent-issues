@@ -24,19 +24,19 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"devDependencies": {
-		"@types/express": "^5.0.6",
-		"@types/node": "^25.9.2",
-		"@types/pg": "^8.20.0",
-		"@types/supertest": "^7.2.0",
-		"supertest": "^7.2.2",
-		"typescript": "^7.0.0",
-		"vitest": "^4.1.8"
+		"@types/express": "catalog:",
+		"@types/node": "catalog:",
+		"@types/pg": "catalog:",
+		"@types/supertest": "catalog:",
+		"supertest": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
 	},
 	"dependencies": {
 		"@agent-issues/core": "workspace:*",
-		"drizzle-orm": "^0.45.2",
-		"express": "^5.2.1",
-		"jose": "^6.2.3",
-		"pg": "^8.22.0"
+		"drizzle-orm": "catalog:",
+		"express": "catalog:",
+		"jose": "catalog:",
+		"pg": "catalog:"
 	}
 }

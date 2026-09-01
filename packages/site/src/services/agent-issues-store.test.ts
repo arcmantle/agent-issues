@@ -753,6 +753,120 @@ describe("id-driven initiative bundle", () => {
 });
 
 describe("progressive initiative detail loading", () => {
+	it("prefetches initiative tabs one at a time without duplicating a tab opened early", async () => {
+		vi.useFakeTimers();
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 1, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project" }
+		});
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (resource) => {
+			const path = String(resource);
+			if (path.includes("/api/initiative-detail")) {
+				return new Response(JSON.stringify({ initiative }), { status: 200 });
+			}
+			const tab = new URL(path, "http://localhost").searchParams.get("tab");
+			return new Response(JSON.stringify({ records: [], relations: [], tab }), { status: 200 });
+		});
+
+		store.selectInitiative(initiative.id);
+		await vi.advanceTimersByTimeAsync(0);
+		store.setInitTab("adrs");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchMock.mock.calls.filter(([resource]) => String(resource).includes("/api/initiative-tab")).length).toBe(1);
+
+		for (let index = 0; index < 10; index += 1) {
+			await vi.advanceTimersByTimeAsync(400);
+		}
+
+		const tabRequests = fetchMock.mock.calls
+			.map(([resource]) => String(resource))
+			.filter((path) => path.includes("/api/initiative-tab"));
+		expect(new Set(tabRequests.map((path) => new URL(path, "http://localhost").searchParams.get("tab")))).toEqual(
+			new Set(["issues", "plans", "prds", "adrs", "context", "userStories", "debt", "graph"])
+		);
+		expect(tabRequests.filter((path) => path.includes("tab=adrs"))).toHaveLength(1);
+	});
+
+	it("cancels remaining initiative tab prefetch when another initiative opens", async () => {
+		vi.useFakeTimers();
+		const first = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "First" });
+		const second = makeEntity({ id: "INIT2", kind: "initiative", status: "active", title: "Second" });
+		const toSummary = (initiative: Entity) => ({ createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt });
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 2 },
+			epics: [{ epic: { ...toSummary(first), id: "EPIC1", kind: "epic" }, initiatives: [first, second].map((initiative) => ({ completedIssueCount: 0, initiative: toSummary(initiative), issueCount: 0, userStoryCount: 0 })) }],
+			kind: "available",
+			project: { ...toSummary(first), id: "PROJ1", kind: "project" }
+		});
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (resource) => {
+			const path = String(resource);
+			const initiative = path.includes("INIT2") ? second : first;
+			if (path.includes("/api/initiative-detail")) return new Response(JSON.stringify({ initiative }), { status: 200 });
+			return new Response(JSON.stringify({ records: [], relations: [], tab: new URL(path, "http://localhost").searchParams.get("tab") }), { status: 200 });
+		});
+
+		store.selectInitiative(first.id);
+		await vi.advanceTimersByTimeAsync(400);
+		store.selectInitiative(second.id);
+		await vi.advanceTimersByTimeAsync(4000);
+
+		const firstTabRequests = fetchMock.mock.calls.filter(([resource]) => String(resource).includes("initiative=INIT1&tab="));
+		expect(firstTabRequests).toHaveLength(1);
+	});
+
+	it("does not duplicate a tab request while its background prefetch is pending", async () => {
+		vi.useFakeTimers();
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 1, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project" }
+		});
+		let resolveIssues: (response: Response) => void;
+		const issuesResponse = new Promise<Response>((resolve) => {
+			resolveIssues = resolve;
+		});
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((resource) => {
+			const path = String(resource);
+			if (path.includes("/api/initiative-detail")) return Promise.resolve(new Response(JSON.stringify({ initiative }), { status: 200 }));
+			if (path.includes("tab=issues")) return issuesResponse;
+			return Promise.resolve(new Response(JSON.stringify({ records: [], relations: [], tab: new URL(path, "http://localhost").searchParams.get("tab") }), { status: 200 }));
+		});
+
+		store.selectInitiative(initiative.id);
+		await vi.advanceTimersByTimeAsync(400);
+		store.setInitTab("issues");
+		await vi.advanceTimersByTimeAsync(2000);
+
+		let tabRequests = fetchMock.mock.calls.filter(([resource]) => String(resource).includes("/api/initiative-tab"));
+		expect(tabRequests).toHaveLength(1);
+		expect(String(tabRequests[0]?.[0])).toContain("tab=issues");
+
+		resolveIssues!(new Response(JSON.stringify({ records: [], relations: [], tab: "issues" }), { status: 200 }));
+		await vi.advanceTimersByTimeAsync(400);
+		tabRequests = fetchMock.mock.calls.filter(([resource]) => String(resource).includes("/api/initiative-tab"));
+		expect(tabRequests).toHaveLength(2);
+		expect(String(tabRequests[1]?.[0])).toContain("tab=plans");
+	});
+
 	it("loads only the selected initiative detail from a Project Summary rollup", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const store = new AgentIssuesStore();
@@ -1179,7 +1293,7 @@ describe("browser detail routes", () => {
 
 		expect(store.selectedId.get()).toBe("PLAN1");
 		expect(store.selectedNestedTarget.get()).toBeNull();
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=PLAN1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=entity&entity=PLAN1");
 	});
 
 	it("opens a Plan-entry target in its Plan", () => {
@@ -1193,7 +1307,7 @@ describe("browser detail routes", () => {
 
 		expect(store.selectedId.get()).toBe("PLAN1");
 		expect(store.selectedNestedTarget.get()).toEqual({ id: "ENTRY1", type: "plan-entry" });
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=PLAN1&target=plan-entry&target-id=ENTRY1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=entity&entity=PLAN1&target=plan-entry&target-id=ENTRY1");
 	});
 
 	it("opens an entity target without nested route data", () => {
@@ -1207,7 +1321,7 @@ describe("browser detail routes", () => {
 
 		expect(store.selectedId.get()).toBe(issue.id);
 		expect(store.selectedNestedTarget.get()).toBeNull();
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=entity&entity=ISS1");
 	});
 
 	it("opens an issue-comment target in its issue", () => {
@@ -1221,7 +1335,7 @@ describe("browser detail routes", () => {
 
 		expect(store.selectedId.get()).toBe("ISS1");
 		expect(store.selectedNestedTarget.get()).toEqual({ id: "COMMENT1", type: "issue-comment" });
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS1&target=issue-comment&target-id=COMMENT1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=entity&entity=ISS1&target=issue-comment&target-id=COMMENT1");
 	});
 
 	it("opens a context-term target in its scoped context", () => {
@@ -1236,7 +1350,7 @@ describe("browser detail routes", () => {
 		expect(store.activeSection.get()).toBe("context");
 		expect(store.contextTab.get()).toBe("initiatives");
 		expect(store.selectedContextInitiativeId.get()).toBe("INIT1");
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&section=context&target=context-term&target-id=Search%20document&target-scope=INIT1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=project&section=context&target=context-term&target-id=Search%20document&target-scope=INIT1");
 	});
 
 	it("clears a nested target when navigating to another initiative", () => {
@@ -1251,7 +1365,7 @@ describe("browser detail routes", () => {
 		store.selectInitiative(initiative.id);
 
 		expect(store.selectedNestedTarget.get()).toBeNull();
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&initiative=INIT1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=overview");
 	});
 
 	it("clears a nested target when closing its owner detail", () => {
@@ -1266,7 +1380,7 @@ describe("browser detail routes", () => {
 		store.closeEntity();
 
 		expect(store.selectedNestedTarget.get()).toBeNull();
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&initiative=INIT1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=overview");
 	});
 
 	it("restores a scoped context-term target from a direct hash route", () => {
@@ -1328,7 +1442,7 @@ describe("browser detail routes", () => {
 
 		expect(store.selectedId.get()).toBe("ISS18");
 		expect(store.cascadePath.get()).toEqual([]);
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS18");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=entity&entity=ISS18");
 		fetchMock.mockRestore();
 	});
 
@@ -1339,12 +1453,13 @@ describe("browser detail routes", () => {
 		store.snapshot.set(makeSnapshot({ entities: [initiative, issue], initiatives: [makeBundle(initiative, { issues: [issue] })] }));
 		store.selectedTenant.set("demo");
 		store.selectedProjectId.set("PROJ1");
-		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&initiative=INIT1");
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=issues");
 
 		await store.onPopState();
 		expect(store.selectedInitiativeId.get()).toBe("INIT1");
 		expect(store.selectedId.get()).toBeNull();
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&initiative=INIT1");
+		expect(store.initTab.get()).toBe("issues");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=issues");
 
 		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&entity=ISS1");
 		await store.onPopState();
@@ -1353,12 +1468,32 @@ describe("browser detail routes", () => {
 		expect(store.selectedId.get()).toBe("ISS1");
 		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&entity=ISS1");
 
-		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1");
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&page=project");
 		await store.onPopState();
 		expect(store.selectedInitiativeId.get()).toBeNull();
 		expect(store.selectedId.get()).toBeNull();
 		expect(store.activePage.get()).toBe("list");
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=project");
+	});
+
+	it("keeps an explicit initiative route while asynchronous startup work begins", async () => {
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=adrs");
+		const store = new AgentIssuesStore();
+		const fetchMock = vi.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({ availableTenants: [{ displayName: "Demo", id: "demo" }], currentTenant: "demo", dbPath: "/tmp/agent-issues.db" }), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ kind: "available", projects: [] }), { status: 200 }))
+			.mockReturnValue(new Promise<Response>(() => {}));
+
+		store.connect();
+
+		expect(store.activePage.get()).toBe("initiative");
+		expect(store.selectedInitiativeId.get()).toBe("INIT1");
+		expect(store.initTab.get()).toBe("adrs");
+		await vi.waitFor(() => expect(fetchMock.mock.calls.some(([resource]) => String(resource).includes("/api/project-summary"))).toBe(true));
+		expect(store.activePage.get()).toBe("initiative");
+		expect(store.selectedInitiativeId.get()).toBe("INIT1");
+		expect(store.initTab.get()).toBe("adrs");
+		store.disconnect();
 	});
 
 	it("restores main menu sections from browser history", async () => {
@@ -1367,7 +1502,7 @@ describe("browser detail routes", () => {
 		store.selectedProjectId.set("PROJ1");
 
 		store.selectSection("adrs");
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&section=adrs");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=project&section=adrs");
 
 		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&section=graph");
 		await store.onPopState();
@@ -2505,7 +2640,7 @@ describe("tenant and project route scope", () => {
 		expect(store.selectedId.get()).toBeNull();
 		expect(store.selectedInitiativeId.get()).toBeNull();
 		expect(store.cascadePath.get()).toEqual([]);
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=project");
 	});
 
 	it("migrates legacy tenant query links and existing detail hashes into the shared hash route", () => {
@@ -2576,7 +2711,7 @@ describe("tenant and project route scope", () => {
 		expect(store.globalSearchQuery.get()).toBe("");
 		expect(store.globalSearchResponse.get()).toBeNull();
 		expect(store.activeSection.get()).toBe("initiatives");
-		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2");
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2&page=project");
 		fetchMock.mockRestore();
 	});
 

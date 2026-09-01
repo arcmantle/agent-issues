@@ -94,25 +94,19 @@ export abstract class TargetCommand extends BaseCommand {
  * output (the cloud API URL in cloud mode, per `OpenStorageDriverResult`).
  *
  * Passes this install's build-content-hash so local mode's daemon routing
- * (ISS190, ADR44/45) can detect a stale already-running daemon; surfaces
- * `daemonFallbackWarning` on stderr so a failed daemon spawn is visible
- * without ever failing the command itself.
+ * (ISS190, ADR44/45) can detect a stale already-running daemon.
  */
 export async function withStore<T>(
 	dbPath: string | undefined,
 	options: (DatabaseLocationOptions & { credentialStoreOptions?: SavedLoginStoreOptions }) | undefined,
 	fn: (store: StorageDriver, dbPath: string) => Promise<T>
 ): Promise<T> {
-	const { store, dbPath: resolvedDbPath, daemonFallbackWarning } = await openStorageDriver({
+	const { store, dbPath: resolvedDbPath } = await openStorageDriver({
 		dbPath,
 		databaseOptions: options,
 		authSessionOptions: options?.credentialStoreOptions,
 		localDaemon: { buildHash: readBuildContentHash() }
 	});
-
-	if (daemonFallbackWarning) {
-		process.stderr.write(`Warning: ${daemonFallbackWarning}\n`);
-	}
 
 	try {
 		return await fn(store, resolvedDbPath);

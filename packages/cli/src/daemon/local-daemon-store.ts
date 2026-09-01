@@ -6,7 +6,7 @@ import { spawn as spawnChildProcess } from "node:child_process";
  * entrypoint agree on the exact same literal without either hardcoding it
  * independently.
  */
-export const LOCAL_DAEMON_SPAWN_FLAG = "--agent-issues-run-daemon";
+export const LOCAL_DAEMON_SPAWN_FLAG = "--spawn-daemon";
 
 /**
  * Default `spawn` for the local daemon (ISS190, ADR44): re-invokes this

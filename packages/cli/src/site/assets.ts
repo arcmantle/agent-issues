@@ -1,8 +1,9 @@
 import { cpSync, existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const siteDistDir = fileURLToPath(new URL("../../site/dist/", import.meta.url));
+import { resolvePackagePath } from "../package-path.js";
+
+const siteDistDir = resolvePackagePath("site", "dist");
 
 export function ensureBuiltSite(): string {
 	const entrypoint = path.join(siteDistDir, "index.html");

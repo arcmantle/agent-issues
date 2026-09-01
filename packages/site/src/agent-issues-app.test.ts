@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import "./agent-issues-app.js";
 import type { ContextDetails, Entity, InitiativeBundle, ProjectDiscovery, ProjectRollup, ProjectSummary, SiteConfig, Snapshot } from "./models.js";
@@ -143,6 +143,10 @@ async function mountApp(store: AgentIssuesStore) {
 	await app.updateComplete;
 	return app;
 }
+
+beforeEach(() => {
+	window.history.replaceState({}, "", "/");
+});
 
 afterEach(() => {
 	document.body.replaceChildren();
@@ -676,6 +680,22 @@ describe("three-pane console shell", () => {
 		expect(root?.querySelector('[data-pane="rail"]')).not.toBeNull();
 		expect(root?.querySelector('[data-pane="master"]')).not.toBeNull();
 		expect(root?.querySelector('[data-pane="detail"]')).not.toBeNull();
+	});
+
+	it("shows progress inside the initiative list while Project Summary loads", async () => {
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.config.set(makeConfig());
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.syncLabel.set("connecting");
+
+		const app = await mountApp(store);
+		const loadingState = app.shadowRoot?.querySelector<HTMLElement>('[data-pane="master"] [role="status"]');
+
+		expect(loadingState?.textContent).toContain("Loading initiatives");
+		expect(loadingState?.querySelector(".master-loading-spinner")).not.toBeNull();
+		expect(app.shadowRoot?.querySelector('[data-pane="master"] .master-list')).not.toBeNull();
 	});
 
 	it("renders Initiative Rollups in the master list without a project snapshot", async () => {
@@ -1305,6 +1325,28 @@ describe("project relationship graph section", () => {
 });
 
 describe("project context section", () => {
+	it("does not show a provisional context title while direct-route context loads", async () => {
+		const store = makeStore(makeConfig(), makeSnapshot());
+		store.snapshot.set(null);
+		store.projectContextCache.set({ data: null, error: null, loading: true });
+		store.activeSection.set("context");
+		const app = await mountApp(store);
+
+		expect(app.shadowRoot?.querySelector(".d-title")?.textContent).toBe("Loading context");
+		expect(app.shadowRoot?.textContent).not.toContain("Project context");
+
+		const shared = makeSharedContext();
+		shared.context.title = "Content Hub";
+		store.projectContextCache.set({
+			data: { duplicateTerms: [], initiatives: [], shared, terms: [] },
+			error: null,
+			loading: false
+		});
+		await app.updateComplete;
+
+		expect(app.shadowRoot?.querySelector(".d-title")?.textContent).toBe("Content Hub");
+	});
+
 	it("shows the shared term count on the Context nav item", async () => {
 		const shared = makeSharedContext();
 		shared.context.summary = "Project glossary.";

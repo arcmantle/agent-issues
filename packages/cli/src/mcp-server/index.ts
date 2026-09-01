@@ -16,6 +16,8 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import packageJson from "../../package.json" with { type: "json" };
+
 export type McpServerOptions = {
 	projectIdentity?: string;
 	openStore: () => Promise<
@@ -71,7 +73,7 @@ export type McpServerOptions = {
 };
 
 export function createMcpServer(options: McpServerOptions): McpServer {
-	const server = new McpServer({ name: "agent-issues", version: "0.1.0" });
+	const server = new McpServer({ name: "agent-issues", version: packageJson.version });
 	const confirmationTokens = new ConfirmationTokenStore(options.now ?? Date.now);
 
 	server.registerTool(

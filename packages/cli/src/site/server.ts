@@ -109,10 +109,6 @@ export async function startLiveSite(input: {
 	});
 	await opened.store.close();
 
-	if (opened.daemonFallbackWarning) {
-		process.stderr.write(`Warning: ${opened.daemonFallbackWarning}\n`);
-	}
-
 	let databaseSignature =
 		opened.backend === "local"
 			? await readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions)
@@ -120,6 +116,7 @@ export async function startLiveSite(input: {
 	let pollTimer: NodeJS.Timeout | undefined;
 	let pollingStopped = false;
 	let stopCloudEventsRelay: (() => void) | undefined;
+	let stopServer: () => void;
 
 	const server = createServer((request, response) => {
 		void handleRequest({
@@ -129,14 +126,42 @@ export async function startLiveSite(input: {
 			clients,
 			currentWorkingDirectory,
 			defaultTenant,
-			server,
 			credentialStoreOptions,
+			stopServer,
 			onLocalMutation: (event, signature) => {
 				databaseSignature = signature;
 				broadcast(clients, JSON.stringify(event));
 			}
+		}).catch((error) => {
+			process.stderr.write(`Live site request failed: ${error instanceof Error ? error.message : String(error)}\n`);
+			if (response.writableEnded) {
+				return;
+			}
+			if (response.headersSent) {
+				response.end();
+				return;
+			}
+			writeText(response, 500, "Internal Server Error");
 		});
 	});
+	const stopBackgroundWork = () => {
+		pollingStopped = true;
+		if (pollTimer) {
+			clearTimeout(pollTimer);
+		}
+		stopCloudEventsRelay?.();
+	};
+	const closeClients = () => {
+		for (const client of clients) {
+			client.end();
+		}
+		clients.clear();
+	};
+	stopServer = () => {
+		stopBackgroundWork();
+		closeClients();
+		server.close();
+	};
 
 	if (opened.backend === "local") {
 		// A self-rescheduling `setTimeout` (rather than `setInterval`) so a
@@ -149,14 +174,17 @@ export async function startLiveSite(input: {
 			}
 
 			pollTimer = setTimeout(() => {
-				void readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions).then((nextSignature) => {
-					if (nextSignature !== databaseSignature) {
-						databaseSignature = nextSignature;
-						broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString(), category: "unknown" }));
-					}
-
-					scheduleNextPoll();
-				});
+				void readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions)
+					.then((nextSignature) => {
+						if (nextSignature !== databaseSignature) {
+							databaseSignature = nextSignature;
+							broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString(), category: "unknown" }));
+						}
+					})
+					.catch((error) => {
+						process.stderr.write(`Live site change poll failed: ${error instanceof Error ? error.message : String(error)}\n`);
+					})
+					.finally(scheduleNextPoll);
 			}, pollIntervalMs);
 		};
 
@@ -168,23 +196,13 @@ export async function startLiveSite(input: {
 	}
 
 	server.on("close", () => {
-		pollingStopped = true;
-		if (pollTimer) {
-			clearTimeout(pollTimer);
-		}
-		stopCloudEventsRelay?.();
-		for (const client of clients) {
-			client.end();
-		}
-		clients.clear();
+		stopBackgroundWork();
+		closeClients();
 	});
 
 	server.on("error", () => {
-		pollingStopped = true;
-		if (pollTimer) {
-			clearTimeout(pollTimer);
-		}
-		stopCloudEventsRelay?.();
+		stopBackgroundWork();
+		closeClients();
 	});
 
 	server.listen(port, host);
@@ -192,9 +210,7 @@ export async function startLiveSite(input: {
 	return {
 		info,
 		server,
-		close: () => {
-			server.close();
-		}
+		close: stopServer
 	};
 }
 
@@ -257,8 +273,8 @@ async function handleRequest(input: {
 	clients: Set<ServerResponse>;
 	currentWorkingDirectory: string | undefined;
 	defaultTenant: string;
-	server: Server;
 	credentialStoreOptions: SavedLoginStoreOptions | undefined;
+	stopServer: () => void;
 	onLocalMutation: (event: ProjectChangeEvent, signature: string) => void;
 }) {
 	const requestUrl = new URL(input.request.url ?? "/", "http://127.0.0.1");
@@ -273,7 +289,7 @@ async function handleRequest(input: {
 
 		writeText(input.response, 200, "Stopping live site");
 		setImmediate(() => {
-			input.server.close();
+			input.stopServer();
 		});
 		return;
 	}
@@ -1035,9 +1051,6 @@ async function executeProjectMutation(input: {
 		dbPath: input.dbPath,
 		localDaemon: { buildHash: readBuildContentHash() }
 	});
-	if (opened.daemonFallbackWarning) {
-		process.stderr.write(`Warning: ${opened.daemonFallbackWarning}\n`);
-	}
 	const handler = rpcMethods[input.mutation.method]!;
 
 	try {

@@ -148,6 +148,26 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 		).rejects.toThrow(/token/i);
 	});
 
+	it("times out when a reachable daemon does not answer its health request", async () => {
+		await saveDaemonToken("real-token", credentialStoreOptions);
+		const server = createServer(() => {});
+		servers.push(server);
+		const port = await new Promise<number>((resolve) => {
+			server.listen(0, "127.0.0.1", () => {
+				const address = server.address();
+				resolve(typeof address === "object" && address !== null ? address.port : 0);
+			});
+		});
+		saveDaemonState({ pid: process.pid, port }, { homeDirectory });
+
+		await expect(openLocalDaemonStore({
+			homeDirectory,
+			credentialStoreOptions,
+			requestTimeoutMs: 20,
+			spawn: vi.fn()
+		})).rejects.toThrow("Local daemon request timed out after 20ms.");
+	});
+
 	it("retries once against a freshly-spawned daemon when the current one reports a db-path mismatch (ISS190)", async () => {
 		await saveDaemonToken("real-token", { ...credentialStoreOptions, dbPath: "/tmp/new.db" });
 		const oldPort = await listenFakeDaemon(() => {

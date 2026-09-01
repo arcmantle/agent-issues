@@ -630,6 +630,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const baseGraph = store.buildInitiativeGraph(bundle);
 		const graph = graphFilterActive ? store.buildInitiativeGraph(bundle, visibleGraphKinds) : baseGraph;
 		const hasProjectSummaryRollup = store.isSummaryInitiative(bundle.initiative.id);
+		const rollup = store.projectSummaryInitiatives.get().find((candidate) => candidate.initiative.id === bundle.initiative.id);
 		const debtSections = store.debtRecordSectionsFor(bundle.initiative.id);
 		const debtRecords = hasProjectSummaryRollup && requestedTab === "debt"
 			? bundle.entities.filter((entity) => entity.kind === "debt")
@@ -637,7 +638,15 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const plans = bundle.entities
 			.filter((entity) => entity.kind === "plan")
 			.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime() || left.id.localeCompare(right.id));
-			const tabCounts: Partial<Record<InitiativeTab, number>> = {
+			const tabCounts: Partial<Record<InitiativeTab, number>> = hasProjectSummaryRollup && rollup ? {
+				adrs: rollup.adrCount ?? bundle.adrs.length,
+				context: rollup.contextTermCount ?? context?.terms.length ?? 0,
+				debt: rollup.debtCount ?? debtRecords.length,
+				issues: rollup.issueCount,
+				plans: rollup.planCount ?? plans.length,
+				prds: rollup.prdCount ?? bundle.prds.length,
+				userStories: rollup.userStoryCount
+			} : {
 				adrs: bundle.adrs.length,
 				context: context?.terms.length ?? 0,
 				debt: debtRecords.length,
@@ -658,9 +667,12 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					.map(([candidate, label]) => ({ label, recordCount: tabCounts[candidate], tab: candidate }))
 			];
 			const initiativeTabs: InitiativeTabDefinition[] = hasProjectSummaryRollup
-				? [{ label: "Overview", tab: "overview" }, ...INITIATIVE_TAB_DETAILS.map(([tab, label]) => ({ label, tab }))]
+				? [{ label: "Overview", tab: "overview" }, ...INITIATIVE_TAB_DETAILS.map(([tab, label]) => ({ label, recordCount: tabCounts[tab], tab }))]
 				: populatedInitiativeTabs;
 			const tab = initiativeTabs.some(({ tab: candidate }) => candidate === requestedTab) ? requestedTab : "overview";
+			const tabLoading = tab === "overview"
+				? detailState?.loading === true
+				: tabState?.loading === true;
 
 		return html`
 		<div class="detail-inner">
@@ -669,9 +681,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				${bundle.initiative.title}
 				<span class=${`badge ${store.badgeTone(bundle.initiative.status)}`}>${bundle.initiative.status}</span>
 			</h1>
-			<div class="d-sub">
-				${unsafeHTML(renderMarkdownBody(context?.context.summary ?? "No initiative-specific context is available yet."))}
-			</div>
 
 			<div class="kpis">
 				<div class="kpi">
@@ -704,7 +713,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			>
 				${repeat(initiativeTabs, ({ tab: candidate }) => candidate, ({ label, recordCount, tab: candidate }) => html`
 				<button
-					aria-label=${recordCount === undefined ? label : `${label}: ${recordCount} records`}
+					aria-label=${candidate === tab && tabLoading
+						? `${label}, loading`
+						: recordCount === undefined ? label : `${label}: ${recordCount} records`}
 					aria-controls=${this.getTabPanelId(candidate)}
 					aria-selected=${String(tab === candidate)}
 					class=${classMap({ active: tab === candidate, subtab: true })}
@@ -716,21 +727,21 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					<span class="subtab-label">
 						<span class="subtab-label-text">${label}</span>
 					</span>
-					${when(recordCount !== undefined, () => html`<span aria-hidden="true" class="subtab-count">${recordCount}</span>`, () => nothing)}
+					${when(
+						candidate === tab && tabLoading,
+						() => html`<span aria-hidden="true" class="subtab-spinner"></span>`,
+						() => when(recordCount !== undefined, () => html`<span aria-hidden="true" class="subtab-count">${recordCount}</span>`, () => nothing)
+					)}
 				</button>
 				`)}
 			</div>
 
 			<section
+				aria-busy=${String(tabLoading)}
 				aria-labelledby=${this.getTabButtonId(tab)}
 				id=${this.getTabPanelId(tab)}
 				role="tabpanel"
 			>
-			${when(
-				requestedTab !== "overview" && tabState?.loading === true,
-				() => html`<div class="local-state" role="status">Loading ${requestedTab}...</div>`,
-				() => nothing
-			)}
 			${when(
 				requestedTab !== "overview" && Boolean(tabState?.error),
 				() => html`
@@ -751,11 +762,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				tab,
 				[
 					["overview", () => html`
-					${when(
-						detailState?.loading === true,
-						() => html`<div class="local-state" role="status">Loading initiative details...</div>`,
-						() => nothing
-					)}
 					${when(
 						Boolean(detailState?.error),
 						() => html`
@@ -867,29 +873,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			margin: 6px 0 0;
 			font-size: 24px;
 		}
-		.d-sub {
-			max-width: 70ch;
-			margin: 10px 0 0;
-			color: var(--muted);
-		}
-		.d-sub > :first-child {
-			margin-top: 0;
-		}
-		.d-sub > :last-child {
-			margin-bottom: 0;
-		}
-		.d-sub h1,
-		.d-sub h2,
-		.d-sub h3 {
-			margin-bottom: 6px;
-			font-size: 16px;
-			line-height: 1.4;
-		}
-		.d-sub p,
-		.d-sub ul,
-		.d-sub ol {
-			margin: 6px 0;
-		}
 		.kpis {
 			display: grid;
 			grid-template-columns: repeat(4, 1fr);
@@ -947,6 +930,28 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 		.subtab-label {
 			display: inline-block;
+		}
+		.subtab-spinner {
+			box-sizing: border-box;
+			position: absolute;
+			top: 2px;
+			right: 4px;
+			width: 14px;
+			height: 14px;
+			border: 2px solid var(--border);
+			border-top-color: var(--accent);
+			border-radius: 50%;
+			animation: tab-loading-spin 700ms linear infinite;
+		}
+		@keyframes tab-loading-spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.subtab-spinner {
+				animation: none;
+			}
 		}
 		.subtab.active {
 			border-bottom-color: #fd8c73;

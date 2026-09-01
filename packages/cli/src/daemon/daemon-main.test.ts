@@ -33,7 +33,7 @@ describe("runDaemonProcess (ISS190)", () => {
 	it("forwards a --db <path> argv flag as the server's dbPath (ISS190)", () => {
 		createLocalDaemonServerMock.mockReturnValue({ server: { address: () => ({ port: 0 }) as AddressInfo } });
 		const originalArgv = process.argv;
-		process.argv = [...originalArgv.slice(0, 2), "--agent-issues-run-daemon", "--db", "/tmp/other.db"];
+		process.argv = [...originalArgv.slice(0, 2), "--spawn-daemon", "--db", "/tmp/other.db"];
 
 		try {
 			runDaemonProcess();
@@ -48,7 +48,7 @@ describe("runDaemonProcess (ISS190)", () => {
 	it("leaves dbPath undefined when no --db flag is present in argv", () => {
 		createLocalDaemonServerMock.mockReturnValue({ server: { address: () => ({ port: 0 }) as AddressInfo } });
 		const originalArgv = process.argv;
-		process.argv = [...originalArgv.slice(0, 2), "--agent-issues-run-daemon"];
+		process.argv = [...originalArgv.slice(0, 2), "--spawn-daemon"];
 
 		try {
 			runDaemonProcess();

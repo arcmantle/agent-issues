@@ -61,11 +61,11 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 
 	it("rejects AGENT_ISSUES_NO_DAEMON in a production build", () => {
 		expect(() => assertNoDaemonAllowed({ AGENT_ISSUES_NO_DAEMON: "1" }, "production")).toThrow(
-			"AGENT_ISSUES_NO_DAEMON is only available in development builds"
+			"AGENT_ISSUES_NO_DAEMON is only available to tests in development builds"
 		);
 	});
 
-	it("opens a direct SqliteStore when AGENT_ISSUES_NO_DAEMON=1 forces the escape hatch (ISS190)", async () => {
+	it("opens a direct SqliteStore only for the in-process test harness", async () => {
 		const result = await openStorageDriver({
 			databaseOptions: { currentWorkingDirectory: projectDirectory },
 			authSessionOptions: { homeDirectory, ...fakeCredentialStore() },
@@ -77,7 +77,6 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			expect(result.store).toBeInstanceOf(SqliteStore);
 			expect(result.dbPath).toBeTruthy();
 			expect(result.cloudConnection).toBeUndefined();
-			expect(result.daemonFallbackWarning).toBeUndefined();
 		} finally {
 			await result.store.close();
 		}
@@ -129,7 +128,6 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 				expect(result.backend).toBe("local");
 				expect(result.store).toBeInstanceOf(LocalDaemonStore);
 				expect(result.dbPath).toBeTruthy();
-				expect(result.daemonFallbackWarning).toBeUndefined();
 				expect(spawn).not.toHaveBeenCalled();
 			} finally {
 				await result.store.close();
@@ -204,25 +202,17 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			}
 		});
 
-		it("falls back to a direct SqliteStore with a visible warning when the daemon cannot be spawned", async () => {
+		it("fails explicitly when the daemon cannot be spawned", async () => {
 			const spawn = vi.fn(() => {
 				throw new Error("spawn agent-issues ENOENT");
 			});
 
-			const result = await openStorageDriver({
+			await expect(openStorageDriver({
 				databaseOptions: { currentWorkingDirectory: projectDirectory },
 				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
 				env: {},
 				localDaemon: { homeDirectory, credentialStoreOptions, spawn, waitTimeoutMs: 50, pollIntervalMs: 5 }
-			});
-
-			try {
-				expect(result.backend).toBe("local");
-				expect(result.store).toBeInstanceOf(SqliteStore);
-				expect(result.daemonFallbackWarning).toMatch(/ENOENT/);
-			} finally {
-				await result.store.close();
-			}
+			})).rejects.toThrow("spawn agent-issues ENOENT");
 		});
 	});
 

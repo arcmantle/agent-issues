@@ -50,43 +50,4 @@ describe("withStore (ISS190)", () => {
 		);
 	});
 
-	it("surfaces a visible warning on stderr when the daemon store falls back", async () => {
-		openStorageDriverMock.mockResolvedValue({
-			store: fakeStore(),
-			dbPath: "/tmp/agent-issues.db",
-			daemonFallbackWarning: "could not spawn the local daemon: boom"
-		});
-		const originalWrite = process.stderr.write.bind(process.stderr);
-		const chunks: string[] = [];
-		process.stderr.write = ((chunk: string) => {
-			chunks.push(chunk.toString());
-			return true;
-		}) as typeof process.stderr.write;
-
-		try {
-			await withStore(undefined, undefined, async () => undefined);
-		} finally {
-			process.stderr.write = originalWrite;
-		}
-
-		expect(chunks.join("")).toContain("could not spawn the local daemon: boom");
-	});
-
-	it("stays silent when there is no fallback warning", async () => {
-		openStorageDriverMock.mockResolvedValue({ store: fakeStore(), dbPath: "/tmp/agent-issues.db" });
-		const originalWrite = process.stderr.write.bind(process.stderr);
-		const chunks: string[] = [];
-		process.stderr.write = ((chunk: string) => {
-			chunks.push(chunk.toString());
-			return true;
-		}) as typeof process.stderr.write;
-
-		try {
-			await withStore(undefined, undefined, async () => undefined);
-		} finally {
-			process.stderr.write = originalWrite;
-		}
-
-		expect(chunks.join("")).toBe("");
-	});
 });

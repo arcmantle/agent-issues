@@ -552,11 +552,9 @@ function findProjectsByNormalizedTitle(db: DatabaseHandle, normalizedTitle: stri
  * brought this call here.
  *
  * Runs the miss-check and the write in one `immediate` transaction, which
- * takes SQLite's write lock up front: two processes opening the same fresh
- * workspace at once (the direct-SQLite path, where the daemon is not there to
- * serialize them) then take turns, and the loser re-reads the winner's
- * project instead of minting a second one. A duplicate would be worse than a
- * failure - it makes the identity permanently ambiguous.
+ * takes SQLite's write lock up front. The daemon serializes production access,
+ * and the transaction keeps direct backend tests safe from duplicate project
+ * registration. A duplicate would make the identity permanently ambiguous.
  */
 function registerWorkspaceProject(db: DatabaseHandle, title: string, normalizedTitle: string): string {
 	return db.drizzle.transaction(

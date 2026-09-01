@@ -6,6 +6,7 @@ const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
 const GLOBAL_SEARCH_RECENTS_LIMIT = 5;
 const GLOBAL_SEARCH_RECENTS_STORAGE_PREFIX = "agent-issues-global-search-recents";
+const INITIATIVE_TAB_PREFETCH_DELAY_MS = 400;
 const LOCAL_CHANGE_CORRELATION_TTL_MS = 5 * 60 * 1000;
 const PLAN_CURRENT_GROUPS = [
 	{ key: "questions", title: "Questions" },
@@ -121,11 +122,16 @@ type CachedInitiativeTab = {
 type ViewerRoute = {
 	tenantId: string | null;
 	projectId: string | null;
+	page: PageMode;
 	section: ConsoleSection;
 	entityId: string | null;
 	initiativeId: string | null;
+	initiativeTab: InitiativeTab;
 	target: NestedRouteTarget | null;
 };
+
+const INITIATIVE_TABS: readonly InitiativeTab[] = ["overview", "issues", "plans", "prds", "adrs", "context", "userStories", "debt", "graph"];
+const DEFERRED_INITIATIVE_TABS = INITIATIVE_TABS.filter((tab): tab is Exclude<InitiativeTab, "overview"> => tab !== "overview");
 
 type NestedRouteTarget = { scopeRef?: string } & (
 	| { type: "context"; id: null }
@@ -272,6 +278,8 @@ export class AgentIssuesStore {
 	protected globalSearchAbortController: AbortController | null = null;
 	protected globalSearchProgressTimer: number | null = null;
 	protected globalSearchRequestTimer: number | null = null;
+	protected initiativeTabPrefetchGeneration = 0;
+	protected initiativeTabPrefetchTimer: number | null = null;
 	protected localChangeCorrelations = new Map<string, number>();
 
 	public tenantById = computed(() => new Map((this.config.get()?.availableTenants ?? []).map((tenant) => [tenant.id, tenant])));
@@ -1163,6 +1171,7 @@ export class AgentIssuesStore {
 		}
 
 		this.connected = true;
+		this.applyRoute(this.readRoute(), false);
 		window.addEventListener("hashchange", this.onBrowserNavigation);
 		window.addEventListener("popstate", this.onPopState);
 		void this.bootstrap();
@@ -1174,6 +1183,7 @@ export class AgentIssuesStore {
 		}
 
 		this.connected = false;
+		this.cancelInitiativeTabPrefetch();
 		window.removeEventListener("hashchange", this.onBrowserNavigation);
 		window.removeEventListener("popstate", this.onPopState);
 		this.cancelGlobalSearchRequest();
@@ -1317,6 +1327,7 @@ export class AgentIssuesStore {
 
 	public setInitTab(tab: InitiativeTab) {
 		this.initTab.set(tab);
+		this.writeRoute(this.currentRoute());
 		const initiativeId = this.selectedInitiativeId.get();
 		if (initiativeId && tab !== "overview" && this.projectSummaryInitiatives.get().some((rollup) => rollup.initiative.id === initiativeId)) {
 			void this.loadInitiativeTab(initiativeId, tab);
@@ -1573,6 +1584,7 @@ export class AgentIssuesStore {
 	}
 
 	public selectInitiative(initiativeId: string) {
+		this.cancelInitiativeTabPrefetch();
 		this.selectedId.set(null);
 		this.selectedInitiativeId.set(initiativeId);
 		this.selectedNestedTarget.set(null);
@@ -1585,10 +1597,12 @@ export class AgentIssuesStore {
 		this.writeRoute(this.currentRoute());
 		if (this.isSummaryInitiative(initiativeId)) {
 			void this.loadInitiativeDetail(initiativeId);
+			this.startInitiativeTabPrefetch(initiativeId);
 		}
 	}
 
 	public clearSelection() {
+		this.cancelInitiativeTabPrefetch();
 		this.cascadePath.set([]);
 		this.clearMasterOverrideIfShallow();
 		this.selectedInitiativeId.set(null);
@@ -1657,7 +1671,7 @@ export class AgentIssuesStore {
 		const rollup = this.projectSummaryInitiatives.get().find((candidate) => candidate.initiative.id === bundle.initiative.id);
 		if (rollup) {
 			const pct = rollup.issueCount > 0 ? Math.round((rollup.completedIssueCount / rollup.issueCount) * 100) : 0;
-			return { adrs: bundle.adrs.length, done: rollup.completedIssueCount, issues: rollup.issueCount, pct, stories: rollup.userStoryCount };
+			return { adrs: rollup.adrCount ?? bundle.adrs.length, done: rollup.completedIssueCount, issues: rollup.issueCount, pct, stories: rollup.userStoryCount };
 		}
 
 		const total = bundle.issues.length;
@@ -2805,6 +2819,55 @@ export class AgentIssuesStore {
 		}
 	}
 
+	protected startInitiativeTabPrefetch(initiativeId: string) {
+		this.cancelInitiativeTabPrefetch();
+		if (!this.connected) {
+			return;
+		}
+		const generation = this.initiativeTabPrefetchGeneration;
+		const tabs = [...DEFERRED_INITIATIVE_TABS];
+
+		const scheduleNext = () => {
+			if (generation !== this.initiativeTabPrefetchGeneration || this.selectedInitiativeId.get() !== initiativeId || tabs.length === 0) {
+				return;
+			}
+			this.initiativeTabPrefetchTimer = window.setTimeout(() => {
+				this.initiativeTabPrefetchTimer = null;
+				void prefetchNext();
+			}, INITIATIVE_TAB_PREFETCH_DELAY_MS);
+		};
+
+		const prefetchNext = async () => {
+			if (generation !== this.initiativeTabPrefetchGeneration || this.selectedInitiativeId.get() !== initiativeId) {
+				return;
+			}
+			const tab = tabs[0];
+			if (!tab) {
+				return;
+			}
+			const cached = this.initiativeTabs.get().get(this.initiativeTabCacheKey(initiativeId, tab));
+			if (cached?.loading) {
+				scheduleNext();
+				return;
+			}
+			tabs.shift();
+			if (!cached?.data || cached.stale) {
+				await this.loadInitiativeTab(initiativeId, tab);
+			}
+			scheduleNext();
+		};
+
+		scheduleNext();
+	}
+
+	protected cancelInitiativeTabPrefetch() {
+		this.initiativeTabPrefetchGeneration += 1;
+		if (this.initiativeTabPrefetchTimer !== null) {
+			window.clearTimeout(this.initiativeTabPrefetchTimer);
+			this.initiativeTabPrefetchTimer = null;
+		}
+	}
+
 	protected initiativeTabCacheKey(initiativeId: string, tab: InitiativeTab) {
 		return `${initiativeId}:${tab}`;
 	}
@@ -2858,6 +2921,7 @@ export class AgentIssuesStore {
 	}
 
 	protected resetScopeDetail() {
+		this.cancelInitiativeTabPrefetch();
 		this.cancelGlobalSearchRequest();
 		this.globalSearchCapability.set(null);
 		this.globalSearchQuery.set("");
@@ -3193,9 +3257,11 @@ export class AgentIssuesStore {
 		return {
 			tenantId: this.selectedTenant.get(),
 			projectId: this.selectedProjectId.get(),
+			page: this.activePage.get(),
 			section: this.activeSection.get(),
 			entityId: this.selectedId.get(),
 			initiativeId: this.selectedInitiativeId.get(),
+			initiativeTab: this.initTab.get(),
 			target: this.selectedNestedTarget.get()
 		};
 	}
@@ -3207,6 +3273,20 @@ export class AgentIssuesStore {
 		const tenantId = params.get("tenant") ?? legacyParams.get("tenant");
 		const projectId = params.get("project") ?? legacyParams.get("project");
 		const section = params.get("section");
+		const entityId = params.get("entity");
+		const initiativeId = params.get("initiative");
+		const pageParam = params.get("page");
+		const page: PageMode = pageParam === "entity"
+			? "entity"
+			: pageParam === "initiative"
+				? "initiative"
+				: pageParam === "project"
+					? "list"
+					: entityId
+						? "entity"
+						: initiativeId ? "initiative" : "list";
+		const tabParam = params.get("tab");
+		const initiativeTab = INITIATIVE_TABS.includes(tabParam as InitiativeTab) ? tabParam as InitiativeTab : "overview";
 		const targetType = params.get("target");
 		const targetId = params.get("target-id");
 		const targetScopeRef = params.get("target-scope") ?? undefined;
@@ -3220,9 +3300,11 @@ export class AgentIssuesStore {
 		return {
 			tenantId,
 			projectId,
+			page,
 			section: isConsoleSection(section) ? section : "initiatives",
-			entityId: params.get("entity"),
-			initiativeId: params.get("initiative"),
+			entityId,
+			initiativeId,
+			initiativeTab,
 			target
 		};
 	}
@@ -3233,12 +3315,14 @@ export class AgentIssuesStore {
 			return route;
 		}
 
-		const validEntityId = route.entityId && (this.snapshot.get() === null || entityById.has(route.entityId)) ? route.entityId : null;
-		const validInitiativeId = route.initiativeId && this.bundleForInitiativeId(route.initiativeId) ? route.initiativeId : null;
+		const validEntityId = route.page === "entity" && route.entityId && (this.snapshot.get() === null || entityById.has(route.entityId)) ? route.entityId : null;
+		const validInitiativeId = route.page === "initiative" && route.initiativeId && this.bundleForInitiativeId(route.initiativeId) ? route.initiativeId : null;
 		return {
 			...route,
+			page: validEntityId ? "entity" : validInitiativeId ? "initiative" : "list",
 			entityId: validEntityId,
 			initiativeId: validInitiativeId,
+			initiativeTab: validInitiativeId ? route.initiativeTab : "overview",
 			target: this.normalizeNestedTarget(route.target, validEntityId)
 		};
 	}
@@ -3269,13 +3353,14 @@ export class AgentIssuesStore {
 		return context.terms.some((term) => term.term === target.id) ? target : null;
 	}
 
-	protected applyRoute(route: ViewerRoute): ViewerRoute {
+	protected applyRoute(route: ViewerRoute, loadData = true): ViewerRoute {
 		const normalizedRoute = this.normalizeRoute(route);
 		this.selectedTenant.set(normalizedRoute.tenantId);
 		this.selectedProjectId.set(normalizedRoute.projectId);
 		this.activeSection.set(normalizedRoute.section);
 		this.selectedId.set(normalizedRoute.entityId);
 		this.selectedInitiativeId.set(normalizedRoute.initiativeId);
+		this.initTab.set(normalizedRoute.initiativeTab);
 		this.selectedNestedTarget.set(normalizedRoute.target);
 		if (normalizedRoute.target?.type === "context" || normalizedRoute.target?.type === "context-term") {
 			this.contextTab.set(normalizedRoute.target.scopeRef ? "initiatives" : "global");
@@ -3284,12 +3369,19 @@ export class AgentIssuesStore {
 		this.cascadePath.set([]);
 		this.reRootTrail.set([]);
 		this.clearMasterOverrideIfShallow();
-		this.activePage.set(normalizedRoute.entityId ? "entity" : normalizedRoute.initiativeId ? "initiative" : "list");
+		this.activePage.set(normalizedRoute.page);
 		this.activeView.set("overview");
+		if (!loadData) {
+			return normalizedRoute;
+		}
 		if (normalizedRoute.entityId) {
 			void this.loadEntityDetail(normalizedRoute.entityId);
 		} else if (normalizedRoute.initiativeId && this.isSummaryInitiative(normalizedRoute.initiativeId)) {
 			void this.loadInitiativeDetail(normalizedRoute.initiativeId);
+			if (normalizedRoute.initiativeTab !== "overview") {
+				void this.loadInitiativeTab(normalizedRoute.initiativeId, normalizedRoute.initiativeTab);
+			}
+			this.startInitiativeTabPrefetch(normalizedRoute.initiativeId);
 		} else if (normalizedRoute.section === "adrs") {
 			void this.loadProjectAdrs();
 		} else if (normalizedRoute.section === "debt") {
@@ -3312,9 +3404,11 @@ export class AgentIssuesStore {
 		};
 		add("tenant", route.tenantId);
 		add("project", route.projectId);
+		add("page", route.projectId ? route.page === "list" ? "project" : route.page : null);
 		add("section", route.section === "initiatives" ? null : route.section);
 		add("entity", route.entityId);
 		add("initiative", route.initiativeId);
+		add("tab", route.page === "initiative" ? route.initiativeTab : null);
 		add("target", route.target?.type ?? null);
 		add("target-id", route.target?.id ?? null);
 		add("target-scope", route.target?.scopeRef ?? null);

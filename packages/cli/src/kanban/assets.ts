@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const kanbanDistDir = fileURLToPath(new URL("../../kanban/dist/", import.meta.url));
+import { resolvePackagePath } from "../package-path.js";
+
+const kanbanDistDir = resolvePackagePath("kanban", "dist");
 
 export function ensureBuiltKanban(): string {
 	const entrypoint = path.join(kanbanDistDir, "index.html");

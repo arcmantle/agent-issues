@@ -1,5 +1,7 @@
 import { Cli } from "clipanion";
 
+import packageJson from "../../package.json" with { type: "json" };
+
 import { AuthListCommand, AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
 import { BackfillBodiesCommand } from "./commands/backfill.js";
 import { AddIssueCommentCommand, DeleteIssueCommentCommand, EditIssueCommentCommand, IssueCommentCommand, IssueCommentHistoryCommand, ListIssueCommentsCommand } from "./commands/comments.js";
@@ -55,7 +57,8 @@ export type { AgentIssuesContext } from "./shared.js";
 function buildCli(): Cli<AgentIssuesContext> {
 	const cli = new Cli<AgentIssuesContext>({
 		binaryLabel: "agent-issues",
-		binaryName: "agent-issues"
+		binaryName: "agent-issues",
+		binaryVersion: packageJson.version
 	});
 
 	cli.register(HelpCommand);
@@ -120,12 +123,22 @@ function buildCli(): Cli<AgentIssuesContext> {
 }
 
 export async function runCli(argv: string[], context: Partial<AgentIssuesContext> = {}): Promise<number> {
+	if (isVersionRequest(argv)) {
+		(context.stdout ?? process.stdout).write(`${packageJson.version}\n`);
+		return 0;
+	}
+
 	const cli = buildCli();
 	const command = cli.process(normalizeArgv(argv), { cwd: process.cwd(), ...context });
 	return await command.validateAndExecute();
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
+	if (isVersionRequest(argv)) {
+		process.stdout.write(`${packageJson.version}\n`);
+		return 0;
+	}
+
 	const cli = buildCli();
 
 	try {
@@ -161,4 +174,8 @@ function normalizeArgv(argv: string[]): string[] {
 	}
 
 	return argv;
+}
+
+function isVersionRequest(argv: string[]): boolean {
+	return argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v");
 }

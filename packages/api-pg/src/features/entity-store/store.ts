@@ -1424,6 +1424,7 @@ export async function listAllRelations(executor: TenantExecutor): Promise<Relati
 		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
 		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND source.tombstone = false AND target.tombstone = false
+		ORDER BY relations.from_id, relations.to_id, relations.type
 	`);
 	return (result.rows as RelationRow[]).map((row) => ({
 		fromId: row.from_id,
@@ -2162,8 +2163,13 @@ export async function getInitiativeTab(
 				relations: [],
 				rollup: {
 					initiative: toEntitySummary(bundle.initiative),
+					adrCount: bundle.adrs.length,
+					contextTermCount: (await queryProjectContextDetails(executor, bundle.initiative, bundle.initiative.id)).terms.length,
+					debtCount: bundle.entities.filter((entity) => entity.kind === "debt").length,
 					issueCount: bundle.issues.length,
 					completedIssueCount: bundle.issues.filter((issue) => issue.status === "done").length,
+					planCount: bundle.entities.filter((entity) => entity.kind === "plan").length,
+					prdCount: bundle.prds.length,
 					userStoryCount: bundle.userStories.length
 				}
 			};
@@ -2485,6 +2491,14 @@ export async function getProjectSummary(executor: TenantExecutor, input: { proje
 	return withCurrentProject(executor, project.id, async () => {
 		const entities = await getAllDerivedEntities(executor);
 		const relations = await getAllRelations(executor);
+		const contextTermCounts = await executor.execute(sql`SELECT contexts.scope_entity_id AS initiative_id, COUNT(context_terms.id) AS term_count
+			FROM contexts
+			LEFT JOIN context_terms ON context_terms.tenant_id = contexts.tenant_id AND context_terms.context_key = contexts.key AND context_terms.tombstone = FALSE
+			WHERE contexts.tenant_id = ${executor.tenantId} AND contexts.scope_entity_id IS NOT NULL
+			GROUP BY contexts.scope_entity_id`);
+		const contextTermCountByInitiativeId = new Map(
+			(contextTermCounts.rows as Array<{ initiative_id: string; term_count: string }>).map((row) => [row.initiative_id, Number(row.term_count)])
+		);
 		const structuralRelations = relations.filter((relation) => isStructuralRelationType(relation.type));
 		const projectEpicIds = new Set(
 			relations
@@ -2498,12 +2512,18 @@ export async function getProjectSummary(executor: TenantExecutor, input: { proje
 				.filter((entity) => entity.kind === "initiative" && relations.some((relation) => relation.type === "contains" && relation.fromId === epic.id && relation.toId === entity.id))
 				.map((initiative) => {
 					const reachableIds = collectReachableIds(structuralRelations, initiative.id);
+					const reachableEntities = entities.filter((entity) => reachableIds.has(entity.id));
 					const issues = entities.filter((entity) => entity.kind === "issue" && reachableIds.has(entity.id));
 					return {
 						initiative: toEntitySummary(initiative),
+						adrCount: reachableEntities.filter((entity) => entity.kind === "adr").length,
+						contextTermCount: contextTermCountByInitiativeId.get(initiative.id) ?? 0,
+						debtCount: reachableEntities.filter((entity) => entity.kind === "debt").length,
 						issueCount: issues.length,
 						completedIssueCount: issues.filter((issue) => issue.status === "done").length,
-						userStoryCount: entities.filter((entity) => entity.kind === "userStory" && reachableIds.has(entity.id)).length
+						planCount: reachableEntities.filter((entity) => entity.kind === "plan").length,
+						prdCount: reachableEntities.filter((entity) => entity.kind === "prd").length,
+						userStoryCount: reachableEntities.filter((entity) => entity.kind === "userStory").length
 					};
 				})
 		}));

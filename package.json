@@ -9,13 +9,13 @@
 	},
 	"scripts": {
 		"build": "node ./scripts/build.mjs",
-		"typecheck": "pnpm --filter @agent-issues/core build && pnpm --filter @agent-issues/api-local build && pnpm --filter @agent-issues/api-pg build && pnpm --filter @agent-issues/mcp-server build && pnpm -r typecheck",
+		"typecheck": "pnpm --filter @agent-issues/core build && pnpm --filter @agent-issues/api-local build && pnpm --filter @agent-issues/api-pg build && pnpm --filter agent-issues-mcp build && pnpm -r typecheck",
 		"test": "pnpm -r test",
 		"site:dev": "pnpm --filter @agent-issues/site dev"
 	},
 	"devDependencies": {
-		"@types/node": "^25.9.2",
-		"typescript": "^7.0.0",
-		"vitest": "^4.1.8"
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
 	}
 }

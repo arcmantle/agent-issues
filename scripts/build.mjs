@@ -4,10 +4,10 @@ const packages = [
   '@agent-issues/core',
   '@agent-issues/api-local',
   '@agent-issues/api-pg',
-  '@agent-issues/mcp-server',
   '@agent-issues/site',
   '@agent-issues/kanban',
   'agent-issues',
+  'agent-issues-mcp',
   'agent-issues-mcp-provider',
 ];
 

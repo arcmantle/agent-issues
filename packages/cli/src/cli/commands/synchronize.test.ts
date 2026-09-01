@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,7 +12,7 @@ import {
 	type CanonicalChainWireBundle,
 	type RunCredentialCommand
 } from "@agent-issues/core";
-import { openSqliteStore, type SqliteStore } from "@agent-issues/api-local";
+import { createLocalDaemonServer, openSqliteStore, type LocalDaemonServerHandle, type SqliteStore } from "@agent-issues/api-local";
 import { saveSavedLogin, type SavedLoginStoreOptions } from "../../auth-session.js";
 
 import { runCli } from "../../cli.js";
@@ -111,6 +112,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	let cloudDirectory: string;
 	let cloudStore: SqliteStore;
 	let credentialStoreOptions: SavedLoginStoreOptions;
+	let localDaemon: LocalDaemonServerHandle;
 
 	beforeEach(async () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-home-"));
@@ -121,10 +123,15 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		mkdirSync(projectDirectory);
 		cloudDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-cloud-"));
 		cloudStore = (await openSqliteStore(path.join(cloudDirectory, "cloud.db"), { tenant: "tenant-a" })).store;
-		credentialStoreOptions = fakeCredentialStore();
+		credentialStoreOptions = { homeDirectory, ...fakeCredentialStore() };
+		localDaemon = createLocalDaemonServer({ credentialStoreOptions, homeDirectory, idleTimeoutMs: 0, onIdleExit: () => {} });
+		if (!localDaemon.server.listening) {
+			await once(localDaemon.server, "listening");
+		}
 	});
 
 	afterEach(async () => {
+		await localDaemon.close();
 		await cloudStore.close();
 		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { force: true, recursive: true });

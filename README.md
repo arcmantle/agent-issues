@@ -20,13 +20,13 @@ For frontend development, run `pnpm site:dev` from the repo root or `pnpm --filt
 The Vite dev server now auto-starts the live backend used for `site-config.json`, `/api/snapshot`, and `/events`.
 Set `AGENT_ISSUES_DB=/path/to/agent-issues.db` before starting the dev server if you want the browser to point at a non-default database.
 
-## Global install from this repo
+## Global install
 
 ```bash
-pnpm add -g .
+npm install --global agent-issues agent-issues-mcp
 ```
 
-That installs the `agent-issues` command using the package `bin` entry.
+The `agent-issues` package installs the CLI and owns the MCP implementation. The fixed-version `agent-issues-mcp` package installs a stable stdio proxy that starts `agent-issues` from `PATH`, so MCP behavior updates with the CLI.
 
 ## Storage
 

@@ -36,14 +36,6 @@ export type OpenStorageDriverResult = {
 	 * directly rather than through a `StorageDriver` method.
 	 */
 	cloudConnection?: { baseUrl: string; bearerToken: string; tenantId: string };
-	/**
-	 * Set only when the local daemon could not be spawned/reached and this
-	 * call fell back to a direct in-process `SqliteStore` instead (ISS190's
-	 * escape hatch). Callers that print CLI output should surface this so
-	 * the fallback is visible rather than silent - a hard failure would be
-	 * worse than a slower direct-SQLite command.
-	 */
-	daemonFallbackWarning?: string;
 };
 
 const NO_DAEMON_ENV_VAR = "AGENT_ISSUES_NO_DAEMON";
@@ -52,8 +44,8 @@ export function assertNoDaemonAllowed(
 	env: Record<string, string | undefined>,
 	buildMode: "development" | "production" = BUILD_MODE
 ): void {
-	if (env[NO_DAEMON_ENV_VAR] === "1" && buildMode === "production") {
-		throw new Error(`${NO_DAEMON_ENV_VAR} is only available in development builds.`);
+	if (env[NO_DAEMON_ENV_VAR] === "1" && (buildMode === "production" || process.env.VITEST !== "true")) {
+		throw new Error(`${NO_DAEMON_ENV_VAR} is only available to tests in development builds.`);
 	}
 }
 
@@ -64,7 +56,7 @@ export function isSessionExpired(expiresAt: string): boolean {
 
 /**
  * Opens a `StorageDriver` for the globally active saved login: a daemon-routed
- * `LocalDaemonStore` for local (falling back to direct SQLite), or an
+ * `LocalDaemonStore` for local, or an
  * authenticated `HttpStore` for remote. Callers do not choose the destination.
  */
 export async function openStorageDriver(options: OpenStorageDriverOptions = {}): Promise<OpenStorageDriverResult> {
@@ -83,26 +75,15 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 			return { store, backend: "local", dbPath };
 		}
 
-		try {
-			const store = await openLocalDaemonStore({
-				...options.localDaemon,
-				spawn: options.localDaemon?.spawn ?? (() => spawnLocalDaemon({ dbPath: options.localDaemon?.dbPath ?? dbPath })),
-				dbPath: options.localDaemon?.dbPath ?? dbPath,
-				correlationId: options.correlationId,
-				projectIdentity,
-				workspaceRoot: currentWorkingDirectory
-			});
-			return { store, backend: "local", dbPath };
-		} catch (error) {
-			const { store } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
-			const message = error instanceof Error ? error.message : String(error);
-			return {
-				store,
-				backend: "local",
-				dbPath,
-				daemonFallbackWarning: `Could not reach the local daemon (${message}); falling back to direct SQLite access.`
-			};
-		}
+		const store = await openLocalDaemonStore({
+			...options.localDaemon,
+			spawn: options.localDaemon?.spawn ?? (() => spawnLocalDaemon({ dbPath: options.localDaemon?.dbPath ?? dbPath })),
+			dbPath: options.localDaemon?.dbPath ?? dbPath,
+			correlationId: options.correlationId,
+			projectIdentity,
+			workspaceRoot: currentWorkingDirectory
+		});
+		return { store, backend: "local", dbPath };
 	}
 
 	if (isSessionExpired(activeLogin.expiresAt)) {

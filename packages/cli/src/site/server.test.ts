@@ -9,7 +9,7 @@ vi.mock("@agent-issues/api-local", async (importOriginal) => {
 	return { ...actual, readBuildContentHash: readBuildContentHashMock };
 });
 
-const { startLiveSite } = await import("./server.js");
+const { startLiveSite, stopLiveSite } = await import("./server.js");
 
 function fakeStore() {
 	return { close: vi.fn(async () => {}), getSnapshotSignature: vi.fn(async () => "test-signature") } as never;
@@ -35,6 +35,83 @@ async function readSseEvent(reader: ReadableStreamDefaultReader<Uint8Array>): Pr
 }
 
 describe("startLiveSite (ISS190)", () => {
+	it("stops completely while an SSE client is connected", async () => {
+		openStorageDriverMock.mockResolvedValue({ store: fakeStore(), dbPath: "/tmp/agent-issues.db", backend: "local" });
+		const handle = await startLiveSite({ port: 0, tenant: "demo" });
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const address = handle.server.address();
+		const port = typeof address === "object" && address ? address.port : 0;
+		const eventController = new AbortController();
+		await fetch(`http://127.0.0.1:${port}/events`, { signal: eventController.signal });
+		const closePromise = new Promise<void>((resolve) => handle.server.once("close", resolve));
+
+		await stopLiveSite({ port });
+		const result = await Promise.race([
+			closePromise.then(() => "closed" as const),
+			new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 100))
+		]);
+		eventController.abort();
+		if (result === "timed-out") {
+			await closePromise;
+		}
+
+		expect(result).toBe("closed");
+	});
+
+	it("continues local change polling after a transient signature failure", async () => {
+		const signatures = ["backend check", "initial", new Error("daemon restarting"), "recovered"];
+		openStorageDriverMock.mockImplementation(async () => {
+			const signature = signatures.shift() ?? "recovered";
+			return {
+				backend: "local",
+				dbPath: "/tmp/agent-issues.db",
+				store: {
+					close: vi.fn(async () => {}),
+					getSnapshotSignature: vi.fn(async () => {
+						if (signature instanceof Error) throw signature;
+						return signature;
+					})
+				}
+			};
+		});
+		const handle = await startLiveSite({ pollIntervalMs: 5, port: 0, tenant: "demo" });
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const address = handle.server.address();
+		const port = typeof address === "object" && address ? address.port : 0;
+
+		try {
+			await vi.waitFor(() => expect(openStorageDriverMock.mock.calls.length).toBeGreaterThanOrEqual(4));
+			await expect(fetch(`http://127.0.0.1:${port}/`)).resolves.toMatchObject({ ok: true });
+		} finally {
+			const closePromise = new Promise<void>((resolve) => handle.server.once("close", resolve));
+			handle.close();
+			await closePromise;
+		}
+	});
+
+	it("returns 500 for a rejected request and keeps serving the site", async () => {
+		const store = {
+			close: vi.fn(async () => {}),
+			getSnapshotSignature: vi.fn(async () => "test-signature"),
+			listTenants: vi.fn(async () => { throw new Error("database temporarily unavailable"); })
+		} as never;
+		openStorageDriverMock.mockResolvedValue({ store, dbPath: "/tmp/agent-issues.db", backend: "local" });
+		const handle = await startLiveSite({ port: 0, tenant: "demo" });
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const address = handle.server.address();
+		const port = typeof address === "object" && address ? address.port : 0;
+
+		try {
+			const failedResponse = await fetch(`http://127.0.0.1:${port}/site-config.json`);
+			expect(failedResponse.status).toBe(500);
+			await expect(fetch(`http://127.0.0.1:${port}/`)).resolves.toMatchObject({ ok: true });
+		} finally {
+			const closePromise = new Promise<void>((resolve) => handle.server.once("close", resolve));
+			handle.close();
+			await closePromise;
+		}
+	});
+
 	it("rejects tenant-wide writes through the project mutation route", async () => {
 		openStorageDriverMock.mockResolvedValue({ store: fakeStore(), dbPath: "/tmp/agent-issues.db", backend: "local" });
 		const handle = await startLiveSite({ port: 0, tenant: "demo" });
@@ -467,28 +544,4 @@ describe("startLiveSite (ISS190)", () => {
 		}
 	});
 
-	it("surfaces a visible warning on stderr when the daemon store falls back", async () => {
-		openStorageDriverMock.mockResolvedValue({
-			store: fakeStore(),
-			dbPath: "/tmp/agent-issues.db",
-			backend: "local",
-			daemonFallbackWarning: "could not spawn the local daemon: boom"
-		});
-		const originalWrite = process.stderr.write.bind(process.stderr);
-		const chunks: string[] = [];
-		process.stderr.write = ((chunk: string) => {
-			chunks.push(chunk.toString());
-			return true;
-		}) as typeof process.stderr.write;
-
-		let handle;
-		try {
-			handle = await startLiveSite({ port: 0 });
-		} finally {
-			process.stderr.write = originalWrite;
-		}
-
-		expect(chunks.join("")).toContain("could not spawn the local daemon: boom");
-		handle.close();
-	});
 });

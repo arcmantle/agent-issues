@@ -915,6 +915,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const debtPriorities = [...new Set(allDebtRecords.map((debt) => debt.priority).filter((priority): priority is string => Boolean(priority)))].sort();
 		const debtLifecycles = [...new Set(allDebtRecords.map((debt) => debt.status))].sort();
 		const sectionFeedback = this.renderSectionFeedback(section);
+		const initiativesLoading = section === "initiatives" && store.selectedProjectId.get() !== null && store.projectSummary.get() === null && store.syncLabel.get() === "connecting";
 
 		return html`
 		<section class="master" data-pane="master">
@@ -977,10 +978,19 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			</div>
 			${sectionFeedback}
 			<div class="master-list">
-				${choose(section, [
-					["adrs", () => html`${repeat(adrEntries, (entry) => entry.adr.id, (entry) => this.renderAdrCard(entry))}`],
-					["debt", () => html`${repeat(debtEntries, (debt) => debt.id, (debt) => this.renderDebtCard(debt))}`]
-				], () => html`${repeat(epicGroups, (group) => group.epic.id, (group) => this.renderEpicInitiativeGroup(group))}`)}
+				${when(
+					initiativesLoading,
+					() => html`
+					<div aria-live="polite" class="master-loading" role="status">
+						<span aria-hidden="true" class="master-loading-spinner"></span>
+						<span>Loading initiatives</span>
+					</div>
+					`,
+					() => choose(section, [
+						["adrs", () => html`${repeat(adrEntries, (entry) => entry.adr.id, (entry) => this.renderAdrCard(entry))}`],
+						["debt", () => html`${repeat(debtEntries, (debt) => debt.id, (debt) => this.renderDebtCard(debt))}`]
+					], () => html`${repeat(epicGroups, (group) => group.epic.id, (group) => this.renderEpicInitiativeGroup(group))}`)
+				)}
 			</div>
 		</section>
 		`;
@@ -1026,6 +1036,17 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 		if (section === "context") {
 			const sharedContext = store.sharedContext.get();
+			if (!sharedContext) {
+				return html`
+				<section class="detail" data-pane="detail">
+					<div class="detail-inner wide-inner">
+						<div class="ai-crumbs">${store.selectedTenantDisplayName.get()} · Context</div>
+						<h1 class="d-title">${when(store.projectContextCache.get().error, () => html`Context unavailable`, () => html`Loading context`)}</h1>
+						${this.renderSectionFeedback("context")}
+					</div>
+				</section>
+				`;
+			}
 			const contextTab = store.contextTab.get();
 			const searchPlaceholder = {
 				all: "Search all context…",
@@ -1037,7 +1058,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			<section class="detail" data-pane="detail">
 				<div class="detail-inner wide-inner">
 					<div class="ai-crumbs">${store.selectedTenantDisplayName.get()} · Context</div>
-					<h1 class="d-title">${sharedContext?.context.title ?? "Project context"}</h1>
+					<h1 class="d-title">${sharedContext.context.title}</h1>
 					<p class="d-sub">Shared glossary plus initiative-scoped term discovery, with scope preserved so local language stays findable without becoming silently global.</p>
 					${this.renderSectionFeedback("context")}
 					<div class="ctx-controls">
@@ -1524,6 +1545,35 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		.master-list {
 			flex: 1;
 			overflow-y: auto;
+		}
+		.master-loading {
+			display: grid;
+			gap: 10px;
+			min-height: 160px;
+			place-content: center;
+			place-items: center;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 600;
+		}
+		.master-loading-spinner {
+			box-sizing: border-box;
+			width: 18px;
+			height: 18px;
+			border: 2px solid var(--border);
+			border-top-color: var(--accent);
+			border-radius: 50%;
+			animation: master-loading-spin 700ms linear infinite;
+		}
+		@keyframes master-loading-spin {
+			to {
+				transform: rotate(360deg);
+			}
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.master-loading-spinner {
+				animation: none;
+			}
 		}
 		.m-item {
 			display: block;

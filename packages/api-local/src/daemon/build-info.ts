@@ -5,6 +5,8 @@ import path from "node:path";
 
 const BUILD_INFO_FILENAME = "build-info.json";
 
+declare const __AGENT_ISSUES_BUNDLED__: boolean | undefined;
+
 /**
  * The daemon's version identity (ADR45): a content hash of every file under
  * `distDir`, excluding `build-info.json` itself (writing that file must not
@@ -55,7 +57,9 @@ export type ReadBuildContentHashOptions = {
  * outside of an actual built install.
  */
 export function readBuildContentHash(options?: ReadBuildContentHashOptions): string {
-	const distDir = options?.distDir ?? path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+	const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+	const defaultDistDir = typeof __AGENT_ISSUES_BUNDLED__ === "undefined" ? path.dirname(moduleDirectory) : moduleDirectory;
+	const distDir = options?.distDir ?? defaultDistDir;
 	const filePath = path.join(distDir, BUILD_INFO_FILENAME);
 	if (!existsSync(filePath)) return "dev";
 

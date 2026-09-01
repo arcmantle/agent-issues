@@ -7,11 +7,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { shortEntityReference } from "@agent-issues/core";
-import { isEntrypointInvocation, runCli, shouldRunLocalDaemon } from "./cli.js";
+import { isEntrypointInvocation, runCli, shouldRunLocalDaemon, shouldRunMcpServer } from "./cli.js";
 import { main } from "./cli/index.js";
 import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listTenants, materializeEntityRevision, openSqliteStore } from "@agent-issues/api-local";
 import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
+import { MCP_SERVER_FLAG } from "./mcp.js";
 import { startLiveSite } from "./site/index.js";
+import packageJson from "../package.json" with { type: "json" };
 
 let tempDir: string | null = null;
 const liveSiteClosers = new Set<() => void>();
@@ -838,6 +840,22 @@ describe("cli", () => {
 	it("does not treat an ordinary command as the daemon-spawn flag", () => {
 		expect(shouldRunLocalDaemon(["list", "initiative"])).toBe(false);
 		expect(shouldRunLocalDaemon([])).toBe(false);
+	});
+
+	it("recognizes the hidden MCP server flag as the first argument", () => {
+		expect(shouldRunMcpServer([MCP_SERVER_FLAG])).toBe(true);
+		expect(shouldRunMcpServer(["list", "initiative"])).toBe(false);
+	});
+
+	it.each(["--version", "-v"])("prints the installed package version for %s", async (versionFlag) => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+
+		const exitCode = await runCli([versionFlag], { stderr: stderr.stream, stdout: stdout.stream });
+
+		expect(exitCode).toBe(0);
+		expect(stderr.read()).toBe("");
+		expect(stdout.read()).toBe(`${packageJson.version}\n`);
 	});
 
 	it("creates entities through clipanion-parsed options", async () => {

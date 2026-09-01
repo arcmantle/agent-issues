@@ -238,8 +238,13 @@ export type ProjectDiscovery =
 
 export type InitiativeRollup = {
 	initiative: EntitySummary;
+	adrCount?: number;
+	contextTermCount?: number;
+	debtCount?: number;
 	issueCount: number;
 	completedIssueCount: number;
+	planCount?: number;
+	prdCount?: number;
 	userStoryCount: number;
 };
 

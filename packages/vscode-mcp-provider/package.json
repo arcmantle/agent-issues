@@ -55,8 +55,8 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"devDependencies": {
-		"@types/node": "^25.9.2",
-		"@types/vscode": "1.120.0",
-		"typescript": "^7.0.0"
+		"@types/node": "catalog:",
+		"@types/vscode": "catalog:",
+		"typescript": "catalog:"
 	}
 }

@@ -1,10 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { HttpStore, type RunCredentialCommand } from "@agent-issues/core";
-import { SqliteStore } from "@agent-issues/api-local";
+import { LocalDaemonStore, saveDaemonState, saveDaemonToken } from "@agent-issues/api-local";
 import { saveSavedLogin } from "./auth-session.js";
 import { openSynchronizeStores } from "./open-synchronize-stores.js";
 
@@ -37,6 +38,7 @@ describe("openSynchronizeStores (ISS59/ADR13, ADR18)", () => {
 	let projectDirectory: string;
 	let projectRoot: string;
 	let credentialStoreOptions: ReturnType<typeof fakeCredentialStore>;
+	let servers: Server[];
 
 	beforeEach(() => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-open-sync-stores-home-"));
@@ -50,15 +52,19 @@ describe("openSynchronizeStores (ISS59/ADR13, ADR18)", () => {
 		projectDirectory = path.join(projectRoot, "default-project");
 		mkdirSync(projectDirectory);
 		credentialStoreOptions = fakeCredentialStore();
+		servers = [];
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		for (const server of servers) {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
 		process.env.HOME = originalHome;
 		rmSync(homeDirectory, { recursive: true, force: true });
 		rmSync(projectRoot, { recursive: true, force: true });
 	});
 
-	it("opens a local SqliteStore and the active remote saved login as the destination", async () => {
+	it("opens a local daemon store and the active remote saved login as the destination", async () => {
 		await saveSavedLogin(
 			{
 				name: "work",
@@ -71,14 +77,28 @@ describe("openSynchronizeStores (ISS59/ADR13, ADR18)", () => {
 			},
 			{ homeDirectory, ...credentialStoreOptions }
 		);
+		await saveDaemonToken("daemon-token", credentialStoreOptions);
+		const daemon = createServer((_request, response) => {
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: "1", result: [] }));
+		});
+		servers.push(daemon);
+		const port = await new Promise<number>((resolve) => {
+			daemon.listen(0, "127.0.0.1", () => {
+				const address = daemon.address();
+				resolve(typeof address === "object" && address !== null ? address.port : 0);
+			});
+		});
+		saveDaemonState({ pid: process.pid, port }, { homeDirectory });
 
 		const { local, cloud, destination } = await openSynchronizeStores({
 			databaseOptions: { currentWorkingDirectory: projectDirectory },
-			authSessionOptions: { homeDirectory, ...credentialStoreOptions }
+			authSessionOptions: { homeDirectory, ...credentialStoreOptions },
+			localDaemon: { homeDirectory, credentialStoreOptions, spawn: () => {} }
 		});
 
 		try {
-			expect(local).toBeInstanceOf(SqliteStore);
+			expect(local).toBeInstanceOf(LocalDaemonStore);
 			expect(cloud).toBeInstanceOf(HttpStore);
 			expect(cloud.tenantId).toBe("tenant-a");
 			expect(destination).toEqual({ name: "work", serviceUrl: "https://api.example.com", tenantId: "tenant-a" });

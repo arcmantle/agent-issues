@@ -6,6 +6,8 @@ import {
 	type CallDaemonWithVersionHandshakeRetryOptions
 } from "./daemon-lifecycle.js";
 
+const DEFAULT_DAEMON_REQUEST_TIMEOUT_MS = 1000;
+
 export type LocalDaemonStoreOptions = Omit<CallDaemonWithVersionHandshakeRetryOptions, "spawn"> & {
 	spawn?: CallDaemonWithVersionHandshakeRetryOptions["spawn"];
 	buildHash?: string;
@@ -14,30 +16,45 @@ export type LocalDaemonStoreOptions = Omit<CallDaemonWithVersionHandshakeRetryOp
 	workspaceRoot?: string;
 	projectIdentity?: string;
 	correlationId?: string;
+	requestTimeoutMs?: number;
 };
 
 type ResolvedLocalDaemonStoreOptions = LocalDaemonStoreOptions & Pick<CallDaemonWithVersionHandshakeRetryOptions, "spawn">;
 
 export class LocalDaemonStore extends HttpStore {
 	public constructor(lifecycleOptions: ResolvedLocalDaemonStoreOptions, httpOptions: Omit<HttpStoreOptions, "baseUrl">) {
-		super({ ...httpOptions, baseUrl: "http://127.0.0.1:0" });
+		const requestTimeoutMs = lifecycleOptions.requestTimeoutMs ?? DEFAULT_DAEMON_REQUEST_TIMEOUT_MS;
+		super({
+			...httpOptions,
+			baseUrl: "http://127.0.0.1:0",
+			fetchImpl: createTimeoutFetch(httpOptions.fetchImpl ?? fetch, requestTimeoutMs)
+		});
 		this.lifecycleOptions = lifecycleOptions;
+		this.requestTimeoutMs = requestTimeoutMs;
 	}
 
 	protected lifecycleOptions: ResolvedLocalDaemonStoreOptions;
+	protected requestTimeoutMs: number;
 
 	protected override async call<T>(method: string, params?: unknown): Promise<T> {
 		const dbPath = this.lifecycleOptions.dbPath;
 		let attempt = 0;
-		return callDaemonWithVersionHandshakeRetry(this.lifecycleOptions, async (port) => {
-			if (attempt > 0) {
-				const freshToken = await readDaemonToken({ ...this.lifecycleOptions.credentialStoreOptions, dbPath });
-				if (freshToken) this.options.bearerToken = freshToken;
+		try {
+			return await callDaemonWithVersionHandshakeRetry(this.lifecycleOptions, async (port) => {
+				if (attempt > 0) {
+					const freshToken = await readDaemonToken({ ...this.lifecycleOptions.credentialStoreOptions, dbPath });
+					if (freshToken) this.options.bearerToken = freshToken;
+				}
+				attempt++;
+				this.options.baseUrl = `http://127.0.0.1:${port}`;
+				return super.call<T>(method, params);
+			});
+		} catch (error) {
+			if (error instanceof DOMException && error.name === "TimeoutError") {
+				throw new Error(`Local daemon request timed out after ${this.requestTimeoutMs}ms.`, { cause: error });
 			}
-			attempt++;
-			this.options.baseUrl = `http://127.0.0.1:${port}`;
-			return super.call<T>(method, params);
-		});
+			throw error;
+		}
 	}
 }
 
@@ -52,7 +69,7 @@ export async function openLocalDaemonStore(options: LocalDaemonStoreOptions): Pr
 	const token = await readDaemonToken({ ...options.credentialStoreOptions, dbPath: options.dbPath });
 	if (!token) throw new Error("Local daemon is running but no daemon token was found in the OS credential store.");
 
-	return new LocalDaemonStore(lifecycleOptions, {
+	const store = new LocalDaemonStore(lifecycleOptions, {
 		bearerToken: token,
 		tenantId: resolveWellKnownLocalTenantId(),
 		buildHash: options.buildHash,
@@ -61,4 +78,19 @@ export async function openLocalDaemonStore(options: LocalDaemonStoreOptions): Pr
 		projectIdentity: options.projectIdentity,
 		workspaceRoot: options.workspaceRoot
 	});
+	try {
+		await store.getSnapshotSignature();
+		return store;
+	} catch (error) {
+		await store.close();
+		throw error;
+	}
+}
+
+function createTimeoutFetch(fetchImpl: typeof fetch, timeoutMs: number): typeof fetch {
+	return ((input: RequestInfo | URL, init?: RequestInit) => {
+		const timeoutSignal = AbortSignal.timeout(timeoutMs);
+		const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+		return fetchImpl(input, { ...init, signal });
+	}) as typeof fetch;
 }

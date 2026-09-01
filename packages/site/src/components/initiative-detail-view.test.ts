@@ -174,7 +174,35 @@ describe("initiative detail overview tab", () => {
 
 		const view = await mountView(store);
 
-		expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain("Loading initiative details");
+		const activeTab = view.shadowRoot?.querySelector<HTMLElement>('.subtab.active');
+		expect(activeTab?.querySelector(".subtab-spinner")).not.toBeNull();
+		expect(activeTab?.getAttribute("aria-label")).toContain("loading");
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-busy")).toBe("true");
+		expect(view.shadowRoot?.querySelector(".local-state:not(.local-state-error)")).toBeNull();
+	});
+
+	it("shows scoped tab loading progress in the tab control without inserting panel content", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 1, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		store.initiativeTabs.set(new Map([[`${initiative.id}:issues`, { data: null, error: null, loading: true }]]));
+		store.selectedInitiativeId.set(initiative.id);
+		store.initTab.set("issues");
+
+		const view = await mountView(store);
+		const activeTab = view.shadowRoot?.querySelector<HTMLElement>('.subtab.active');
+
+		expect(activeTab?.textContent).toContain("Issues");
+		expect(activeTab?.querySelector(".subtab-spinner")).not.toBeNull();
+		expect(activeTab?.getAttribute("aria-label")).toContain("loading");
+		expect(view.shadowRoot?.querySelector('[role="tabpanel"]')?.getAttribute("aria-busy")).toBe("true");
+		expect(view.shadowRoot?.querySelector(".local-state:not(.local-state-error)")).toBeNull();
 	});
 
 	it("makes deferred record tabs available from a Project Summary rollup", async () => {
@@ -183,7 +211,7 @@ describe("initiative detail overview tab", () => {
 		const store = new AgentIssuesStore();
 		store.projectSummary.set({
 			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
-			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ adrCount: 2, completedIssueCount: 0, contextTermCount: 8, debtCount: 3, initiative: initiativeSummary, issueCount: 4, planCount: 5, prdCount: 6, userStoryCount: 7 }] }],
 			kind: "available",
 			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
 		});
@@ -192,6 +220,8 @@ describe("initiative detail overview tab", () => {
 		const view = await mountView(store);
 
 		expect(tabLabels(view)).toContain("Issues");
+		expect(tabRecordCounts(view)).toEqual({ adrs: "2", context: "8", debt: "3", issues: "4", plans: "5", prds: "6", userStories: "7" });
+		expect(view.shadowRoot?.querySelector(".kpi:last-child .k-num")?.textContent).toBe("2");
 	});
 
 	it("renders records from the active scoped tab cache", async () => {
@@ -280,7 +310,7 @@ describe("initiative detail overview tab", () => {
 		expect(view.shadowRoot?.querySelector(".initiative-body .ai-body-source")).toBeNull();
 	});
 
-	it("renders initiative context summary Markdown in the subtitle", async () => {
+	it("keeps initiative Context in its tab instead of changing the header", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const bundle = makeBundle(initiative);
 		const store = new AgentIssuesStore();
@@ -308,13 +338,12 @@ describe("initiative detail overview tab", () => {
 		store.selectInitiative(initiative.id);
 
 		const view = await mountView(store);
-		await view.updateComplete;
-		const subtitle = view.shadowRoot?.querySelector(".d-sub");
+		expect(view.shadowRoot?.querySelector(".d-sub")).toBeNull();
 
-		expect(subtitle?.tagName).toBe("DIV");
-		expect(subtitle?.querySelector("p")?.textContent?.trim()).toBe("Build the viewer.");
-		expect(subtitle?.querySelector("strong")?.textContent?.trim()).toBe("viewer");
-		expect(subtitle?.querySelector("li")?.textContent?.trim()).toBe("Show records");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="context"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector(".context-tab-summary")?.textContent).toContain("Console Viewer Context");
+		expect(view.shadowRoot?.querySelector(".context-tab-summary")?.textContent).toContain("Build the **viewer**");
 	});
 
 	it("renders the overview body flat, without a boxed collapsible section", async () => {

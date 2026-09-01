@@ -1,6 +1,7 @@
 import { HttpStore, type StorageDriver } from "@agent-issues/core";
-import { openSqliteStore, type DatabaseLocationOptions } from "@agent-issues/api-local";
+import { openLocalDaemonStore, readBuildContentHash, resolveDatabasePath, type DatabaseLocationOptions, type LocalDaemonStoreOptions } from "@agent-issues/api-local";
 import { getActiveSavedLogin, type SavedLoginStoreOptions } from "./auth-session.js";
+import { spawnLocalDaemon } from "./daemon/local-daemon-store.js";
 import { isSessionExpired } from "./open-storage-driver.js";
 import { resolveProjectIdentity } from "./project-identity.js";
 
@@ -9,6 +10,7 @@ export type OpenSynchronizeStoresOptions = {
 	dbPath?: string;
 	databaseOptions?: DatabaseLocationOptions;
 	authSessionOptions?: SavedLoginStoreOptions;
+	localDaemon?: LocalDaemonStoreOptions;
 };
 
 export type OpenSynchronizeStoresResult = {
@@ -37,7 +39,17 @@ export async function openSynchronizeStores(options: OpenSynchronizeStoresOption
 		);
 	}
 
-	const { store: local } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
+	const dbPath = resolveDatabasePath(options.dbPath, options.databaseOptions);
+	const local = await openLocalDaemonStore({
+		...options.localDaemon,
+		buildHash: options.localDaemon?.buildHash ?? readBuildContentHash(),
+		credentialStoreOptions: options.localDaemon?.credentialStoreOptions ?? options.authSessionOptions,
+		homeDirectory: options.localDaemon?.homeDirectory ?? options.authSessionOptions?.homeDirectory,
+		spawn: options.localDaemon?.spawn ?? (() => spawnLocalDaemon({ dbPath: options.localDaemon?.dbPath ?? dbPath })),
+		dbPath: options.localDaemon?.dbPath ?? dbPath,
+		projectIdentity,
+		workspaceRoot: currentWorkingDirectory
+	});
 	const cloud = new HttpStore({
 		baseUrl: activeLogin.serviceUrl,
 		bearerToken: activeLogin.accessToken,
