@@ -17,6 +17,8 @@ export type Entity = {
 	updatedAt: string;
 };
 
+export type EntitySummary = Omit<Entity, "body" | "bodySource">;
+
 export type Relation = {
 	fromId: string;
 	type: string;
@@ -57,10 +59,23 @@ export type InitiativeBundle = {
 	userStories: Entity[];
 	adrs: Entity[];
 	issues: Entity[];
+	relations?: Relation[];
 	fixLinks: FixLink[];
 	subIssueLinks: SubIssueLink[];
 	blockerLinks: BlockerLink[];
 	constrainsLinks: ConstrainsLink[];
+};
+
+export type InitiativeDetail = {
+	initiative: Entity;
+};
+
+export type EntityDetails = {
+	entity: Entity;
+	incoming: Array<{ relationType: string; entity: EntitySummary }>;
+	outgoing: Array<{ relationType: string; entity: EntitySummary }>;
+	planEntries: PlanEntry[];
+	comments?: IssueCommentPage;
 };
 
 export type EpicInitiativeGroup = {
@@ -118,6 +133,21 @@ export type SnapshotContexts = {
 	initiatives: ContextDetails[];
 };
 
+export type ProjectAdrSectionData = {
+	projectAdrs: Entity[];
+	initiativeAdrs: Array<{
+		initiative: EntitySummary;
+		adrs: Entity[];
+	}>;
+};
+
+export type ProjectContextSectionData = {
+	shared: ContextDetails;
+	initiatives: ContextDetails[];
+	terms: ProjectContextTermEntry[];
+	duplicateTerms: string[];
+};
+
 export type IssueComment = {
 	id: string;
 	reference: string;
@@ -135,6 +165,7 @@ export type IssueComment = {
 
 export type IssueCommentPage = {
 	comments: IssueComment[];
+	users: UserDirectoryEntry[];
 	total: number;
 	nextBefore: string | null;
 };
@@ -152,6 +183,12 @@ export type PlanEntry = {
 	tombstone: boolean;
 	createdAt: string;
 	updatedAt: string;
+};
+
+export type PlanEntryPage = {
+	entries: PlanEntry[];
+	total: number;
+	nextBefore: string | null;
 };
 
 export type UserDirectoryEntry = {
@@ -199,6 +236,33 @@ export type ProjectDiscovery =
 			kind: "unavailable";
 	  };
 
+export type InitiativeRollup = {
+	initiative: EntitySummary;
+	issueCount: number;
+	completedIssueCount: number;
+	userStoryCount: number;
+};
+
+export type ProjectSummaryEpicGroup = {
+	epic: EntitySummary;
+	initiatives: InitiativeRollup[];
+};
+
+export type ProjectSummary =
+	| {
+			kind: "available";
+			project: EntitySummary;
+			epics: ProjectSummaryEpicGroup[];
+			counts: {
+				epics: number;
+				initiatives: number;
+				completedInitiatives: number;
+			};
+	  }
+	| {
+			kind: "unavailable";
+	  };
+
 export type ViewMode = "overview" | "graph" | "raw";
 
 export type PageMode = "list" | "initiative" | "entity";
@@ -218,6 +282,14 @@ export function isConsoleSection(value: string | null): value is ConsoleSection 
 export type DebtFilter = "lifecycle" | "category" | "priority";
 
 export type InitiativeTab = "overview" | "issues" | "plans" | "prds" | "adrs" | "context" | "userStories" | "debt" | "graph";
+
+export type InitiativeTabData = {
+	tab: InitiativeTab;
+	records: Entity[];
+	relations: Relation[];
+	rollup?: InitiativeRollup;
+	context?: ContextDetails;
+};
 
 export type GraphStatus = "idle" | "loading" | "ready" | "error";
 

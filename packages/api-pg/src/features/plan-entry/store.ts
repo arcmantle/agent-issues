@@ -12,6 +12,7 @@ import {
 	materializePlanEntryFromPatches,
 	PLAN_ENTRY_REVERSE_PATCH_REGISTRY,
 	PlanEntryConflictError,
+	type PlanEntryPage,
 	shortEntityReference,
 	toPlanEntrySummary,
 	type LinkResult,
@@ -57,6 +58,10 @@ type LedgerRow = {
 	restored_from_revision: number | null;
 	created_at: string;
 };
+
+type PlanEntryCursor = Pick<PlanEntryRecord, "createdAt" | "reference">;
+
+const DEFAULT_PAGE_SIZE = 50;
 
 export class PgPlanEntryStore {
 	public constructor(executor: TenantExecutor) {
@@ -160,6 +165,32 @@ export class PgPlanEntryStore {
 		return Promise.all((result.rows as PlanEntryRow[]).map((row) => toPlanEntryRecordWithLinks(this.executor, row)));
 	}
 
+	public async listPlanEntryPage(input: { planId: string; before?: string; all?: boolean }): Promise<PlanEntryPage> {
+		const plan = await getProjectPlanOrThrow(this.executor, input.planId);
+		const cursor = input.before ? decodeCursor(input.before) : undefined;
+		const beforePredicate = cursor
+			? sql`AND (created_at < ${cursor.createdAt} OR (created_at = ${cursor.createdAt} AND reference < ${cursor.reference}))`
+			: sql``;
+		const availableCount = await this.executor.execute(sql`SELECT COUNT(*) AS count FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid ${beforePredicate}`);
+		const total = await this.executor.execute(sql`SELECT COUNT(*) AS count FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid`);
+		const result = input.all
+			? await this.executor.execute(sql`SELECT * FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid ${beforePredicate} ORDER BY created_at ASC, reference ASC`)
+			: await this.executor.execute(sql`SELECT * FROM (
+				SELECT * FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid ${beforePredicate}
+				ORDER BY created_at DESC, reference DESC LIMIT ${DEFAULT_PAGE_SIZE}
+			) AS page ORDER BY created_at ASC, reference ASC`);
+		const entries = await Promise.all((result.rows as PlanEntryRow[]).map((row) => toPlanEntryRecordWithLinks(this.executor, row)));
+		const oldest = entries[0];
+
+		return {
+			entries,
+			total: Number((total.rows[0] as { count: string }).count),
+			nextBefore: !input.all && oldest && Number((availableCount.rows[0] as { count: string }).count) > entries.length
+				? encodeCursor({ createdAt: oldest.createdAt, reference: oldest.reference })
+				: null
+		};
+	}
+
 	public async listPlanEntryHistory(input: { entryId: string }): Promise<PlanEntryHistoryEntry[]> {
 		const row = await findPlanEntry(this.executor, input.entryId);
 		if (!row) {
@@ -216,6 +247,21 @@ async function getPlanEntryOrThrow(executor: TenantExecutor, entryId: string): P
 		throw new Error(`Plan entry not found: ${entryId}`);
 	}
 	return toPlanEntryRecordWithLinks(executor, row);
+}
+
+function encodeCursor(cursor: PlanEntryCursor): string {
+	return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
+function decodeCursor(value: string): PlanEntryCursor {
+	try {
+		const cursor = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<PlanEntryCursor>;
+		if (typeof cursor.createdAt === "string" && typeof cursor.reference === "string") {
+			return { createdAt: cursor.createdAt, reference: cursor.reference };
+		}
+	} catch {}
+
+	throw new Error("Invalid Plan entry cursor.");
 }
 
 async function validateReferencedEntityIds(executor: TenantExecutor, referencedEntityIds: string[]): Promise<string[]> {

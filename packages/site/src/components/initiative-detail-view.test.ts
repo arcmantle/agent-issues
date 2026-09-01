@@ -120,6 +120,120 @@ afterEach(() => {
 });
 
 describe("initiative detail overview tab", () => {
+	it("renders a Project Summary rollup with its cached detail without a snapshot", async () => {
+		const initiative = makeEntity({
+			body: "Loaded on selection.",
+			id: "INIT1",
+			kind: "initiative",
+			status: "active",
+			title: "Console Viewer"
+		});
+		const initiativeSummary = {
+			createdAt: initiative.createdAt,
+			id: initiative.id,
+			kind: initiative.kind,
+			status: initiative.status,
+			title: initiative.title,
+			updatedAt: initiative.updatedAt
+		};
+		const store = new AgentIssuesStore();
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		store.initiativeDetails.set(new Map([[initiative.id, { detail: { initiative }, error: null, loading: false }]]));
+		store.selectedInitiativeId.set(initiative.id);
+
+		const view = await mountView(store);
+
+		expect(view.shadowRoot?.querySelector(".d-title")?.textContent).toContain("Console Viewer");
+		expect(view.shadowRoot?.querySelector(".initiative-body")?.textContent).toContain("Loaded on selection.");
+	});
+
+	it("shows local loading feedback while initiative detail loads", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = {
+			createdAt: initiative.createdAt,
+			id: initiative.id,
+			kind: initiative.kind,
+			status: initiative.status,
+			title: initiative.title,
+			updatedAt: initiative.updatedAt
+		};
+		const store = new AgentIssuesStore();
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		store.initiativeDetails.set(new Map([[initiative.id, { detail: null, error: null, loading: true }]]));
+		store.selectedInitiativeId.set(initiative.id);
+
+		const view = await mountView(store);
+
+		expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain("Loading initiative details");
+	});
+
+	it("makes deferred record tabs available from a Project Summary rollup", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		store.selectedInitiativeId.set(initiative.id);
+
+		const view = await mountView(store);
+
+		expect(tabLabels(view)).toContain("Issues");
+	});
+
+	it("renders records from the active scoped tab cache", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Load details" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 1, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		store.initiativeTabs.set(new Map([[`${initiative.id}:issues`, { data: { records: [issue], relations: [], tab: "issues" }, error: null, loading: false }]]));
+		store.selectedInitiativeId.set(initiative.id);
+		store.initTab.set("issues");
+
+		const view = await mountView(store);
+
+		expect(view.shadowRoot?.querySelector<HTMLElement>('.record-tab-list agent-issues-record-list-item[data-id="ISS1"]')).not.toBeNull();
+	});
+
+	it("shows an inline retry action when the active scoped tab fails", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		store.initiativeTabs.set(new Map([[`${initiative.id}:issues`, { data: null, error: "Request failed", loading: false }]]));
+		store.selectedInitiativeId.set(initiative.id);
+		store.initTab.set("issues");
+
+		const view = await mountView(store);
+
+		expect(view.shadowRoot?.querySelector('[role="alert"]')?.textContent).toContain("Could not load issues.");
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[role="alert"] button')?.textContent).toContain("Retry");
+	});
+
 	it("renders an explicitly supplied initiative id without relying on the global selection", async () => {
 		const initiative = makeEntity({
 			body: "Overview of the work.",

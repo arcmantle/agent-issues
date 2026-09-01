@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "./agent-issues-app.js";
-import type { ContextDetails, Entity, InitiativeBundle, ProjectDiscovery, ProjectRollup, SiteConfig, Snapshot } from "./models.js";
+import type { ContextDetails, Entity, InitiativeBundle, ProjectDiscovery, ProjectRollup, ProjectSummary, SiteConfig, Snapshot } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 
 function makeEntity(overrides: Partial<Entity> & Pick<Entity, "id">): Entity {
@@ -91,11 +91,46 @@ function makeProjectDiscovery(projects: ProjectRollup[]): ProjectDiscovery {
 	return { kind: "available", projects };
 }
 
+function makeProjectSummary(snapshot: Snapshot): ProjectSummary {
+	const toSummary = ({ body, bodySource, ...entity }: Entity) => entity;
+	const project = snapshot.entities.find((entity) => entity.kind === "project") ?? makeEntity({ id: "PROJ1", kind: "project", title: "Console Viewer" });
+	const bundlesByInitiativeId = new Map(snapshot.initiatives.map((bundle) => [bundle.initiative.id, bundle]));
+	const epics = snapshot.entities
+		.filter((entity) => entity.kind === "epic")
+		.map((epic) => ({
+			epic: toSummary(epic),
+			initiatives: snapshot.relations
+				.filter((relation) => relation.type === "contains" && relation.fromId === epic.id)
+				.map((relation) => bundlesByInitiativeId.get(relation.toId))
+				.filter((bundle): bundle is InitiativeBundle => Boolean(bundle))
+				.map((bundle) => ({
+					initiative: toSummary(bundle.initiative),
+					issueCount: bundle.issues.length,
+					completedIssueCount: bundle.issues.filter((issue) => issue.status === "done").length,
+					userStoryCount: bundle.userStories.length
+				}))
+		}))
+		.filter((group) => group.initiatives.length > 0);
+	const initiatives = epics.flatMap((group) => group.initiatives);
+
+	return {
+		kind: "available",
+		project: toSummary(project),
+		epics,
+		counts: {
+			completedInitiatives: initiatives.filter((rollup) => rollup.initiative.status === "done").length,
+			epics: epics.length,
+			initiatives: initiatives.length
+		}
+	};
+}
+
 function makeStore(config: SiteConfig, snapshot: Snapshot): AgentIssuesStore {
 	const store = new AgentIssuesStore();
 	store.connected = true;
 	store.config.set(config);
 	store.snapshot.set(snapshot);
+	store.projectSummary.set(makeProjectSummary(snapshot));
 	store.selectedTenant.set(config.currentTenant);
 	store.selectedProjectId.set("PROJ1");
 	return store;
@@ -643,6 +678,35 @@ describe("three-pane console shell", () => {
 		expect(root?.querySelector('[data-pane="detail"]')).not.toBeNull();
 	});
 
+	it("renders Initiative Rollups in the master list without a project snapshot", async () => {
+		const store = new AgentIssuesStore();
+		store.config.set(makeConfig());
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			kind: "available",
+			project: { createdAt: "2026-01-01T00:00:00.000Z", id: "PROJ1", kind: "project", status: "active", title: "Console Viewer", updatedAt: "2026-01-01T00:00:00.000Z" },
+			epics: [{
+				epic: { createdAt: "2026-01-01T00:00:00.000Z", id: "EPIC1", kind: "epic", status: "active", title: "Platform work", updatedAt: "2026-01-01T00:00:00.000Z" },
+				initiatives: [{
+					initiative: { createdAt: "2026-01-01T00:00:00.000Z", id: "INIT1", kind: "initiative", status: "active", title: "Progressive loading", updatedAt: "2026-01-01T00:00:00.000Z" },
+					issueCount: 2,
+					completedIssueCount: 1,
+					userStoryCount: 3
+				}]
+			}],
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 }
+		});
+		const app = await mountApp(store);
+
+		const card = app.shadowRoot?.querySelector<HTMLElement>('[data-initiative="INIT1"]');
+		expect(card?.textContent).toContain("Progressive loading");
+		expect(card?.textContent).toContain("1/2 issues");
+		const storyTotal = [...(app.shadowRoot?.querySelectorAll<HTMLElement>(".nav-item.static") ?? [])]
+			.find((item) => item.textContent?.includes("User stories"));
+		expect(storyTotal?.querySelector(".nav-count")?.textContent).toBe("3");
+	});
+
 	it("lists every available project in the rail", async () => {
 		const config = makeConfig({
 			availableTenants: [
@@ -931,6 +995,66 @@ describe("three-pane console shell", () => {
 		const card = app.shadowRoot?.querySelector('[data-pane="master"] [data-id="ADR2"]');
 		expect(card?.getAttribute("data-scope")).toBe("initiative");
 		expect(card?.querySelector(".m-meta")?.textContent).toContain("initiative Console Viewer");
+	});
+
+	it("renders scoped initiative ADR and Context data without a snapshot", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", title: "Payments" });
+		const initiativeAdr = makeEntity({ id: "ADR2", kind: "adr", status: "current", title: "Use payment intents" });
+		const shared = makeSharedContext();
+		shared.context.exists = true;
+		shared.terms = [{ avoid: [], createdAt: "", definition: "Canonical order.", term: "Order", updatedAt: "" }];
+		const initiativeContext = {
+			context: {
+				createdAt: null,
+				exists: true,
+				key: initiative.id,
+				scopeEntityId: initiative.id,
+				scopeKind: "initiative" as const,
+				scopeLabel: initiative.title,
+				summary: "Payments terms.",
+				title: "Payments Context",
+				updatedAt: null
+			},
+			terms: [{ avoid: [], createdAt: "", definition: "Payment-specific order.", term: "Order", updatedAt: "" }]
+		};
+		const store = makeStore(makeConfig(), makeSnapshot({ initiatives: [makeBundle(initiative)] }));
+		store.snapshot.set(null);
+		store.projectAdrsCache.set({
+			data: { initiativeAdrs: [{ adrs: [initiativeAdr], initiative }], projectAdrs: [] },
+			error: null,
+			loading: false
+		});
+		store.projectContextCache.set({
+			data: {
+				duplicateTerms: ["Order"],
+				initiatives: [initiativeContext],
+				shared,
+				terms: [{
+					hasConflictingDefinitions: true,
+					hasDuplicates: true,
+					hasSharedSource: true,
+					sources: [
+						{ ...shared.terms[0], contextKey: "shared", contextTitle: shared.context.title, scopeEntityId: null, scopeKind: "default", scopeLabel: "Shared" },
+						{ ...initiativeContext.terms[0], contextKey: initiative.id, contextTitle: initiativeContext.context.title, scopeEntityId: initiative.id, scopeKind: "initiative", scopeLabel: initiative.title }
+					],
+					term: "Order"
+				}]
+			},
+			error: null,
+			loading: false
+		});
+		store.selectSection("adrs");
+		const app = await mountApp(store);
+
+		const adrCard = app.shadowRoot?.querySelector('[data-pane="master"] [data-id="ADR2"]');
+		expect(adrCard?.getAttribute("data-scope")).toBe("initiative");
+		expect(adrCard?.querySelector(".m-meta")?.textContent).toContain("initiative Payments");
+
+		store.selectSection("context");
+		await app.updateComplete;
+		const contextText = app.shadowRoot?.textContent ?? "";
+		expect(contextText).toContain("Payments");
+		expect(contextText).toContain("conflicting definitions across 2 scopes");
 	});
 
 	it("renders KPI cards and overview/graph subtabs in the initiative detail", async () => {

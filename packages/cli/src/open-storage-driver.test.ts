@@ -172,6 +172,38 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			}
 		});
 
+		it("uses an explicit selected project identity for daemon requests", async () => {
+			await saveDaemonToken("real-token", credentialStoreOptions);
+			let seenProjectIdentity: string | string[] | undefined;
+			const server = createServer((request, response) => {
+				seenProjectIdentity = request.headers["x-agent-issues-project-identity"];
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(JSON.stringify({ jsonrpc: "2.0", id: "1", result: [] }));
+			});
+			servers.push(server);
+			const port = await new Promise<number>((resolve) => {
+				server.listen(0, "127.0.0.1", () => {
+					const address = server.address();
+					resolve(typeof address === "object" && address !== null ? address.port : 0);
+				});
+			});
+			saveDaemonState({ pid: process.pid, port }, { homeDirectory });
+
+			const result = await openStorageDriver({
+				databaseOptions: { currentWorkingDirectory: projectDirectory, projectIdentity: "PROJ2" },
+				authSessionOptions: { homeDirectory, ...credentialStoreOptions },
+				env: {},
+				localDaemon: { homeDirectory, credentialStoreOptions, spawn: vi.fn() }
+			});
+
+			try {
+				await result.store.listEntities("initiative");
+				expect(seenProjectIdentity).toBe("PROJ2");
+			} finally {
+				await result.store.close();
+			}
+		});
+
 		it("falls back to a direct SqliteStore with a visible warning when the daemon cannot be spawned", async () => {
 			const spawn = vi.fn(() => {
 				throw new Error("spawn agent-issues ENOENT");
@@ -227,6 +259,53 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 			});
 		} finally {
 			await result.store.close();
+		}
+	});
+
+	it("sends an explicit selected project identity to the remote API", async () => {
+		const credentialStoreOptions = fakeCredentialStore();
+		let seenProjectIdentity: string | string[] | undefined;
+		const server = createServer(async (request, response) => {
+			seenProjectIdentity = request.headers["x-agent-issues-project-identity"];
+			const chunks: Buffer[] = [];
+			for await (const chunk of request) {
+				chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			}
+			const rpcRequest = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id: string };
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify({ jsonrpc: "2.0", id: rpcRequest.id, result: [] }));
+		});
+		const port = await new Promise<number>((resolve) => {
+			server.listen(0, "127.0.0.1", () => {
+				const address = server.address();
+				resolve(typeof address === "object" && address !== null ? address.port : 0);
+			});
+		});
+		await saveSavedLogin(
+			{
+				name: "selected-project",
+				kind: "remote",
+				serviceUrl: `http://127.0.0.1:${port}`,
+				tenantId: "tenant-a",
+				userId: "user-1",
+				accessToken: "token-a",
+				expiresAt: "2099-01-01T00:00:00.000Z"
+			},
+			{ homeDirectory, ...credentialStoreOptions }
+		);
+
+		const result = await openStorageDriver({
+			databaseOptions: { currentWorkingDirectory: projectDirectory, projectIdentity: "PROJ2" },
+			authSessionOptions: { homeDirectory, ...credentialStoreOptions },
+			env: {}
+		});
+
+		try {
+			await result.store.listEntities("initiative");
+			expect(seenProjectIdentity).toBe("PROJ2");
+		} finally {
+			await result.store.close();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}
 	});
 

@@ -1,5 +1,5 @@
 import type { LinkResult, UnlinkResult } from "../entity-store/store-types.js";
-import type { PlanEntryHistoryEntry, PlanEntryRecord, PlanEntryRole, PlanEntryScopeDirection, PlanEntrySummary } from "../plan-entry/plan-entry-types.js";
+import type { PlanEntryHistoryEntry, PlanEntryPage, PlanEntryRecord, PlanEntryRole, PlanEntryScopeDirection, PlanEntrySummary } from "../plan-entry/plan-entry-types.js";
 
 export interface PlanEntryStore {
 	createPlanEntry(input: {
@@ -16,5 +16,6 @@ export interface PlanEntryStore {
 	linkPlanEntryIssue(input: { entryId: string; issueId: string }): Promise<LinkResult>;
 	unlinkPlanEntryIssue(input: { entryId: string; issueId: string }): Promise<UnlinkResult>;
 	listPlanEntries(input: { planId: string }): Promise<PlanEntryRecord[]>;
+	listPlanEntryPage(input: { planId: string; before?: string; all?: boolean }): Promise<PlanEntryPage>;
 	listPlanEntryHistory(input: { entryId: string }): Promise<PlanEntryHistoryEntry[]>;
 }

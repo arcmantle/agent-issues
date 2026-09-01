@@ -82,6 +82,26 @@ export type InitiativeBundle = {
 	constrainsLinks: Array<{ adr: EntityRecord; issue: EntityRecord }>;
 };
 
+export type InitiativeDetail = {
+	initiative: EntityRecord;
+};
+
+export const INITIATIVE_TABS = ["overview", "issues", "plans", "prds", "adrs", "context", "userStories", "debt", "graph"] as const;
+
+export type InitiativeTab = (typeof INITIATIVE_TABS)[number];
+
+export function isInitiativeTab(value: string | null): value is InitiativeTab {
+	return typeof value === "string" && (INITIATIVE_TABS as readonly string[]).includes(value);
+}
+
+export type InitiativeTabData = {
+	tab: InitiativeTab;
+	records: EntityRecord[];
+	relations: RelationRecord[];
+	rollup?: InitiativeRollup;
+	context?: ContextDetails;
+};
+
 export type ProjectDiscovery =
 	| {
 			kind: "available";
@@ -118,6 +138,31 @@ export type ProjectSnapshot =
 	| {
 			kind: "available";
 			snapshot: DatabaseSnapshot;
+	  }
+	| {
+			kind: "unavailable";
+	  };
+
+export type InitiativeRollup = {
+	initiative: EntitySummary;
+	issueCount: number;
+	completedIssueCount: number;
+	userStoryCount: number;
+};
+
+export type ProjectSummary =
+	| {
+			kind: "available";
+			project: EntitySummary;
+			epics: Array<{
+				epic: EntitySummary;
+				initiatives: InitiativeRollup[];
+			}>;
+			counts: {
+				epics: number;
+				initiatives: number;
+				completedInitiatives: number;
+			};
 	  }
 	| {
 			kind: "unavailable";

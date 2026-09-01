@@ -52,11 +52,12 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId });
 		const aliceToken = await authProvider.issueToken({ userId: "entra:alice", tenantId, displayName: "Alice" });
 		const bobToken = await authProvider.issueToken({ userId: "entra:bob", tenantId, displayName: "Bob" });
+		const commentAuthorToken = await authProvider.issueToken({ userId: "entra:comment-author", tenantId, displayName: "Comment Author" });
 		return new HttpStore({
 			baseUrl: handle.url,
 			bearerToken,
 			tenantId,
-			identityBearerToken: (identity) => ({ "entra:alice": aliceToken, "entra:bob": bobToken }[identity.userId])
+			identityBearerToken: (identity) => ({ "entra:alice": aliceToken, "entra:bob": bobToken, "entra:comment-author": commentAuthorToken }[identity.userId])
 		});
 	}
 
@@ -69,12 +70,13 @@ describe("HttpStore over a real JSON-RPC gate", () => {
 		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: contractTenantId });
 		const aliceToken = await authProvider.issueToken({ userId: "entra:alice", tenantId: contractTenantId, displayName: "Alice" });
 		const bobToken = await authProvider.issueToken({ userId: "entra:bob", tenantId: contractTenantId, displayName: "Bob" });
+		const commentAuthorToken = await authProvider.issueToken({ userId: "entra:comment-author", tenantId: contractTenantId, displayName: "Comment Author" });
 		return new HttpStore({
 			baseUrl: handle.url,
 			bearerToken,
 			tenantId: contractTenantId,
 			projectIdentity,
-			identityBearerToken: (identity) => ({ "entra:alice": aliceToken, "entra:bob": bobToken }[identity.userId])
+			identityBearerToken: (identity) => ({ "entra:alice": aliceToken, "entra:bob": bobToken, "entra:comment-author": commentAuthorToken }[identity.userId])
 		});
 	}
 

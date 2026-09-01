@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { readBuildContentHash, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/api-local";
-import type { SearchRequest, SearchSourceType } from "@agent-issues/core";
+import { ENTITY_KINDS, mergeProjectChangeEventDetails, projectChangeEventForWrite, rpcMethods, writeMethods, type InitiativeTab, type ProjectChangeEvent, type SearchRequest, type SearchSourceType, type StorageDriver } from "@agent-issues/core";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
@@ -32,6 +32,37 @@ export type StopLiveSiteResult = {
 };
 
 const LIVE_SITE_STOP_PATH = "/__agent_issues/stop";
+const INITIATIVE_TABS: InitiativeTab[] = ["overview", "issues", "plans", "prds", "adrs", "context", "userStories", "debt", "graph"];
+const PROJECT_MUTATION_METHODS = new Set([
+	"applyRelations",
+	"archiveEntity",
+	"createEntity",
+	"createIssueComment",
+	"createPlanEntry",
+	"defineContextTerm",
+	"deleteEntity",
+	"deleteIssueComment",
+	"deletePlanEntry",
+	"forgetContextTerm",
+	"linkEntities",
+	"linkPlanEntryIssue",
+	"moveEntity",
+	"restoreContextRevision",
+	"restoreContextTermRevision",
+	"restoreEntityRevision",
+	"setEntityBody",
+	"unlinkEntities",
+	"unlinkPlanEntryIssue",
+	"updateEntity",
+	"updateEntityStatus",
+	"updateIssueComment",
+	"updatePlanEntry",
+	"upsertContext"
+]);
+
+function isInitiativeTab(value: string | null): value is InitiativeTab {
+	return typeof value === "string" && INITIATIVE_TABS.includes(value as InitiativeTab);
+}
 
 export async function startLiveSite(input: {
 	dbPath?: string;
@@ -91,7 +122,20 @@ export async function startLiveSite(input: {
 	let stopCloudEventsRelay: (() => void) | undefined;
 
 	const server = createServer((request, response) => {
-		void handleRequest({ request, response, dbPath, clients, currentWorkingDirectory, defaultTenant, server, credentialStoreOptions });
+		void handleRequest({
+			request,
+			response,
+			dbPath,
+			clients,
+			currentWorkingDirectory,
+			defaultTenant,
+			server,
+			credentialStoreOptions,
+			onLocalMutation: (event, signature) => {
+				databaseSignature = signature;
+				broadcast(clients, JSON.stringify(event));
+			}
+		});
 	});
 
 	if (opened.backend === "local") {
@@ -108,7 +152,7 @@ export async function startLiveSite(input: {
 				void readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions).then((nextSignature) => {
 					if (nextSignature !== databaseSignature) {
 						databaseSignature = nextSignature;
-						broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString() }));
+						broadcast(clients, JSON.stringify({ type: "snapshot-changed", at: new Date().toISOString(), category: "unknown" }));
 					}
 
 					scheduleNextPoll();
@@ -215,9 +259,11 @@ async function handleRequest(input: {
 	defaultTenant: string;
 	server: Server;
 	credentialStoreOptions: SavedLoginStoreOptions | undefined;
+	onLocalMutation: (event: ProjectChangeEvent, signature: string) => void;
 }) {
 	const requestUrl = new URL(input.request.url ?? "/", "http://127.0.0.1");
 	const requestedTenant = requestUrl.searchParams.get("tenant")?.trim() || input.defaultTenant;
+	const requestedProjectIdentity = requestUrl.searchParams.get("project")?.trim() || undefined;
 
 	if (requestUrl.pathname === LIVE_SITE_STOP_PATH) {
 		if (input.request.method !== "POST") {
@@ -229,6 +275,36 @@ async function handleRequest(input: {
 		setImmediate(() => {
 			input.server.close();
 		});
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/project-mutation") {
+		if (input.request.method !== "POST") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+
+		let mutation: ProjectMutationRequest;
+		try {
+			mutation = await readProjectMutationRequest(input.request);
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid project mutation request.");
+			return;
+		}
+
+		try {
+			writeJson(input.response, await executeProjectMutation({
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				dbPath: input.dbPath,
+				mutation,
+				onLocalMutation: input.onLocalMutation,
+				projectId: requestedProjectIdentity,
+				tenant: requestedTenant
+			}));
+		} catch (error) {
+			writeText(input.response, 500, error instanceof Error ? error.message : "Project mutation failed.");
+		}
 		return;
 	}
 
@@ -254,7 +330,150 @@ async function handleRequest(input: {
 				input.defaultTenant,
 				input.currentWorkingDirectory,
 				input.credentialStoreOptions,
-				requestUrl.searchParams.get("project")?.trim() || undefined
+				requestedProjectIdentity
+			)
+		);
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/project-summary") {
+		const startedAt = performance.now();
+		const projectSummary = await readProjectSummary(
+			input.dbPath,
+			requestedTenant,
+			input.defaultTenant,
+			input.currentWorkingDirectory,
+			input.credentialStoreOptions,
+			requestedProjectIdentity
+		);
+		writeJson(
+			input.response,
+			projectSummary,
+			{ durationMs: performance.now() - startedAt, metricName: "project-summary" }
+		);
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/entity-detail") {
+		const entityId = requestUrl.searchParams.get("entity")?.trim();
+		if (!entityId) {
+			writeText(input.response, 400, "Invalid entity detail request.");
+			return;
+		}
+
+		writeJson(
+			input.response,
+			await readEntityDetails(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions,
+				entityId,
+				requestedProjectIdentity
+			)
+		);
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/entity-relations") {
+		const entityId = requestUrl.searchParams.get("entity")?.trim();
+		if (!entityId) {
+			writeText(input.response, 400, "Invalid entity relations request.");
+			return;
+		}
+
+		writeJson(input.response, await readEntityRelations(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, entityId, requestedProjectIdentity));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/issue-comments") {
+		const issueId = requestUrl.searchParams.get("issue")?.trim();
+		if (!issueId) {
+			writeText(input.response, 400, "Invalid issue comments request.");
+			return;
+		}
+
+		const before = requestUrl.searchParams.get("before")?.trim();
+		const all = requestUrl.searchParams.get("all") === "true";
+		writeJson(input.response, await readIssueComments(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, requestedProjectIdentity, { issueId, ...(before ? { before } : {}), ...(all ? { all } : {}) }));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/plan-entries") {
+		const planId = requestUrl.searchParams.get("plan")?.trim();
+		if (!planId) {
+			writeText(input.response, 400, "Invalid Plan entries request.");
+			return;
+		}
+
+		const before = requestUrl.searchParams.get("before")?.trim();
+		const all = requestUrl.searchParams.get("all") === "true";
+		writeJson(input.response, await readPlanEntryPage(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, requestedProjectIdentity, { planId, ...(before ? { before } : {}), ...(all ? { all } : {}) }));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/project-adrs") {
+		writeJson(input.response, await readProjectAdrs(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, requestedProjectIdentity));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/project-debt") {
+		writeJson(input.response, await readProjectDebt(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, requestedProjectIdentity));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/project-context") {
+		writeJson(input.response, await readProjectContext(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, requestedProjectIdentity));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/project-graph") {
+		writeJson(input.response, await readProjectGraph(input.dbPath, requestedTenant, input.defaultTenant, input.currentWorkingDirectory, input.credentialStoreOptions, requestedProjectIdentity));
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/initiative-tab") {
+		const initiativeId = requestUrl.searchParams.get("initiative")?.trim();
+		const tab = requestUrl.searchParams.get("tab");
+		if (!initiativeId || !isInitiativeTab(tab)) {
+			writeText(input.response, 400, "Invalid initiative tab request.");
+			return;
+		}
+
+		writeJson(
+			input.response,
+			await readInitiativeTab(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions,
+				initiativeId,
+				tab,
+				requestedProjectIdentity
+			)
+		);
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/initiative-detail") {
+		const initiativeId = requestUrl.searchParams.get("initiative")?.trim();
+		if (!initiativeId) {
+			writeText(input.response, 400, "Invalid initiative detail request.");
+			return;
+		}
+
+		writeJson(
+			input.response,
+			await readInitiativeDetail(
+				input.dbPath,
+				requestedTenant,
+				input.defaultTenant,
+				input.currentWorkingDirectory,
+				input.credentialStoreOptions,
+				initiativeId,
+				requestedProjectIdentity
 			)
 		);
 		return;
@@ -269,7 +488,7 @@ async function handleRequest(input: {
 				input.defaultTenant,
 				input.currentWorkingDirectory,
 				input.credentialStoreOptions,
-				requestUrl.searchParams.get("project")?.trim() || undefined
+				requestedProjectIdentity
 			)
 		);
 		return;
@@ -389,6 +608,132 @@ async function readSnapshot(
 	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getDatabaseSnapshot({ projectId }));
 }
 
+async function readTenantScoped<T>(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined,
+	read: (store: StorageDriver) => Promise<T>
+): Promise<T | { kind: "unavailable" }> {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" };
+		}
+	}
+
+	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant }, read);
+}
+
+async function readEntityRelations(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	entityId: string,
+	projectIdentity: string | undefined
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, async (store) => {
+		const relations = await store.queryEntityRelations({ entityId });
+		return await hasSelectedProjectEntity(store, relations.entity.kind, relations.entity.id)
+			? relations
+			: { kind: "unavailable" as const };
+	});
+}
+
+async function readIssueComments(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined,
+	input: { issueId: string; before?: string; all?: boolean }
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, (store) => store.listIssueComments(input));
+}
+
+async function readPlanEntryPage(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined,
+	input: { planId: string; before?: string; all?: boolean }
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, (store) => store.listPlanEntryPage(input));
+}
+
+async function readProjectAdrs(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, async (store) => {
+		const [projectAdrs, initiatives] = await Promise.all([
+			store.listProjectAdrs(),
+			store.listEntities("initiative")
+		]);
+		const initiativeAdrs = await Promise.all(initiatives.map(async (initiative) => ({
+			adrs: (await store.getInitiativeTab({ initiativeId: initiative.id, tab: "adrs" })).records,
+			initiative
+		})));
+		return { initiativeAdrs, projectAdrs };
+	});
+}
+
+async function readProjectDebt(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, async (store) => {
+		const result = await store.queryEntities({ kind: "debt" });
+		return { records: result.entities, relations: [] };
+	});
+}
+
+async function readProjectContext(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, (store) => store.getContextDirectory());
+}
+
+async function readProjectGraph(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectIdentity: string | undefined
+) {
+	return readTenantScoped(dbPath, tenant, defaultTenant, currentWorkingDirectory, credentialStoreOptions, projectIdentity, async (store) => {
+		const records = [...new Map((await Promise.all(ENTITY_KINDS.map((kind) => store.listEntities(kind)))).flat().map((record) => [record.id, record])).values()];
+		const recordIds = new Set(records.map((record) => record.id));
+		const relations = (await store.listAllRelations()).filter((relation) => recordIds.has(relation.fromId) && recordIds.has(relation.toId));
+		return { records, relations };
+	});
+}
+
 async function readProjectDiscovery(
 	dbPath: string,
 	tenant: string,
@@ -412,6 +757,133 @@ async function readProjectDiscovery(
 		dbPath,
 		{ credentialStoreOptions, currentWorkingDirectory, tenant },
 		(store) => store.getProjectDiscovery(projectId ? { projectId } : undefined)
+	);
+}
+
+async function readProjectSummary(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	projectId: string | undefined
+) {
+	if (!projectId) {
+		return { kind: "unavailable" } as const;
+	}
+
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, tenant },
+		(store) => store.getProjectSummary({ projectId })
+	);
+}
+
+async function readEntityDetails(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	entityId: string,
+	projectIdentity: string | undefined
+) {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
+		async (store) => {
+			const details = await store.getEntityDetails(entityId);
+			return await hasSelectedProjectEntity(store, details.entity.kind, details.entity.id)
+				? details
+				: { kind: "unavailable" as const };
+		}
+	);
+}
+
+async function readInitiativeTab(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	initiativeId: string,
+	tab: InitiativeTab,
+	projectIdentity: string | undefined
+) {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
+		async (store) => await hasSelectedProjectEntity(store, "initiative", initiativeId)
+			? store.getInitiativeTab({ initiativeId, tab })
+			: { kind: "unavailable" as const }
+	);
+}
+
+async function readInitiativeDetail(
+	dbPath: string,
+	tenant: string,
+	defaultTenant: string,
+	currentWorkingDirectory: string | undefined,
+	credentialStoreOptions: SavedLoginStoreOptions | undefined,
+	initiativeId: string,
+	projectIdentity: string | undefined
+) {
+	if (tenant !== defaultTenant) {
+		const availableTenants = await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, tenant: defaultTenant },
+			(store) => store.listTenants()
+		);
+		if (!availableTenants.some((availableTenant) => availableTenant.id === tenant)) {
+			return { kind: "unavailable" } as const;
+		}
+	}
+
+	return withStore(
+		dbPath,
+		{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
+		async (store) => await hasSelectedProjectEntity(store, "initiative", initiativeId)
+			? store.getInitiativeDetail({ initiativeId })
+			: { kind: "unavailable" as const }
+	);
+}
+
+async function hasSelectedProjectEntity(store: StorageDriver, kind: string, entityIdentity: string): Promise<boolean> {
+	return (await store.listEntities(kind)).some((entity) =>
+		entity.id === entityIdentity || entity.reference === entityIdentity || entity.shortReference === entityIdentity
 	);
 }
 
@@ -521,18 +993,94 @@ async function readSnapshotSignature(
 	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getSnapshotSignature());
 }
 
+type ProjectMutationRequest = {
+	correlationId: string;
+	method: string;
+	params?: unknown;
+};
+
+async function readProjectMutationRequest(request: IncomingMessage): Promise<ProjectMutationRequest> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of request) {
+		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	}
+
+	const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Partial<ProjectMutationRequest>;
+	if (
+		typeof value.correlationId !== "string" ||
+		value.correlationId.length === 0 ||
+		typeof value.method !== "string" ||
+		!writeMethods.has(value.method) ||
+		!PROJECT_MUTATION_METHODS.has(value.method) ||
+		!rpcMethods[value.method]
+	) {
+		throw new Error("Invalid project mutation request.");
+	}
+	return { correlationId: value.correlationId, method: value.method, params: value.params };
+}
+
+async function executeProjectMutation(input: {
+	dbPath: string;
+	currentWorkingDirectory: string | undefined;
+	credentialStoreOptions: SavedLoginStoreOptions | undefined;
+	mutation: ProjectMutationRequest;
+	onLocalMutation: (event: ProjectChangeEvent, signature: string) => void;
+	projectId: string | undefined;
+	tenant: string;
+}): Promise<{ event: ProjectChangeEvent; result: unknown }> {
+	const opened = await openStorageDriver({
+		authSessionOptions: input.credentialStoreOptions,
+		correlationId: input.mutation.correlationId,
+		databaseOptions: { currentWorkingDirectory: input.currentWorkingDirectory, projectIdentity: input.projectId, tenant: input.tenant },
+		dbPath: input.dbPath,
+		localDaemon: { buildHash: readBuildContentHash() }
+	});
+	if (opened.daemonFallbackWarning) {
+		process.stderr.write(`Warning: ${opened.daemonFallbackWarning}\n`);
+	}
+	const handler = rpcMethods[input.mutation.method]!;
+
+	try {
+		const before = await projectChangeEventForWrite(opened.store, input.mutation.method, input.projectId, input.mutation.params, undefined, input.mutation.correlationId);
+		const result = await handler(opened.store, input.mutation.params);
+		const after = await projectChangeEventForWrite(opened.store, input.mutation.method, input.projectId, input.mutation.params, result, input.mutation.correlationId);
+		const event: ProjectChangeEvent = {
+			...mergeProjectChangeEventDetails(before, after),
+			at: new Date().toISOString(),
+			type: "snapshot-changed"
+		};
+		if (opened.backend === "local") {
+			input.onLocalMutation(event, await opened.store.getSnapshotSignature());
+		}
+		return { event, result };
+	} finally {
+		await opened.store.close();
+	}
+}
+
 function broadcast(clients: Set<ServerResponse>, payload: string) {
 	for (const client of clients) {
 		client.write(`data: ${payload}\n\n`);
 	}
 }
 
-function writeJson(response: ServerResponse, payload: unknown) {
+function writeJson(
+	response: ServerResponse,
+	payload: unknown,
+	diagnostics?: { durationMs: number; metricName: string }
+) {
+	const body = `${JSON.stringify(payload)}\n`;
+	const payloadBytes = Buffer.byteLength(body);
 	response.writeHead(200, {
 		"Content-Type": "application/json; charset=utf-8",
-		"Cache-Control": "no-store"
+		"Cache-Control": "no-store",
+		...(diagnostics ? {
+			"Server-Timing": `${diagnostics.metricName};dur=${diagnostics.durationMs.toFixed(3)}`,
+			"X-Agent-Issues-Payload-Bytes": String(payloadBytes),
+			"X-Agent-Issues-Response-Duration-Ms": String(diagnostics.durationMs)
+		} : {})
 	});
-	response.end(`${JSON.stringify(payload)}\n`);
+	response.end(body);
 }
 
 function writeText(response: ServerResponse, statusCode: number, body: string) {

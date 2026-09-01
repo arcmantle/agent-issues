@@ -58,10 +58,26 @@ describe("subscribeToCloudEvents", () => {
 		stops.push(stop);
 
 		await new Promise((resolve) => setTimeout(resolve, 50));
-		gate.push({ type: "snapshot-changed", at: "2024-01-01T00:00:00.000Z" });
+		gate.push({
+			affectedEntityIds: ["ISS1"],
+			affectedInitiativeIds: ["INIT1"],
+			at: "2024-01-01T00:00:00.000Z",
+			category: "entity",
+			correlationId: "write-1",
+			projectId: "PROJ1",
+			type: "snapshot-changed"
+		});
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
-		expect(received).toEqual([{ type: "snapshot-changed", at: "2024-01-01T00:00:00.000Z" }]);
+		expect(received).toEqual([{
+			affectedEntityIds: ["ISS1"],
+			affectedInitiativeIds: ["INIT1"],
+			at: "2024-01-01T00:00:00.000Z",
+			category: "entity",
+			correlationId: "write-1",
+			projectId: "PROJ1",
+			type: "snapshot-changed"
+		}]);
 	});
 
 	it("does not relay the gate's own connected event", async () => {

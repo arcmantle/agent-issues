@@ -1,12 +1,11 @@
+import type { ProjectChangeEvent } from "@agent-issues/core";
+
 export type CloudEventsConnection = {
 	baseUrl: string;
 	bearerToken: string;
 };
 
-export type CloudChangeEvent = {
-	type: string;
-	at: string;
-};
+export type CloudChangeEvent = ProjectChangeEvent;
 
 const RECONNECT_DELAY_MS = 1000;
 
@@ -76,9 +75,9 @@ function emitParsedEvent(rawEvent: string, onEvent: (event: CloudChangeEvent) =>
 	}
 
 	try {
-		const parsed = JSON.parse(dataLine.slice("data:".length).trim()) as CloudChangeEvent;
+		const parsed = JSON.parse(dataLine.slice("data:".length).trim()) as Partial<CloudChangeEvent>;
 		if (parsed.type === "snapshot-changed") {
-			onEvent(parsed);
+			onEvent(parsed as CloudChangeEvent);
 		}
 	} catch {
 		// Malformed event payload; ignore rather than crash the relay.

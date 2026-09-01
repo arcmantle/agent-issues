@@ -36,9 +36,13 @@ import type {
 	EntityDetails,
 	EntityRelations,
 	InitiativeBundle,
+	InitiativeDetail,
+	InitiativeTab,
+	InitiativeTabData,
 	LinkResult,
 	MoveResult,
 	ProjectDiscovery,
+	ProjectSummary,
 	ProjectSnapshot,
 	StatusUpdateResult,
 	UnlinkResult
@@ -85,6 +89,8 @@ export type HttpStoreOptions = {
 	 * driven by `projectIdentity`.
 	 */
 	workspaceRoot?: string;
+	/** Correlates a write with the initiating browser cache update. */
+	correlationId?: string;
 	/** Injectable for tests; defaults to the global `fetch`. */
 	fetchImpl?: typeof fetch;
 };
@@ -92,6 +98,7 @@ export type HttpStoreOptions = {
 const BUILD_HASH_HEADER = "x-agent-issues-build-hash";
 const DB_PATH_HEADER = "x-agent-issues-db-path";
 const PROJECT_IDENTITY_HEADER = "x-agent-issues-project-identity";
+const CORRELATION_ID_HEADER = "x-agent-issues-correlation-id";
 const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 
 type JsonRpcSuccessResponse = { jsonrpc: "2.0"; id: string; result: unknown };
@@ -317,6 +324,9 @@ export class HttpStore implements StorageDriver {
 		if (this.options.projectIdentity !== undefined) {
 			headers[PROJECT_IDENTITY_HEADER] = this.options.projectIdentity;
 		}
+		if (this.options.correlationId !== undefined) {
+			headers[CORRELATION_ID_HEADER] = this.options.correlationId;
+		}
 		if (this.options.workspaceRoot !== undefined) {
 			headers[WORKSPACE_ROOT_HEADER] = this.options.workspaceRoot;
 		}
@@ -427,6 +437,10 @@ export class HttpStore implements StorageDriver {
 		return this.call("listPlanEntries", input);
 	}
 
+	public listPlanEntryPage(input: Parameters<StorageDriver["listPlanEntryPage"]>[0]): ReturnType<StorageDriver["listPlanEntryPage"]> {
+		return this.call("listPlanEntryPage", input);
+	}
+
 	public listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]): ReturnType<StorageDriver["listPlanEntryHistory"]> {
 		return this.call("listPlanEntryHistory", input);
 	}
@@ -513,12 +527,24 @@ export class HttpStore implements StorageDriver {
 		return this.call("getDatabaseSnapshot", input);
 	}
 
+	public getProjectSummary(input: { projectId: string }): Promise<ProjectSummary> {
+		return this.call("getProjectSummary", input);
+	}
+
 	public getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
 		return this.call("getProjectDiscovery", input);
 	}
 
 	public getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
 		return this.call("getInitiativeBundle", { initiativeId });
+	}
+
+	public getInitiativeDetail(input: { initiativeId: string }): Promise<InitiativeDetail> {
+		return this.call("getInitiativeDetail", input);
+	}
+
+	public getInitiativeTab(input: { initiativeId: string; tab: InitiativeTab }): Promise<InitiativeTabData> {
+		return this.call("getInitiativeTab", input);
 	}
 
 	public getSnapshotSignature(): Promise<string> {

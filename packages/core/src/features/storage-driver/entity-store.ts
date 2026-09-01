@@ -5,9 +5,13 @@ import type {
 	EntityDetails,
 	EntityRelations,
 	InitiativeBundle,
+	InitiativeDetail,
+	InitiativeTab,
+	InitiativeTabData,
 	LinkResult,
 	MoveResult,
 	ProjectDiscovery,
+	ProjectSummary,
 	ProjectSnapshot,
 	QueryEntitiesInput,
 	QueryEntitiesResult,
@@ -60,8 +64,11 @@ export interface EntityStore {
 	unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult>;
 	getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
 	getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
+	getProjectSummary(input: { projectId: string }): Promise<ProjectSummary>;
 	getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery>;
 	getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle>;
+	getInitiativeDetail(input: { initiativeId: string }): Promise<InitiativeDetail>;
+	getInitiativeTab(input: { initiativeId: string; tab: InitiativeTab }): Promise<InitiativeTabData>;
 	/**
 	 * A cheap, opaque string that changes whenever this tenant's own data
 	 * changes and stays stable otherwise (ISS191) - the site server's

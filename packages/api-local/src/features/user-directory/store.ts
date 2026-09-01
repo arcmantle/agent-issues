@@ -23,9 +23,13 @@ export class LocalUserDirectoryStore implements UserDirectoryStore {
 	}
 
 	public async listUsers(): Promise<UserDirectoryRecord[]> {
-		const rows = this.executor.drizzle.all(sql`SELECT id, authentication_subject, display_name, updated_at FROM users WHERE tenant_id=${this.executor.tenantId} ORDER BY id`) as UserRow[];
-		return rows.map(toUserDirectoryRecord);
+		return listUsers(this.executor);
 	}
+}
+
+export function listUsers(executor: SqliteExecutor): UserDirectoryRecord[] {
+	const rows = executor.drizzle.all(sql`SELECT id, authentication_subject, display_name, updated_at FROM users WHERE tenant_id=${executor.tenantId} ORDER BY id`) as UserRow[];
+	return rows.map(toUserDirectoryRecord);
 }
 
 export function upsertUser(executor: SqliteExecutor, input: { authenticationSubject: string; displayName?: string | null }): UserDirectoryRecord {

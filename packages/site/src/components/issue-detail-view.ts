@@ -93,6 +93,13 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		this.store?.closeEntity();
 	};
 
+	protected onRetryEntityDetail = (event: Event) => {
+		const entityId = (event.currentTarget as HTMLElement).dataset.entityId;
+		if (entityId) {
+			void this.store?.retryEntityDetail(entityId);
+		}
+	};
+
 	protected onSelectEntityClick = (event: Event) => {
 		if (this.cascade) {
 			const target = event.currentTarget as HTMLElement;
@@ -136,6 +143,10 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		this.entityDetailTab = tab;
 		this.recordQuery = "";
 		this.recordStatus = "all";
+		const entityId = this.entityId ?? this.store?.selectedId.get();
+		if (entityId) {
+			this.store?.requestEntityTab(entityId, tab);
+		}
 		this.requestUpdate();
 	};
 
@@ -580,8 +591,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	}
 
 	protected displayUser(userId: string): string {
-		const user = this.store?.snapshot.get()?.users.find((candidate) => candidate.id === userId);
-		return user?.displayName ?? user?.authenticationSubject ?? userId;
+		return this.store?.displayUser(userId, this.entityId ?? this.store.selectedId.get() ?? "") ?? userId;
 	}
 
 	public renderIssueComment(comment: IssueComment): TemplateResult {
@@ -611,7 +621,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	}
 
 	public renderPlanEntry(entry: PlanEntry): TemplateResult {
-		const planEntries = this.store?.snapshot.get()?.planEntries ?? [];
+		const planEntries = this.store?.planEntriesFor(entry.planId) ?? [];
 		const entriesById = new Map(planEntries.map((candidate) => [candidate.id, candidate]));
 		const referencedEntities = entry.referencedEntityIds.map((id) => {
 			const entity = this.store?.entityForId(id);
@@ -718,8 +728,28 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 
 		const entityId = this.entityId ?? store.selectedId.get();
 		const entity = store.entityForId(entityId);
+		const detailState = entityId ? store.entityDetails.get().get(entityId) : null;
 		if (!entity) {
-			return nothing;
+			return html`
+			<div class="detail-inner">
+				${when(
+					detailState?.error,
+					() => html`
+					<div class="ai-empty">
+						<p>Could not load this record.</p>
+						<button
+							class="ai-back"
+							data-entity-id=${entityId ?? nothing}
+							@click=${this.onRetryEntityDetail}
+						>
+							Retry
+						</button>
+					</div>
+					`,
+					() => html`<div class="ai-empty">Loading record...</div>`
+				)}
+			</div>
+			`;
 		}
 		if (store.selectedNestedTarget.get()?.type === "plan-entry") {
 			this.entityDetailTab = "plan";
@@ -734,6 +764,27 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 
 		return html`
 		<div class="detail-inner">
+			${when(
+				detailState?.loading === true,
+				() => html`<p class="ai-load-state">Refreshing record...</p>`,
+				() => nothing
+			)}
+			${when(
+				detailState?.error,
+				() => html`
+				<div class="ai-load-state ai-load-error">
+					<span>Could not refresh this record.</span>
+					<button
+						class="ai-back"
+						data-entity-id=${entity.id}
+						@click=${this.onRetryEntityDetail}
+					>
+						Retry
+					</button>
+				</div>
+				`,
+				() => nothing
+			)}
 			${when(
 				!this.cascade,
 				() => html`
@@ -794,6 +845,17 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		}
 		.ai-back:hover {
 			color: var(--accent);
+		}
+		.ai-load-state {
+			display: flex;
+			gap: 8px;
+			align-items: center;
+			margin: 0 0 12px;
+			color: var(--muted);
+			font-size: 13px;
+		}
+		.ai-load-error {
+			color: var(--danger);
 		}
 		.ai-crumbs {
 			margin-bottom: 12px;

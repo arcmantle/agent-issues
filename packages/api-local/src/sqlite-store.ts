@@ -1,4 +1,4 @@
-import { measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
+import { isDirectEntitySelector, measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSummary, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
 import type { CanonicalChainBundle } from "@agent-issues/core";
 import { LocalSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import * as localSynchronizeStore from "./features/synchronize/canonical-chain-store.js";
@@ -14,7 +14,7 @@ import * as localContextStore from "./features/context/context-store.js";
 import type { DatabaseLocationOptions } from "./db/database.js";
 import { LocalHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
 import { deleteTenant, ensureDatabase, listTenants, renameTenant } from "./db/database.js";
-import { getSqliteEntityOrThrow, type SqliteExecutor, type SqliteInternalConnection } from "./db/sqlite-executor.js";
+import { getSqliteEntityOrThrow, resolveSqliteEntity, type SqliteExecutor, type SqliteInternalConnection } from "./db/sqlite-executor.js";
 import { LocalEntityStore } from "./features/entity-store/store.js";
 import * as localEntityStore from "./features/entity-store/store.js";
 import { LocalIssueCommentStore } from "./features/issue-comment/store.js";
@@ -34,9 +34,10 @@ export type OpenSqliteStoreResult = {
  * can slot in without callers branching on backend.
  */
 export class SqliteStore implements StorageDriver {
-	public constructor(executor: SqliteInternalConnection, actorIdentity?: AuthIdentity) {
+	public constructor(executor: SqliteInternalConnection, actorIdentity?: AuthIdentity, strictProjectScope = false) {
 		this.executor = executor;
 		this.actorIdentity = actorIdentity;
+		this.strictProjectScope = strictProjectScope;
 		this.synchronizeStore = new LocalSynchronizeStore(executor);
 		this.userDirectoryStore = new LocalUserDirectoryStore(executor);
 		this.historyDiagnosticsStore = new LocalHistoryDiagnosticsStore(executor);
@@ -49,6 +50,7 @@ export class SqliteStore implements StorageDriver {
 
 	protected executor: SqliteInternalConnection;
 	protected readonly actorIdentity: AuthIdentity | undefined;
+	protected readonly strictProjectScope: boolean;
 	private readonly synchronizeStore: LocalSynchronizeStore;
 	private readonly userDirectoryStore: LocalUserDirectoryStore;
 	private readonly historyDiagnosticsStore: LocalHistoryDiagnosticsStore;
@@ -63,7 +65,7 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver {
-		return new SqliteStore(this.executor, identity);
+		return new SqliteStore(this.executor, identity, this.strictProjectScope);
 	}
 
 	public async exportCanonicalChains() {
@@ -108,10 +110,18 @@ export class SqliteStore implements StorageDriver {
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
 		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}) {
+		if (input.parentId) {
+			this.assertSelectedProjectEntity(input.parentId);
+		}
+		for (const link of input.links ?? []) {
+			this.assertSelectedProjectEntity(link.targetId);
+		}
 		return toEntitySummary(await this.mutate((actorId) => localEntityStore.createEntity(this.executor, input, actorId)));
 	}
 
@@ -120,14 +130,13 @@ export class SqliteStore implements StorageDriver {
 		if (details.entity.kind !== "issue") {
 			return details;
 		}
-
-		const issue = getSqliteEntityOrThrow(this.executor, details.entity.id);
-		if (issue.projectId !== this.executor.currentProjectId) {
+		const entity = getSqliteEntityOrThrow(this.executor, details.entity.id);
+		if (entity.projectId !== this.executor.currentProjectId) {
 			const currentProject = getSqliteEntityOrThrow(this.executor, this.executor.currentProjectId);
 			throw new Error(`Entity not found in current project "${currentProject.title}" (${currentProject.reference}): ${entityId}`);
 		}
 
-		return { ...details, comments: this.issueCommentStore.listIssueComments({ issueId: issue.id }) };
+		return { ...details, comments: this.issueCommentStore.listIssueComments({ issueId: entity.id }) };
 	}
 
 	public async queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]) {
@@ -178,6 +187,10 @@ export class SqliteStore implements StorageDriver {
 		return this.planEntryStore.listPlanEntries(input);
 	}
 
+	public async listPlanEntryPage(input: Parameters<StorageDriver["listPlanEntryPage"]>[0]) {
+		return this.planEntryStore.listPlanEntryPage(input);
+	}
+
 	public async updatePlanEntry(input: Parameters<StorageDriver["updatePlanEntry"]>[0]) {
 		return this.mutate((actorId) => this.planEntryStore.updatePlanEntry(input, actorId));
 	}
@@ -203,6 +216,10 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async applyRelations(relations: RelationRecord[]) {
+		for (const relation of relations) {
+			this.assertSelectedProjectEntity(relation.fromId);
+			this.assertSelectedProjectEntity(relation.toId);
+		}
 		return this.executor.drizzle.transaction(() => {
 			const result = localEntityStore.applyRelations(this.executor, relations);
 			this.searchStore.synchronizeSearchDocuments();
@@ -219,14 +236,17 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }) {
+		this.assertSelectedProjectEntity(input.entityId);
 		return this.mutate((actorId) => localEntityStore.updateEntityStatus(this.executor, input, actorId));
 	}
 
 	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		this.assertSelectedProjectEntity(input.entityId);
 		return this.mutate((actorId) => localEntityStore.updateEntity(this.executor, input, actorId));
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		this.assertSelectedProjectEntity(input.entityId);
 		return this.mutate((actorId) => localEntityStore.setEntityBody(this.executor, input, actorId));
 	}
 
@@ -235,26 +255,35 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
+		this.assertSelectedProjectEntity(input.entityId, true);
 		return this.mutate((actorId) => localEntityStore.restoreEntityRevision(this.executor, input, actorId));
 	}
 
 	public async archiveEntity(input: { entityId: string }) {
+		this.assertSelectedProjectEntity(input.entityId);
 		return this.mutate((actorId) => localEntityStore.archiveEntity(this.executor, input, actorId));
 	}
 
 	public async deleteEntity(input: { entityId: string }) {
+		this.assertSelectedProjectEntity(input.entityId);
 		return this.mutate((actorId) => localEntityStore.deleteEntity(this.executor, input, actorId));
 	}
 
 	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }) {
+		this.assertSelectedProjectEntity(input.entityId);
+		this.assertSelectedProjectEntity(input.newParentId);
 		return this.mutate((actorId) => localEntityStore.moveEntity(this.executor, input, actorId));
 	}
 
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }) {
+		this.assertSelectedProjectEntity(input.fromId);
+		this.assertSelectedProjectEntity(input.toId);
 		return this.mutate((actorId) => localEntityStore.linkEntities(this.executor, input, actorId));
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }) {
+		this.assertSelectedProjectEntity(input.fromId);
+		this.assertSelectedProjectEntity(input.toId);
 		return this.mutate(() => localEntityStore.unlinkEntities(this.executor, input));
 	}
 
@@ -264,12 +293,24 @@ export class SqliteStore implements StorageDriver {
 		return input ? this.entityStore.getDatabaseSnapshot(input) : this.entityStore.getDatabaseSnapshot();
 	}
 
+	public async getProjectSummary(input: { projectId: string }): Promise<ProjectSummary> {
+		return this.entityStore.getProjectSummary(input);
+	}
+
 	public async getProjectDiscovery(input?: { projectId?: string }) {
 		return this.entityStore.getProjectDiscovery(input);
 	}
 
 	public async getInitiativeBundle(initiativeId: string) {
 		return this.entityStore.getInitiativeBundle(initiativeId);
+	}
+
+	public async getInitiativeDetail(input: Parameters<StorageDriver["getInitiativeDetail"]>[0]) {
+		return this.entityStore.getInitiativeDetail(input);
+	}
+
+	public async getInitiativeTab(input: Parameters<StorageDriver["getInitiativeTab"]>[0]) {
+		return this.entityStore.getInitiativeTab(input);
 	}
 
 	public async getSnapshotSignature(): Promise<string> {
@@ -336,6 +377,17 @@ export class SqliteStore implements StorageDriver {
 		this.executor.close();
 	}
 
+	protected assertSelectedProjectEntity(entityId: string, includeTombstone = false): void {
+		if (!this.strictProjectScope) {
+			return;
+		}
+
+		const entity = resolveSqliteEntity(this.executor, entityId, includeTombstone);
+		if (!entity || entity.projectId !== this.executor.currentProjectId) {
+			throw new Error(`Entity not found: ${entityId}`);
+		}
+	}
+
 	protected mutate<T>(operation: (actorId: string) => T): T {
 		return this.executor.drizzle.transaction(() => {
 			const username = resolveLocalUsername();
@@ -350,5 +402,5 @@ export class SqliteStore implements StorageDriver {
 
 export async function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenSqliteStoreResult> {
 	const { executor, dbPath } = await ensureDatabase(inputPath, options);
-	return { store: new SqliteStore(executor), dbPath };
+	return { store: new SqliteStore(executor, undefined, isDirectEntitySelector(options?.projectIdentity ?? "")), dbPath };
 }

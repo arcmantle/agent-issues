@@ -54,11 +54,15 @@ import {
 	type EntityStore,
 	type HistoryEntryRecord,
 	type InitiativeBundle,
+	type InitiativeDetail,
+	type InitiativeTab,
+	type InitiativeTabData,
 	type LinkResult,
 	type MaterializedEntityRevision,
 	type MoveResult,
 	type PlanEntryRecord,
 	type ProjectDiscovery,
+	type ProjectSummary,
 	type ProjectSnapshot,
 	type QueryEntitiesResult,
 	type RelationRecord,
@@ -995,6 +999,76 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 	};
 }
 
+export function getInitiativeDetail(executor: SqliteExecutor, input: { initiativeId: string }): InitiativeDetail {
+	const initiative = getEntityOrThrow(executor, input.initiativeId);
+	if (initiative.kind !== "initiative") {
+		throw new Error(`${input.initiativeId} is not an initiative.`);
+	}
+
+	return { initiative: applyDerivedStatus(initiative, getDerivedStatusMap(executor)) };
+}
+
+export function getInitiativeTab(
+	executor: SqliteExecutor,
+	input: { initiativeId: string; tab: InitiativeTab }
+): InitiativeTabData {
+	const bundle = getInitiativeBundle(executor, input.initiativeId);
+	let records: EntityRecord[];
+	switch (input.tab) {
+		case "overview":
+			return {
+				tab: input.tab,
+				records: [],
+				relations: [],
+				rollup: {
+					initiative: toEntitySummary(bundle.initiative),
+					issueCount: bundle.issues.length,
+					completedIssueCount: bundle.issues.filter((issue) => issue.status === "done").length,
+					userStoryCount: bundle.userStories.length
+				}
+			};
+		case "context":
+			return {
+				tab: input.tab,
+				records: [],
+				relations: [],
+				context: getContextDetails(executor, { scopeRef: bundle.initiative.id })
+			};
+		case "issues":
+			records = bundle.issues;
+			break;
+		case "plans":
+			records = bundle.entities.filter((entity) => entity.kind === "plan");
+			break;
+		case "prds":
+			records = bundle.prds;
+			break;
+		case "adrs":
+			records = bundle.adrs;
+			break;
+		case "userStories":
+			records = [...bundle.userStories, ...bundle.issues];
+			break;
+		case "debt":
+			records = bundle.entities.filter((entity) => entity.kind === "debt");
+			break;
+		case "graph":
+			records = bundle.entities;
+			break;
+		default:
+			throw new Error(`Initiative tab ${input.tab} is not supported.`);
+	}
+
+	const recordIds = new Set(records.map((record) => record.id));
+	return {
+		tab: input.tab,
+		records,
+		relations: listAllRelations(executor).filter(
+			(relation) => recordIds.has(relation.fromId) && recordIds.has(relation.toId)
+		)
+	};
+}
+
 export function listEntities(executor: SqliteExecutor, kind: string): EntitySummary[] {
 	if (!isEntityKind(kind)) {
 		throw new Error(`Unknown entity kind: ${kind}`);
@@ -1375,6 +1449,57 @@ export function getProjectDiscovery(executor: SqliteExecutor, input?: { projectI
 			};
 		})
 	};
+}
+
+export function getProjectSummary(executor: SqliteExecutor, input: { projectId: string }): ProjectSummary {
+	const discovery = getProjectDiscovery(executor, input);
+	if (discovery.kind === "unavailable") {
+		return discovery;
+	}
+
+	const project = discovery.projects.find((entry) => entry.project.id === input.projectId)!.project;
+	const currentProjectId = executor.currentProjectId;
+	executor.currentProjectId = project.id;
+	try {
+		const entities = getAllDerivedEntities(executor);
+		const relations = getAllRelations(executor);
+		const structuralRelations = relations.filter((relation) => isStructuralRelationType(relation.type));
+		const projectEpicIds = new Set(
+			relations
+				.filter((relation) => relation.type === "contains" && relation.fromId === project.id)
+				.map((relation) => relation.toId)
+		);
+		const epics = entities.filter((entity) => entity.kind === "epic" && projectEpicIds.has(entity.id));
+		const initiativeGroups = epics.map((epic) => ({
+			epic: toEntitySummary(epic),
+			initiatives: entities
+				.filter((entity) => entity.kind === "initiative" && relations.some((relation) => relation.type === "contains" && relation.fromId === epic.id && relation.toId === entity.id))
+				.map((initiative) => {
+					const reachableIds = collectReachableIds(structuralRelations, initiative.id);
+					const issues = entities.filter((entity) => entity.kind === "issue" && reachableIds.has(entity.id));
+					return {
+						initiative: toEntitySummary(initiative),
+						issueCount: issues.length,
+						completedIssueCount: issues.filter((issue) => issue.status === "done").length,
+						userStoryCount: entities.filter((entity) => entity.kind === "userStory" && reachableIds.has(entity.id)).length
+					};
+				})
+		}));
+		const initiatives = initiativeGroups.flatMap((group) => group.initiatives);
+
+		return {
+			kind: "available",
+			project: toEntitySummary(project),
+			epics: initiativeGroups,
+			counts: {
+				epics: epics.length,
+				initiatives: initiatives.length,
+				completedInitiatives: initiatives.filter((initiative) => initiative.initiative.status === "done").length
+			}
+		};
+	} finally {
+		executor.currentProjectId = currentProjectId;
+	}
 }
 
 
@@ -2014,12 +2139,24 @@ export class LocalEntityStore implements EntityStore {
 		return input ? getDatabaseSnapshot(this.executor, input) : getDatabaseSnapshot(this.executor);
 	}
 
+	public async getProjectSummary(input: { projectId: string }): Promise<ProjectSummary> {
+		return getProjectSummary(this.executor, input);
+	}
+
 	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
 		return getProjectDiscovery(this.executor, input);
 	}
 
 	public async getInitiativeBundle(initiativeId: string): Promise<InitiativeBundle> {
 		return getInitiativeBundle(this.executor, initiativeId);
+	}
+
+	public async getInitiativeDetail(input: { initiativeId: string }): Promise<InitiativeDetail> {
+		return getInitiativeDetail(this.executor, input);
+	}
+
+	public async getInitiativeTab(input: { initiativeId: string; tab: InitiativeTab }): Promise<InitiativeTabData> {
+		return getInitiativeTab(this.executor, input);
 	}
 
 	public async getSnapshotSignature(): Promise<string> {

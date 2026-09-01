@@ -13,6 +13,7 @@ export type LocalDaemonStoreOptions = Omit<CallDaemonWithVersionHandshakeRetryOp
 	credentialStoreOptions?: DaemonTokenStoreOptions;
 	workspaceRoot?: string;
 	projectIdentity?: string;
+	correlationId?: string;
 };
 
 type ResolvedLocalDaemonStoreOptions = LocalDaemonStoreOptions & Pick<CallDaemonWithVersionHandshakeRetryOptions, "spawn">;
@@ -55,6 +56,7 @@ export async function openLocalDaemonStore(options: LocalDaemonStoreOptions): Pr
 		bearerToken: token,
 		tenantId: resolveWellKnownLocalTenantId(),
 		buildHash: options.buildHash,
+		correlationId: options.correlationId,
 		dbPath: options.dbPath,
 		projectIdentity: options.projectIdentity,
 		workspaceRoot: options.workspaceRoot

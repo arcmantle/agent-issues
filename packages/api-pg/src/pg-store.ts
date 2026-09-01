@@ -21,12 +21,16 @@ import type {
 	ForgetContextTermResult,
 	HistoryEntryRecord,
 	InitiativeBundle,
+	InitiativeDetail,
+	InitiativeTab,
+	InitiativeTabData,
 	IssueCommentPage,
 	IssueCommentRecord,
 	IssueCommentHistoryEntry,
 	LinkResult,
 	MoveResult,
 	ProjectDiscovery,
+	ProjectSummary,
 	ProjectSnapshot,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult,
@@ -40,7 +44,7 @@ import type {
 	TenantSummary,
 	UnlinkResult
 } from "@agent-issues/core";
-import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, type SearchCapability, type SearchRequest, type SearchResponse } from "@agent-issues/core";
+import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, isDirectEntitySelector, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, type SearchCapability, type SearchRequest, type SearchResponse } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
@@ -89,6 +93,7 @@ export class PgStore implements StorageDriver {
 		actorIdentity?: AuthIdentity
 	) {
 		this.actorIdentity = actorIdentity;
+		this.strictProjectScope = isDirectEntitySelector(projectIdentity ?? "");
 	}
 
 	/**
@@ -97,6 +102,7 @@ export class PgStore implements StorageDriver {
 	 */
 	protected currentProjectId?: string;
 	protected readonly actorIdentity: AuthIdentity | undefined;
+	protected readonly strictProjectScope: boolean;
 
 	private get historyDiagnosticsStore(): PgHistoryDiagnosticsStore {
 		return new PgHistoryDiagnosticsStore(this.pool, this.tenantId);
@@ -209,11 +215,21 @@ export class PgStore implements StorageDriver {
 		parentId?: string;
 		status?: string;
 		body?: string;
+		category?: string;
+		priority?: string;
 		type?: string;
 		author?: string;
 		links?: Array<{ relationType: string; targetId: string }>;
 	}): Promise<EntitySummary> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).createEntity(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			if (input.parentId) {
+				await this.assertSelectedProjectEntity(executor, input.parentId);
+			}
+			for (const link of input.links ?? []) {
+				await this.assertSelectedProjectEntity(executor, link.targetId);
+			}
+			return new PgEntityStore(executor, this.projectIdentity).createEntity(input, actorId);
+		});
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
@@ -232,7 +248,7 @@ export class PgStore implements StorageDriver {
 
 				throw new Error(`Entity not found: ${entityId}`);
 			}
-			return { ...details, comments: { comments: [], total: 0, nextBefore: null } };
+			return { ...details, comments: { comments: [], users: [], total: 0, nextBefore: null } };
 		}
 
 		return { ...details, comments: await this.listIssueComments({ issueId: issue.id }) };
@@ -302,6 +318,10 @@ export class PgStore implements StorageDriver {
 		return this.transaction((executor) => new PgPlanEntryStore(executor).listPlanEntries(input));
 	}
 
+	public async listPlanEntryPage(input: Parameters<StorageDriver["listPlanEntryPage"]>[0]) {
+		return this.transaction((executor) => new PgPlanEntryStore(executor).listPlanEntryPage(input));
+	}
+
 	public async listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]) {
 		return this.transaction((executor) => new PgPlanEntryStore(executor).listPlanEntryHistory(input));
 	}
@@ -311,27 +331,50 @@ export class PgStore implements StorageDriver {
 	}
 
 	public async applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }> {
-		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).applyRelations(relations));
+		return this.transaction(async (executor) => {
+			for (const relation of relations) {
+				await this.assertSelectedProjectEntity(executor, relation.fromId);
+				await this.assertSelectedProjectEntity(executor, relation.toId);
+			}
+			return new PgEntityStore(executor, this.projectIdentity).applyRelations(relations);
+		});
 	}
 
 	public async linkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<LinkResult> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).linkEntities(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.fromId);
+			await this.assertSelectedProjectEntity(executor, input.toId);
+			return new PgEntityStore(executor, this.projectIdentity).linkEntities(input, actorId);
+		});
 	}
 
 	public async unlinkEntities(input: { fromId: string; toId: string; relationType: string }): Promise<UnlinkResult> {
-		return this.mutation((executor) => new PgEntityStore(executor, this.projectIdentity).unlinkEntities(input));
+		return this.mutation(async (executor) => {
+			await this.assertSelectedProjectEntity(executor, input.fromId);
+			await this.assertSelectedProjectEntity(executor, input.toId);
+			return new PgEntityStore(executor, this.projectIdentity).unlinkEntities(input);
+		});
 	}
 
 	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).updateEntityStatus(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId);
+			return new PgEntityStore(executor, this.projectIdentity).updateEntityStatus(input, actorId);
+		});
 	}
 
 	public async updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).updateEntity(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId);
+			return new PgEntityStore(executor, this.projectIdentity).updateEntity(input, actorId);
+		});
 	}
 
 	public async setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).setEntityBody(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId);
+			return new PgEntityStore(executor, this.projectIdentity).setEntityBody(input, actorId);
+		});
 	}
 
 	public async materializeEntityRevision(input: { entityId: string; revision: number }) {
@@ -341,21 +384,34 @@ export class PgStore implements StorageDriver {
 	}
 
 	public async restoreEntityRevision(input: { entityId: string; revision: number; author?: string; expectedRevision: number; expectedContentHash: string }) {
-		const result = await this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).restoreEntityRevision(input, actorId));
+		const result = await this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId, true);
+			return new PgEntityStore(executor, this.projectIdentity).restoreEntityRevision(input, actorId);
+		});
 		await this.historyDiagnosticsStore.recordMaterialization("entity", input.expectedRevision, input.revision);
 		return result;
 	}
 
 	public async archiveEntity(input: { entityId: string }): Promise<StatusUpdateResult> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).archiveEntity(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId);
+			return new PgEntityStore(executor, this.projectIdentity).archiveEntity(input, actorId);
+		});
 	}
 
 	public async moveEntity(input: { entityId: string; newParentId: string; author?: string }): Promise<MoveResult> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).moveEntity(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId);
+			await this.assertSelectedProjectEntity(executor, input.newParentId);
+			return new PgEntityStore(executor, this.projectIdentity).moveEntity(input, actorId);
+		});
 	}
 
 	public async deleteEntity(input: { entityId: string }): Promise<DeleteResult> {
-		return this.mutation((executor, actorId) => new PgEntityStore(executor, this.projectIdentity).deleteEntity(input, actorId));
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.entityId);
+			return new PgEntityStore(executor, this.projectIdentity).deleteEntity(input, actorId);
+		});
 	}
 
 	public async listOrphans(kind?: string): Promise<EntityRecord[]> {
@@ -370,6 +426,14 @@ export class PgStore implements StorageDriver {
 		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getInitiativeBundle(initiativeId));
 	}
 
+	public async getInitiativeDetail(input: { initiativeId: string }): Promise<InitiativeDetail> {
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getInitiativeDetail(input));
+	}
+
+	public async getInitiativeTab(input: { initiativeId: string; tab: InitiativeTab }): Promise<InitiativeTabData> {
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getInitiativeTab(input));
+	}
+
 	public async getDatabaseSnapshot(): Promise<DatabaseSnapshot>;
 	public async getDatabaseSnapshot(input: { projectId: string }): Promise<ProjectSnapshot>;
 	public async getDatabaseSnapshot(input?: { projectId: string }): Promise<DatabaseSnapshot | ProjectSnapshot> {
@@ -378,6 +442,10 @@ export class PgStore implements StorageDriver {
 		}
 
 		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getDatabaseSnapshot());
+	}
+
+	public async getProjectSummary(input: { projectId: string }): Promise<ProjectSummary> {
+		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getProjectSummary(input));
 	}
 
 	public async getProjectDiscovery(input?: { projectId?: string }): Promise<ProjectDiscovery> {
@@ -463,6 +531,16 @@ export class PgStore implements StorageDriver {
 	public async close(): Promise<void> {
 		await this.pool.end();
 	}
+
+	protected async assertSelectedProjectEntity(executor: TenantExecutor, entityId: string, includeTombstone = false): Promise<void> {
+		if (!this.strictProjectScope) {
+			return;
+		}
+
+		if (!await findProjectEntity(executor, entityId, includeTombstone)) {
+			throw new Error(`Entity not found: ${entityId}`);
+		}
+	}
 }
 
 async function validateReferencedIssueIds(executor: TenantExecutor, referencedIssueIds: string[]): Promise<string[]> {
@@ -490,6 +568,18 @@ async function findProjectIssue(executor: TenantExecutor, issueId: string): Prom
 			AND entities.kind = 'issue'
 			AND entities.tombstone = false
 			AND (entities.id::text = ${issueId} OR entities.reference = ${issueId})
+	`);
+	return result.rows[0] as { id: string } | undefined;
+}
+
+async function findProjectEntity(executor: TenantExecutor, entityId: string, includeTombstone: boolean): Promise<{ id: string } | undefined> {
+	const result = await executor.execute(sql`
+		SELECT entities.id::text AS id
+		FROM entities
+		WHERE entities.tenant_id = ${executor.tenantId}
+			AND entities.project_id = ${executor.currentProjectId}
+			${includeTombstone ? sql`` : sql`AND entities.tombstone = false`}
+			AND (entities.id::text = ${entityId} OR entities.reference = ${entityId})
 	`);
 	return result.rows[0] as { id: string } | undefined;
 }

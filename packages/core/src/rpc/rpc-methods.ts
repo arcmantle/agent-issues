@@ -35,6 +35,7 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	linkPlanEntryIssue: async (store, params) => store.linkPlanEntryIssue(params as Parameters<StorageDriver["linkPlanEntryIssue"]>[0]),
 	unlinkPlanEntryIssue: async (store, params) => store.unlinkPlanEntryIssue(params as Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]),
 	listPlanEntries: async (store, params) => store.listPlanEntries(params as Parameters<StorageDriver["listPlanEntries"]>[0]),
+	listPlanEntryPage: async (store, params) => store.listPlanEntryPage(params as Parameters<StorageDriver["listPlanEntryPage"]>[0]),
 	listPlanEntryHistory: async (store, params) => store.listPlanEntryHistory(params as Parameters<StorageDriver["listPlanEntryHistory"]>[0]),
 
 	// Entity lifecycle (ISS50). Methods whose `StorageDriver` signature takes
@@ -61,8 +62,11 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	linkEntities: async (store, params) => store.linkEntities(params as Parameters<StorageDriver["linkEntities"]>[0]),
 	unlinkEntities: async (store, params) => store.unlinkEntities(params as Parameters<StorageDriver["unlinkEntities"]>[0]),
 	getDatabaseSnapshot: async (store, params) => store.getDatabaseSnapshot(params as Parameters<StorageDriver["getDatabaseSnapshot"]>[0]),
+	getProjectSummary: async (store, params) => store.getProjectSummary(params as Parameters<StorageDriver["getProjectSummary"]>[0]),
 	getProjectDiscovery: async (store, params) => store.getProjectDiscovery(params as Parameters<StorageDriver["getProjectDiscovery"]>[0]),
 	getInitiativeBundle: async (store, params) => store.getInitiativeBundle((params as { initiativeId: string }).initiativeId),
+	getInitiativeDetail: async (store, params) => store.getInitiativeDetail(params as Parameters<StorageDriver["getInitiativeDetail"]>[0]),
+	getInitiativeTab: async (store, params) => store.getInitiativeTab(params as Parameters<StorageDriver["getInitiativeTab"]>[0]),
 	getSnapshotSignature: async (store) => store.getSnapshotSignature(),
 
 	listContexts: async (store) => store.listContexts(),

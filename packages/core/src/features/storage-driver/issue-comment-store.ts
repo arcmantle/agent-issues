@@ -21,8 +21,11 @@ export function toIssueCommentSummary(comment: IssueCommentRecord): IssueComment
 	return summary;
 }
 
+import type { UserDirectoryRecord } from "../user-directory/user-directory.js";
+
 export type IssueCommentPage = {
 	comments: IssueCommentRecord[];
+	users: UserDirectoryRecord[];
 	total: number;
 	nextBefore: string | null;
 };

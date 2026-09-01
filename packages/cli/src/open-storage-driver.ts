@@ -12,6 +12,8 @@ export type OpenStorageDriverOptions = {
 	authSessionOptions?: SavedLoginStoreOptions;
 	/** Injectable for tests; defaults to `process.env`. */
 	env?: Record<string, string | undefined>;
+	/** Correlates a write with the initiating browser cache update. */
+	correlationId?: string;
 	/**
 	 * Local-daemon routing overrides (ISS190, ADR44): all optional and
 	 * defaulted for production use (real spawn, real OS credential store).
@@ -70,7 +72,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 	assertNoDaemonAllowed(env);
 
 	const currentWorkingDirectory = options.databaseOptions?.currentWorkingDirectory ?? process.cwd();
-	const { identity: projectIdentity } = resolveProjectIdentity(currentWorkingDirectory);
+	const projectIdentity = options.databaseOptions?.projectIdentity ?? resolveProjectIdentity(currentWorkingDirectory).identity;
 	const activeLogin = await getActiveSavedLogin(options.authSessionOptions);
 
 	if (activeLogin.kind === "local") {
@@ -86,6 +88,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 				...options.localDaemon,
 				spawn: options.localDaemon?.spawn ?? (() => spawnLocalDaemon({ dbPath: options.localDaemon?.dbPath ?? dbPath })),
 				dbPath: options.localDaemon?.dbPath ?? dbPath,
+				correlationId: options.correlationId,
 				projectIdentity,
 				workspaceRoot: currentWorkingDirectory
 			});
@@ -111,6 +114,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 	const store = new HttpStore({
 		baseUrl: activeLogin.serviceUrl,
 		bearerToken: activeLogin.accessToken,
+		correlationId: options.correlationId,
 		tenantId: activeLogin.tenantId,
 		projectIdentity
 	});

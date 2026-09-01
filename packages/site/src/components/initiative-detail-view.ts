@@ -108,6 +108,22 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		this.store?.setInitTab(tab);
 	};
 
+	protected onRetryLoad = (event: Event) => {
+		const target = event.currentTarget as HTMLElement;
+		const initiativeId = target.dataset.initiativeId;
+		const tab = target.dataset.tab as Exclude<InitiativeTab, "overview"> | undefined;
+		if (!initiativeId) {
+			return;
+		}
+
+		if (tab) {
+			void this.store?.retryInitiativeTab(initiativeId, tab);
+			return;
+		}
+
+		void this.store?.retryInitiativeDetail(initiativeId);
+	};
+
 	protected onContextQueryInput = (event: Event) => {
 		this.recordQuery = (event.target as HTMLInputElement).value;
 		this.requestUpdate();
@@ -605,14 +621,19 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const context = store.getContextForInitiative(bundle.initiative.id);
 		const stats = store.initiativeStats(bundle);
 		const requestedTab = store.initTab.get();
+		const detailState = store.initiativeDetails.get().get(bundle.initiative.id);
+		const tabState = store.initiativeTabs.get().get(`${bundle.initiative.id}:${requestedTab}`);
 		const body = (bundle.initiative.body ?? "").trim();
 		const bodySource = bundle.initiative.bodySource ?? "authored";
 		const visibleGraphKinds = this.visibleGraphKinds;
 		const graphFilterActive = visibleGraphKinds.size !== INITIATIVE_GRAPH_KINDS.length;
 		const baseGraph = store.buildInitiativeGraph(bundle);
 		const graph = graphFilterActive ? store.buildInitiativeGraph(bundle, visibleGraphKinds) : baseGraph;
+		const hasProjectSummaryRollup = store.isSummaryInitiative(bundle.initiative.id);
 		const debtSections = store.debtRecordSectionsFor(bundle.initiative.id);
-		const debtRecords = [...new Map(debtSections.flatMap((section) => section.records).map((record) => [record.id, record])).values()];
+		const debtRecords = hasProjectSummaryRollup && requestedTab === "debt"
+			? bundle.entities.filter((entity) => entity.kind === "debt")
+			: [...new Map(debtSections.flatMap((section) => section.records).map((record) => [record.id, record])).values()];
 		const plans = bundle.entities
 			.filter((entity) => entity.kind === "plan")
 			.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime() || left.id.localeCompare(right.id));
@@ -626,7 +647,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				prds: bundle.prds.length,
 				userStories: bundle.userStories.length
 			};
-			const initiativeTabs: InitiativeTabDefinition[] = [
+			const populatedInitiativeTabs: InitiativeTabDefinition[] = [
 				{ label: "Overview", tab: "overview" },
 				...INITIATIVE_TAB_DETAILS
 					.filter(([candidate]) => {
@@ -636,6 +657,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					})
 					.map(([candidate, label]) => ({ label, recordCount: tabCounts[candidate], tab: candidate }))
 			];
+			const initiativeTabs: InitiativeTabDefinition[] = hasProjectSummaryRollup
+				? [{ label: "Overview", tab: "overview" }, ...INITIATIVE_TAB_DETAILS.map(([tab, label]) => ({ label, tab }))]
+				: populatedInitiativeTabs;
 			const tab = initiativeTabs.some(({ tab: candidate }) => candidate === requestedTab) ? requestedTab : "overview";
 
 		return html`
@@ -702,10 +726,51 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				id=${this.getTabPanelId(tab)}
 				role="tabpanel"
 			>
+			${when(
+				requestedTab !== "overview" && tabState?.loading === true,
+				() => html`<div class="local-state" role="status">Loading ${requestedTab}...</div>`,
+				() => nothing
+			)}
+			${when(
+				requestedTab !== "overview" && Boolean(tabState?.error),
+				() => html`
+				<div class="local-state local-state-error" role="alert">
+					<span>Could not load ${requestedTab}.</span>
+					<button
+						data-initiative-id=${bundle.initiative.id}
+						data-tab=${requestedTab}
+						@click=${this.onRetryLoad}
+					>
+						Retry
+					</button>
+				</div>
+				`,
+				() => nothing
+			)}
 			${choose(
 				tab,
 				[
 					["overview", () => html`
+					${when(
+						detailState?.loading === true,
+						() => html`<div class="local-state" role="status">Loading initiative details...</div>`,
+						() => nothing
+					)}
+					${when(
+						Boolean(detailState?.error),
+						() => html`
+						<div class="local-state local-state-error" role="alert">
+							<span>Could not load initiative details.</span>
+							<button
+								data-initiative-id=${bundle.initiative.id}
+								@click=${this.onRetryLoad}
+							>
+								Retry
+							</button>
+						</div>
+						`,
+						() => nothing
+					)}
 					${when(
 						body.length > 0,
 						() => html`
@@ -895,6 +960,30 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			border: 1px solid var(--border);
 			border-radius: 10px;
 			background: var(--surface);
+		}
+		.local-state {
+			margin-top: 18px;
+			padding: 12px 16px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--muted);
+		}
+		.local-state-error {
+			display: flex;
+			gap: 12px;
+			align-items: center;
+			justify-content: space-between;
+			color: var(--danger);
+		}
+		.local-state-error button {
+			padding: 6px 10px;
+			border: 1px solid currentColor;
+			border-radius: 6px;
+			background: transparent;
+			color: inherit;
+			cursor: pointer;
+			font: inherit;
 		}
 		.context-tab-toolbar {
 			display: flex;

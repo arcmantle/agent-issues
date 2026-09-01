@@ -11,7 +11,7 @@ import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
 import "./components/relationship-graph.js";
 import "./components/relationship-graph-filters.js";
-import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, DebtFilter, Entity, EpicInitiativeGroup, InitiativeBundle, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup } from "./models.js";
+import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, DebtFilter, Entity, EpicInitiativeGroup, InitiativeBundle, InitiativeRollup, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup, ProjectSummaryEpicGroup } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
@@ -104,6 +104,19 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	protected onRetryGlobalSearch = () => {
 		void this.store.retryGlobalSearch();
+	};
+
+	protected onRetryProjectSection = (event: Event) => {
+		const section = (event.currentTarget as HTMLElement).dataset.section as ConsoleSection | undefined;
+		if (section === "adrs") {
+			void this.store.retryProjectAdrs();
+		} else if (section === "debt") {
+			void this.store.retryProjectDebt();
+		} else if (section === "context") {
+			void this.store.retryProjectContext();
+		} else if (section === "graph") {
+			void this.store.retryProjectGraph();
+		}
 	};
 
 	protected onWindowKeyDown = (event: KeyboardEvent) => {
@@ -363,7 +376,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const projectName = store.selectedProjectDisplayName.get() ?? "Project";
 		const section = store.activeSection.get();
 		const navItems: Array<{ count: string; icon: string; label: string; section: ConsoleSection }> = [
-			{ count: String(store.projectInitiatives.get().length), icon: "📁", label: "Initiatives", section: "initiatives" },
+			{ count: String(store.projectSummaryInitiatives.get().length), icon: "📁", label: "Initiatives", section: "initiatives" },
 			{ count: String(store.adrRailEntries.get().length), icon: "📐", label: "ADRs", section: "adrs" },
 			{ count: String(store.debtRecords.get().length), icon: "◒", label: "Debt records", section: "debt" },
 			{ count: String(store.projectContextTerms.get().length), icon: "📖", label: "Context", section: "context" },
@@ -545,36 +558,34 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		`;
 	}
 
-	protected renderInitiativeCard(bundle: InitiativeBundle) {
+	protected renderInitiativeCard(rollup: InitiativeRollup) {
 		const store = this.store;
-		const stats = store.initiativeStats(bundle);
-		const summary = store.getContextForInitiative(bundle.initiative.id)?.context.summary ?? "No initiative-specific context is available yet.";
+		const { initiative } = rollup;
+		const progress = rollup.issueCount > 0 ? Math.round((rollup.completedIssueCount / rollup.issueCount) * 100) : 0;
 
 		return html`
 		<button
-			class=${classMap({ active: store.activeInitiativeId.get() === bundle.initiative.id, "m-item": true })}
-			data-initiative=${bundle.initiative.id}
+			class=${classMap({ active: store.activeInitiativeId.get() === initiative.id, "m-item": true })}
+			data-initiative=${initiative.id}
 			@click=${this.onSelectInitiative}
 		>
 			<div class="m-top">
-				<span class="m-title">${bundle.initiative.title}</span>
-				<span class=${`badge ${store.badgeTone(bundle.initiative.status)}`}>${bundle.initiative.status}</span>
+				<span class="m-title">${initiative.title}</span>
+				<span class=${`badge ${store.badgeTone(initiative.status)}`}>${initiative.status}</span>
 			</div>
-			<div class="m-sub">${summary}</div>
 			<div class="m-meta">
-				<span><b>${stats.stories}</b> stories</span>
-				<span><b>${stats.done}/${stats.issues}</b> issues</span>
-				<span><b>${stats.adrs}</b> ADRs</span>
+				<span><b>${rollup.completedIssueCount}/${rollup.issueCount}</b> issues</span>
 			</div>
-			<div class="miniprog"><span style=${`width:${stats.pct}%`}></span></div>
+			<div class="miniprog"><span style=${`width:${progress}%`}></span></div>
 		</button>
 		`;
 	}
 
-	protected renderEpicInitiativeGroup(group: EpicInitiativeGroup) {
+	protected renderEpicInitiativeGroup(group: ProjectSummaryEpicGroup) {
 		const expanded = this.store.isEpicExpanded(group.epic.id);
 		const label = group.epic.id === "EPIC0" ? "Uncategorized work" : group.epic.title;
-		const completionPercentage = group.initiatives.length > 0 ? Math.round((group.completedInitiativeCount / group.initiatives.length) * 100) : 0;
+		const completedInitiativeCount = group.initiatives.filter((rollup) => this.store.isDoneStatus(rollup.initiative.status)).length;
+		const completionPercentage = group.initiatives.length > 0 ? Math.round((completedInitiativeCount / group.initiatives.length) * 100) : 0;
 
 		return html`
 		<section
@@ -589,7 +600,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			>
 				<h2>${label}</h2>
 				<span>${group.initiatives.length} initiatives</span>
-				<span>${group.completedInitiativeCount}/${group.initiatives.length} completed</span>
+				<span>${completedInitiativeCount}/${group.initiatives.length} completed</span>
 			</button>
 			<div
 				aria-label=${`${completionPercentage}% of ${label} initiatives completed`}
@@ -605,7 +616,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				expanded,
 				() => html`
 				<div class="epic-group-items">
-					${repeat(group.initiatives, (bundle) => bundle.initiative.id, (bundle) => this.renderInitiativeCard(bundle))}
+					${repeat(group.initiatives, (rollup) => rollup.initiative.id, (rollup) => this.renderInitiativeCard(rollup))}
 				</div>
 				`,
 				() => nothing
@@ -874,7 +885,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const statusFilter = isAdrs ? store.adrStatusFilter.get() : store.initiativeStatusFilter.get();
 		const statusValues = isAdrs
 			? store.adrRailEntries.get().map((entry) => entry.adr.status)
-			: store.projectInitiatives.get().map((bundle) => bundle.initiative.status);
+			: store.projectSummaryInitiatives.get().map((rollup) => rollup.initiative.status);
 		const statusOptions = ["all", ...new Set(statusValues)].sort((left, right) => {
 			if (left === "all") {
 				return -1;
@@ -885,11 +896,11 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			return left.localeCompare(right);
 		});
 
-		const epicGroups = store.epicInitiativeGroups.get().map((group) => ({
+		const epicGroups = store.projectSummaryEpicGroups.get().map((group) => ({
 			...group,
-			initiatives: group.initiatives.filter((bundle) =>
-				(statusFilter === "all" || bundle.initiative.status === statusFilter) &&
-				`${bundle.initiative.title} ${bundle.initiative.id}`.toLowerCase().includes(query)
+			initiatives: group.initiatives.filter((rollup) =>
+				(statusFilter === "all" || rollup.initiative.status === statusFilter) &&
+				`${rollup.initiative.title} ${rollup.initiative.id}`.toLowerCase().includes(query)
 			)
 		})).filter((group) => group.initiatives.length > 0);
 		const adrEntries = store.adrRailEntries.get().filter((entry) =>
@@ -903,6 +914,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		const debtCategories = [...new Set(allDebtRecords.map((debt) => debt.category).filter((category): category is string => Boolean(category)))].sort();
 		const debtPriorities = [...new Set(allDebtRecords.map((debt) => debt.priority).filter((priority): priority is string => Boolean(priority)))].sort();
 		const debtLifecycles = [...new Set(allDebtRecords.map((debt) => debt.status))].sort();
+		const sectionFeedback = this.renderSectionFeedback(section);
 
 		return html`
 		<section class="master" data-pane="master">
@@ -963,6 +975,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					`
 				)}
 			</div>
+			${sectionFeedback}
 			<div class="master-list">
 				${choose(section, [
 					["adrs", () => html`${repeat(adrEntries, (entry) => entry.adr.id, (entry) => this.renderAdrCard(entry))}`],
@@ -971,6 +984,38 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			</div>
 		</section>
 		`;
+	}
+
+	protected renderSectionFeedback(section: ConsoleSection) {
+		const cache = section === "adrs"
+			? this.store.projectAdrsCache.get()
+			: section === "debt"
+				? this.store.projectDebtCache.get()
+				: section === "context"
+					? this.store.projectContextCache.get()
+					: section === "graph"
+						? this.store.projectGraphCache.get()
+						: null;
+		if (!cache) {
+			return nothing;
+		}
+		if (cache.error) {
+			return html`
+			<div class="project-state unavailable">
+				Could not refresh this section.
+				<button
+					data-section=${section}
+					@click=${this.onRetryProjectSection}
+				>
+					Retry
+				</button>
+			</div>
+			`;
+		}
+		if (cache.loading) {
+			return html`<div class="project-state">Loading section...</div>`;
+		}
+		return nothing;
 	}
 
 	protected renderDetail() {
@@ -994,6 +1039,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					<div class="ai-crumbs">${store.selectedTenantDisplayName.get()} · Context</div>
 					<h1 class="d-title">${sharedContext?.context.title ?? "Project context"}</h1>
 					<p class="d-sub">Shared glossary plus initiative-scoped term discovery, with scope preserved so local language stays findable without becoming silently global.</p>
+					${this.renderSectionFeedback("context")}
 					<div class="ctx-controls">
 						<input
 							class="master-search"
@@ -1041,6 +1087,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 					<div class="ai-crumbs">${store.selectedTenantDisplayName.get()} · Graph</div>
 					<h1 class="d-title">Project relationship graph</h1>
 					<p class="d-sub">Project decisions, epics, initiatives, and their PRDs, ADRs, and issues. Click an initiative or record to open it.</p>
+					${this.renderSectionFeedback("graph")}
 					<div class="ai-graph-wrap">
 						<div class="graph-scroll-content">
 							<div class="ai-graph-legend">

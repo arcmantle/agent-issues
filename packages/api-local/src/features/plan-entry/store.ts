@@ -12,6 +12,7 @@ import {
 	materializePlanEntryFromPatches,
 	PLAN_ENTRY_REVERSE_PATCH_REGISTRY,
 	PlanEntryConflictError,
+	type PlanEntryPage,
 	shortEntityReference,
 	toPlanEntrySummary,
 	type LinkResult,
@@ -54,6 +55,10 @@ type LedgerRow = {
 	restored_from_revision: number | null;
 	created_at: string;
 };
+
+type PlanEntryCursor = Pick<PlanEntryRecord, "createdAt" | "reference">;
+
+const DEFAULT_PAGE_SIZE = 50;
 
 export function createPlanEntry(
 	executor: SqliteExecutor,
@@ -137,6 +142,36 @@ export function listPlanEntries(executor: SqliteExecutor, input: { planId: strin
 	}
 	const rows = executor.drizzle.all(sql`SELECT * FROM plan_entries WHERE tenant_id = ${executor.tenantId} AND plan_id = ${plan.id} ORDER BY created_at, reference`) as PlanEntryRow[];
 	return rows.map((row) => toPlanEntryRecord(executor, row));
+}
+
+export function listPlanEntryPage(executor: SqliteExecutor, input: { planId: string; before?: string; all?: boolean }): PlanEntryPage {
+	const plan = getSqliteEntityOrThrow(executor, input.planId);
+	if (plan.kind !== "plan" || plan.projectId !== executor.currentProjectId) {
+		throw new Error(`Plan not found: ${input.planId}`);
+	}
+
+	const cursor = input.before ? decodeCursor(input.before) : undefined;
+	const beforePredicate = cursor
+		? sql`AND (created_at < ${cursor.createdAt} OR (created_at = ${cursor.createdAt} AND reference < ${cursor.reference}))`
+		: sql``;
+	const availableCount = executor.drizzle.get(sql`SELECT COUNT(*) AS count FROM plan_entries WHERE tenant_id = ${executor.tenantId} AND plan_id = ${plan.id} ${beforePredicate}`) as { count: number };
+	const total = executor.drizzle.get(sql`SELECT COUNT(*) AS count FROM plan_entries WHERE tenant_id = ${executor.tenantId} AND plan_id = ${plan.id}`) as { count: number };
+	const rows = input.all
+		? executor.drizzle.all(sql`SELECT * FROM plan_entries WHERE tenant_id = ${executor.tenantId} AND plan_id = ${plan.id} ${beforePredicate} ORDER BY created_at ASC, reference ASC`) as PlanEntryRow[]
+		: executor.drizzle.all(sql`SELECT * FROM (
+			SELECT * FROM plan_entries WHERE tenant_id = ${executor.tenantId} AND plan_id = ${plan.id} ${beforePredicate}
+			ORDER BY created_at DESC, reference DESC LIMIT ${DEFAULT_PAGE_SIZE}
+		) ORDER BY created_at ASC, reference ASC`) as PlanEntryRow[];
+	const entries = rows.map((row) => toPlanEntryRecord(executor, row));
+	const oldest = entries[0];
+
+	return {
+		entries,
+		total: total.count,
+		nextBefore: !input.all && oldest && availableCount.count > entries.length
+			? encodeCursor({ createdAt: oldest.createdAt, reference: oldest.reference })
+			: null
+	};
 }
 
 export function updatePlanEntry(
@@ -260,6 +295,10 @@ export class LocalPlanEntryStore {
 		return listPlanEntries(this.executor, input);
 	}
 
+	public listPlanEntryPage(input: { planId: string; before?: string; all?: boolean }): PlanEntryPage {
+		return listPlanEntryPage(this.executor, input);
+	}
+
 	public updatePlanEntry(input: { entryId: string; body: string; expectedRevision: number; expectedContentHash: string }, actorId: string): PlanEntryRecord {
 		return updatePlanEntry(this.executor, input, actorId);
 	}
@@ -318,6 +357,21 @@ function getPlanEntry(executor: SqliteExecutor, entryId: string): PlanEntryRecor
 		throw new Error(`Plan entry not found: ${entryId}`);
 	}
 	return toPlanEntryRecord(executor, entry);
+}
+
+function encodeCursor(cursor: PlanEntryCursor): string {
+	return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
+function decodeCursor(value: string): PlanEntryCursor {
+	try {
+		const cursor = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<PlanEntryCursor>;
+		if (typeof cursor.createdAt === "string" && typeof cursor.reference === "string") {
+			return { createdAt: cursor.createdAt, reference: cursor.reference };
+		}
+	} catch {}
+
+	throw new Error("Invalid Plan entry cursor.");
 }
 
 function findPlanEntry(executor: SqliteExecutor, entryId: string): PlanEntryRow | undefined {

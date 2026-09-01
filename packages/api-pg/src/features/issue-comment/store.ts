@@ -22,6 +22,7 @@ import {
 import type { TenantExecutor } from "../../db/connection.js";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
 import { entities, issueCommentReferences, issueComments, revisionEntries } from "../../schema.js";
+import { PgUserDirectoryStore } from "../user-directory/store.js";
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -251,12 +252,14 @@ export class PgIssueCommentStore {
 			createdAt: row.created_at,
 			updatedAt: row.updated_at
 		}));
+		const userIds = new Set(comments.flatMap((comment) => [comment.createdBy, comment.updatedBy]));
 		const oldest = comments[0];
 		const total = Number(totalResult.rows[0]?.count ?? 0);
 		const available = Number(availableResult.rows[0]?.count ?? 0);
 
 		return {
 			comments,
+			users: (await new PgUserDirectoryStore(this.executor).listUsers()).filter((user) => userIds.has(user.id)),
 			total,
 			nextBefore: !input.all && oldest && available > comments.length
 				? encodeCursor(oldest)

@@ -35,6 +35,12 @@ export function toPlanEntrySummary(entry: PlanEntryRecord): PlanEntrySummary {
 	return summary;
 }
 
+export type PlanEntryPage = {
+	entries: PlanEntryRecord[];
+	total: number;
+	nextBefore: string | null;
+};
+
 export const PLAN_CURRENT_GROUPS = [
 	{ key: "questions", title: "Questions" },
 	{ key: "decisions", title: "Decisions" },

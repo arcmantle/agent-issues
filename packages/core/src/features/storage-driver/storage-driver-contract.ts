@@ -213,6 +213,33 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 		});
 	});
 
+	describe(`storage-driver seam: Plan entry pagination (${label})`, () => {
+		it("returns one bounded Plan-entry page and a cursor for older entries", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Paginated Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Paginated Plan" });
+				for (let index = 0; index < 51; index += 1) {
+					await store.createPlanEntry({ planId: plan.id, role: "decision", body: `Decision ${index}` });
+				}
+
+				const firstPage = await store.listPlanEntryPage({ planId: plan.id });
+
+				expect(firstPage).toMatchObject({ total: 51 });
+				expect(firstPage.entries).toHaveLength(50);
+				expect(firstPage.nextBefore).toEqual(expect.any(String));
+				expect((await store.listPlanEntryPage({ planId: plan.id, before: firstPage.nextBefore! }))).toMatchObject({
+					entries: [expect.objectContaining({ body: "Decision 0" })],
+					nextBefore: null,
+					total: 51
+				});
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: Plan entry supersession (${label})`, () => {
 		it("lets decisions explicitly supersede questions and decisions", async () => {
 			const store = await openStore();
@@ -886,6 +913,95 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 		});
 	});
 
+	describe(`storage-driver seam: Project Summary (${label})`, () => {
+		it("uses the same direct project epic membership as Project Discovery", async () => {
+			const store = await openStoreForProject("summary-membership");
+
+			try {
+				await store.createEntity({ kind: "initiative", title: "Project bootstrap" });
+				const discoveryBefore = await store.getProjectDiscovery();
+				expect(discoveryBefore.kind).toBe("available");
+				if (discoveryBefore.kind !== "available") {
+					return;
+				}
+
+				const project = discoveryBefore.projects[0]!.project;
+				const summaryBefore = await store.getProjectSummary({ projectId: project.id });
+				expect(summaryBefore.kind).toBe("available");
+				if (summaryBefore.kind !== "available") {
+					return;
+				}
+				const expectedEpicIds = summaryBefore.epics.map((group) => group.epic.id);
+				await store.createEntity({ kind: "epic", title: "Parentless epic" });
+
+				const discovery = await store.getProjectDiscovery({ projectId: project.id });
+				const summary = await store.getProjectSummary({ projectId: project.id });
+
+				expect(discovery.kind).toBe("available");
+				expect(summary.kind).toBe("available");
+				if (discovery.kind === "available" && summary.kind === "available") {
+					expect({
+						discoveryEpicCount: discovery.projects[0]!.epicCount,
+						summaryEpicCount: summary.counts.epics,
+						summaryEpicIds: summary.epics.map((group) => group.epic.id)
+					}).toEqual({
+						discoveryEpicCount: expectedEpicIds.length,
+						summaryEpicCount: expectedEpicIds.length,
+						summaryEpicIds: expectedEpicIds
+					});
+				}
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns project navigation and Initiative Rollups without initiative detail", async () => {
+			const store = await openStore();
+
+			try {
+				const project = await store.createEntity({ kind: "project", title: "Summary project" });
+				const epic = await store.createEntity({ kind: "epic", title: "Summary epic", parentId: project.id });
+				const initiative = await store.createEntity({
+					kind: "initiative",
+					title: "Summary initiative",
+					body: "Initiative detail",
+					parentId: epic.id
+				});
+				await store.createEntity({ kind: "issue", title: "Open issue", parentId: initiative.id });
+				await store.createEntity({ kind: "issue", title: "Done issue", parentId: initiative.id, status: "done" });
+				const prd = await store.createEntity({ kind: "prd", title: "Summary PRD", parentId: initiative.id });
+				await store.createEntity({ kind: "userStory", title: "Summary story", parentId: prd.id });
+				const otherProject = await store.createEntity({ kind: "project", title: "Other project" });
+				const otherEpic = await store.createEntity({ kind: "epic", title: "Other epic", parentId: otherProject.id });
+				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative", parentId: otherEpic.id });
+
+				const summary = await store.getProjectSummary({ projectId: project.id });
+
+				expect(summary).toEqual(expect.objectContaining({
+					kind: "available",
+					project: expect.objectContaining({ id: project.id }),
+					epics: [expect.objectContaining({
+						epic: expect.objectContaining({ id: epic.id }),
+						initiatives: [expect.objectContaining({
+							initiative: expect.objectContaining({ id: initiative.id }),
+							issueCount: 2,
+								completedIssueCount: 1,
+								userStoryCount: 1
+						})]
+					})],
+					counts: { epics: 1, initiatives: 1, completedInitiatives: 0 }
+				}));
+				if (summary.kind === "available") {
+					expect(summary.epics[0]?.initiatives[0]?.initiative).not.toHaveProperty("body");
+					expect(summary.epics[0]?.initiatives[0]).not.toHaveProperty("entities");
+					expect(summary.epics.flatMap((epicGroup) => epicGroup.initiatives).map((rollup) => rollup.initiative.id)).not.toContain(otherInitiative.id);
+				}
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: entity lifecycle (${label})`, () => {
 		it("creates an entity and reads it back through the async seam", async () => {
 			const store = await openStore();
@@ -1300,6 +1416,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await store.linkEntities({ fromId: issue.id, toId: subIssue.id, relationType: "decomposes" });
 				await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
 				await store.linkEntities({ fromId: adr.id, toId: issue.id, relationType: "constrains" });
+				const comment = await store.createIssueComment({ issueId: issue.id, body: "Snapshot comment." });
 
 				expect((await store.listEntities("initiative")).map((entity) => entity.id)).toContain(initiative.id);
 				expect((await store.listOrphans()).map((entity) => entity.id)).not.toContain(orphanAdr.id);
@@ -1307,6 +1424,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				const snapshot = await store.getDatabaseSnapshot();
 				expect(snapshot.entities.map((entity) => entity.id)).toContain(initiative.id);
+				expect(snapshot.issueComments[issue.id]?.users).toEqual([
+					expect.objectContaining({ id: comment.createdBy })
+				]);
 
 				const bundle = await store.getInitiativeBundle(initiative.id);
 				expect(bundle.prds.map((entity) => entity.id)).toEqual([prd.id]);
@@ -1320,6 +1440,126 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 
 				const bundleByReference = await store.getInitiativeBundle(initiative.reference);
 				expect(bundleByReference).toEqual(bundle);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns only issue records and their local relations for an initiative Issues tab", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Scoped tab reads" });
+				const issue = await store.createEntity({ kind: "issue", title: "Visible issue", parentId: initiative.id });
+				const blocker = await store.createEntity({ kind: "issue", title: "Visible blocker", parentId: initiative.id });
+				const adr = await store.createEntity({ kind: "adr", title: "Hidden ADR", parentId: initiative.id });
+				await store.linkEntities({ fromId: blocker.id, toId: issue.id, relationType: "blocks" });
+				await store.linkEntities({ fromId: adr.id, toId: issue.id, relationType: "constrains" });
+
+				const tab = await store.getInitiativeTab({ initiativeId: initiative.id, tab: "issues" });
+
+				expect(tab.records.map((record) => record.id).sort()).toEqual([blocker.id, issue.id].sort());
+				expect(tab.relations).toEqual([
+					expect.objectContaining({ fromId: blocker.id, toId: issue.id, type: "blocks" })
+				]);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns all local records and relations for an initiative Graph tab", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Graph initiative" });
+				const issue = await store.createEntity({ kind: "issue", title: "Graph issue", parentId: initiative.id });
+				const adr = await store.createEntity({ kind: "adr", title: "Graph ADR", parentId: initiative.id });
+				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative" });
+				const otherIssue = await store.createEntity({ kind: "issue", title: "Other issue", parentId: otherInitiative.id });
+				await store.linkEntities({ fromId: adr.id, toId: issue.id, relationType: "constrains" });
+
+				const tab = await store.getInitiativeTab({ initiativeId: initiative.id, tab: "graph" });
+
+				expect(tab.records.map((record) => record.id).sort()).toEqual([initiative.id, issue.id, adr.id].sort());
+				expect(tab.records.map((record) => record.id)).not.toContain(otherIssue.id);
+				expect(tab.relations).toContainEqual(expect.objectContaining({ fromId: adr.id, toId: issue.id, type: "constrains" }));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns an initiative body without its related-record collections", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Detailed initiative", body: "Initiative body" });
+				await store.createEntity({ kind: "issue", title: "Unrelated detail record", parentId: initiative.id });
+
+				const detail = await store.getInitiativeDetail({ initiativeId: initiative.id });
+
+				expect(detail).toEqual({
+					initiative: expect.objectContaining({ body: "Initiative body", id: initiative.id })
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns the records required by each active initiative record tab", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Record tabs" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan", parentId: initiative.id });
+				const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
+				const story = await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
+				const issue = await store.createEntity({ kind: "issue", title: "Issue", parentId: initiative.id });
+				const adr = await store.createEntity({ kind: "adr", title: "ADR", parentId: initiative.id });
+				const debt = await store.createEntity({
+					kind: "debt",
+					title: "Debt",
+					parentId: initiative.id,
+					category: "technical",
+					priority: "high"
+				});
+				await store.linkEntities({ fromId: issue.id, toId: story.id, relationType: "fixes" });
+
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "plans" })).resolves.toMatchObject({ records: [expect.objectContaining({ id: plan.id })] });
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "prds" })).resolves.toMatchObject({ records: [expect.objectContaining({ id: prd.id })] });
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "adrs" })).resolves.toMatchObject({ records: [expect.objectContaining({ id: adr.id })] });
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "debt" })).resolves.toMatchObject({ records: [expect.objectContaining({ id: debt.id })] });
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "userStories" })).resolves.toMatchObject({
+					records: [expect.objectContaining({ id: story.id }), expect.objectContaining({ id: issue.id })],
+					relations: [expect.objectContaining({ fromId: issue.id, toId: story.id, type: "fixes" })]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns an initiative rollup and glossary in their own tabs", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Specialized tabs" });
+				await store.createEntity({ kind: "issue", title: "Done issue", parentId: initiative.id, status: "done" });
+				const prd = await store.createEntity({ kind: "prd", title: "PRD", parentId: initiative.id });
+				await store.createEntity({ kind: "userStory", title: "Story", parentId: prd.id });
+				await store.upsertContext({ scopeRef: initiative.id, title: "Initiative Context", summary: "Initiative glossary" });
+
+				const overview = await store.getInitiativeTab({ initiativeId: initiative.id, tab: "overview" });
+				const context = await store.getInitiativeTab({ initiativeId: initiative.id, tab: "context" });
+
+				expect(overview).toMatchObject({
+					records: [],
+					relations: [],
+					rollup: { issueCount: 1, completedIssueCount: 1, userStoryCount: 1 }
+				});
+				expect(context).toMatchObject({
+					records: [],
+					relations: [],
+					context: { context: expect.objectContaining({ scopeEntityId: initiative.id, summary: "Initiative glossary" }) }
+				});
 			} finally {
 				await store.close();
 			}
@@ -2647,14 +2887,17 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 			const store = await openStore();
 
 			try {
-				const issue = await store.createEntity({ kind: "issue", title: "Commented issue" });
-				const comment = await store.createIssueComment({ issueId: issue.id, body: "First comment." });
+				const actor = { userId: "entra:comment-author", tenantId: store.tenantId, displayName: "Comment Author" };
+				const actorStore = store.withAuthenticatedIdentity(actor);
+				const issue = await actorStore.createEntity({ kind: "issue", title: "Commented issue" });
+				const comment = await actorStore.createIssueComment({ issueId: issue.id, body: "First comment." });
 				expect(comment.shortReference).toMatch(/^COM_[0-9A-HJKMNP-TV-Z]{6}$/);
 				expect(comment).not.toHaveProperty("body");
 
 				expect(await store.listIssueComments({ issueId: issue.id })).toEqual(
 					expect.objectContaining({
 						comments: [expect.objectContaining({ id: comment.id, issueId: issue.id, body: "First comment.", shortReference: comment.shortReference })],
+						users: [expect.objectContaining({ id: comment.createdBy, authenticationSubject: actor.userId, displayName: actor.displayName })],
 						total: 1,
 						nextBefore: null
 					})

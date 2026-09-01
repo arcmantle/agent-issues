@@ -1,11 +1,12 @@
 import { computed, signal } from "@lit-labs/signals";
-import type { SearchCapability, SearchNavigationTarget, SearchResponse, SearchResult, SearchSourceType } from "@agent-issues/core";
-import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeTab, type PageMode, type PlanEntry, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
+import type { ProjectChangeEvent, SearchCapability, SearchNavigationTarget, SearchResponse, SearchResult, SearchSourceType } from "@agent-issues/core";
+import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EntityDetails, type EntitySummary, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeDetail, type InitiativeRollup, type InitiativeTab, type InitiativeTabData, type IssueCommentPage, type PageMode, type PlanEntry, type PlanEntryPage, type ProjectAdrSectionData, type ProjectContextSectionData, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type ProjectSummary, type ProjectSummaryEpicGroup, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
 const GLOBAL_SEARCH_RECENTS_LIMIT = 5;
 const GLOBAL_SEARCH_RECENTS_STORAGE_PREFIX = "agent-issues-global-search-recents";
+const LOCAL_CHANGE_CORRELATION_TTL_MS = 5 * 60 * 1000;
 const PLAN_CURRENT_GROUPS = [
 	{ key: "questions", title: "Questions" },
 	{ key: "decisions", title: "Decisions" },
@@ -62,6 +63,60 @@ type ProjectSnapshot = {
 	snapshot: Snapshot;
 } | {
 	kind: "unavailable";
+};
+type CachedInitiativeDetail = {
+	detail: InitiativeDetail | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type InitiativeDetailResponse = InitiativeDetail | { kind: "unavailable" };
+type CachedEntityDetail = {
+	detail: EntityDetails | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type EntityDetailResponse = EntityDetails | { kind: "unavailable" };
+type CachedProjectAdrs = {
+	data: ProjectAdrSectionData | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type ProjectRecordData = {
+	records: Entity[];
+	relations: Relation[];
+};
+type CachedProjectRecordData = {
+	data: ProjectRecordData | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type CachedProjectContext = {
+	data: ProjectContextSectionData | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type CachedPlanEntryPage = {
+	data: PlanEntryPage | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type CachedIssueCommentPage = {
+	data: IssueCommentPage | null;
+	error: string | null;
+	loading: boolean;
+	stale?: boolean;
+};
+type CachedInitiativeTab = {
+	error: string | null;
+	loading: boolean;
+	data: InitiativeTabData | null;
+	stale?: boolean;
 };
 type ViewerRoute = {
 	tenantId: string | null;
@@ -122,9 +177,58 @@ function filterGraphByKind(graph: RelationshipGraph, visibleKinds: ReadonlySet<P
 	};
 }
 
+function entityFromSummary(entity: EntitySummary): Entity {
+	return { ...entity, body: "" };
+}
+
+function relationsFromEntityDetails(details: EntityDetails): Relation[] {
+	return [
+		...(details.incoming ?? []).map(({ entity, relationType }) => ({ createdAt: details.entity.createdAt, fromId: entity.id, toId: details.entity.id, type: relationType })),
+		...(details.outgoing ?? []).map(({ entity, relationType }) => ({ createdAt: details.entity.createdAt, fromId: details.entity.id, toId: entity.id, type: relationType }))
+	];
+}
+
+function affectedInitiativeTabs(event: ProjectChangeEvent): Set<Exclude<InitiativeTab, "overview">> {
+	if (event.category === "relation") {
+		return new Set(["issues", "plans", "prds", "adrs", "context", "userStories", "debt", "graph"]);
+	}
+	if (event.category === "context") {
+		return new Set(["context"]);
+	}
+	if (event.category === "plan-entry") {
+		return new Set(["plans"]);
+	}
+	if (event.category !== "entity") {
+		return new Set();
+	}
+
+	const tabByKind: Record<string, Exclude<InitiativeTab, "overview">> = {
+		adr: "adrs",
+		debt: "debt",
+		issue: "issues",
+		plan: "plans",
+		prd: "prds",
+		userStory: "userStories"
+	};
+	return new Set([
+		...(event.affectedEntityKinds ?? []).flatMap((kind) => tabByKind[kind] ? [tabByKind[kind]] : []),
+		"graph"
+	]);
+}
+
 export class AgentIssuesStore {
 	public config = signal<SiteConfig | null>(null);
 	public snapshot = signal<Snapshot | null>(null);
+	public projectSummary = signal<ProjectSummary | null>(null);
+	public entityDetails = signal<Map<string, CachedEntityDetail>>(new Map());
+	public projectAdrsCache = signal<CachedProjectAdrs>({ data: null, error: null, loading: false });
+	public projectDebtCache = signal<CachedProjectRecordData>({ data: null, error: null, loading: false });
+	public projectContextCache = signal<CachedProjectContext>({ data: null, error: null, loading: false });
+	public projectGraphCache = signal<CachedProjectRecordData>({ data: null, error: null, loading: false });
+	public planEntryPages = signal<Map<string, CachedPlanEntryPage>>(new Map());
+	public issueCommentPages = signal<Map<string, CachedIssueCommentPage>>(new Map());
+	public initiativeDetails = signal<Map<string, CachedInitiativeDetail>>(new Map());
+	public initiativeTabs = signal<Map<string, CachedInitiativeTab>>(new Map());
 	public projectDiscovery = signal<ProjectDiscovery | null>(null);
 	public search = signal("");
 	public globalSearchCapability = signal<SearchCapability | null>(null);
@@ -168,6 +272,7 @@ export class AgentIssuesStore {
 	protected globalSearchAbortController: AbortController | null = null;
 	protected globalSearchProgressTimer: number | null = null;
 	protected globalSearchRequestTimer: number | null = null;
+	protected localChangeCorrelations = new Map<string, number>();
 
 	public tenantById = computed(() => new Map((this.config.get()?.availableTenants ?? []).map((tenant) => [tenant.id, tenant])));
 
@@ -208,18 +313,21 @@ export class AgentIssuesStore {
 
 	public entityById = computed(() => {
 		const snapshot = this.snapshot.get();
-		if (!snapshot) {
-			return new Map<string, Entity>();
-		}
-
-		const bundleEntities = snapshot.initiatives.flatMap((bundle) => [
+		const bundleEntities = snapshot?.initiatives.flatMap((bundle) => [
 			bundle.initiative,
 			...bundle.prds,
 			...bundle.userStories,
 			...bundle.adrs,
 			...bundle.issues
+		]) ?? [];
+		const entityDetails = [...this.entityDetails.get().values()]
+			.flatMap((entry) => entry.detail ? [entry.detail] : []);
+		const detailEntities = entityDetails.map((details) => details.entity);
+		const relatedEntities = entityDetails.flatMap((details) => [
+			...(details.incoming ?? []).map(({ entity }) => entityFromSummary(entity)),
+			...(details.outgoing ?? []).map(({ entity }) => entityFromSummary(entity))
 		]);
-		return new Map([...snapshot.entities, ...snapshot.projectAdrs, ...bundleEntities].map((entity) => [entity.id, entity]));
+		return new Map([...(snapshot?.entities ?? []), ...(snapshot?.projectAdrs ?? []), ...bundleEntities, ...relatedEntities, ...detailEntities].map((entity) => [entity.id, entity]));
 	});
 
 	public globalSearchRecentRecords = computed(() => this.globalSearchRecents.get().flatMap((target): GlobalSearchRecent[] => {
@@ -263,10 +371,44 @@ export class AgentIssuesStore {
 		return entityId ? this.entityById.get().get(entityId) ?? null : null;
 	}
 
+	public requestEntityTab(entityId: string, tab: string) {
+		if (tab === "plan") {
+			void this.loadPlanEntryPage(entityId);
+		}
+	}
+
+	public async loadMorePlanEntries(planId: string) {
+		const before = this.planEntryPages.get().get(planId)?.data?.nextBefore;
+		if (before) {
+			await this.loadPlanEntryPage(planId, false, before);
+		}
+	}
+
+	public async loadMoreIssueComments(issueId: string) {
+		const before = this.issueCommentPages.get().get(issueId)?.data?.nextBefore;
+		if (before) {
+			await this.loadIssueCommentPage(issueId, false, before);
+		}
+	}
+
 	public openGlobalSearch() {
 		this.globalSearchOpen.set(true);
 		this.globalSearchRecents.set(this.readGlobalSearchRecents());
 		void this.reloadGlobalSearchCapability();
+	}
+
+	public planEntriesFor(planId: string): PlanEntry[] {
+		return this.planEntryPages.get().get(planId)?.data?.entries ?? (this.snapshot.get()?.planEntries ?? []).filter((entry) => entry.planId === planId);
+	}
+
+	public issueCommentsFor(issueId: string) {
+		return this.issueCommentPages.get().get(issueId)?.data?.comments ?? this.snapshot.get()?.issueComments[issueId]?.comments ?? [];
+	}
+
+	public displayUser(userId: string, issueId: string): string {
+		const user = this.issueCommentPages.get().get(issueId)?.data?.users.find((candidate) => candidate.id === userId)
+			?? this.snapshot.get()?.users.find((candidate) => candidate.id === userId);
+		return user?.displayName ?? user?.authenticationSubject ?? userId;
 	}
 
 	public closeGlobalSearch() {
@@ -572,18 +714,83 @@ export class AgentIssuesStore {
 			return null;
 		}
 
-		return (this.snapshot.get()?.initiatives ?? []).find((bundle) => bundle.initiative.id === initiativeId) ?? null;
+		const snapshotBundle = (this.snapshot.get()?.initiatives ?? []).find((bundle) => bundle.initiative.id === initiativeId) ?? null;
+		if (snapshotBundle) {
+			return snapshotBundle;
+		}
+
+		const rollup = this.projectSummaryInitiatives.get().find((candidate) => candidate.initiative.id === initiativeId);
+		if (!rollup) {
+			return null;
+		}
+
+		const detail = this.initiativeDetailForId(initiativeId);
+		const tabData = this.initiativeTabForId(initiativeId, this.initTab.get());
+		const initiative: Entity = detail?.initiative ?? { ...rollup.initiative, body: "" };
+		const records = tabData?.records ?? [];
+		const recordsById = new Map([initiative, ...records].map((record) => [record.id, record]));
+		const relationRecords = tabData?.relations ?? [];
+		return {
+			adrs: records.filter((record) => record.kind === "adr"),
+			blockerLinks: relationRecords
+				.filter((relation) => relation.type === "blocks")
+				.flatMap((relation) => {
+					const source = recordsById.get(relation.fromId);
+					const target = recordsById.get(relation.toId);
+					return source && target ? [{ source, target }] : [];
+				}),
+			constrainsLinks: relationRecords
+				.filter((relation) => relation.type === "constrains")
+				.flatMap((relation) => {
+					const adr = recordsById.get(relation.fromId);
+					const issue = recordsById.get(relation.toId);
+					return adr && issue ? [{ adr, issue }] : [];
+				}),
+			entities: [initiative, ...records],
+			fixLinks: relationRecords
+				.filter((relation) => relation.type === "fixes")
+				.flatMap((relation) => {
+					const issue = recordsById.get(relation.fromId);
+					const userStory = recordsById.get(relation.toId);
+					return issue && userStory ? [{ issue, userStory }] : [];
+				}),
+			initiative,
+			issues: records.filter((record) => record.kind === "issue"),
+			prds: records.filter((record) => record.kind === "prd"),
+			relations: relationRecords,
+			subIssueLinks: relationRecords
+				.filter((relation) => relation.type === "decomposes")
+				.flatMap((relation) => {
+					const parent = recordsById.get(relation.fromId);
+					const issue = recordsById.get(relation.toId);
+					return parent && issue ? [{ parent, issue }] : [];
+				}),
+			userStories: records.filter((record) => record.kind === "userStory")
+		};
 	}
 
 	public selectedInitiativeBundle = computed(() => this.bundleForInitiativeId(this.selectedInitiativeId.get()));
 
+	public initiativeDetailForId(initiativeId: string | null): InitiativeDetail | null {
+		return initiativeId ? this.initiativeDetails.get().get(initiativeId)?.detail ?? null : null;
+	}
+
+	public initiativeTabForId(initiativeId: string | null, tab: InitiativeTab): InitiativeTabData | null {
+		return initiativeId ? this.initiativeTabs.get().get(this.initiativeTabCacheKey(initiativeId, tab))?.data ?? null : null;
+	}
+
+	public isSummaryInitiative(initiativeId: string): boolean {
+		return !this.snapshot.get()?.initiatives.some((bundle) => bundle.initiative.id === initiativeId) &&
+			this.projectSummaryInitiatives.get().some((rollup) => rollup.initiative.id === initiativeId);
+	}
+
 	public activeInitiativeId = computed(() => this.selectedInitiativeId.get() ?? this.selectedBundle.get()?.initiative.id ?? null);
 
-	public sharedContext = computed(() => this.snapshot.get()?.contexts.shared ?? null);
+	public sharedContext = computed(() => this.projectContextCache.get().data?.shared ?? this.snapshot.get()?.contexts.shared ?? null);
 
 	public initiativeContextById = computed(() =>
 		new Map(
-			(this.snapshot.get()?.contexts.initiatives ?? [])
+			(this.projectContextCache.get().data?.initiatives ?? this.snapshot.get()?.contexts.initiatives ?? [])
 				.filter((details) => Boolean(details.context.scopeEntityId))
 				.map((details) => [details.context.scopeEntityId ?? details.context.key, details])
 		)
@@ -599,8 +806,13 @@ export class AgentIssuesStore {
 	});
 
 	public projectContextTerms = computed(() => {
+		const scopedTerms = this.projectContextCache.get().data?.terms;
+		if (scopedTerms) {
+			return scopedTerms;
+		}
+
 		const termsByKey = new Map<string, ProjectContextTermEntry>();
-		for (const details of [this.sharedContext.get(), ...(this.snapshot.get()?.contexts.initiatives ?? [])]) {
+		for (const details of [this.sharedContext.get(), ...(this.projectContextCache.get().data?.initiatives ?? this.snapshot.get()?.contexts.initiatives ?? [])]) {
 			if (!details) {
 				continue;
 			}
@@ -753,7 +965,7 @@ export class AgentIssuesStore {
 			return [];
 		}
 
-		return (this.snapshot.get()?.relations ?? []).filter((relation) => relation.toId === entityId);
+		return this.scopedRelations().filter((relation) => relation.toId === entityId);
 	}
 
 	public outgoingRelationsFor(entityId: string | null): Relation[] {
@@ -761,7 +973,21 @@ export class AgentIssuesStore {
 			return [];
 		}
 
-		return (this.snapshot.get()?.relations ?? []).filter((relation) => relation.fromId === entityId);
+		return this.scopedRelations().filter((relation) => relation.fromId === entityId);
+	}
+
+	public scopedRelations(): Relation[] {
+		const relationByKey = new Map<string, Relation>();
+		for (const relation of this.snapshot.get()?.relations ?? []) {
+			relationByKey.set(`${relation.fromId}:${relation.type}:${relation.toId}`, relation);
+		}
+		for (const details of [...this.entityDetails.get().values()]
+			.flatMap((entry) => entry.detail ? [entry.detail] : [])) {
+			for (const relation of relationsFromEntityDetails(details)) {
+				relationByKey.set(`${relation.fromId}:${relation.type}:${relation.toId}`, relation);
+			}
+		}
+		return [...relationByKey.values()];
 	}
 
 	public selectedIncoming = computed(() => this.incomingRelationsFor(this.selectedId.get()));
@@ -790,7 +1016,7 @@ export class AgentIssuesStore {
 
 	public localGraphRelations = computed(() => {
 		const localIds = new Set(this.localGraphEntities.get().map((entity) => entity.id));
-		return (this.snapshot.get()?.relations ?? []).filter((relation) => localIds.has(relation.fromId) && localIds.has(relation.toId));
+		return this.scopedRelations().filter((relation) => localIds.has(relation.fromId) && localIds.has(relation.toId));
 	});
 
 	public filteredEntities = computed(() => {
@@ -823,9 +1049,9 @@ export class AgentIssuesStore {
 		initiatives: this.snapshot.get()?.initiatives.length ?? 0
 	}));
 
-	public allDebtRecords = computed(() =>
-		this.sortEntities((this.snapshot.get()?.entities ?? []).filter((entity) => entity.kind === "debt"))
-	);
+	public allDebtRecords = computed(() => this.sortEntities(
+		this.projectDebtCache.get().data?.records ?? (this.snapshot.get()?.entities ?? []).filter((entity) => entity.kind === "debt")
+	));
 
 	public debtRecords = computed(() => {
 		const lifecycle = this.debtLifecycleFilter.get();
@@ -841,7 +1067,27 @@ export class AgentIssuesStore {
 		);
 	});
 
-	public projectInitiatives = computed(() => this.snapshot.get()?.initiatives ?? []);
+	public projectInitiatives = computed(() => this.snapshot.get()?.initiatives ?? this.projectSummaryInitiatives.get().map((rollup) => ({
+		adrs: [],
+		blockerLinks: [],
+		constrainsLinks: [],
+		entities: [entityFromSummary(rollup.initiative)],
+		fixLinks: [],
+		initiative: entityFromSummary(rollup.initiative),
+		issues: [],
+		prds: [],
+		subIssueLinks: [],
+		userStories: []
+	})));
+
+	public projectSummaryEpicGroups = computed(() => {
+		const summary = this.projectSummary.get();
+		return summary?.kind === "available" ? summary.epics : [];
+	});
+
+	public projectSummaryInitiatives = computed<InitiativeRollup[]>(() =>
+		this.projectSummaryEpicGroups.get().flatMap((group) => group.initiatives)
+	);
 
 	public epicInitiativeGroups = computed<EpicInitiativeGroup[]>(() => {
 		const snapshot = this.snapshot.get();
@@ -875,34 +1121,33 @@ export class AgentIssuesStore {
 			.filter((group) => group.initiatives.length > 0);
 	});
 
-	public projectAdrs = computed(() => this.sortEntities((this.snapshot.get()?.entities ?? []).filter((entity) => entity.kind === "adr")));
+	public projectAdrs = computed(() => this.sortEntities(
+		this.projectAdrsCache.get().data?.projectAdrs ?? this.snapshot.get()?.projectAdrs ?? (this.snapshot.get()?.entities ?? []).filter((entity) => entity.kind === "adr")
+	));
 
 	public adrRailEntries = computed<AdrRailEntry[]>(() => {
 		const snapshot = this.snapshot.get();
-		if (!snapshot) {
-			return [];
-		}
-
-		const projectEntries = this.sortEntities(snapshot.projectAdrs).map((adr) => ({
+		const projectEntries = this.projectAdrs.get().map((adr) => ({
 			adr,
 			scope: "project" as const,
 			scopeLabel: "project decision"
 		}));
 
-		const initiativeEntries = snapshot.initiatives.flatMap((bundle) =>
-			this.sortEntities(bundle.adrs).map((adr) => ({
+		const initiativeAdrs = this.projectAdrsCache.get().data?.initiativeAdrs;
+		const initiativeEntries = (initiativeAdrs ?? snapshot?.initiatives ?? []).flatMap((entry) =>
+			this.sortEntities(entry.adrs).map((adr) => ({
 				adr,
 				scope: "initiative" as const,
-				scopeLabel: `initiative ${bundle.initiative.title}`
+				scopeLabel: `initiative ${entry.initiative.title}`
 			}))
 		);
 
 		return [...projectEntries, ...initiativeEntries];
 	});
 
-	public projectStoryCount = computed(() => this.projectInitiatives.get().reduce((total, bundle) => total + bundle.userStories.length, 0));
+	public projectStoryCount = computed(() => this.projectSummaryInitiatives.get().reduce((total, rollup) => total + rollup.userStoryCount, 0));
 
-	public projectIssueCount = computed(() => this.projectInitiatives.get().reduce((total, bundle) => total + bundle.issues.length, 0));
+	public projectIssueCount = computed(() => this.projectSummaryInitiatives.get().reduce((total, rollup) => total + rollup.issueCount, 0));
 
 	public projectDescription = computed(() => this.sharedContext.get()?.context.summary ?? this.selectedTenantDisplayName.get() ?? "");
 
@@ -938,6 +1183,48 @@ export class AgentIssuesStore {
 			window.clearInterval(this.pollTimer);
 			this.pollTimer = null;
 		}
+	}
+
+	public applyLocalProjectChange(event: ProjectChangeEvent) {
+		this.handleProjectChange(event);
+		this.registerLocalChangeCorrelation(event.correlationId);
+	}
+
+	public async mutateProject<T>(method: string, params: unknown): Promise<T> {
+		const correlationId = globalThis.crypto.randomUUID();
+		this.registerLocalChangeCorrelation(correlationId);
+
+		try {
+			const response = await fetch(this.buildTenantScopedPath("/api/project-mutation"), {
+				body: JSON.stringify({ correlationId, method, params }),
+				cache: "no-store",
+				headers: { "content-type": "application/json" },
+				method: "POST"
+			});
+			if (!response.ok) {
+				throw new Error(`Project mutation ${method} failed.`);
+			}
+
+			const payload = await response.json() as { event: ProjectChangeEvent; result: T };
+			this.applyLocalProjectChange(payload.event);
+			return payload.result;
+		} catch (error) {
+			this.localChangeCorrelations.delete(correlationId);
+			throw error;
+		}
+	}
+
+	protected registerLocalChangeCorrelation(correlationId: string | undefined) {
+		if (!correlationId) {
+			return;
+		}
+		const now = Date.now();
+		for (const [pendingCorrelationId, expiresAt] of this.localChangeCorrelations) {
+			if (expiresAt < now) {
+				this.localChangeCorrelations.delete(pendingCorrelationId);
+			}
+		}
+		this.localChangeCorrelations.set(correlationId, now + LOCAL_CHANGE_CORRELATION_TTL_MS);
 	}
 
 	public onHashChange = () => {
@@ -986,6 +1273,15 @@ export class AgentIssuesStore {
 		this.selectedContextInitiativeId.set(null);
 		this.activePage.set("list");
 		this.writeRoute(this.currentRoute());
+		if (section === "adrs") {
+			void this.loadProjectAdrs();
+		} else if (section === "debt") {
+			void this.loadProjectDebt();
+		} else if (section === "context") {
+			void this.loadProjectContext();
+		} else if (section === "graph") {
+			void this.loadProjectGraph();
+		}
 	}
 
 	public setContextTab(tab: ContextPageTab) {
@@ -1021,6 +1317,18 @@ export class AgentIssuesStore {
 
 	public setInitTab(tab: InitiativeTab) {
 		this.initTab.set(tab);
+		const initiativeId = this.selectedInitiativeId.get();
+		if (initiativeId && tab !== "overview" && this.projectSummaryInitiatives.get().some((rollup) => rollup.initiative.id === initiativeId)) {
+			void this.loadInitiativeTab(initiativeId, tab);
+		}
+	}
+
+	public async retryInitiativeDetail(initiativeId: string) {
+		await this.loadInitiativeDetail(initiativeId, true);
+	}
+
+	public async retryInitiativeTab(initiativeId: string, tab: Exclude<InitiativeTab, "overview">) {
+		await this.loadInitiativeTab(initiativeId, tab, true);
 	}
 
 	public setTenantFromEvent = (event: Event) => {
@@ -1128,6 +1436,10 @@ export class AgentIssuesStore {
 		this.selectedNestedTarget.set(target);
 		this.activePage.set("entity");
 		this.writeRoute(this.currentRoute());
+		void this.loadEntityDetail(entityId);
+		if (this.entityForId(entityId)?.kind === "issue") {
+			void this.loadIssueCommentPage(entityId);
+		}
 	}
 
 	public selectProjectGraphEntity(entityId: string, kind: string) {
@@ -1271,6 +1583,9 @@ export class AgentIssuesStore {
 		this.cascadePath.set([]);
 		this.clearMasterOverrideIfShallow();
 		this.writeRoute(this.currentRoute());
+		if (this.isSummaryInitiative(initiativeId)) {
+			void this.loadInitiativeDetail(initiativeId);
+		}
 	}
 
 	public clearSelection() {
@@ -1305,6 +1620,7 @@ export class AgentIssuesStore {
 
 		this.selectedProjectId.set(null);
 		this.snapshot.set(null);
+		this.projectSummary.set(null);
 		this.resetScopeDetail();
 		this.writeRoute(this.currentRoute());
 		this.stopLiveUpdates();
@@ -1325,11 +1641,12 @@ export class AgentIssuesStore {
 		this.syncLabel.set("connecting");
 
 		try {
-			await this.reloadSnapshot();
+			await this.reloadProjectSummary();
 			this.connectEvents();
 		} catch (error) {
 			this.selectedProjectId.set(null);
 			this.snapshot.set(null);
+			this.projectSummary.set(null);
 			this.writeRoute(this.currentRoute(), true);
 			this.errorMessage.set(error instanceof Error ? error.message : String(error));
 			this.syncLabel.set("project unavailable");
@@ -1337,6 +1654,12 @@ export class AgentIssuesStore {
 	}
 
 	public initiativeStats(bundle: InitiativeBundle) {
+		const rollup = this.projectSummaryInitiatives.get().find((candidate) => candidate.initiative.id === bundle.initiative.id);
+		if (rollup) {
+			const pct = rollup.issueCount > 0 ? Math.round((rollup.completedIssueCount / rollup.issueCount) * 100) : 0;
+			return { adrs: bundle.adrs.length, done: rollup.completedIssueCount, issues: rollup.issueCount, pct, stories: rollup.userStoryCount };
+		}
+
 		const total = bundle.issues.length;
 		const done = bundle.issues.filter((issue) => this.isDoneStatus(issue.status)).length;
 		const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -1445,6 +1768,8 @@ export class AgentIssuesStore {
 	public buildInitiativeGraph(bundle: InitiativeBundle, visibleKinds?: ReadonlySet<ProjectGraphKind>): RelationshipGraph {
 		const initiative = bundle.initiative;
 		const snapshot = this.snapshot.get();
+		const relations = bundle.relations ?? snapshot?.relations ?? [];
+		const graphEntities = bundle.relations ? bundle.entities : snapshot?.entities ?? [];
 		const nodes: GraphNode[] = [];
 		const edges: GraphEdge[] = [];
 		const issueById = new Map(bundle.issues.map((issue) => [issue.id, issue]));
@@ -1544,10 +1869,10 @@ export class AgentIssuesStore {
 		}
 		const debtColumn = 3 + issueColumns.length;
 		const ownedDebt = this.sortEntities(
-			(snapshot?.entities ?? []).filter(
+			graphEntities.filter(
 				(entity) =>
 					entity.kind === "debt" &&
-					(snapshot?.relations ?? []).some(
+					relations.some(
 						(relation) => relation.fromId === initiative.id && relation.toId === entity.id && relation.type === "records"
 					)
 			)
@@ -1569,7 +1894,7 @@ export class AgentIssuesStore {
 		const visibleNodeIds = new Set(nodes.map((node) => node.id));
 		const debtIds = new Set(ownedDebt.map((debt) => debt.id));
 		const planIds = new Set(plans.map((plan) => plan.id));
-		for (const relation of snapshot?.relations ?? []) {
+		for (const relation of relations) {
 			if (relation.type === "informs" && planIds.has(relation.fromId) && visibleNodeIds.has(relation.toId)) {
 				edges.push({ from: relation.fromId, label: "informs", to: relation.toId });
 			}
@@ -1588,6 +1913,11 @@ export class AgentIssuesStore {
 	}
 
 	public buildProjectGraph(): RelationshipGraph {
+		const cachedGraph = this.projectGraphCache.get().data;
+		if (cachedGraph) {
+			return this.buildScopedProjectGraph(cachedGraph);
+		}
+
 		const snapshot = this.snapshot.get();
 		const epicGroups = this.epicInitiativeGroups.get();
 		const projectKey = "__project";
@@ -1734,6 +2064,32 @@ export class AgentIssuesStore {
 			{ columns: ["Project", "Epics", "Initiatives", "Plans, PRDs & ADRs", "User stories", "Issues", "Debt records"], edges, nodes },
 			this.visibleProjectGraphKinds.get()
 		);
+	}
+
+	protected buildScopedProjectGraph(data: ProjectRecordData): RelationshipGraph {
+		const records = this.sortEntities(data.records);
+		const kinds = [...new Set(records
+			.map((record) => record.kind === "userStory" ? "story" : record.kind)
+			.filter((kind): kind is ProjectGraphKind => PROJECT_GRAPH_KINDS.includes(kind as ProjectGraphKind)))];
+		const columnByKind = new Map(kinds.map((kind, index) => [kind, index]));
+		const recordIds = new Set(records.map((record) => record.id));
+		const nodes = records.flatMap((record): GraphNode[] => {
+			const kind = record.kind === "userStory" ? "story" : record.kind;
+			const column = columnByKind.get(kind as ProjectGraphKind);
+			return column === undefined ? [] : [{
+				col: column,
+				fullLabel: record.title,
+				id: record.id,
+				key: record.id,
+				kind,
+				label: record.title,
+				status: record.status
+			}];
+		});
+		const edges = data.relations
+			.filter((relation) => recordIds.has(relation.fromId) && recordIds.has(relation.toId))
+			.map((relation) => ({ from: relation.fromId, label: relation.type, to: relation.toId }));
+		return { columns: kinds.map((kind) => kind === "story" ? "User stories" : `${kind.slice(0, 1).toUpperCase()}${kind.slice(1)}s`), edges, nodes };
 	}
 
 	public toggleProjectGraphKind(kind: ProjectGraphKind) {
@@ -2067,8 +2423,7 @@ export class AgentIssuesStore {
 	}
 
 	public planProjectionFor(planId: string): { current: Array<{ key: PlanCurrentGroupKey; title: string; entries: PlanEntry[] }>; history: PlanEntry[] } {
-		const history = [...(this.snapshot.get()?.planEntries ?? [])]
-			.filter((entry) => entry.planId === planId)
+		const history = [...this.planEntriesFor(planId)]
 			.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.reference.localeCompare(right.reference));
 		const supersededEntryIds = new Set(history.flatMap((entry) => entry.supersededEntryIds));
 		const activeEntries = history.filter((entry) => !entry.tombstone && !supersededEntryIds.has(entry.id));
@@ -2100,7 +2455,7 @@ export class AgentIssuesStore {
 	}
 
 	public getContextForInitiative(initiativeId: string): ContextDetails | null {
-		return this.initiativeContextById.get().get(initiativeId) ?? null;
+		return this.initiativeTabForId(initiativeId, "context")?.context ?? this.initiativeContextById.get().get(initiativeId) ?? null;
 	}
 
 	protected async bootstrap() {
@@ -2119,20 +2474,345 @@ export class AgentIssuesStore {
 		}
 	}
 
-	protected async reloadSnapshot() {
-		const result = await this.fetchJson<ProjectSnapshot>(this.buildTenantScopedPath("/api/snapshot"));
+	protected async reloadProjectSummary() {
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		const result = await this.fetchJson<ProjectSummary>(this.buildTenantScopedPath("/api/project-summary"));
+		if (this.selectedTenant.get() !== tenantId || this.selectedProjectId.get() !== projectId) {
+			return;
+		}
 		if (result.kind === "unavailable") {
 			throw new Error("Selected project is unavailable.");
 		}
 
-		this.snapshot.set(result.snapshot);
-		this.onHashChange();
-		const selectedId = this.selectedId.get();
-		if (selectedId && !this.entityById.get().has(selectedId)) {
-			this.selectedId.set(null);
-		}
+		this.projectSummary.set(result);
+		this.snapshot.set(null);
 		this.errorMessage.set(null);
 		this.syncLabel.set("listening");
+	}
+
+	protected refreshProjectSummaryInBackground() {
+		void this.reloadProjectSummary().catch((error) => {
+			this.errorMessage.set(error instanceof Error ? error.message : String(error));
+			this.syncLabel.set("refresh failed");
+		});
+	}
+
+	protected async loadInitiativeDetail(initiativeId: string, force = false) {
+		const cached = this.initiativeDetails.get().get(initiativeId);
+		if (cached?.loading || (!force && cached?.detail && !cached.stale)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.setInitiativeDetailCache(initiativeId, { detail: cached?.detail ?? null, error: null, loading: true, stale: cached?.stale });
+		try {
+			const detail = await this.fetchJson<InitiativeDetailResponse>(this.buildTenantScopedPath(`/api/initiative-detail?initiative=${encodeURIComponent(initiativeId)}`));
+			if (this.selectedTenant.get() !== tenantId || this.selectedProjectId.get() !== projectId) {
+				return;
+			}
+			if (!("initiative" in detail)) {
+				if (this.selectedInitiativeId.get() === initiativeId) {
+					this.clearSelection();
+				}
+				return;
+			}
+
+			this.setInitiativeDetailCache(initiativeId, { detail, error: null, loading: false });
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.initiativeDetails.get().get(initiativeId);
+				this.setInitiativeDetailCache(initiativeId, {
+					detail: current?.detail ?? cached?.detail ?? null,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current?.stale ?? cached?.stale
+				});
+			}
+		}
+	}
+
+	public async retryProjectAdrs() {
+		await this.loadProjectAdrs(true);
+	}
+
+	protected async loadProjectAdrs(force = false) {
+		const cached = this.projectAdrsCache.get();
+		if (cached.loading || (!force && cached.data && !cached.stale)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.projectAdrsCache.set({ data: cached.data, error: null, loading: true, stale: cached.stale });
+		try {
+			const data = await this.fetchJson<ProjectAdrSectionData>(this.buildTenantScopedPath("/api/project-adrs"));
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				this.projectAdrsCache.set({ data, error: null, loading: false });
+			}
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.projectAdrsCache.get();
+				this.projectAdrsCache.set({
+					data: current.data,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current.stale ?? cached.stale
+				});
+			}
+		}
+	}
+
+	public async retryProjectDebt() {
+		await this.loadProjectDebt(true);
+	}
+
+	protected async loadProjectDebt(force = false) {
+		await this.loadProjectRecordData("/api/project-debt", this.projectDebtCache, force);
+	}
+
+	public async retryProjectContext() {
+		await this.loadProjectContext(true);
+	}
+
+	protected async loadProjectContext(force = false) {
+		const cached = this.projectContextCache.get();
+		if (cached.loading || (!force && cached.data && !cached.stale)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.projectContextCache.set({ data: cached.data, error: null, loading: true, stale: cached.stale });
+		try {
+			const data = await this.fetchJson<ProjectContextSectionData>(this.buildTenantScopedPath("/api/project-context"));
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				this.projectContextCache.set({ data, error: null, loading: false });
+			}
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.projectContextCache.get();
+				this.projectContextCache.set({
+					data: current.data,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current.stale ?? cached.stale
+				});
+			}
+		}
+	}
+
+	public async retryProjectGraph() {
+		await this.loadProjectGraph(true);
+	}
+
+	protected async loadProjectGraph(force = false) {
+		await this.loadProjectRecordData("/api/project-graph", this.projectGraphCache, force);
+	}
+
+	protected async loadProjectRecordData(
+		path: string,
+		cache: { get(): CachedProjectRecordData; set(value: CachedProjectRecordData): void },
+		force: boolean
+	) {
+		const cached = cache.get();
+		if (cached.loading || (!force && cached.data && !cached.stale)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		cache.set({ data: cached.data, error: null, loading: true, stale: cached.stale });
+		try {
+			const data = await this.fetchJson<ProjectRecordData>(this.buildTenantScopedPath(path));
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				cache.set({ data, error: null, loading: false });
+			}
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = cache.get();
+				cache.set({
+					data: current.data,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current.stale ?? cached.stale
+				});
+			}
+		}
+	}
+
+	protected async loadPlanEntryPage(planId: string, force = false, before?: string) {
+		const cached = this.planEntryPages.get().get(planId);
+		if (cached?.loading || (!force && cached?.data && !cached.stale && !before)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.setPlanEntryPageCache(planId, { data: cached?.data ?? null, error: null, loading: true, stale: cached?.stale });
+		try {
+			const page = await this.fetchJson<PlanEntryPage>(this.buildTenantScopedPath(`/api/plan-entries?plan=${encodeURIComponent(planId)}${before ? `&before=${encodeURIComponent(before)}` : ""}`));
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const entries = before
+					? [...new Map([...(cached?.data?.entries ?? []), ...page.entries].map((entry) => [entry.id, entry])).values()]
+					: page.entries;
+				this.setPlanEntryPageCache(planId, { data: { ...page, entries }, error: null, loading: false });
+			}
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.planEntryPages.get().get(planId);
+				this.setPlanEntryPageCache(planId, {
+					data: current?.data ?? cached?.data ?? null,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current?.stale ?? cached?.stale
+				});
+			}
+		}
+	}
+
+	protected setPlanEntryPageCache(planId: string, entry: CachedPlanEntryPage) {
+		const pages = new Map(this.planEntryPages.get());
+		pages.set(planId, entry);
+		this.planEntryPages.set(pages);
+	}
+
+	protected async loadIssueCommentPage(issueId: string, force = false, before?: string) {
+		const cached = this.issueCommentPages.get().get(issueId);
+		if (cached?.loading || (!force && cached?.data && !cached.stale && !before)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.setIssueCommentPageCache(issueId, { data: cached?.data ?? null, error: null, loading: true, stale: cached?.stale });
+		try {
+			const page = await this.fetchJson<IssueCommentPage>(this.buildTenantScopedPath(`/api/issue-comments?issue=${encodeURIComponent(issueId)}${before ? `&before=${encodeURIComponent(before)}` : ""}`));
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const comments = before
+					? [...new Map([...(cached?.data?.comments ?? []), ...page.comments].map((comment) => [comment.id, comment])).values()]
+					: page.comments;
+				const users = before
+					? [...new Map([...(cached?.data?.users ?? []), ...page.users].map((user) => [user.id, user])).values()]
+					: page.users;
+				this.setIssueCommentPageCache(issueId, { data: { ...page, comments, users }, error: null, loading: false });
+			}
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.issueCommentPages.get().get(issueId);
+				this.setIssueCommentPageCache(issueId, {
+					data: current?.data ?? cached?.data ?? null,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current?.stale ?? cached?.stale
+				});
+			}
+		}
+	}
+
+	protected setIssueCommentPageCache(issueId: string, entry: CachedIssueCommentPage) {
+		const pages = new Map(this.issueCommentPages.get());
+		pages.set(issueId, entry);
+		this.issueCommentPages.set(pages);
+	}
+
+	public entityDetailForId(entityId: string | null): EntityDetails | null {
+		return entityId ? this.entityDetails.get().get(entityId)?.detail ?? null : null;
+	}
+
+	public async retryEntityDetail(entityId: string) {
+		await this.loadEntityDetail(entityId, true);
+	}
+
+	protected async loadEntityDetail(entityId: string, force = false) {
+		const cached = this.entityDetails.get().get(entityId);
+		if (cached?.loading || (!force && cached?.detail && !cached.stale)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.setEntityDetailCache(entityId, { detail: cached?.detail ?? null, error: null, loading: true, stale: cached?.stale });
+		try {
+			const detail = await this.fetchJson<EntityDetailResponse>(this.buildTenantScopedPath(`/api/entity-detail?entity=${encodeURIComponent(entityId)}`));
+			if (this.selectedTenant.get() !== tenantId || this.selectedProjectId.get() !== projectId) {
+				return;
+			}
+			if (!("entity" in detail)) {
+				if (this.selectedId.get() === entityId) {
+					this.clearSelection();
+				}
+				return;
+			}
+
+			this.setEntityDetailCache(entityId, { detail, error: null, loading: false });
+			if (detail.entity.kind === "issue") {
+				void this.loadIssueCommentPage(entityId);
+			}
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.entityDetails.get().get(entityId);
+				this.setEntityDetailCache(entityId, {
+					detail: current?.detail ?? cached?.detail ?? null,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current?.stale ?? cached?.stale
+				});
+			}
+		}
+	}
+
+	protected setEntityDetailCache(entityId: string, entry: CachedEntityDetail) {
+		const details = new Map(this.entityDetails.get());
+		details.set(entityId, entry);
+		this.entityDetails.set(details);
+	}
+
+	protected setInitiativeDetailCache(initiativeId: string, entry: CachedInitiativeDetail) {
+		const details = new Map(this.initiativeDetails.get());
+		details.set(initiativeId, entry);
+		this.initiativeDetails.set(details);
+	}
+
+	protected async loadInitiativeTab(initiativeId: string, tab: Exclude<InitiativeTab, "overview">, force = false) {
+		const cacheKey = this.initiativeTabCacheKey(initiativeId, tab);
+		const cached = this.initiativeTabs.get().get(cacheKey);
+		if (cached?.loading || (!force && cached?.data && !cached.stale)) {
+			return;
+		}
+
+		const tenantId = this.selectedTenant.get();
+		const projectId = this.selectedProjectId.get();
+		this.setInitiativeTabCache(cacheKey, { data: cached?.data ?? null, error: null, loading: true, stale: cached?.stale });
+		try {
+			const data = await this.fetchJson<InitiativeTabData>(this.buildTenantScopedPath(`/api/initiative-tab?initiative=${encodeURIComponent(initiativeId)}&tab=${tab}`));
+			if (this.selectedTenant.get() !== tenantId || this.selectedProjectId.get() !== projectId) {
+				return;
+			}
+
+			this.setInitiativeTabCache(cacheKey, { data, error: null, loading: false });
+		} catch (error) {
+			if (this.selectedTenant.get() === tenantId && this.selectedProjectId.get() === projectId) {
+				const current = this.initiativeTabs.get().get(cacheKey);
+				this.setInitiativeTabCache(cacheKey, {
+					data: current?.data ?? cached?.data ?? null,
+					error: error instanceof Error ? error.message : String(error),
+					loading: false,
+					stale: current?.stale ?? cached?.stale
+				});
+			}
+		}
+	}
+
+	protected initiativeTabCacheKey(initiativeId: string, tab: InitiativeTab) {
+		return `${initiativeId}:${tab}`;
+	}
+
+	protected setInitiativeTabCache(cacheKey: string, entry: CachedInitiativeTab) {
+		const tabs = new Map(this.initiativeTabs.get());
+		tabs.set(cacheKey, entry);
+		this.initiativeTabs.set(tabs);
 	}
 
 	protected async reloadProjectDiscovery() {
@@ -2154,6 +2834,7 @@ export class AgentIssuesStore {
 		}
 		if (!route.projectId) {
 			this.snapshot.set(null);
+			this.projectSummary.set(null);
 			this.syncLabel.set("choose a project");
 			await this.reloadProjectDiscovery();
 			this.applyRoute(route);
@@ -2163,12 +2844,13 @@ export class AgentIssuesStore {
 		this.stopLiveUpdates();
 		this.syncLabel.set("connecting");
 		try {
-			await this.reloadSnapshot();
+			await this.reloadProjectSummary();
 			this.connectEvents();
 			this.applyRoute(route);
 		} catch (error) {
 			this.selectedProjectId.set(null);
 			this.snapshot.set(null);
+			this.projectSummary.set(null);
 			this.writeRoute(this.currentRoute(), true);
 			this.errorMessage.set(error instanceof Error ? error.message : String(error));
 			this.syncLabel.set("project unavailable");
@@ -2182,6 +2864,15 @@ export class AgentIssuesStore {
 		this.globalSearchResponse.set(null);
 		this.globalSearchProgress.set(false);
 		this.globalSearchOpen.set(false);
+		this.entityDetails.set(new Map());
+		this.projectAdrsCache.set({ data: null, error: null, loading: false });
+		this.projectDebtCache.set({ data: null, error: null, loading: false });
+		this.projectContextCache.set({ data: null, error: null, loading: false });
+		this.projectGraphCache.set({ data: null, error: null, loading: false });
+		this.planEntryPages.set(new Map());
+		this.issueCommentPages.set(new Map());
+		this.initiativeDetails.set(new Map());
+		this.initiativeTabs.set(new Map());
 		this.selectedId.set(null);
 		this.selectedInitiativeId.set(null);
 		this.selectedNestedTarget.set(null);
@@ -2203,13 +2894,201 @@ export class AgentIssuesStore {
 		}
 
 		this.events = new EventSource(this.buildTenantScopedPath("/events"));
-		this.events.onmessage = () => {
-			void this.reloadSnapshot();
+		this.events.onmessage = (message) => {
+			this.handleProjectChangeEvent(message);
 		};
 		this.events.onerror = () => {
 			this.syncLabel.set("reconnecting");
 			this.startPolling();
 		};
+	}
+
+	protected handleProjectChangeEvent(message: MessageEvent<string>) {
+		let event: ProjectChangeEvent;
+		try {
+			event = JSON.parse(message.data) as ProjectChangeEvent;
+		} catch {
+			this.refreshProjectSummaryInBackground();
+			return;
+		}
+
+		if (event.correlationId) {
+			const expiresAt = this.localChangeCorrelations.get(event.correlationId);
+			this.localChangeCorrelations.delete(event.correlationId);
+			if (expiresAt !== undefined && expiresAt >= Date.now()) {
+				return;
+			}
+		}
+
+		this.handleProjectChange(event);
+	}
+
+	protected handleProjectChange(event: ProjectChangeEvent) {
+		if (event.projectId && event.projectId !== this.selectedProjectId.get()) {
+			return;
+		}
+		if (!event.category || event.category === "bulk" || event.category === "unknown") {
+			this.refreshProjectSummaryInBackground();
+			return;
+		}
+
+		const selectedEntityId = this.selectedId.get();
+		const affectedTabs = affectedInitiativeTabs(event);
+		let handled = false;
+		if (event.category === "entity") {
+			for (const entityId of event.affectedEntityIds ?? []) {
+				const cached = this.entityDetails.get().get(entityId);
+				if (cached) {
+					this.setEntityDetailCache(entityId, { ...cached, stale: true });
+					handled = true;
+				}
+			}
+
+			if (selectedEntityId && event.affectedEntityIds?.includes(selectedEntityId)) {
+				void this.loadEntityDetail(selectedEntityId, true);
+				handled = true;
+			}
+
+			if (event.affectedEntityKinds?.includes("adr")) {
+				const cached = this.projectAdrsCache.get();
+				if (cached.data) {
+					this.projectAdrsCache.set({ ...cached, stale: true });
+				}
+				if (this.activeSection.get() === "adrs" && this.activePage.get() === "list") {
+					void this.loadProjectAdrs(true);
+				}
+				handled = true;
+			}
+
+			if (event.affectedEntityKinds?.includes("debt")) {
+				const cached = this.projectDebtCache.get();
+				if (cached.data) {
+					this.projectDebtCache.set({ ...cached, stale: true });
+				}
+				if (this.activeSection.get() === "debt" && this.activePage.get() === "list") {
+					void this.loadProjectDebt(true);
+				}
+				handled = true;
+			}
+
+			const graphCache = this.projectGraphCache.get();
+			if (graphCache.data) {
+				this.projectGraphCache.set({ ...graphCache, stale: true });
+			}
+			if (this.activeSection.get() === "graph" && this.activePage.get() === "list") {
+				void this.loadProjectGraph(true);
+				handled = true;
+			}
+		}
+
+		if (event.category === "issue-comment") {
+			for (const issueId of event.affectedEntityIds ?? []) {
+				const cached = this.issueCommentPages.get().get(issueId);
+				if (cached) {
+					this.setIssueCommentPageCache(issueId, { ...cached, stale: true });
+					handled = true;
+				}
+				if (selectedEntityId === issueId) {
+					void this.loadIssueCommentPage(issueId, true);
+					handled = true;
+				}
+			}
+		}
+
+		if (event.category === "plan-entry") {
+			for (const entityId of event.affectedEntityIds ?? []) {
+				const cachedPlanEntries = this.planEntryPages.get().get(entityId);
+				const isPlan = cachedPlanEntries !== undefined || this.entityForId(entityId)?.kind === "plan";
+				if (cachedPlanEntries) {
+					this.setPlanEntryPageCache(entityId, { ...cachedPlanEntries, stale: true });
+					handled = true;
+				}
+				if (selectedEntityId === entityId && isPlan) {
+					void this.loadPlanEntryPage(entityId, true);
+					handled = true;
+				}
+
+				const cachedEntity = this.entityDetails.get().get(entityId);
+				if (cachedEntity && !isPlan) {
+					this.setEntityDetailCache(entityId, { ...cachedEntity, stale: true });
+					handled = true;
+				}
+				if (selectedEntityId === entityId && !isPlan) {
+					void this.loadEntityDetail(entityId, true);
+					handled = true;
+				}
+			}
+		}
+
+		if (event.category === "context") {
+			const cached = this.projectContextCache.get();
+			if (cached.data) {
+				this.projectContextCache.set({ ...cached, stale: true });
+			}
+			if (this.activeSection.get() === "context" && this.activePage.get() === "list") {
+				void this.loadProjectContext(true);
+			}
+			handled = true;
+		}
+
+		if (event.category === "relation") {
+			for (const entityId of event.affectedEntityIds ?? []) {
+				const entityDetail = this.entityDetails.get().get(entityId);
+				if (entityDetail) {
+					this.setEntityDetailCache(entityId, { ...entityDetail, stale: true });
+					handled = true;
+				}
+				if (selectedEntityId === entityId) {
+					void this.loadEntityDetail(entityId, true);
+					handled = true;
+				}
+			}
+
+			const cached = this.projectGraphCache.get();
+			if (cached.data) {
+				this.projectGraphCache.set({ ...cached, stale: true });
+			}
+			if (this.activeSection.get() === "graph" && this.activePage.get() === "list") {
+				void this.loadProjectGraph(true);
+			}
+			handled = true;
+		}
+
+		for (const initiativeId of event.affectedInitiativeIds ?? []) {
+			if (event.affectedEntityIds?.includes(initiativeId)) {
+				const cached = this.initiativeDetails.get().get(initiativeId);
+				if (cached) {
+					this.setInitiativeDetailCache(initiativeId, { ...cached, stale: true });
+					handled = true;
+				}
+				if (this.selectedInitiativeId.get() === initiativeId && this.initTab.get() === "overview") {
+					void this.loadInitiativeDetail(initiativeId, true);
+					handled = true;
+				}
+			}
+
+			for (const [cacheKey, cached] of this.initiativeTabs.get()) {
+				const tab = cacheKey.slice(`${initiativeId}:`.length) as Exclude<InitiativeTab, "overview">;
+				if (cacheKey.startsWith(`${initiativeId}:`) && affectedTabs.has(tab)) {
+					this.setInitiativeTabCache(cacheKey, { ...cached, stale: true });
+					handled = true;
+				}
+			}
+
+			if (this.selectedInitiativeId.get() === initiativeId && this.initTab.get() !== "overview" && affectedTabs.has(this.initTab.get() as Exclude<InitiativeTab, "overview">)) {
+				void this.loadInitiativeTab(initiativeId, this.initTab.get() as Exclude<InitiativeTab, "overview">, true);
+				handled = true;
+			}
+		}
+
+		if (handled) {
+			if (event.affectsProjectSummary) {
+				this.refreshProjectSummaryInBackground();
+			}
+			return;
+		}
+
+		this.refreshProjectSummaryInBackground();
 	}
 
 	protected startPolling() {
@@ -2218,7 +3097,7 @@ export class AgentIssuesStore {
 		}
 
 		this.pollTimer = window.setInterval(() => {
-			void this.reloadSnapshot();
+			this.refreshProjectSummaryInBackground();
 		}, 3000);
 	}
 
@@ -2354,7 +3233,7 @@ export class AgentIssuesStore {
 			return route;
 		}
 
-		const validEntityId = route.entityId && entityById.has(route.entityId) ? route.entityId : null;
+		const validEntityId = route.entityId && (this.snapshot.get() === null || entityById.has(route.entityId)) ? route.entityId : null;
 		const validInitiativeId = route.initiativeId && this.bundleForInitiativeId(route.initiativeId) ? route.initiativeId : null;
 		return {
 			...route,
@@ -2407,6 +3286,19 @@ export class AgentIssuesStore {
 		this.clearMasterOverrideIfShallow();
 		this.activePage.set(normalizedRoute.entityId ? "entity" : normalizedRoute.initiativeId ? "initiative" : "list");
 		this.activeView.set("overview");
+		if (normalizedRoute.entityId) {
+			void this.loadEntityDetail(normalizedRoute.entityId);
+		} else if (normalizedRoute.initiativeId && this.isSummaryInitiative(normalizedRoute.initiativeId)) {
+			void this.loadInitiativeDetail(normalizedRoute.initiativeId);
+		} else if (normalizedRoute.section === "adrs") {
+			void this.loadProjectAdrs();
+		} else if (normalizedRoute.section === "debt") {
+			void this.loadProjectDebt();
+		} else if (normalizedRoute.section === "context") {
+			void this.loadProjectContext();
+		} else if (normalizedRoute.section === "graph") {
+			void this.loadProjectGraph();
+		}
 		return normalizedRoute;
 	}
 
@@ -2444,7 +3336,7 @@ export class AgentIssuesStore {
 		if (tenantId) {
 			query.set("tenant", tenantId);
 		}
-		if (projectId && resourcePath === "/api/snapshot") {
+		if (projectId) {
 			query.set("project", projectId);
 		}
 		return query.size > 0 ? `${resourcePath}${separator}${query}` : resourcePath;

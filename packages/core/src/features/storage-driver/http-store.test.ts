@@ -281,6 +281,18 @@ describe("HttpStore build-hash version handshake (ISS188, ADR45)", () => {
 		expect(seenHeader).toBe("hash-v1");
 	});
 
+	it("sends the configured project-change correlation on every request", async () => {
+		let seenHeader: string | string[] | undefined;
+		const baseUrl = await listenWithHandler((headers) => {
+			seenHeader = headers["x-agent-issues-correlation-id"];
+		});
+
+		const client = new HttpStore({ baseUrl, bearerToken: "token", correlationId: "write-1", tenantId: "t1" });
+		await client.updateEntityStatus({ entityId: "ISS1", status: "done" }).catch(() => undefined);
+
+		expect(seenHeader).toBe("write-1");
+	});
+
 	it("sends no build-hash header when none is configured (cloud mode, unaffected)", async () => {
 		let sawHeader = false;
 		const baseUrl = await listenWithHandler((headers) => {

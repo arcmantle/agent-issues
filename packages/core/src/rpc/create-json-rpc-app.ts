@@ -7,7 +7,7 @@ import { IssueCommentConflictError } from "../features/storage-driver/issue-comm
 import { PlanEntryConflictError } from "../features/plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
 import { SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
-import { ChangeEventBroadcaster } from "./change-events.js";
+import { ChangeEventBroadcaster, mergeProjectChangeEventDetails, projectChangeEventForWrite } from "./change-events.js";
 import { isJsonRpcRequest, JSON_RPC_ERROR_CODES, type JsonRpcErrorResponse, type JsonRpcSuccessResponse } from "./json-rpc.js";
 import { rpcMethods, writeMethods } from "./rpc-methods.js";
 
@@ -66,6 +66,7 @@ export type CreateJsonRpcAppOptions = {
 const DEFAULT_BUILD_HASH_HEADER = "x-agent-issues-build-hash";
 const DEFAULT_DB_PATH_HEADER = "x-agent-issues-db-path";
 const PROJECT_IDENTITY_HEADER = "x-agent-issues-project-identity";
+const CORRELATION_ID_HEADER = "x-agent-issues-correlation-id";
 const WORKSPACE_ROOT_HEADER = "x-agent-issues-workspace-root";
 
 type VersionCheckResult =
@@ -207,11 +208,35 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			// express' default handler and the caller only ever sees an opaque
 			// HTTP 500 instead of the actual message.
 			const store = (await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER))).withAuthenticatedIdentity(identity);
+			const isWrite = writeMethods.has(rpcRequest.method);
+			const changeBefore = isWrite
+				? await projectChangeEventForWrite(
+					store,
+					rpcRequest.method,
+					request.header(PROJECT_IDENTITY_HEADER),
+					rpcRequest.params,
+					undefined,
+					request.header(CORRELATION_ID_HEADER)
+				)
+				: undefined;
 			const result = await handler(store, rpcRequest.params);
+			const changeAfter = isWrite
+				? await projectChangeEventForWrite(
+					store,
+					rpcRequest.method,
+					request.header(PROJECT_IDENTITY_HEADER),
+					rpcRequest.params,
+					result,
+					request.header(CORRELATION_ID_HEADER)
+				)
+				: undefined;
 			const successResponse: JsonRpcSuccessResponse = { jsonrpc: "2.0", id: rpcRequest.id, result };
 			response.status(200).json(successResponse);
-			if (writeMethods.has(rpcRequest.method)) {
-				changeEvents.publishSnapshotChanged(identity.tenantId);
+			if (changeBefore && changeAfter) {
+				changeEvents.publishSnapshotChanged(
+					identity.tenantId,
+					mergeProjectChangeEventDetails(changeBefore, changeAfter)
+				);
 			}
 		} catch (error) {
 			const data = error instanceof SynchronizeConflictError

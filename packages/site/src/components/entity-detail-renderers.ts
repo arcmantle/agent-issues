@@ -100,6 +100,9 @@ export abstract class EntityDetailRenderer {
 	public entity: Entity;
 	public host: EntityDetailRendererHost;
 	public abstract label: string;
+	protected onLoadMoreIssueComments = () => {
+		void this.store.loadMoreIssueComments(this.entity.id);
+	};
 
 	public usesTabs(): boolean {
 		return true;
@@ -347,7 +350,7 @@ export abstract class EntityDetailRenderer {
 			label: record.title,
 			status: record.status
 		}));
-		const edges: GraphEdge[] = (this.store.snapshot.get()?.relations ?? [])
+		const edges: GraphEdge[] = this.store.scopedRelations()
 			.filter((relation) => recordIds.has(relation.fromId) && recordIds.has(relation.toId))
 			.map((relation) => ({ from: relation.fromId, label: relation.type, to: relation.toId }));
 
@@ -419,7 +422,8 @@ export abstract class EntityDetailRenderer {
 	public renderOverview(): TemplateResult {
 		const body = (this.entity.body ?? "").trim();
 		const bodySource = this.entity.bodySource ?? "authored";
-		const comments = this.entity.kind === "issue" ? this.store.snapshot.get()?.issueComments[this.entity.id]?.comments ?? [] : [];
+		const comments = this.entity.kind === "issue" ? this.store.issueCommentsFor(this.entity.id) : [];
+		const hasMoreComments = this.entity.kind === "issue" && (this.store.issueCommentPages.get().get(this.entity.id)?.data?.nextBefore ?? null) !== null;
 
 		return html`
 		${when(
@@ -438,6 +442,11 @@ export abstract class EntityDetailRenderer {
 			<section class="ai-sec ai-conversation">
 				<h2>Conversation</h2>
 				${repeat(comments, (comment) => comment.id, (comment) => this.host.renderIssueComment(comment))}
+				${when(
+					hasMoreComments,
+					() => html`<button @click=${this.onLoadMoreIssueComments}>Load more comments</button>`,
+					() => nothing
+				)}
 			</section>
 			`,
 			() => nothing
@@ -509,6 +518,9 @@ class UserStoryRenderer extends EntityDetailRenderer {
 
 class PlanRenderer extends EntityDetailRenderer {
 	public label = "Plan";
+	protected onLoadMorePlanEntries = () => {
+		void this.store.loadMorePlanEntries(this.entity.id);
+	};
 
 	public override entityTabs(): EntityDetailTabDefinition[] {
 		return [{ label: "Plan", tab: "plan" }];
@@ -543,6 +555,7 @@ class PlanRenderer extends EntityDetailRenderer {
 		const planProjection = this.store.planProjectionFor(this.entity.id);
 		const currentGroups = planProjection.current.filter((group) => group.entries.length > 0);
 		const entriesById = new Map(planProjection.history.map((entry) => [entry.id, entry]));
+		const hasMoreEntries = (this.store.planEntryPages.get().get(this.entity.id)?.data?.nextBefore ?? null) !== null;
 
 		return html`
 		<div class="ai-plan-tab">
@@ -580,6 +593,11 @@ class PlanRenderer extends EntityDetailRenderer {
 					)}
 				</div>
 			</details>
+			${when(
+				hasMoreEntries,
+				() => html`<button @click=${this.onLoadMorePlanEntries}>Load more entries</button>`,
+				() => nothing
+			)}
 		</div>
 		`;
 	}

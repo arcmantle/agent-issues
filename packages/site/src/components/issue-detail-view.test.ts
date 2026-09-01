@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "./issue-detail-view.js";
 import type { ContextDetails, Entity, InitiativeBundle, Relation, Snapshot } from "../models.js";
@@ -117,6 +117,7 @@ function updateIssueRecordView(view: HTMLElement, tab: "issues" | "userStories",
 afterEach(() => {
 	document.body.replaceChildren();
 	window.location.hash = "";
+	vi.restoreAllMocks();
 });
 
 describe("entity detail pane", () => {
@@ -359,6 +360,58 @@ describe("entity detail pane", () => {
 		expect(store.selectedId.get()).toBe(story.id);
 	});
 
+	it("renders an entity graph from scoped detail relations without a snapshot", async () => {
+		const issue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Render local graph" });
+		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Open graph records" });
+		const { body: _body, bodySource: _bodySource, ...storySummary } = story;
+		const store = new AgentIssuesStore();
+		store.entityDetails.set(new Map([[
+			issue.id,
+			{
+				detail: {
+					entity: issue,
+					incoming: [],
+					outgoing: [{ entity: storySummary, relationType: "fixes" }],
+					planEntries: []
+				},
+				error: null,
+				loading: false
+			}
+		]]));
+		store.selectEntity(issue.id);
+		const view = await mountDetail(store);
+
+		expect(store.snapshot.get()).toBeNull();
+		expect(tabLabels(view)).toContain("Graph");
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="graph"]')?.click();
+		await view.updateComplete;
+		const graph = view.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		expect(graph?.shadowRoot?.querySelectorAll(".ai-node").length).toBe(2);
+		expect(graph?.shadowRoot?.querySelectorAll(".ai-edge").length).toBe(1);
+		expect(graph?.shadowRoot?.querySelector('[data-id="ISS1"]')).not.toBeNull();
+		expect(graph?.shadowRoot?.querySelector('[data-id="US1"]')).not.toBeNull();
+
+		const replacementStory = makeEntity({ id: "US2", kind: "userStory", status: "draft", title: "Refresh graph records" });
+		const { body: _replacementBody, bodySource: _replacementBodySource, ...replacementStorySummary } = replacementStory;
+		store.entityDetails.set(new Map([[
+			issue.id,
+			{
+				detail: {
+					entity: issue,
+					incoming: [],
+					outgoing: [{ entity: replacementStorySummary, relationType: "fixes" }],
+					planEntries: []
+				},
+				error: null,
+				loading: false
+			}
+		]]));
+		await view.updateComplete;
+		const refreshedGraph = view.shadowRoot?.querySelector("agent-issues-relationship-graph");
+		expect(refreshedGraph?.shadowRoot?.querySelector('[data-id="US1"]')).toBeNull();
+		expect(refreshedGraph?.shadowRoot?.querySelector('[data-id="US2"]')).not.toBeNull();
+	});
+
 	it("renders a Plan's generated current groups and complete entry history in its Plan tab", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Plan owner" });
 		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "in-progress", title: "Plan record" });
@@ -442,6 +495,66 @@ describe("entity detail pane", () => {
 		expect(view.shadowRoot?.querySelector(".ai-plan-history")?.textContent).toContain("Deleted");
 		view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-plan-current .ai-plan-entry-link[data-id="INIT1"]')?.click();
 		expect(store.selectedInitiativeId.get()).toBe(initiative.id);
+	});
+
+	it("renders and appends scoped Plan-entry pages without a snapshot", async () => {
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "in-progress", title: "Scoped Plan" });
+		const question = {
+			body: "Which entries are current?",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			id: "ENTRY1",
+			planId: plan.id,
+			reference: "PLAN_ENTRY_QUESTION",
+			referencedEntityIds: [],
+			role: "question" as const,
+			shortReference: "PLAN_ENTRY_QUESTION_SHORT",
+			scopeDirection: null,
+			supersededEntryIds: [],
+			tombstone: false,
+			updatedAt: "2026-01-01T00:00:00.000Z"
+		};
+		const decision = {
+			...question,
+			body: "Use scoped pages.",
+			createdAt: "2026-01-02T00:00:00.000Z",
+			id: "ENTRY2",
+			reference: "PLAN_ENTRY_DECISION",
+			role: "decision" as const,
+			shortReference: "PLAN_ENTRY_DECISION_SHORT",
+			supersededEntryIds: [question.id]
+		};
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			plan.id,
+			{ detail: { entity: plan, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		store.planEntryPages.set(new Map([[
+			plan.id,
+			{ data: { entries: [decision], nextBefore: "cursor-1", total: 2 }, error: null, loading: false }
+		]]));
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ entries: [question], nextBefore: null, total: 2 }), { status: 200 }));
+		store.selectEntity(plan.id);
+		const view = await mountDetail(store);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="plan"]')?.click();
+		await view.updateComplete;
+		expect(store.snapshot.get()).toBeNull();
+		expect(view.shadowRoot?.querySelector(".ai-plan-history .ai-plan-count")?.textContent).toBe("1");
+		expect(view.shadowRoot?.querySelector(".ai-plan-current")?.textContent).toContain(decision.body);
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-plan-current .ai-plan-entry-link[data-plan-entry-id="ENTRY1"]')?.textContent?.trim()).toBe(question.id);
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>(".ai-plan-tab > button")?.textContent).toContain("Load more entries");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>(".ai-plan-tab > button")?.click();
+		await vi.waitFor(() => expect(store.planEntriesFor(plan.id)).toEqual([decision, question]));
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector(".ai-plan-history .ai-plan-count")?.textContent).toBe("2");
+		expect(view.shadowRoot?.querySelector(".ai-plan-group .ai-plan-count")?.textContent).toBe("1");
+		expect(view.shadowRoot?.querySelector(".ai-plan-decision-question")?.textContent).toContain(question.body);
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('.ai-plan-current .ai-plan-entry-link[data-plan-entry-id="ENTRY1"]')?.textContent?.trim()).toBe(question.shortReference);
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>(".ai-plan-tab > button")).toBeNull();
 	});
 
 	it("opens and highlights a deep-linked Plan entry", async () => {
@@ -730,7 +843,8 @@ describe("entity detail pane", () => {
 						}
 					],
 					nextBefore: null,
-					total: 2
+					total: 2,
+					users: []
 				}
 			},
 			users: []
@@ -768,7 +882,7 @@ describe("entity detail pane", () => {
 		const store = makeStore(makeSnapshot({
 			entities: [initiative, issue],
 			initiatives: [makeBundle(initiative, { issues: [issue] })],
-			issueComments: { [issue.id]: { comments: [comment], nextBefore: null, total: 1 } }
+			issueComments: { [issue.id]: { comments: [comment], nextBefore: null, total: 1, users: [] } }
 		}));
 		store.openSearchTarget({ type: "issue-comment", issueId: issue.id, commentId: comment.id });
 
@@ -780,15 +894,19 @@ describe("entity detail pane", () => {
 	});
 
 	it("resolves comment provenance and preserves a deleted-comment placeholder", async () => {
-		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "todo", title: "Discuss detail rendering" });
-		const snapshot: Snapshot = {
-			...makeSnapshot({
-				entities: [initiative, issue],
-				initiatives: [makeBundle(initiative, { issues: [issue] })]
-			}),
-			issueComments: {
-				ISS9: {
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			issue.id,
+			{ detail: { entity: issue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		store.issueCommentPages.set(new Map([[
+			issue.id,
+			{
+				data: {
 					comments: [{
 						body: "Hidden deleted body.",
 						contentHash: "hash-deleted",
@@ -801,26 +919,27 @@ describe("entity detail pane", () => {
 						revision: 2,
 						tombstone: true,
 						updatedAt: "2026-01-03T00:00:00.000Z",
-						updatedBy: "user-2"
+						updatedBy: "missing-user"
 					}],
+					users: [
+						{ authenticationSubject: "ada", displayName: "Ada", id: "user-1", updatedAt: "2026-01-01T00:00:00.000Z" }
+					],
 					nextBefore: null,
 					total: 1
-				}
-			},
-			users: [
-				{ authenticationSubject: "ada", displayName: "Ada", id: "user-1", updatedAt: "2026-01-01T00:00:00.000Z" },
-				{ authenticationSubject: "ben", displayName: "Ben", id: "user-2", updatedAt: "2026-01-03T00:00:00.000Z" }
-			]
-		};
-		const store = makeStore(snapshot);
+				},
+				error: null,
+				loading: false
+			}
+		]]));
 		store.selectEntity("ISS9");
 		const view = await mountDetail(store);
 
 		const comment = view.shadowRoot?.querySelector(".ai-comment");
+		expect(store.snapshot.get()).toBeNull();
 		expect(comment?.textContent).toContain("COM_DELETED");
 		expect(comment?.textContent).toContain("Deleted 2026-01-03T00:00:00.000Z");
 		expect(comment?.textContent).toContain("Created by Ada");
-		expect(comment?.textContent).toContain("Updated by Ben");
+		expect(comment?.textContent).toContain("Updated by missing-user");
 		expect(comment?.textContent).not.toContain("Hidden deleted body.");
 	});
 

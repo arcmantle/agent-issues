@@ -19,6 +19,7 @@ import {
 } from "@agent-issues/core";
 import { getSqliteEntityOrThrow, type SqliteExecutor } from "../../db/sqlite-executor.js";
 import { decodeRevisionPatchHash, encodeRevisionPatchHash } from "../../db/revision-patch-hash.js";
+import { listUsers } from "../user-directory/store.js";
 
 type IssueCommentRow = {
 	id: string;
@@ -113,10 +114,12 @@ export function listIssueComments(
 			ORDER BY created_at DESC, reference DESC LIMIT ${DEFAULT_PAGE_SIZE}
 		) ORDER BY created_at ASC, reference ASC`) as IssueCommentRow[];
 	const comments = rows.map((row) => toIssueCommentRecord(executor, row));
+	const userIds = new Set(comments.flatMap((comment) => [comment.createdBy, comment.updatedBy]));
 	const oldest = comments[0];
 
 	return {
 		comments,
+		users: listUsers(executor).filter((user) => userIds.has(user.id)),
 		total: total.count,
 		nextBefore: !input.all && oldest && availableCount.count > comments.length
 			? encodeCursor({ createdAt: oldest.createdAt, reference: oldest.reference })

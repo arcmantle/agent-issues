@@ -66,6 +66,9 @@ function stubEventSource(): void {
 	vi.stubGlobal(
 		"EventSource",
 		class {
+			public onerror: (() => void) | null = null;
+			public onmessage: ((event: MessageEvent<string>) => void) | null = null;
+
 			public close() {}
 		}
 	);
@@ -749,6 +752,387 @@ describe("id-driven initiative bundle", () => {
 	});
 });
 
+describe("progressive initiative detail loading", () => {
+	it("loads only the selected initiative detail from a Project Summary rollup", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const initiativeSummary = {
+			createdAt: initiative.createdAt,
+			id: initiative.id,
+			kind: initiative.kind,
+			status: initiative.status,
+			title: initiative.title,
+			updatedAt: initiative.updatedAt
+		};
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ initiative }), { status: 200 }));
+
+		store.selectInitiative(initiative.id);
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledWith(
+				expect.stringContaining("/api/initiative-detail?initiative=INIT1&tenant=demo"),
+				expect.objectContaining({ cache: "no-store" })
+			);
+		});
+
+		expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/tabs/"), expect.anything());
+	});
+
+	it("loads an activated tab once and reuses its cached data", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const initiativeSummary = {
+			createdAt: initiative.createdAt,
+			id: initiative.id,
+			kind: initiative.kind,
+			status: initiative.status,
+			title: initiative.title,
+			updatedAt: initiative.updatedAt
+		};
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ initiative }), { status: 200 }));
+
+		store.selectInitiative(initiative.id);
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		fetchMock.mockResolvedValue(new Response(JSON.stringify({ records: [], relations: [], tab: "issues" }), { status: 200 }));
+
+		store.setInitTab("issues");
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledWith(
+				expect.stringContaining("/api/initiative-tab?initiative=INIT1&tab=issues&tenant=demo"),
+			expect.objectContaining({ cache: "no-store" })
+			);
+		});
+		store.setInitTab("overview");
+		store.setInitTab("issues");
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries a failed initiative detail request", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ initiative }), { status: 200 }));
+
+		store.selectInitiative(initiative.id);
+		await vi.waitFor(() => expect(store.initiativeDetails.get().get(initiative.id)?.error).toBe("Request failed for /api/initiative-detail?initiative=INIT1&tenant=demo&project=PROJ1"));
+
+		await store.retryInitiativeDetail(initiative.id);
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(store.initiativeDetailForId(initiative.id)).toEqual({ initiative });
+	});
+
+	it("clears the active initiative when its detail is unavailable", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
+		});
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ kind: "unavailable" }), { status: 200 }));
+
+		store.selectInitiative(initiative.id);
+
+		await vi.waitFor(() => expect(store.selectedInitiativeId.get()).toBeNull());
+		expect(store.activePage.get()).toBe("list");
+	});
+});
+
+describe("progressive entity detail loading", () => {
+	it("loads a selected entity through its scoped detail route", async () => {
+		const entity = makeEntity({ id: "ISS1", title: "Scoped entity" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ entity }), { status: 200 }));
+
+		store.selectEntity(entity.id);
+
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledWith(
+				expect.stringContaining("/api/entity-detail?entity=ISS1&tenant=demo&project=PROJ1"),
+				expect.objectContaining({ cache: "no-store" })
+			);
+			expect(store.entityForId(entity.id)).toEqual(entity);
+		});
+	});
+
+	it("exposes local relations from a selected entity detail response", async () => {
+		const entity = makeEntity({ id: "ISS1", title: "Scoped entity" });
+		const parent = makeEntity({ id: "INIT1", kind: "initiative", title: "Scoped initiative" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+			entity,
+			incoming: [{ entity: parent, relationType: "tracks" }],
+			outgoing: [],
+			planEntries: []
+		}), { status: 200 }));
+
+		store.selectEntity(entity.id);
+
+		await vi.waitFor(() => {
+			expect(store.incomingRelationsFor(entity.id)).toEqual([
+				{ createdAt: entity.createdAt, fromId: parent.id, toId: entity.id, type: "tracks" }
+			]);
+			expect(store.entityForId(parent.id)).toEqual({ ...parent, body: "" });
+		});
+	});
+
+	it("loads a Plan-entry page only when the Plan tab opens", async () => {
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Scoped Plan" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ entries: [], nextBefore: null, total: 0 }), { status: 200 }));
+
+		store.requestEntityTab(plan.id, "plan");
+
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledWith(
+				expect.stringContaining("/api/plan-entries?plan=PLAN1&tenant=demo"),
+				expect.objectContaining({ cache: "no-store" })
+			);
+			expect(store.planEntriesFor(plan.id)).toEqual([]);
+		});
+	});
+
+	it("appends the next Plan-entry page through its cursor", async () => {
+		const plan = makeEntity({ id: "PLAN1", kind: "plan", title: "Scoped Plan" });
+		const firstEntry = { body: "First", createdAt: "2026-01-01T00:00:00.000Z", id: "ENTRY1", planId: plan.id, reference: "PLAN_ENTRY_1", referencedEntityIds: [], role: "decision" as const, scopeDirection: null, supersededEntryIds: [], tombstone: false, updatedAt: "2026-01-01T00:00:00.000Z" };
+		const secondEntry = { ...firstEntry, body: "Second", id: "ENTRY2", reference: "PLAN_ENTRY_2" };
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({ entries: [firstEntry], nextBefore: "cursor-1", total: 2 }), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ entries: [secondEntry], nextBefore: null, total: 2 }), { status: 200 }));
+
+		store.requestEntityTab(plan.id, "plan");
+		await vi.waitFor(() => expect(store.planEntriesFor(plan.id)).toEqual([firstEntry]));
+		await store.loadMorePlanEntries(plan.id);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/api/plan-entries?plan=PLAN1&before=cursor-1&tenant=demo"),
+			expect.objectContaining({ cache: "no-store" })
+		);
+		expect(store.planEntriesFor(plan.id)).toEqual([firstEntry, secondEntry]);
+	});
+
+	it("preserves comment authors when it appends an older comment page", async () => {
+		const firstUser = { authenticationSubject: "ada", displayName: "Ada", id: "USER1", updatedAt: "2026-01-02T00:00:00.000Z" };
+		const secondUser = { authenticationSubject: "ben", displayName: "Ben", id: "USER2", updatedAt: "2026-01-01T00:00:00.000Z" };
+		const firstComment = { body: "Newer", contentHash: "hash-1", createdAt: "2026-01-02T00:00:00.000Z", createdBy: firstUser.id, id: "COMMENT1", issueId: "ISS1", reference: "COM_1", referencedIssueIds: [], revision: 1, tombstone: false, updatedAt: "2026-01-02T00:00:00.000Z", updatedBy: firstUser.id };
+		const secondComment = { ...firstComment, body: "Older", createdAt: "2026-01-01T00:00:00.000Z", createdBy: secondUser.id, id: "COMMENT2", reference: "COM_2", updatedAt: "2026-01-01T00:00:00.000Z", updatedBy: secondUser.id };
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.issueCommentPages.set(new Map([[
+			"ISS1",
+			{ data: { comments: [firstComment], users: [firstUser], nextBefore: "cursor-1", total: 2 }, error: null, loading: false }
+		]]));
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ comments: [secondComment], users: [secondUser], nextBefore: null, total: 2 }), { status: 200 }));
+
+		await store.loadMoreIssueComments("ISS1");
+
+		expect(store.issueCommentPages.get().get("ISS1")?.data).toEqual(expect.objectContaining({
+			comments: [firstComment, secondComment],
+			users: [firstUser, secondUser]
+		}));
+	});
+
+	it("builds the Plan projection from scoped entries without a snapshot", () => {
+		const question = { body: "Which entries are current?", createdAt: "2026-01-01T00:00:00.000Z", id: "ENTRY1", planId: "PLAN1", reference: "PLAN_ENTRY_1", referencedEntityIds: [], role: "question" as const, scopeDirection: null, supersededEntryIds: [], tombstone: false, updatedAt: "2026-01-01T00:00:00.000Z" };
+		const decision = { ...question, body: "Use scoped pages.", createdAt: "2026-01-02T00:00:00.000Z", id: "ENTRY2", reference: "PLAN_ENTRY_2", role: "decision" as const, supersededEntryIds: [question.id] };
+		const store = new AgentIssuesStore();
+		store.planEntryPages.set(new Map([[
+			"PLAN1",
+			{ data: { entries: [decision, question], nextBefore: null, total: 2 }, error: null, loading: false }
+		]]));
+
+		const projection = store.planProjectionFor("PLAN1");
+
+		expect(store.snapshot.get()).toBeNull();
+		expect(projection.history).toEqual([question, decision]);
+		expect(projection.current.find((group) => group.key === "questions")?.entries).toEqual([]);
+		expect(projection.current.find((group) => group.key === "decisions")?.entries).toEqual([decision]);
+	});
+});
+
+describe("progressive project section loading", () => {
+	it("projects initiative ADRs and Context terms from scoped section responses", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", title: "Payments" });
+		const projectAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Project decision" });
+		const initiativeAdr = makeEntity({ id: "ADR2", kind: "adr", title: "Initiative decision" });
+		const sharedContext = {
+			context: {
+				createdAt: null,
+				exists: true,
+				key: "shared",
+				scopeEntityId: null,
+				scopeKind: "default" as const,
+				scopeLabel: "Shared",
+				summary: "Project language.",
+				title: "Shared Context",
+				updatedAt: null
+			},
+			terms: [{ avoid: [], createdAt: "", definition: "Canonical order.", term: "Order", updatedAt: "" }]
+		};
+		const initiativeContext = {
+			context: {
+				createdAt: null,
+				exists: true,
+				key: "INIT1",
+				scopeEntityId: "INIT1",
+				scopeKind: "initiative" as const,
+				scopeLabel: "Payments",
+				summary: "Payments language.",
+				title: "Payments Context",
+				updatedAt: null
+			},
+			terms: [{ avoid: [], createdAt: "", definition: "Payment-specific order.", term: "Order", updatedAt: "" }]
+		};
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				initiativeAdrs: [{ adrs: [initiativeAdr], initiative }],
+				projectAdrs: [projectAdr]
+			}), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				duplicateTerms: ["Order"],
+				initiatives: [initiativeContext],
+				shared: sharedContext,
+				terms: [{
+					hasConflictingDefinitions: true,
+					hasDuplicates: true,
+					hasSharedSource: true,
+					sources: [
+						{ ...sharedContext.terms[0], contextKey: "shared", contextTitle: "Shared Context", scopeEntityId: null, scopeKind: "default", scopeLabel: "Shared" },
+						{ ...initiativeContext.terms[0], contextKey: "INIT1", contextTitle: "Payments Context", scopeEntityId: "INIT1", scopeKind: "initiative", scopeLabel: "Payments" }
+					],
+					term: "Order"
+				}]
+			}), { status: 200 }));
+
+		store.selectSection("adrs");
+		await vi.waitFor(() => expect(store.adrRailEntries.get()).toEqual([
+			{ adr: projectAdr, scope: "project", scopeLabel: "project decision" },
+			{ adr: initiativeAdr, scope: "initiative", scopeLabel: "initiative Payments" }
+		]));
+		expect(store.snapshot.get()).toBeNull();
+
+		store.selectSection("context");
+		await vi.waitFor(() => expect(store.projectContextTerms.get()).toEqual([
+			expect.objectContaining({
+				hasConflictingDefinitions: true,
+				hasDuplicates: true,
+				sources: [expect.objectContaining({ scopeLabel: "Shared" }), expect.objectContaining({ scopeLabel: "Payments" })],
+				term: "Order"
+			})
+		]));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("loads project ADRs only when the ADR section opens", async () => {
+		const adr = makeEntity({ id: "ADR1", kind: "adr", title: "Scoped ADR" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ initiativeAdrs: [], projectAdrs: [adr] }), { status: 200 }));
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		store.selectSection("adrs");
+
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledWith(
+				expect.stringContaining("/api/project-adrs?tenant=demo"),
+				expect.objectContaining({ cache: "no-store" })
+			);
+			expect(store.projectAdrs.get()).toEqual([adr]);
+		});
+	});
+
+	it("loads debt, context, and graph data only when their sections open", async () => {
+		const debt = makeEntity({ id: "DEBT1", kind: "debt", title: "Scoped debt" });
+		const context = {
+			context: {
+				createdAt: null,
+				exists: true,
+				key: "shared",
+				scopeEntityId: null,
+				scopeKind: "default" as const,
+				scopeLabel: "Shared",
+				summary: "Scoped context",
+				title: "Shared context",
+				updatedAt: null
+			},
+			terms: []
+		};
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({ records: [debt], relations: [] }), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ duplicateTerms: [], initiatives: [], shared: context, terms: [] }), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ records: [debt], relations: [] }), { status: 200 }));
+
+		store.selectSection("debt");
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/project-debt?tenant=demo"), expect.anything()));
+		store.selectSection("context");
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/project-context?tenant=demo"), expect.anything()));
+		store.selectSection("graph");
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/project-graph?tenant=demo"), expect.anything()));
+	});
+});
+
 describe("browser detail routes", () => {
 	afterEach(() => {
 		window.location.hash = "";
@@ -1026,6 +1410,1053 @@ describe("tenant and project route scope", () => {
 
 		expect(store.selectedProjectDisplayName.get()).toBe("Console Viewer");
 		fetchMock.mockRestore();
+	});
+
+	it("opens a project from Project Summary without requesting a snapshot", async () => {
+		const store = new AgentIssuesStore();
+		const project = makeEntity({ id: "PROJ1", kind: "project", title: "Console Viewer" });
+		const epic = makeEntity({ id: "EPIC1", kind: "epic", title: "Platform work" });
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Progressive loading" });
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({ availableTenants: [{ displayName: "Demo", id: "demo" }], currentTenant: "demo", dbPath: "/tmp/agent-issues.db" }),
+					{ status: 200 }
+				)
+			)
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						kind: "available",
+						projects: [{ completedInitiativeCount: 0, epicCount: 1, initiativeCount: 1, project }]
+					}),
+					{ status: 200 }
+				)
+			)
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						kind: "available",
+						project,
+						epics: [{ epic, initiatives: [{ initiative, issueCount: 2, completedIssueCount: 1, userStoryCount: 1 }] }],
+						counts: { epics: 1, initiatives: 1, completedInitiatives: 0 }
+					}),
+					{ status: 200 }
+				)
+			);
+
+		await (store as unknown as { bootstrap(): Promise<void> }).bootstrap();
+
+		expect(store.projectSummary.get()).toEqual(expect.objectContaining({ project }));
+		expect(store.projectSummaryEpicGroups.get()).toEqual(expect.arrayContaining([
+			expect.objectContaining({ epic: expect.objectContaining({ id: epic.id }) })
+		]));
+		const resourcePaths = fetchMock.mock.calls.map(([resource]) => String(resource));
+		expect(resourcePaths.some((resourcePath) => resourcePath.startsWith("/api/project-summary?tenant=demo&project=PROJ1&ts="))).toBe(true);
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/snapshot"))).toBe(false);
+		fetchMock.mockRestore();
+	});
+
+	it("refreshes only the active entity for a matching scoped live update", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		const cachedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Cached decision" });
+		const refreshedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Refreshed decision" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ADR1");
+		store.entityDetails.set(new Map([[
+			"ADR1",
+			{ detail: { entity: cachedAdr, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ADR1"],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.entityDetails.get().get("ADR1")).toEqual(expect.objectContaining({
+			detail: expect.objectContaining({ entity: cachedAdr }),
+			loading: true
+		}));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/entity-detail?entity=ADR1&tenant=demo");
+		expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain("/api/project-summary");
+
+		resolveRefresh!(new Response(JSON.stringify({ entity: refreshedAdr, incoming: [], outgoing: [], planEntries: [] }), { status: 200 }));
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.detail?.entity.title).toBe("Refreshed decision"));
+	});
+
+	it("marks an inactive entity cache stale and reloads it when opened", async () => {
+		const store = new AgentIssuesStore();
+		const cachedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Cached decision" });
+		const refreshedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Refreshed decision" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			"ADR1",
+			{ detail: { entity: cachedAdr, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ entity: refreshedAdr, incoming: [], outgoing: [], planEntries: [] }), { status: 200 })
+		);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ADR1"],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(store.entityDetails.get().get("ADR1")).toEqual(expect.objectContaining({ stale: true }));
+
+		store.selectEntity("ADR1");
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.detail?.entity.title).toBe("Refreshed decision"));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries a stale entity refresh after a failed reopen", async () => {
+		const store = new AgentIssuesStore();
+		const cachedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Cached decision" });
+		const refreshedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Refreshed decision" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			"ADR1",
+			{ detail: { entity: cachedAdr, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ entity: refreshedAdr, incoming: [], outgoing: [], planEntries: [] }), { status: 200 }));
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ADR1"],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		store.selectEntity("ADR1");
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.error).not.toBeNull());
+		expect(store.entityDetails.get().get("ADR1")).toEqual(expect.objectContaining({
+			detail: expect.objectContaining({ entity: cachedAdr }),
+			stale: true
+		}));
+
+		store.selectEntity("ADR1");
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.detail?.entity.title).toBe("Refreshed decision"));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(store.entityDetails.get().get("ADR1")).toEqual(expect.objectContaining({ error: null }));
+		expect(store.entityDetails.get().get("ADR1")).not.toHaveProperty("stale");
+	});
+
+	it("keeps a live stale marker when an in-flight entity refresh fails", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		const cachedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Cached decision" });
+		const refreshedAdr = makeEntity({ id: "ADR1", kind: "adr", title: "Refreshed decision" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			"ADR1",
+			{ detail: { entity: cachedAdr, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockReturnValueOnce(refreshResponse)
+			.mockResolvedValueOnce(new Response(JSON.stringify({ entity: refreshedAdr, incoming: [], outgoing: [], planEntries: [] }), { status: 200 }));
+
+		void store.retryEntityDetail("ADR1");
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.loading).toBe(true));
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ADR1"],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+		resolveRefresh!(new Response(null, { status: 500 }));
+
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.error).not.toBeNull());
+		expect(store.entityDetails.get().get("ADR1")).toEqual(expect.objectContaining({ stale: true }));
+
+		store.selectEntity("ADR1");
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.detail?.entity.title).toBe("Refreshed decision"));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries a stale initiative detail refresh after a failed reopen", async () => {
+		const store = new AgentIssuesStore();
+		const cachedInitiative = makeEntity({ id: "INIT1", kind: "initiative", title: "Cached initiative" });
+		const refreshedInitiative = makeEntity({ id: "INIT1", kind: "initiative", title: "Refreshed initiative" });
+		const initiativeSummary = { createdAt: cachedInitiative.createdAt, id: cachedInitiative.id, kind: cachedInitiative.kind, status: cachedInitiative.status, title: cachedInitiative.title, updatedAt: cachedInitiative.updatedAt };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project" }
+		});
+		store.initiativeDetails.set(new Map([[
+			"INIT1",
+			{ detail: { initiative: cachedInitiative }, error: null, loading: false, stale: true }
+		]]));
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ initiative: refreshedInitiative }), { status: 200 }));
+
+		store.selectInitiative("INIT1");
+		await vi.waitFor(() => expect(store.initiativeDetails.get().get("INIT1")?.error).not.toBeNull());
+		expect(store.initiativeDetails.get().get("INIT1")).toEqual(expect.objectContaining({
+			detail: { initiative: cachedInitiative },
+			stale: true
+		}));
+
+		store.selectInitiative("INIT1");
+		await vi.waitFor(() => expect(store.initiativeDetailForId("INIT1")?.initiative.title).toBe("Refreshed initiative"));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(store.initiativeDetails.get().get("INIT1")).not.toHaveProperty("stale");
+	});
+
+	it("retries a stale initiative tab refresh after a failed reopen", async () => {
+		const store = new AgentIssuesStore();
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", title: "Initiative" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedInitiativeId.set("INIT1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project" }
+		});
+		store.initiativeTabs.set(new Map([[
+			"INIT1:issues",
+			{ data: { records: [], relations: [], tab: "issues" }, error: null, loading: false, stale: true }
+		]]));
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ records: [makeEntity({ id: "ISS1" })], relations: [], tab: "issues" }), { status: 200 }));
+
+		store.setInitTab("issues");
+		await vi.waitFor(() => expect(store.initiativeTabs.get().get("INIT1:issues")?.error).not.toBeNull());
+		expect(store.initiativeTabs.get().get("INIT1:issues")).toEqual(expect.objectContaining({ stale: true }));
+
+		store.setInitTab("overview");
+		store.setInitTab("issues");
+		await vi.waitFor(() => expect(store.initiativeTabs.get().get("INIT1:issues")?.data?.records).toHaveLength(1));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(store.initiativeTabs.get().get("INIT1:issues")).not.toHaveProperty("stale");
+	});
+
+	it.each([
+		{
+			cache: (store: AgentIssuesStore) => store.projectAdrsCache.get(),
+			data: { initiativeAdrs: [], projectAdrs: [makeEntity({ id: "ADR1", kind: "adr" })] },
+			name: "ADR",
+			open: (store: AgentIssuesStore) => store.selectSection("adrs"),
+			seed: (store: AgentIssuesStore, data: unknown) => store.projectAdrsCache.set({ data: data as never, error: null, loading: false, stale: true })
+		},
+		{
+			cache: (store: AgentIssuesStore) => store.projectContextCache.get(),
+			data: { duplicateTerms: [], initiatives: [], shared: makeSnapshot().contexts.shared, terms: [] },
+			name: "Context",
+			open: (store: AgentIssuesStore) => store.selectSection("context"),
+			seed: (store: AgentIssuesStore, data: unknown) => store.projectContextCache.set({ data: data as never, error: null, loading: false, stale: true })
+		},
+		{
+			cache: (store: AgentIssuesStore) => store.projectDebtCache.get(),
+			data: { records: [makeEntity({ id: "DEBT1", kind: "debt" })], relations: [] },
+			name: "record",
+			open: (store: AgentIssuesStore) => store.selectSection("debt"),
+			seed: (store: AgentIssuesStore, data: unknown) => store.projectDebtCache.set({ data: data as never, error: null, loading: false, stale: true })
+		}
+	])("retries a stale project $name cache refresh after a failed reopen", async ({ cache, data, open, seed }) => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		seed(store, data);
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify(data), { status: 200 }));
+
+		open(store);
+		await vi.waitFor(() => expect(cache(store).error).not.toBeNull());
+		expect(cache(store)).toEqual(expect.objectContaining({ data, stale: true }));
+
+		open(store);
+		await vi.waitFor(() => expect(cache(store)).not.toHaveProperty("stale"));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(cache(store).error).toBeNull();
+	});
+
+	it("retries stale Plan-entry and issue-comment page refreshes after failure", async () => {
+		const store = new AgentIssuesStore();
+		const issue = makeEntity({ id: "ISS1", kind: "issue" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			"ISS1",
+			{ detail: { entity: issue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		store.planEntryPages.set(new Map([[
+			"PLAN1",
+			{ data: { entries: [], nextBefore: null, total: 0 }, error: null, loading: false, stale: true }
+		]]));
+		store.issueCommentPages.set(new Map([[
+			"ISS1",
+			{ data: { comments: [], nextBefore: null, total: 0, users: [] }, error: null, loading: false, stale: true }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (resource) => {
+			const path = String(resource);
+			const failedBefore = fetchMock.mock.calls.slice(0, -1).some(([previousResource]) => String(previousResource).split("&ts=")[0] === path.split("&ts=")[0]);
+			if (!failedBefore) {
+				return new Response(null, { status: 500 });
+			}
+			return new Response(JSON.stringify(path.includes("plan-entries")
+				? { entries: [], nextBefore: null, total: 0 }
+				: { comments: [], nextBefore: null, total: 0 }), { status: 200 });
+		});
+
+		store.requestEntityTab("PLAN1", "plan");
+		store.selectEntity("ISS1");
+		await vi.waitFor(() => {
+			expect(store.planEntryPages.get().get("PLAN1")?.error).not.toBeNull();
+			expect(store.issueCommentPages.get().get("ISS1")?.error).not.toBeNull();
+		});
+		expect(store.planEntryPages.get().get("PLAN1")).toEqual(expect.objectContaining({ stale: true }));
+		expect(store.issueCommentPages.get().get("ISS1")).toEqual(expect.objectContaining({ stale: true }));
+
+		store.requestEntityTab("PLAN1", "plan");
+		store.selectEntity("ISS1");
+		await vi.waitFor(() => {
+			expect(store.planEntryPages.get().get("PLAN1")).not.toHaveProperty("stale");
+			expect(store.issueCommentPages.get().get("ISS1")).not.toHaveProperty("stale");
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+		expect(store.planEntryPages.get().get("PLAN1")?.error).toBeNull();
+		expect(store.issueCommentPages.get().get("ISS1")?.error).toBeNull();
+	});
+
+	it("refreshes the active initiative tab and marks its inactive tabs stale", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedInitiativeId.set("INIT1");
+		store.initTab.set("issues");
+		store.initiativeTabs.set(new Map([
+			["INIT1:issues", { data: { tab: "issues", records: [], relations: [] }, error: null, loading: false }],
+			["INIT1:graph", { data: { tab: "graph", records: [], relations: [] }, error: null, loading: false }]
+		]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ISS1"],
+				affectedEntityKinds: ["issue"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.initiativeTabs.get().get("INIT1:issues")).toEqual(expect.objectContaining({
+			data: expect.objectContaining({ tab: "issues" }),
+			loading: true
+		}));
+		expect(store.initiativeTabs.get().get("INIT1:graph")).toEqual(expect.objectContaining({ stale: true }));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/initiative-tab?initiative=INIT1&tab=issues");
+
+		resolveRefresh!(new Response(JSON.stringify({ tab: "issues", records: [], relations: [] }), { status: 200 }));
+		await vi.waitFor(() => expect(store.initiativeTabs.get().get("INIT1:issues")?.loading).toBe(false));
+	});
+
+	it("refreshes comments for the active issue after a scoped comment update", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.issueCommentPages.set(new Map([[
+			"ISS1",
+			{ data: { comments: [], nextBefore: null, total: 0, users: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ISS1"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "issue-comment",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.issueCommentPages.get().get("ISS1")).toEqual(expect.objectContaining({
+			data: expect.objectContaining({ total: 0 }),
+			loading: true
+		}));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/issue-comments?issue=ISS1");
+
+		resolveRefresh!(new Response(JSON.stringify({ comments: [], nextBefore: null, total: 0 }), { status: 200 }));
+		await vi.waitFor(() => expect(store.issueCommentPages.get().get("ISS1")?.loading).toBe(false));
+	});
+
+	it("refreshes Plan entries for the active Plan after a scoped entry update", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("PLAN1");
+		store.planEntryPages.set(new Map([[
+			"PLAN1",
+			{ data: { entries: [], nextBefore: null, total: 0 }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["PLAN1"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "plan-entry",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.planEntryPages.get().get("PLAN1")).toEqual(expect.objectContaining({
+			data: expect.objectContaining({ total: 0 }),
+			loading: true
+		}));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/plan-entries?plan=PLAN1");
+
+		resolveRefresh!(new Response(JSON.stringify({ entries: [], nextBefore: null, total: 0 }), { status: 200 }));
+		await vi.waitFor(() => expect(store.planEntryPages.get().get("PLAN1")?.loading).toBe(false));
+	});
+
+	it("refreshes the active project Context and keeps its cached content visible", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		const cachedContext = makeSnapshot().contexts.shared;
+		const cachedContextSection = { duplicateTerms: [], initiatives: [], shared: cachedContext, terms: [] };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.activeSection.set("context");
+		store.projectContextCache.set({ data: cachedContextSection, error: null, loading: false });
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: [],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "context",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.projectContextCache.get()).toEqual(expect.objectContaining({ data: cachedContextSection, loading: true }));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/project-context?tenant=demo");
+
+		resolveRefresh!(new Response(JSON.stringify(cachedContextSection), { status: 200 }));
+		await vi.waitFor(() => expect(store.projectContextCache.get().loading).toBe(false));
+	});
+
+	it("applies a local change immediately and ignores its matching live event", async () => {
+		const store = new AgentIssuesStore();
+		const adr = makeEntity({ id: "ADR1", kind: "adr" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ADR1");
+		store.entityDetails.set(new Map([[
+			"ADR1",
+			{ detail: { entity: adr, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ entity: adr, incoming: [], outgoing: [], planEntries: [] }), { status: 200 })
+		);
+		const event = {
+			affectedEntityIds: ["ADR1"],
+			affectedInitiativeIds: [],
+			at: "2026-08-31T00:00:00.000Z",
+			category: "entity",
+			correlationId: "write-1",
+			projectId: "PROJ1",
+			type: "snapshot-changed"
+		} as const;
+
+		(store as unknown as { applyLocalProjectChange(event: object): void }).applyLocalProjectChange(event);
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ADR1")?.loading).toBe(false));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(event) }));
+		await Promise.resolve();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("registers a site mutation before an early matching event and refreshes once", async () => {
+		const store = new AgentIssuesStore();
+		const originalIssue = makeEntity({ body: "Before", id: "ISS1", kind: "issue" });
+		const updatedIssue = makeEntity({ body: "After", id: "ISS1", kind: "issue" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set(originalIssue.id);
+		store.entityDetails.set(new Map([[
+			originalIssue.id,
+			{ detail: { entity: originalIssue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		let mutationEvent: object | null = null;
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (resource, init) => {
+			const resourcePath = String(resource);
+			if (resourcePath.includes("/api/project-mutation")) {
+				const request = JSON.parse(String(init?.body)) as { correlationId: string };
+				mutationEvent = {
+					affectedEntityIds: [originalIssue.id],
+					affectedEntityKinds: ["issue"],
+					affectedInitiativeIds: ["INIT1"],
+					at: "2026-08-31T00:00:00.000Z",
+					category: "entity",
+					correlationId: request.correlationId,
+					projectId: "PROJ1",
+					type: "snapshot-changed"
+				};
+				store.events?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(mutationEvent) }));
+				return new Response(JSON.stringify({ event: mutationEvent, result: { entity: updatedIssue } }), { status: 200 });
+			}
+			return new Response(JSON.stringify({ entity: updatedIssue, incoming: [], outgoing: [], planEntries: [] }), { status: 200 });
+		});
+
+		const result = await store.mutateProject<{ entity: Entity }>("updateEntity", {
+			body: updatedIssue.body,
+			entityId: updatedIssue.id,
+			expectedContentHash: "hash",
+			expectedRevision: 1
+		});
+		await vi.waitFor(() => expect(store.entityDetails.get().get(updatedIssue.id)?.loading).toBe(false));
+
+		expect(result.entity).toEqual(updatedIssue);
+		expect(fetchMock.mock.calls.filter(([resource]) => String(resource).includes("/api/project-mutation"))).toHaveLength(1);
+		expect(fetchMock.mock.calls.filter(([resource]) => String(resource).includes("/api/entity-detail"))).toHaveLength(1);
+
+		store.events?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(mutationEvent) }));
+		await Promise.resolve();
+		expect(fetchMock.mock.calls.filter(([resource]) => String(resource).includes("/api/entity-detail"))).toHaveLength(1);
+	});
+
+	it("refreshes the active project ADR section for an ADR change", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		const cachedAdr = makeEntity({ id: "ADR1", kind: "adr" });
+		const cachedAdrSection = { initiativeAdrs: [], projectAdrs: [cachedAdr] };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.activeSection.set("adrs");
+		store.projectAdrsCache.set({ data: cachedAdrSection, error: null, loading: false });
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ADR2"],
+				affectedEntityKinds: ["adr"],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.projectAdrsCache.get()).toEqual(expect.objectContaining({ data: cachedAdrSection, loading: true }));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/project-adrs?tenant=demo");
+
+		resolveRefresh!(new Response(JSON.stringify(cachedAdrSection), { status: 200 }));
+		await vi.waitFor(() => expect(store.projectAdrsCache.get().loading).toBe(false));
+	});
+
+	it("refreshes the active project debt section for a debt change", async () => {
+		const store = new AgentIssuesStore();
+		const cachedData = { records: [makeEntity({ id: "DEBT1", kind: "debt" })], relations: [] };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.activeSection.set("debt");
+		store.projectDebtCache.set({ data: cachedData, error: null, loading: false });
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify(cachedData), { status: 200 })
+		);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["DEBT2"],
+				affectedEntityKinds: ["debt"],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(store.projectDebtCache.get().loading).toBe(false));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/project-debt?tenant=demo");
+	});
+
+	it("refreshes the active project graph after a relation change", async () => {
+		const store = new AgentIssuesStore();
+		const cachedData = { records: [], relations: [] };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.activeSection.set("graph");
+		store.projectGraphCache.set({ data: cachedData, error: null, loading: false });
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify(cachedData), { status: 200 })
+		);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["INIT1", "ISS1"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "relation",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(store.projectGraphCache.get().loading).toBe(false));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/project-graph?tenant=demo");
+	});
+
+	it("refreshes active initiative detail without loading its tabs", async () => {
+		let resolveRefresh: (response: Response) => void;
+		const refreshResponse = new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		});
+		const store = new AgentIssuesStore();
+		const cachedInitiative = makeEntity({ id: "INIT1", kind: "initiative", body: "Cached body" });
+		const refreshedInitiative = makeEntity({ id: "INIT1", kind: "initiative", body: "Refreshed body" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedInitiativeId.set("INIT1");
+		store.initTab.set("overview");
+		store.initiativeDetails.set(new Map([[
+			"INIT1",
+			{ detail: { initiative: cachedInitiative }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(refreshResponse);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["INIT1"],
+				affectedEntityKinds: ["initiative"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		expect(store.initiativeDetails.get().get("INIT1")).toEqual(expect.objectContaining({
+			detail: { initiative: cachedInitiative },
+			loading: true
+		}));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/initiative-detail?initiative=INIT1");
+		expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain("/api/initiative-tab");
+
+		resolveRefresh!(new Response(JSON.stringify({ initiative: refreshedInitiative }), { status: 200 }));
+		await vi.waitFor(() => expect(store.initiativeDetails.get().get("INIT1")?.detail?.initiative.body).toBe("Refreshed body"));
+	});
+
+	it("refreshes only Project Summary for a bulk change", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const projectSummary = {
+			kind: "available" as const,
+			project: makeEntity({ id: "PROJ1", kind: "project" }),
+			epics: [],
+			counts: { completedInitiatives: 0, epics: 0, initiatives: 0 }
+		};
+		store.projectSummary.set(projectSummary);
+		store.selectedInitiativeId.set("INIT1");
+		store.initTab.set("issues");
+		store.initiativeTabs.set(new Map([[
+			"INIT1:issues",
+			{ data: { tab: "issues", records: [], relations: [] }, error: null, loading: false }
+		]]));
+		const refreshedSummary = { ...projectSummary, counts: { completedInitiatives: 0, epics: 0, initiatives: 1 } };
+		const fetchMock = vi.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({ kind: "unavailable" }), { status: 200 }))
+			.mockResolvedValue(new Response(JSON.stringify(refreshedSummary), { status: 200 }));
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ISS1"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "bulk",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/project-summary?tenant=demo&project=PROJ1");
+		await vi.waitFor(() => expect(store.syncLabel.get()).toBe("refresh failed"));
+		expect(store.errorMessage.get()).toBe("Selected project is unavailable.");
+		expect(store.projectSummary.get()).toBe(projectSummary);
+		expect(store.initiativeTabs.get().get("INIT1:issues")?.loading).toBe(false);
+
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				at: "2026-08-31T00:00:01.000Z",
+				category: "bulk",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(store.projectSummary.get()).toEqual(refreshedSummary));
+		expect(store.errorMessage.get()).toBeNull();
+		expect(store.syncLabel.get()).toBe("listening");
+	});
+
+	it("ignores a background Project Summary response after project selection changes", async () => {
+		const store = new AgentIssuesStore();
+		const projectASummary = {
+			kind: "available" as const,
+			project: makeEntity({ id: "PROJ1", kind: "project" }),
+			epics: [],
+			counts: { completedInitiatives: 0, epics: 0, initiatives: 1 }
+		};
+		const projectBSummary = {
+			kind: "available" as const,
+			project: makeEntity({ id: "PROJ2", kind: "project" }),
+			epics: [],
+			counts: { completedInitiatives: 0, epics: 0, initiatives: 2 }
+		};
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set(projectASummary);
+		let resolveRefresh: (response: Response) => void;
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise<Response>((resolve) => {
+			resolveRefresh = resolve;
+		}));
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				at: "2026-08-31T00:00:00.000Z",
+				category: "bulk",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		store.selectedProjectId.set("PROJ2");
+		store.projectSummary.set(projectBSummary);
+		const response = new Response(JSON.stringify(projectASummary), { status: 200 });
+		const jsonSpy = vi.spyOn(response, "json");
+		resolveRefresh!(response);
+
+		await vi.waitFor(() => expect(jsonSpy).toHaveBeenCalledTimes(1));
+		await jsonSpy.mock.results[0]!.value;
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(store.projectSummary.get()).toBe(projectBSummary);
+		expect(store.errorMessage.get()).toBeNull();
+	});
+
+	it("refreshes selected entity detail after a relation change", async () => {
+		const store = new AgentIssuesStore();
+		const issue = makeEntity({ id: "ISS1", kind: "issue" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.entityDetails.set(new Map([[
+			"ISS1",
+			{ detail: { entity: issue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ entity: issue, incoming: [], outgoing: [], planEntries: [] }), { status: 200 })
+		);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["INIT1", "ISS1"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "relation",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ISS1")?.loading).toBe(false));
+		const resourcePaths = fetchMock.mock.calls.map(([resource]) => String(resource));
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/entity-detail?entity=ISS1"))).toBe(true);
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/project-summary"))).toBe(false);
+	});
+
+	it("reloads stale comments when a cached issue is opened", async () => {
+		const store = new AgentIssuesStore();
+		const issue = makeEntity({ id: "ISS1", kind: "issue" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.entityDetails.set(new Map([[
+			"ISS1",
+			{ detail: { entity: issue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		store.issueCommentPages.set(new Map([[
+			"ISS1",
+			{ data: { comments: [], nextBefore: null, total: 0, users: [] }, error: null, loading: false, stale: true }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ comments: [], nextBefore: null, total: 0 }), { status: 200 })
+		);
+
+		store.selectEntity("ISS1");
+
+		await vi.waitFor(() => expect(store.issueCommentPages.get().get("ISS1")?.loading).toBe(false));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/issue-comments?issue=ISS1");
+	});
+
+	it("refreshes associated Project Summary rollups for an issue change", async () => {
+		const store = new AgentIssuesStore();
+		const issue = makeEntity({ id: "ISS1", kind: "issue" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.entityDetails.set(new Map([[
+			"ISS1",
+			{ detail: { entity: issue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (resource) => {
+			const path = String(resource);
+			if (path.includes("/api/project-summary")) {
+				return new Response(JSON.stringify({ kind: "available", project: makeEntity({ id: "PROJ1", kind: "project" }), epics: [], counts: { epics: 0, initiatives: 0, completedInitiatives: 0 } }), { status: 200 });
+			}
+			if (path.includes("/api/issue-comments")) {
+				return new Response(JSON.stringify({ comments: [], nextBefore: null, total: 0 }), { status: 200 });
+			}
+			return new Response(JSON.stringify({ entity: issue, incoming: [], outgoing: [], planEntries: [] }), { status: 200 });
+		});
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["ISS1"],
+				affectedEntityKinds: ["issue"],
+				affectedInitiativeIds: ["INIT1"],
+				affectsProjectSummary: true,
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(store.projectSummary.get()).toEqual(expect.objectContaining({ kind: "available" })));
+		const resourcePaths = fetchMock.mock.calls.map(([resource]) => String(resource));
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/entity-detail?entity=ISS1"))).toBe(true);
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/project-summary"))).toBe(true);
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/initiative-tab"))).toBe(false);
+	});
+
+	it("refreshes Project Summary but not unrelated section caches for a contains change", async () => {
+		const store = new AgentIssuesStore();
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative" });
+		const cachedAdrSection = { initiativeAdrs: [], projectAdrs: [makeEntity({ id: "ADR1", kind: "adr" })] };
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectAdrsCache.set({ data: cachedAdrSection, error: null, loading: false });
+		store.initiativeDetails.set(new Map([[
+			initiative.id,
+			{ detail: { initiative }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({
+				counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+				epics: [],
+				kind: "available",
+				project: makeEntity({ id: "PROJ1", kind: "project" })
+			}), { status: 200 })
+		);
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["EPIC1", initiative.id],
+				affectedInitiativeIds: [initiative.id],
+				affectsProjectSummary: true,
+				at: "2026-08-31T00:00:00.000Z",
+				category: "relation",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/project-summary?tenant=demo&project=PROJ1");
+		expect(store.projectAdrsCache.get()).toEqual({ data: cachedAdrSection, error: null, loading: false });
+	});
+
+	it("refreshes the selected issue detail for a Plan-entry linkage event", async () => {
+		const store = new AgentIssuesStore();
+		const issue = makeEntity({ id: "ISS1", kind: "issue" });
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectedId.set("ISS1");
+		store.entityDetails.set(new Map([[
+			"ISS1",
+			{ detail: { entity: issue, incoming: [], outgoing: [], planEntries: [] }, error: null, loading: false }
+		]]));
+		store.planEntryPages.set(new Map([[
+			"PLAN1",
+			{ data: { entries: [], nextBefore: null, total: 0 }, error: null, loading: false }
+		]]));
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (resource) => {
+			if (String(resource).includes("/api/issue-comments")) {
+				return new Response(JSON.stringify({ comments: [], nextBefore: null, total: 0 }), { status: 200 });
+			}
+			return new Response(JSON.stringify({ entity: issue, incoming: [], outgoing: [], planEntries: [] }), { status: 200 });
+		});
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				affectedEntityIds: ["PLAN1", "ISS1"],
+				affectedEntityKinds: ["plan", "issue"],
+				affectedInitiativeIds: ["INIT1"],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "plan-entry",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+
+		await vi.waitFor(() => expect(store.entityDetails.get().get("ISS1")?.loading).toBe(false));
+		expect(store.planEntryPages.get().get("PLAN1")).toEqual(expect.objectContaining({ stale: true }));
+		const resourcePaths = fetchMock.mock.calls.map(([resource]) => String(resource));
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/entity-detail?entity=ISS1"))).toBe(true);
+		expect(resourcePaths.some((resourcePath) => resourcePath.includes("/api/plan-entries?plan=ISS1"))).toBe(false);
+	});
+
+	it("does not lose pending local correlations during a burst of writes", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "unavailable" }), { status: 200 })
+		);
+
+		for (let index = 0; index < 101; index += 1) {
+			store.applyLocalProjectChange({
+				affectedEntityIds: [],
+				affectedInitiativeIds: [],
+				at: "2026-08-31T00:00:00.000Z",
+				category: "entity",
+				correlationId: `write-${index}`,
+				projectId: "OTHER_PROJECT",
+				type: "snapshot-changed"
+			});
+		}
+
+		(store as unknown as { connectEvents(): void }).connectEvents();
+		store.events?.onmessage?.(new MessageEvent("message", {
+			data: JSON.stringify({
+				at: "2026-08-31T00:00:00.000Z",
+				category: "unknown",
+				correlationId: "write-0",
+				projectId: "PROJ1",
+				type: "snapshot-changed"
+			})
+		}));
+		await Promise.resolve();
+
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("records the default tenant chooser route during startup", async () => {

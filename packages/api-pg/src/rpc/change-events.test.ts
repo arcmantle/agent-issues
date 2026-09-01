@@ -6,7 +6,7 @@ import type { Pool } from "pg";
 
 import { createPgPool, migratePgDatabase } from "../db/connection.js";
 import { cleanupTestTenants, createTestTenantId } from "../db/test-tenant-cleanup.js";
-import { createJsonRpcApp, LocalAuthProvider } from "@agent-issues/core";
+import { createJsonRpcApp, LocalAuthProvider, type ProjectChangeEvent } from "@agent-issues/core";
 import { PgStore } from "../pg-store.js";
 
 const ADMIN_CONNECTION_STRING =
@@ -17,7 +17,7 @@ const APP_CONNECTION_STRING =
 
 const LOCAL_AUTH_SECRET = "test-only-secret-never-used-in-production";
 
-type SseEvent = { type: string; at: string };
+type SseEvent = { type: string; at: string } | ProjectChangeEvent;
 
 /**
  * The gate's SSE endpoint is a genuinely long-lived streaming connection, so
@@ -62,12 +62,17 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 		openSubscriptions.length = 0;
 	});
 
-	async function write(token: string, title: string) {
-		await fetch(`${baseUrl}/rpc`, {
+	async function write(token: string, title: string, projectId?: string) {
+		const response = await fetch(`${baseUrl}/rpc`, {
 			method: "POST",
-			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${token}`,
+				...(projectId ? { "x-agent-issues-project-identity": projectId } : {})
+			},
 			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title } })
 		});
+		return await response.json() as { result: { id: string } };
 	}
 
 	/**
@@ -150,6 +155,144 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 
 		const events = await waitForCount(2);
 		expect(events[1]?.type).toBe("snapshot-changed");
+	});
+
+	it("identifies the project and affected initiative after an entity write", async () => {
+		const tenantId = createTestTenantId();
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const { waitForCount } = await subscribe(token);
+		await waitForCount(1);
+
+		const writeResponse = await write(token, "Scoped initiative", "PROJ1");
+
+		const events = await waitForCount(2);
+		expect(events[1]).toMatchObject({
+			affectedEntityIds: [writeResponse.result.id],
+			affectedInitiativeIds: [writeResponse.result.id],
+			category: "entity",
+			projectId: "PROJ1",
+			type: "snapshot-changed"
+		});
+	});
+
+	it("marks contains link and unlink events as Project Summary changes", async () => {
+		const tenantId = createTestTenantId();
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const rpcWrite = async <Result>(id: number, method: string, params: unknown, projectId?: string) => {
+			const response = await fetch(`${baseUrl}/rpc`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${token}`,
+					...(projectId ? { "x-agent-issues-project-identity": projectId } : {})
+				},
+				body: JSON.stringify({ jsonrpc: "2.0", id, method, params })
+			});
+			return await response.json() as { error?: { message: string }; result?: Result };
+		};
+		const requireResult = <Result>(response: { error?: { message: string }; result?: Result }): Result => {
+			expect(response.error).toBeUndefined();
+			expect(response.result).toBeDefined();
+			return response.result!;
+		};
+		const project = requireResult(await rpcWrite<{ id: string }>(1, "createEntity", { kind: "project", title: "Scoped project" }));
+		const epic = requireResult(await rpcWrite<{ id: string }>(2, "createEntity", { kind: "epic", parentId: project.id, title: "Scoped epic" }, project.id));
+		const alternateEpic = requireResult(await rpcWrite<{ id: string }>(3, "createEntity", { kind: "epic", parentId: project.id, title: "Alternate epic" }, project.id));
+		const initiative = requireResult(await rpcWrite<{ id: string }>(4, "createEntity", { kind: "initiative", parentId: epic.id, title: "Scoped initiative" }, project.id));
+		const alternateParent = requireResult(await rpcWrite<{ created: boolean }>(5, "linkEntities", { fromId: alternateEpic.id, relationType: "contains", toId: initiative.id }, project.id));
+		expect(alternateParent.created).toBe(true);
+		const { waitForCount } = await subscribe(token);
+		await waitForCount(1);
+
+		const unlinkResult = requireResult(await rpcWrite<{ removed: boolean }>(6, "unlinkEntities", { fromId: epic.id, relationType: "contains", toId: initiative.id }, project.id));
+		expect(unlinkResult.removed).toBe(true);
+		const afterUnlink = await waitForCount(2);
+		expect(afterUnlink[1]).toMatchObject({
+			affectedEntityIds: expect.arrayContaining([epic.id, initiative.id]),
+			affectedInitiativeIds: [initiative.id],
+			affectsProjectSummary: true,
+			category: "relation",
+			projectId: project.id
+		});
+
+		const linkResult = requireResult(await rpcWrite<{ created: boolean }>(7, "linkEntities", { fromId: epic.id, relationType: "contains", toId: initiative.id }, project.id));
+		expect(linkResult.created).toBe(true);
+		const afterLink = await waitForCount(3);
+		expect(afterLink[2]).toMatchObject({
+			affectedEntityIds: expect.arrayContaining([epic.id, initiative.id]),
+			affectedInitiativeIds: [initiative.id],
+			affectsProjectSummary: true,
+			category: "relation",
+			projectId: project.id
+		});
+	});
+
+	it("retains affected initiative scope after the initiative is deleted", async () => {
+		const tenantId = createTestTenantId();
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const { waitForCount } = await subscribe(token);
+		await waitForCount(1);
+		const created = await write(token, "Deleted initiative", "PROJ1");
+		await waitForCount(2);
+
+		await fetch(`${baseUrl}/rpc`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${token}`,
+				"x-agent-issues-project-identity": "PROJ1"
+			},
+			body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "deleteEntity", params: { entityId: created.result.id } })
+		});
+
+		const events = await waitForCount(3);
+		expect(events[2]).toMatchObject({
+			affectedEntityIds: [created.result.id],
+			affectedInitiativeIds: [created.result.id],
+			category: "entity",
+			projectId: "PROJ1"
+		});
+	});
+
+	it("identifies both records and the owner for a Plan-entry linkage write", async () => {
+		const tenantId = createTestTenantId();
+		const token = await authProvider.issueToken({ userId: "user-1", tenantId });
+		const { waitForCount } = await subscribe(token);
+		await waitForCount(1);
+		const initiative = await write(token, "Plan owner", "PROJ1");
+		await waitForCount(2);
+
+		const rpcWrite = async (id: number, method: string, params: unknown, correlationId?: string) => {
+			const response = await fetch(`${baseUrl}/rpc`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${token}`,
+					"x-agent-issues-project-identity": "PROJ1",
+					...(correlationId ? { "x-agent-issues-correlation-id": correlationId } : {})
+				},
+				body: JSON.stringify({ jsonrpc: "2.0", id, method, params })
+			});
+			return await response.json() as { result: Record<string, unknown> };
+		};
+
+		const plan = await rpcWrite(2, "createEntity", { kind: "plan", parentId: initiative.result.id, title: "Delivery Plan" });
+		await waitForCount(3);
+		const issue = await rpcWrite(3, "createEntity", { kind: "issue", parentId: initiative.result.id, title: "Implement Plan" });
+		await waitForCount(4);
+		const entry = await rpcWrite(4, "createPlanEntry", { planId: plan.result.id, role: "decision", body: "Use scoped updates." });
+		await waitForCount(5);
+
+		await rpcWrite(5, "linkPlanEntryIssue", { entryId: entry.result.id, issueId: issue.result.id }, "write-link-1");
+
+		const events = await waitForCount(6);
+		expect(events[5]).toMatchObject({
+			affectedEntityIds: expect.arrayContaining([plan.result.id, issue.result.id]),
+			affectedInitiativeIds: [initiative.result.id],
+			category: "plan-entry",
+			correlationId: "write-link-1",
+			projectId: "PROJ1"
+		});
 	});
 
 	it("never broadcasts a write to a different tenant's subscriber", async () => {
