@@ -1596,8 +1596,7 @@ export class AgentIssuesStore {
 		this.clearMasterOverrideIfShallow();
 		this.writeRoute(this.currentRoute());
 		if (this.isSummaryInitiative(initiativeId)) {
-			void this.loadInitiativeDetail(initiativeId);
-			this.startInitiativeTabPrefetch(initiativeId);
+			void this.loadInitiativeRoute(initiativeId, "overview");
 		}
 	}
 
@@ -2547,6 +2546,19 @@ export class AgentIssuesStore {
 		}
 	}
 
+	protected async loadInitiativeRoute(initiativeId: string, tab: InitiativeTab) {
+		await this.loadInitiativeDetail(initiativeId);
+		if (this.selectedInitiativeId.get() !== initiativeId || !this.initiativeDetailForId(initiativeId)) {
+			return;
+		}
+		if (tab !== "overview" && this.initTab.get() === tab) {
+			await this.loadInitiativeTab(initiativeId, tab);
+		}
+		if (this.selectedInitiativeId.get() === initiativeId) {
+			this.startInitiativeTabPrefetch(initiativeId);
+		}
+	}
+
 	public async retryProjectAdrs() {
 		await this.loadProjectAdrs(true);
 	}
@@ -3355,6 +3367,9 @@ export class AgentIssuesStore {
 
 	protected applyRoute(route: ViewerRoute, loadData = true): ViewerRoute {
 		const normalizedRoute = this.normalizeRoute(route);
+		if (normalizedRoute.initiativeId !== this.selectedInitiativeId.get()) {
+			this.cancelInitiativeTabPrefetch();
+		}
 		this.selectedTenant.set(normalizedRoute.tenantId);
 		this.selectedProjectId.set(normalizedRoute.projectId);
 		this.activeSection.set(normalizedRoute.section);
@@ -3377,11 +3392,7 @@ export class AgentIssuesStore {
 		if (normalizedRoute.entityId) {
 			void this.loadEntityDetail(normalizedRoute.entityId);
 		} else if (normalizedRoute.initiativeId && this.isSummaryInitiative(normalizedRoute.initiativeId)) {
-			void this.loadInitiativeDetail(normalizedRoute.initiativeId);
-			if (normalizedRoute.initiativeTab !== "overview") {
-				void this.loadInitiativeTab(normalizedRoute.initiativeId, normalizedRoute.initiativeTab);
-			}
-			this.startInitiativeTabPrefetch(normalizedRoute.initiativeId);
+			void this.loadInitiativeRoute(normalizedRoute.initiativeId, normalizedRoute.initiativeTab);
 		} else if (normalizedRoute.section === "adrs") {
 			void this.loadProjectAdrs();
 		} else if (normalizedRoute.section === "debt") {

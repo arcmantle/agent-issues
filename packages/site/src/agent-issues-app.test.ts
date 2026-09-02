@@ -494,6 +494,8 @@ describe("three-pane console shell", () => {
 		const console = app.shadowRoot?.querySelector(".console");
 		expect(console?.classList.contains("medium")).toBe(true);
 		expect(console?.classList.contains("narrow")).toBe(false);
+		expect(app.shadowRoot?.querySelector('[data-theme-toggle="header"]')).not.toBeNull();
+		expect(app.shadowRoot?.querySelector('[data-theme-toggle="rail"]')).toBeNull();
 		expect(app.shadowRoot?.querySelector('[data-pane="master"]')).not.toBeNull();
 		expect(app.shadowRoot?.querySelector('[data-pane="detail"] agent-issues-initiative-detail-view')).not.toBeNull();
 	});
@@ -555,6 +557,18 @@ describe("three-pane console shell", () => {
 		const remountedApp = await mountApp(makeStore(makeConfig(), makeSnapshot()));
 		expect(document.documentElement.dataset.theme).toBe("dark");
 		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="rail"]')?.getAttribute("aria-pressed")).toBe("true");
+
+		vi.stubGlobal("innerWidth", 1080);
+		window.dispatchEvent(new Event("resize"));
+		await remountedApp.updateComplete;
+		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="rail"]')).toBeNull();
+		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="header"]')?.getAttribute("aria-pressed")).toBe("true");
+
+		vi.stubGlobal("innerWidth", 1280);
+		window.dispatchEvent(new Event("resize"));
+		await remountedApp.updateComplete;
+		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="rail"]')).not.toBeNull();
+		expect(remountedApp.shadowRoot?.querySelector('[data-theme-toggle="header"]')).toBeNull();
 
 		vi.stubGlobal("innerWidth", 390);
 		window.dispatchEvent(new Event("resize"));

@@ -867,6 +867,79 @@ describe("progressive initiative detail loading", () => {
 		expect(String(tabRequests[1]?.[0])).toContain("tab=plans");
 	});
 
+	it("waits for initiative detail before it starts tab prefetch", async () => {
+		vi.useFakeTimers();
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project" }
+		});
+		let resolveDetail: (response: Response) => void;
+		const detailResponse = new Promise<Response>((resolve) => {
+			resolveDetail = resolve;
+		});
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((resource) => {
+			const path = String(resource);
+			if (path.includes("/api/initiative-detail")) return detailResponse;
+			return Promise.resolve(new Response(JSON.stringify({ records: [], relations: [], tab: "issues" }), { status: 200 }));
+		});
+
+		store.selectInitiative(initiative.id);
+		await vi.advanceTimersByTimeAsync(800);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		resolveDetail!(new Response(JSON.stringify({ initiative }), { status: 200 }));
+		await vi.advanceTimersByTimeAsync(400);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/api/initiative-tab");
+	});
+
+	it("loads direct initiative routes in detail, active tab, then prefetch order", async () => {
+		vi.useFakeTimers();
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const initiativeSummary = { createdAt: initiative.createdAt, id: initiative.id, kind: initiative.kind, status: initiative.status, title: initiative.title, updatedAt: initiative.updatedAt };
+		const store = new AgentIssuesStore();
+		store.connected = true;
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.projectSummary.set({
+			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic" }, initiatives: [{ completedIssueCount: 0, initiative: initiativeSummary, issueCount: 0, userStoryCount: 0 }] }],
+			kind: "available",
+			project: { ...initiativeSummary, id: "PROJ1", kind: "project" }
+		});
+		let resolveDetail: (response: Response) => void;
+		const detailResponse = new Promise<Response>((resolve) => {
+			resolveDetail = resolve;
+		});
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((resource) => {
+			const path = String(resource);
+			if (path.includes("/api/initiative-detail")) return detailResponse;
+			return Promise.resolve(new Response(JSON.stringify({ records: [], relations: [], tab: new URL(path, "http://localhost").searchParams.get("tab") }), { status: 200 }));
+		});
+		window.history.replaceState({}, "", "#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=adrs");
+
+		await store.onPopState();
+		await vi.advanceTimersByTimeAsync(800);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		resolveDetail!(new Response(JSON.stringify({ initiative }), { status: 200 }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(String(fetchMock.mock.calls[1]?.[0])).toContain("tab=adrs");
+
+		await vi.advanceTimersByTimeAsync(400);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(String(fetchMock.mock.calls[2]?.[0])).toContain("tab=issues");
+	});
+
 	it("loads only the selected initiative detail from a Project Summary rollup", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const store = new AgentIssuesStore();

@@ -482,9 +482,9 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			</nav>
 			<div class="rail-foot">
 				<span class="rail-foot-copy">${store.projectDescription.get()}</span>
-				${when(!this.narrow, () => this.renderThemeToggle("rail"), () => nothing)}
+				${when(!this.narrow && !this.medium, () => this.renderThemeToggle("rail"), () => nothing)}
 			</div>
-			${when(this.narrow, () => this.renderThemeToggle("header"), () => nothing)}
+			${when(this.narrow || this.medium, () => this.renderThemeToggle("header"), () => nothing)}
 		</aside>
 		`;
 	}
@@ -1698,6 +1698,18 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			margin: 6px 0 0;
 			font-size: 24px;
 		}
+			.console.medium .header-theme-toggle {
+				display: inline-flex;
+				flex: 0 0 40px;
+				align-self: stretch;
+				width: 40px;
+				height: auto;
+				margin-left: auto;
+				border-top: 0;
+				border-right: 0;
+				border-bottom: 0;
+				border-radius: 0;
+			}
 		.d-sub {
 			max-width: 70ch;
 			margin: 10px 0 0;
