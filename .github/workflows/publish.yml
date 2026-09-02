@@ -9,6 +9,23 @@ on:
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
+    env:
+      AGENT_ISSUES_TEST_PG_URL: postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues
+      AGENT_ISSUES_TEST_PG_APP_URL: postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agent_issues
+          POSTGRES_PASSWORD: agent_issues_dev_only
+          POSTGRES_DB: agent_issues
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_issues -d agent_issues"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +43,15 @@ jobs:
 
       - name: Install dependencies.
         run: pnpm install
+
+      - name: Initialize PostgreSQL application role.
+        run: >-
+          docker run --rm --network host
+          --volume "$PWD/docker/postgres-init:/docker-entrypoint-initdb.d:ro"
+          postgres:16-alpine
+          psql "$AGENT_ISSUES_TEST_PG_URL"
+          --set ON_ERROR_STOP=1
+          --file /docker-entrypoint-initdb.d/01-app-role.sql
 
       - name: Typecheck project.
         run: pnpm typecheck
