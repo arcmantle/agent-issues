@@ -59,28 +59,22 @@ describe("startLiveSite (ISS190)", () => {
 	});
 
 	it("continues local change polling after a transient signature failure", async () => {
-		const signatures = ["backend check", "initial", new Error("daemon restarting"), "recovered"];
-		openStorageDriverMock.mockImplementation(async () => {
+		const signatures = ["initial", new Error("database temporarily unavailable"), "recovered"];
+		const readLocalSignature = vi.fn(() => {
 			const signature = signatures.shift() ?? "recovered";
-			return {
-				backend: "local",
-				dbPath: "/tmp/agent-issues.db",
-				store: {
-					close: vi.fn(async () => {}),
-					getSnapshotSignature: vi.fn(async () => {
-						if (signature instanceof Error) throw signature;
-						return signature;
-					})
-				}
-			};
+			if (signature instanceof Error) throw signature;
+			return signature;
 		});
-		const handle = await startLiveSite({ pollIntervalMs: 5, port: 0, tenant: "demo" });
+		openStorageDriverMock.mockClear();
+		openStorageDriverMock.mockResolvedValue({ store: fakeStore(), dbPath: "/tmp/agent-issues.db", backend: "local" });
+		const handle = await startLiveSite({ pollIntervalMs: 5, port: 0, readLocalSignature, tenant: "demo" });
 		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
 		const address = handle.server.address();
 		const port = typeof address === "object" && address ? address.port : 0;
 
 		try {
-			await vi.waitFor(() => expect(openStorageDriverMock.mock.calls.length).toBeGreaterThanOrEqual(4));
+			await vi.waitFor(() => expect(readLocalSignature.mock.calls.length).toBeGreaterThanOrEqual(3));
+			expect(openStorageDriverMock).toHaveBeenCalledOnce();
 			await expect(fetch(`http://127.0.0.1:${port}/`)).resolves.toMatchObject({ ok: true });
 		} finally {
 			const closePromise = new Promise<void>((resolve) => handle.server.once("close", resolve));

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { readBuildContentHash, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/api-local";
@@ -60,6 +60,19 @@ const PROJECT_MUTATION_METHODS = new Set([
 	"upsertContext"
 ]);
 
+function computeFileStatSignature(dbPath: string): string {
+	return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+		.map((candidate) => {
+			if (!existsSync(candidate)) {
+				return `${candidate}:missing`;
+			}
+
+			const stats = statSync(candidate);
+			return `${candidate}:${stats.size}:${stats.mtimeMs}`;
+		})
+		.join("|");
+}
+
 function isInitiativeTab(value: string | null): value is InitiativeTab {
 	return typeof value === "string" && INITIATIVE_TABS.includes(value as InitiativeTab);
 }
@@ -72,6 +85,8 @@ export async function startLiveSite(input: {
 	currentWorkingDirectory?: string;
 	/** Overrides the local-mode snapshot-signature poll interval; defaults to 1000ms. Test-only knob. */
 	pollIntervalMs?: number;
+	/** Overrides local file signature reads. Test-only knob. */
+	readLocalSignature?: (dbPath: string) => string;
 	/**
 	 * Overrides how `auth-session.ts` reaches the native OS credential store
 	 * (ISS185, ADR46) for the remote saved-login lookup. Production
@@ -88,6 +103,7 @@ export async function startLiveSite(input: {
 	const host = input.host ?? "127.0.0.1";
 	const port = input.port ?? 4173;
 	const pollIntervalMs = input.pollIntervalMs ?? 1000;
+	const readLocalSignature = input.readLocalSignature ?? computeFileStatSignature;
 	const info: LiveSiteInfo = {
 		dbPath,
 		defaultTenant,
@@ -111,7 +127,7 @@ export async function startLiveSite(input: {
 
 	let databaseSignature =
 		opened.backend === "local"
-			? await readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions)
+			? readLocalSignature(dbPath)
 			: undefined;
 	let pollTimer: NodeJS.Timeout | undefined;
 	let pollingStopped = false;
@@ -174,7 +190,8 @@ export async function startLiveSite(input: {
 			}
 
 			pollTimer = setTimeout(() => {
-				void readSnapshotSignature(dbPath, defaultTenant, currentWorkingDirectory, credentialStoreOptions)
+				void Promise.resolve()
+					.then(() => readLocalSignature(dbPath))
 					.then((nextSignature) => {
 						if (nextSignature !== databaseSignature) {
 							databaseSignature = nextSignature;
@@ -998,15 +1015,6 @@ function parseSearchLimit(value: string | null): number | null | undefined {
 
 	const limit = Number(value);
 	return limit > 0 && limit <= 100 ? limit : null;
-}
-
-async function readSnapshotSignature(
-	dbPath: string,
-	tenant: string,
-	currentWorkingDirectory: string | undefined,
-	credentialStoreOptions: SavedLoginStoreOptions | undefined
-) {
-	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, tenant }, (store) => store.getSnapshotSignature());
 }
 
 type ProjectMutationRequest = {
