@@ -57,7 +57,7 @@ jobs:
         run: pnpm typecheck
 
       - name: Build test assets.
-        run: pnpm --filter @agent-issues/site build && pnpm --filter @agent-issues/kanban build
+        run: pnpm --filter @agent-issues/site build && pnpm --filter @agent-issues/kanban build && pnpm --filter agent-issues build
 
       - name: Test project.
         run: pnpm --workspace-concurrency=1 -r test

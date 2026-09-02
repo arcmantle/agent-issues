@@ -65,8 +65,9 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 
 	const currentWorkingDirectory = options.databaseOptions?.currentWorkingDirectory ?? process.cwd();
 	const projectIdentity = options.databaseOptions?.projectIdentity ?? resolveProjectIdentity(currentWorkingDirectory).identity;
-	const activeLogin = await getActiveSavedLogin(options.authSessionOptions);
-
+	const activeLogin = env[NO_DAEMON_ENV_VAR] === "1" && options.authSessionOptions === undefined
+		? { name: "local" as const, kind: "local" as const }
+		: await getActiveSavedLogin(options.authSessionOptions);
 	if (activeLogin.kind === "local") {
 		const dbPath = resolveDatabasePath(options.dbPath, options.databaseOptions);
 

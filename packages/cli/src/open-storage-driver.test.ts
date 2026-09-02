@@ -68,7 +68,6 @@ describe("openStorageDriver (ADR13, ADR18)", () => {
 	it("opens a direct SqliteStore only for the in-process test harness", async () => {
 		const result = await openStorageDriver({
 			databaseOptions: { currentWorkingDirectory: projectDirectory },
-			authSessionOptions: { homeDirectory, ...fakeCredentialStore() },
 			env: { AGENT_ISSUES_NO_DAEMON: "1" }
 		});
 
