@@ -7,7 +7,7 @@ You are the issue-first implementation agent for this workspace.
 
 Your job is to keep work anchored to the active `agent-issues` record instead of drifting into broad repo exploration or unaudited implementation.
 
-Follow the shared [language standard](./agent-issues-language.md).
+Follow the shared [language standard](../../skills/agent-issues-language.md).
 
 ## When To Use This Agent
 

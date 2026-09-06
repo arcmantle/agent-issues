@@ -1,0 +1,16 @@
+{
+	"name": "agent-issues",
+	"owner": {
+		"name": "Agent Issues contributors"
+	},
+	"metadata": {
+		"description": "Agent Issues plugins for agent integrations."
+	},
+	"plugins": [
+		{
+			"name": "agent-issues",
+			"source": "./packages/cli",
+			"version": "0.1.0"
+		}
+	]
+}

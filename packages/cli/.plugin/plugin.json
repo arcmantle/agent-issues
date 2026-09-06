@@ -1,0 +1,17 @@
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+	"name": "agent-issues",
+	"version": "0.1.0",
+	"description": "Agent Issues workflow skills and MCP tools.",
+	"author": {
+		"name": "Agent Issues contributors"
+	},
+	"repository": "https://github.com/arcmantle/agent-issues",
+	"license": "MIT",
+	"keywords": [
+		"agent-issues",
+		"issue-tracking",
+		"mcp"
+	],
+	"agents": ".github/agents/"
+}

@@ -125,7 +125,7 @@ export function buildPlugin({ sourceDir, targetDir, mcpPackageJson }) {
 	mkdirSync(path.join(outputRoot, "com.github.copilot", "agents"), { recursive: true });
 	const sourceClaudeAgentContent = readFileSync(sourceClaudeAgent, "utf8");
 	const packagedClaudeAgentContent = sourceClaudeAgentContent.replace(
-		"(./agent-issues-language.md)",
+		"(../../skills/agent-issues-language.md)",
 		"(../skills/agent-issues-language.md)"
 	);
 	if (packagedClaudeAgentContent === sourceClaudeAgentContent) {
@@ -133,13 +133,7 @@ export function buildPlugin({ sourceDir, targetDir, mcpPackageJson }) {
 	}
 	writeFileSync(path.join(outputRoot, "agents", "agent-issues.md"), packagedClaudeAgentContent);
 	const sourceCopilotAgentContent = readFileSync(sourceCopilotAgent, "utf8");
-	const packagedCopilotAgentContent = sourceCopilotAgentContent.replace(
-		"(./agent-issues-language.md)",
-		"(../../skills/agent-issues-language.md)"
-	);
-	if (packagedCopilotAgentContent === sourceCopilotAgentContent) {
-		throw new Error(`Copilot agent language standard link not found: ${sourceCopilotAgent}`);
-	}
+	const packagedCopilotAgentContent = sourceCopilotAgentContent;
 	writeFileSync(
 		path.join(outputRoot, "agents", "copilot", "agent-issues.agent.md"),
 		packagedCopilotAgentContent
