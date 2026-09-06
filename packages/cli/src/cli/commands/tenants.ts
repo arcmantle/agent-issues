@@ -2,7 +2,7 @@ import { Option } from "clipanion";
 
 import { resolveDatabasePath, resolveTenantRootPath, resolveTenantSlug } from "@agent-issues/api-local";
 
-import { resolveProjectIdentity } from "../../project-identity.js";
+import { resolveProjectIdentity } from "../../runtime/project-identity.js";
 import { renderCurrentTenant, renderDeleteTenant, renderProjectIdentity, renderRenameTenant, renderTenantList } from "../renderers.js";
 import { MutableTenantCommand, TenantCommand, requirePositional, withStore } from "../shared.js";
 

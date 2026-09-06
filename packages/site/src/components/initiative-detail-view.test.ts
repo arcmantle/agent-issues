@@ -240,6 +240,8 @@ describe("initiative detail overview tab", () => {
 		store.initTab.set("issues");
 
 		const view = await mountView(store);
+		updateRecordView(view, "issues", "list");
+		await view.updateComplete;
 
 		expect(view.shadowRoot?.querySelector<HTMLElement>('.record-tab-list agent-issues-record-list-item[data-id="ISS1"]')).not.toBeNull();
 	});
@@ -456,6 +458,8 @@ describe("initiative detail record tabs", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateRecordView(view, "issues", "list");
+		await view.updateComplete;
 
 		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS1", "ISS2", "ISS3", "ISS4", "ISS5", "ISS6"]);
 	});
@@ -468,6 +472,8 @@ describe("initiative detail record tabs", () => {
 		const view = await mountView(store);
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateRecordView(view, "issues", "list");
 		await view.updateComplete;
 		updateRecordFilter(view, { query: "priority phrase" });
 		await view.updateComplete;
@@ -490,6 +496,8 @@ describe("initiative detail record tabs", () => {
 		const view = await mountView(store);
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateRecordView(view, "issues", "list");
 		await view.updateComplete;
 		updateRecordFilter(view, { query: "iss_full_reference_123" });
 		await view.updateComplete;
@@ -522,16 +530,15 @@ describe("initiative detail record tabs", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
-		expect(view.shadowRoot?.querySelector(".record-tree")).toBeNull();
-		updateRecordView(view, "issues", "tree");
-		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLElement & { treeView: string }>("agent-issues-record-filter-toolbar")?.treeView).toBe("tree");
 		expect(view.shadowRoot?.querySelector('.record-tree.issue-tree .issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
-		expect(view.shadowRoot?.querySelector(".record-tree.issue-tree")).not.toBeNull();
+		updateRecordView(view, "issues", "list");
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector(".record-tree")).toBeNull();
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="userStories"]')?.click();
 		await view.updateComplete;
-		updateRecordView(view, "userStories", "tree");
-		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLElement & { treeView: string }>("agent-issues-record-filter-toolbar")?.treeView).toBe("tree");
 		expect(view.shadowRoot?.querySelector('.story-tree-block agent-issues-record-list-item[data-id="US1"]')).not.toBeNull();
 		expect(view.shadowRoot?.querySelector('.story-tree-block .issue-branch-children .child[data-id="ISS2"]')).not.toBeNull();
 	});
@@ -566,6 +573,8 @@ describe("initiative detail record tabs", () => {
 		expect(view.shadowRoot?.querySelector('[data-tab="issues"] .subtab-count')?.getAttribute("aria-hidden")).toBe("true");
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateRecordView(view, "issues", "list");
 		await view.updateComplete;
 		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2", "ISS1"]);
 

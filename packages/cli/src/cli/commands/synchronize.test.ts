@@ -13,7 +13,7 @@ import {
 	type RunCredentialCommand
 } from "@agent-issues/core";
 import { createLocalDaemonServer, openSqliteStore, type LocalDaemonServerHandle, type SqliteStore } from "@agent-issues/api-local";
-import { saveSavedLogin, type SavedLoginStoreOptions } from "../../auth-session.js";
+import { saveSavedLogin, type SavedLoginStoreOptions } from "../../auth/auth-session.js";
 
 import { runCli } from "../../cli.js";
 

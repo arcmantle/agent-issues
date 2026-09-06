@@ -15,7 +15,7 @@ import {
 	toCompactMoveAcknowledgement,
 	toCompactNextWork,
 	toCompactStatusAcknowledgement
-} from "../../entity-projection.js";
+} from "../../context/entity-projection.js";
 import { renderEntityDetails, renderEntityList, renderInitiativeBundle, renderOptionalEntityList, renderPlanDetails } from "../renderers.js";
 import { BodyTenantCommand, TenantCommand, parseCsvOption, parseEntityView, parsePositiveIntegerOption, requireOption, requirePositional, withStore } from "../shared.js";
 

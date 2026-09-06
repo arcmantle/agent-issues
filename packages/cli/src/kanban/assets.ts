@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { resolvePackagePath } from "../package-path.js";
+import { resolvePackagePath } from "../runtime/package-path.js";
 
 const kanbanDistDir = resolvePackagePath("kanban", "dist");
 

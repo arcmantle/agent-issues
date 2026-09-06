@@ -5,6 +5,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import { AuthListCommand, AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
 import { BackfillBodiesCommand } from "./commands/backfill.js";
 import { AddIssueCommentCommand, DeleteIssueCommentCommand, EditIssueCommentCommand, IssueCommentCommand, IssueCommentHistoryCommand, ListIssueCommentsCommand } from "./commands/comments.js";
+import { ApproveIssueBreakdownCommand, CreateIssueBreakdownCommand, IssueBreakdownCommand, LatestIssueBreakdownCommand, ShowIssueBreakdownCommand } from "./commands/issue-breakdowns.js";
 import { AddPlanEntryCommand, DeletePlanEntryCommand, EditPlanEntryCommand, ListPlanEntriesCommand, PlanEntryHistoryCommand } from "./commands/plan-entries.js";
 import { ContextCommand } from "./commands/context.js";
 import { KanbanCommand } from "./commands/kanban.js";
@@ -27,17 +28,6 @@ import {
 } from "./commands/entities.js";
 import { ExportCommand } from "./commands/export.js";
 import { FallbackCommand } from "./commands/fallback.js";
-import {
-	InstallAgentCommand,
-	InstallMcpCommand,
-	InstallSkillsCommand,
-	ListAgentCommand,
-	ListMcpCommand,
-	ListSkillsCommand,
-	UninstallAgentCommand,
-	UninstallMcpCommand,
-	UninstallSkillsCommand
-} from "./commands/installers.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
 import { SiteCommand } from "./commands/site.js";
 import { SqlCommand } from "./commands/sql.js";
@@ -64,15 +54,6 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(HelpCommand);
 	cli.register(SchemaCommand);
 	cli.register(CapabilitiesCommand);
-	cli.register(InstallSkillsCommand);
-	cli.register(InstallAgentCommand);
-	cli.register(InstallMcpCommand);
-	cli.register(ListSkillsCommand);
-	cli.register(ListAgentCommand);
-	cli.register(ListMcpCommand);
-	cli.register(UninstallSkillsCommand);
-	cli.register(UninstallAgentCommand);
-	cli.register(UninstallMcpCommand);
 	cli.register(SiteCommand);
 	cli.register(InitCommand);
 	cli.register(CurrentTenantCommand);
@@ -89,6 +70,11 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(EditIssueCommentCommand);
 	cli.register(IssueCommentHistoryCommand);
 	cli.register(ListIssueCommentsCommand);
+	cli.register(IssueBreakdownCommand);
+	cli.register(CreateIssueBreakdownCommand);
+	cli.register(ShowIssueBreakdownCommand);
+	cli.register(LatestIssueBreakdownCommand);
+	cli.register(ApproveIssueBreakdownCommand);
 	cli.register(AddPlanEntryCommand);
 	cli.register(EditPlanEntryCommand);
 	cli.register(DeletePlanEntryCommand);

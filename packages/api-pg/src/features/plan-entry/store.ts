@@ -90,6 +90,8 @@ export class PgPlanEntryStore {
 		await appendPlanEntryDelta(this.executor, id, 1, state, state, actorId, createdAt);
 		if (plan.status === "draft" && !hasExistingEntries) {
 			await new PgEntityStore(this.executor).updateEntityStatus({ entityId: plan.id, status: "in-progress" }, actorId);
+		} else if (plan.status === "ready") {
+			await new PgEntityStore(this.executor).updateEntityStatus({ entityId: plan.id, status: "in-progress" }, actorId);
 		}
 		return toPlanEntrySummary(toPlanEntryRecord({ id, reference, short_reference: shortReference, plan_id: plan.id, created_by: actorId, updated_by: actorId, role: input.role, body: input.body, scope_direction: state.scopeDirection, tombstone: false, revision: 1, content_hash: contentHash, created_at: createdAt, updated_at: createdAt, referencedEntityIds, supersededEntryIds }));
 	}
@@ -115,6 +117,7 @@ export class PgPlanEntryStore {
 			throw await getPlanEntryConflict(this.executor, input.entryId);
 		}
 		await appendPlanEntryDelta(this.executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
+		await this.reopenReadyPlan(existing.planId, actorId);
 		return getPlanEntryOrThrow(this.executor, existing.id);
 	}
 
@@ -132,6 +135,7 @@ export class PgPlanEntryStore {
 			throw await getPlanEntryConflict(this.executor, input.entryId);
 		}
 		await appendPlanEntryDelta(this.executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
+		await this.reopenReadyPlan(existing.planId, actorId);
 		return getPlanEntryOrThrow(this.executor, existing.id);
 	}
 
@@ -163,6 +167,13 @@ export class PgPlanEntryStore {
 		const plan = await getProjectPlanOrThrow(this.executor, input.planId);
 		const result = await this.executor.execute(sql`SELECT * FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid ORDER BY created_at, reference`);
 		return Promise.all((result.rows as PlanEntryRow[]).map((row) => toPlanEntryRecordWithLinks(this.executor, row)));
+	}
+
+	protected async reopenReadyPlan(planId: string, actorId: string): Promise<void> {
+		const plan = await getProjectPlanOrThrow(this.executor, planId);
+		if (plan.status === "ready") {
+			await new PgEntityStore(this.executor).updateEntityStatus({ entityId: plan.id, status: "in-progress" }, actorId);
+		}
 	}
 
 	public async listPlanEntryPage(input: { planId: string; before?: string; all?: boolean }): Promise<PlanEntryPage> {

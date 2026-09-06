@@ -5,6 +5,7 @@ import { computeEntityContentHash, DEFAULT_EPIC_ID, EntityConflictError, EntityR
 import { computeContextTermContentHash, ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../context/context-types.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
 import type { StorageDriver } from "./storage-driver.js";
+import { projectProposedPlan } from "../plan/plan-snapshot.js";
 
 export type StorageDriverContractOptions = {
 	/** Folded into each describe block's title so a failure identifies which backend broke. */
@@ -40,7 +41,335 @@ export type StorageDriverContractOptions = {
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore, openStoreForProject } = options;
 
+	describe(`storage-driver seam: Issue-breakdown drafts (${label})`, () => {
+		it("stores and retrieves a complete ordered issue graph with a stable digest", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Issue-breakdown owner" });
+				const created = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [
+						{
+							key: "storage",
+							title: "Add draft storage",
+							outcome: "Drafts persist.",
+							scope: ["Add storage."],
+							workMode: "AFK",
+							acceptanceCriteria: ["A draft is retrievable."],
+							relationReferences: []
+						}
+					]
+				});
+
+				await expect(store.getIssueBreakdownDraft({ draftId: created.id })).resolves.toEqual(created);
+				expect(created).toMatchObject({ targetId: initiative.id, targetReference: initiative.reference, issues: [{ key: "storage" }] });
+				expect(created.snapshotDigest).toMatch(/^[a-f0-9]{64}$/);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("supersedes the prior active draft when it stores a later graph for the same target", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Revised issue-breakdown owner" });
+				const first = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [{ key: "first", title: "First graph", outcome: "First draft.", scope: [], workMode: "AFK", acceptanceCriteria: [], relationReferences: [] }]
+				});
+				const second = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [{ key: "second", title: "Second graph", outcome: "Later draft.", scope: [], workMode: "AFK", acceptanceCriteria: [], relationReferences: [] }]
+				});
+
+				await expect(store.getIssueBreakdownDraft({ draftId: first.id })).resolves.toMatchObject({ status: "superseded" });
+				await expect(store.getLatestIssueBreakdownDraft({ targetId: initiative.id })).resolves.toEqual(second);
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("approves a matching draft by creating its complete issue graph", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Approval owner" });
+				const userStory = await store.createEntity({ kind: "userStory", title: "Approval outcome" });
+				const draft = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [
+						{ key: "parent", title: "Create parent", outcome: "A parent issue exists.", scope: [], workMode: "AFK", acceptanceCriteria: [], relationReferences: [] },
+						{ key: "child", title: "Create child", outcome: "A child issue exists.", scope: [], workMode: "AFK", acceptanceCriteria: [], parentKey: "parent", relationReferences: [{ relationType: "fixes", targetId: userStory.id }] }
+					]
+				});
+
+				const result = await store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: draft.snapshotDigest });
+
+				expect(result).toMatchObject({ targetReference: initiative.reference, createdIssueReferences: [expect.stringMatching(/^ISS_/), expect.stringMatching(/^ISS_/)] });
+				if (result.status !== "approved") {
+					throw new Error("Expected matching draft approval to succeed.");
+				}
+				const createdIssues = await Promise.all(result.createdIssueReferences.map((reference) => store.getEntityDetails(reference)));
+				expect(createdIssues.map(({ entity }) => entity.title)).toEqual(["Create parent", "Create child"]);
+				expect((await store.queryEntityRelations({ entityId: createdIssues[1]!.entity.id })).outgoing).toEqual(expect.arrayContaining([
+					expect.objectContaining({ relationType: "fixes", entity: expect.objectContaining({ id: userStory.id }) })
+				]));
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns the current draft without creating issues when its snapshot is stale", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Stale approval owner" });
+				const draft = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [{ key: "current", title: "Current issue", outcome: "The current draft is shown.", scope: [], workMode: "AFK", acceptanceCriteria: [], relationReferences: [] }]
+				});
+
+				await expect(store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: "stale" })).resolves.toEqual({ status: "stale", draft });
+				expect(await store.getIssueBreakdownDraft({ draftId: draft.id })).toMatchObject({ status: "active", createdIssueReferences: [] });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns the original references when approval repeats", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Repeat approval owner" });
+				const draft = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [{ key: "once", title: "Create once", outcome: "Only one issue exists.", scope: [], workMode: "AFK", acceptanceCriteria: [], relationReferences: [] }]
+				});
+
+				const first = await store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: draft.snapshotDigest });
+				await expect(store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: draft.snapshotDigest })).resolves.toEqual(first);
+				const approvedDraft = await store.getIssueBreakdownDraft({ draftId: draft.id });
+				await expect(store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: "stale" })).resolves.toEqual({ status: "stale", draft: approvedDraft });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("creates no partial graph when a relation target is invalid", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Atomic approval owner" });
+				const draft = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [{ key: "invalid", title: "Do not create", outcome: "The transaction rolls back.", scope: [], workMode: "AFK", acceptanceCriteria: [], relationReferences: [{ relationType: "blocks", targetKey: "missing" }] }]
+				});
+
+				await expect(store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: draft.snapshotDigest })).rejects.toThrow(/unresolved relation target/i);
+				expect(await store.getIssueBreakdownDraft({ draftId: draft.id })).toMatchObject({ status: "active", createdIssueReferences: [] });
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: Plan lifecycle (${label})`, () => {
+		it("confirms a matching Proposed Plan snapshot", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan confirmation owner" });
+				const plan = await store.createEntity({
+					kind: "plan",
+					title: "Plan ready for confirmation",
+					body: "## Goal\n\nConfirm the Plan.\n\n## Context\n\nUse the current snapshot.",
+					parentId: initiative.id
+				});
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Use snapshot confirmation." });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+
+				await expect(store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest })).resolves.toMatchObject({
+					previousStatus: "in-progress",
+					entity: { id: plan.id, status: "ready" }
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("rejects a stale snapshot without changing Plan status", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Stale Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Stale Plan", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Use the first decision." });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+				const currentEntry = await store.getPlanEntry({ entryId: entry.id });
+				await store.updatePlanEntry({ entryId: entry.id, body: "Use the revised decision.", expectedRevision: currentEntry.revision, expectedContentHash: currentEntry.contentHash });
+
+				await expect(store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest })).rejects.toThrow(/snapshot is stale/i);
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("rejects confirmation while the Proposed Plan has active questions", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Incomplete Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Incomplete Plan", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "question", body: "What remains open?" });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+
+				await expect(store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest })).rejects.toThrow(/active questions/i);
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("does not revise an already-confirmed matching Plan", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Idempotent Plan owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Idempotent Plan", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Confirm once." });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+				const confirmedPlan = (await store.getEntityDetails(plan.id)).entity;
+
+				await expect(store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest })).resolves.toMatchObject({
+					confirmed: false,
+					entity: { id: plan.id, revision: confirmedPlan.revision, status: "ready" }
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("reopens a ready Plan when its body changes", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan reopen owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan reopened by body change", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Confirm before changing." });
+				const details = await store.getEntityDetails(plan.id);
+				const proposedPlan = projectProposedPlan(details.entity, [await store.getPlanEntry({ entryId: entry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+				const readyPlan = (await store.getEntityDetails(plan.id)).entity;
+
+				await store.setEntityBody({
+					entityId: plan.id,
+					body: "## Goal\n\nReview the changed Plan.",
+					expectedRevision: readyPlan.revision,
+					expectedContentHash: readyPlan.contentHash
+				});
+
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("reopens a ready Plan when its title changes", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan title reopen owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Original Plan title", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Confirm before changing." });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+				const readyPlan = (await store.getEntityDetails(plan.id)).entity;
+
+				await store.updateEntity({
+					entityId: plan.id,
+					title: "Changed Plan title",
+					expectedRevision: readyPlan.revision,
+					expectedContentHash: readyPlan.contentHash
+				});
+
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("reopens a ready Plan when an active Plan entry changes", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry reopen owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan reopened by entry change", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Initial decision." });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+				const readyEntry = await store.getPlanEntry({ entryId: entry.id });
+
+				await store.updatePlanEntry({
+					entryId: entry.id,
+					body: "Changed decision.",
+					expectedRevision: readyEntry.revision,
+					expectedContentHash: readyEntry.contentHash
+				});
+
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("reopens a ready Plan when an active Plan entry is added or deleted", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry lifecycle reopen owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan reopened by entry lifecycle", parentId: initiative.id });
+				const firstEntry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "First decision." });
+				let proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: firstEntry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+
+				const secondEntry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Second decision." });
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+
+				proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: firstEntry.id }), await store.getPlanEntry({ entryId: secondEntry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+				const activeSecondEntry = await store.getPlanEntry({ entryId: secondEntry.id });
+				await store.deletePlanEntry({ entryId: secondEntry.id, expectedRevision: activeSecondEntry.revision, expectedContentHash: activeSecondEntry.contentHash });
+
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("in-progress");
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("does not reopen a ready Plan when Plan entry references change", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan reference owner" });
+				const plan = await store.createEntity({ kind: "plan", title: "Plan with references", parentId: initiative.id });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Keep references out of the snapshot." });
+				const issue = await store.createEntity({ kind: "issue", title: "Referenced implementation", parentId: initiative.id });
+				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
+				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
+
+				await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("ready");
+				await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("ready");
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("requires Plans to have an initiative owner", async () => {
 			const store = await openStore();
 

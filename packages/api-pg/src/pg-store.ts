@@ -27,6 +27,8 @@ import type {
 	IssueCommentPage,
 	IssueCommentRecord,
 	IssueCommentHistoryEntry,
+	IssueBreakdownApprovalResult,
+	IssueBreakdownDraft,
 	LinkResult,
 	MoveResult,
 	ProjectDiscovery,
@@ -44,7 +46,7 @@ import type {
 	TenantSummary,
 	UnlinkResult
 } from "@agent-issues/core";
-import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, isDirectEntitySelector, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, type SearchCapability, type SearchRequest, type SearchResponse } from "@agent-issues/core";
+import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, isDirectEntitySelector, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, projectProposedIssueBreakdown, projectProposedPlan, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, toEntitySummary, type SearchCapability, type SearchRequest, type SearchResponse } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
@@ -52,7 +54,7 @@ import { PgSynchronizeStore } from "./features/synchronize/canonical-chain-store
 import { PgUserDirectoryStore } from "./features/user-directory/store.js";
 import { deleteTenant, listTenants, renameTenant } from "./db/tenant-admin.js";
 import { PgContextStore } from "./features/context/context-store.js";
-import { PgEntityStore, resolveCurrentProjectId } from "./features/entity-store/store.js";
+import { createEntity, linkEntities, PgEntityStore, resolveCurrentProjectId } from "./features/entity-store/store.js";
 import { PgHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
 import { PgIssueCommentStore } from "./features/issue-comment/store.js";
 import { PgPlanEntryStore } from "./features/plan-entry/store.js";
@@ -176,6 +178,35 @@ export class PgStore implements StorageDriver {
 		});
 	}
 
+	protected async getIssueBreakdownDraftByWhere(where: ReturnType<typeof sql>): Promise<IssueBreakdownDraft> {
+		return this.transaction(async (executor) => {
+			const result = await executor.execute(sql`SELECT * FROM issue_breakdown_drafts WHERE tenant_id = ${executor.tenantId} AND ${where} ORDER BY created_at DESC LIMIT 1`);
+			const row = result.rows[0] as {
+				id: string;
+				target_id: string;
+				status: "active" | "approved" | "superseded";
+				snapshot_json: string;
+				approved_at: string | null;
+				created_issue_references: string;
+			} | undefined;
+			if (!row) {
+				throw new Error("Issue-breakdown draft not found.");
+			}
+			await this.assertSelectedProjectEntity(executor, row.target_id);
+			try {
+				return {
+					id: row.id,
+					status: row.status,
+					approvedAt: row.approved_at,
+					createdIssueReferences: JSON.parse(row.created_issue_references) as string[],
+					...(JSON.parse(row.snapshot_json) as ReturnType<typeof projectProposedIssueBreakdown>)
+				};
+			} catch (error) {
+				throw new Error(`Issue-breakdown draft contains malformed JSON: ${row.id}`, { cause: error });
+			}
+		});
+	}
+
 	public async exportCanonicalChains() {
 		return this.tenantWideTransaction((executor) => new PgSynchronizeStore(executor).exportCanonicalChains());
 	}
@@ -288,6 +319,126 @@ export class PgStore implements StorageDriver {
 
 	public async listIssueCommentHistory(input: { commentId: string }): Promise<IssueCommentHistoryEntry[]> {
 		return this.transaction((executor) => new PgIssueCommentStore(executor).listIssueCommentHistory(input));
+	}
+
+	public async confirmPlan(input: Parameters<StorageDriver["confirmPlan"]>[0]) {
+		return this.mutation(async (executor, actorId) => {
+			await this.assertSelectedProjectEntity(executor, input.planId);
+			const entityStore = new PgEntityStore(executor, this.projectIdentity);
+			const details = await entityStore.getEntityDetails(input.planId);
+			if (details.entity.kind !== "plan") {
+				throw new Error(`Plan not found: ${input.planId}`);
+			}
+			const proposedPlan = projectProposedPlan(details.entity, await new PgPlanEntryStore(executor).listPlanEntries({ planId: details.entity.id }));
+			if (proposedPlan.snapshotDigest !== input.snapshotDigest) {
+				throw new Error(`Plan snapshot is stale: ${input.planId}`);
+			}
+			if (proposedPlan.hasActiveQuestions) {
+				throw new Error(`Plan has active questions: ${input.planId}`);
+			}
+			if (details.entity.status === "ready") {
+				return { entity: toEntitySummary(details.entity), previousStatus: "ready", confirmed: false };
+			}
+			if (details.entity.status !== "in-progress") {
+				throw new Error(`Plan is not ready for confirmation: ${input.planId}`);
+			}
+			return { ...(await entityStore.updateEntityStatus({ entityId: details.entity.id, status: "ready" }, actorId)), confirmed: true };
+		});
+	}
+
+	public async createIssueBreakdownDraft(input: Parameters<StorageDriver["createIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownDraft> {
+		return this.mutation(async (executor) => {
+			await this.assertSelectedProjectEntity(executor, input.targetId);
+			const target = (await new PgEntityStore(executor, this.projectIdentity).getEntityDetails(input.targetId)).entity;
+			if (!["initiative", "userStory"].includes(target.kind)) {
+				throw new Error(`Issue-breakdown draft target must be an initiative or user story: ${input.targetId}`);
+			}
+			const projected = projectProposedIssueBreakdown({ targetId: target.id, targetReference: target.reference, issues: input.issues });
+			const id = randomUUID();
+			const now = new Date().toISOString();
+			await executor.execute(sql`UPDATE issue_breakdown_drafts SET status = 'superseded', updated_at = ${now}
+				WHERE tenant_id = ${executor.tenantId} AND target_id = ${target.id}::uuid AND status = 'active'`);
+			await executor.execute(sql`INSERT INTO issue_breakdown_drafts (tenant_id, id, target_id, status, snapshot_json, snapshot_digest, created_at, updated_at)
+				VALUES (${executor.tenantId}, ${id}::uuid, ${target.id}::uuid, 'active', ${JSON.stringify(projected)}, ${projected.snapshotDigest}, ${now}, ${now})`);
+			return { id, status: "active", approvedAt: null, createdIssueReferences: [], ...projected };
+		});
+	}
+
+	public async getIssueBreakdownDraft(input: Parameters<StorageDriver["getIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownDraft> {
+		return this.getIssueBreakdownDraftByWhere(sql`id = ${input.draftId}::uuid`);
+	}
+
+	public async getLatestIssueBreakdownDraft(input: Parameters<StorageDriver["getLatestIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownDraft> {
+		return this.getIssueBreakdownDraftByWhere(sql`target_id = ${input.targetId}::uuid AND status = 'active'`);
+	}
+
+	public async approveIssueBreakdownDraft(input: Parameters<StorageDriver["approveIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownApprovalResult> {
+		return this.mutation(async (executor, actorId) => {
+			const readDraft = async (where: ReturnType<typeof sql>): Promise<IssueBreakdownDraft> => {
+				const result = await executor.execute(sql`SELECT * FROM issue_breakdown_drafts WHERE tenant_id = ${executor.tenantId} AND ${where} ORDER BY created_at DESC LIMIT 1`);
+				const row = result.rows[0] as {
+					id: string;
+					target_id: string;
+					status: "active" | "approved" | "superseded";
+					snapshot_json: string;
+					approved_at: string | null;
+					created_issue_references: string;
+				} | undefined;
+				if (!row) {
+					throw new Error("Issue-breakdown draft not found.");
+				}
+				await this.assertSelectedProjectEntity(executor, row.target_id);
+				try {
+					return {
+						id: row.id,
+						status: row.status,
+						approvedAt: row.approved_at,
+						createdIssueReferences: JSON.parse(row.created_issue_references) as string[],
+						...(JSON.parse(row.snapshot_json) as ReturnType<typeof projectProposedIssueBreakdown>)
+					};
+				} catch (error) {
+					throw new Error(`Issue-breakdown draft contains malformed JSON: ${row.id}`, { cause: error });
+				}
+			};
+
+			const draft = await readDraft(sql`id = ${input.draftId}::uuid`);
+			if (draft.status === "approved" && draft.snapshotDigest === input.snapshotDigest) {
+				return { status: "approved", targetReference: draft.targetReference, createdIssueReferences: draft.createdIssueReferences };
+			}
+			if (draft.snapshotDigest !== input.snapshotDigest || draft.status === "superseded") {
+				return { status: "stale", draft: draft.status === "approved" ? draft : await readDraft(sql`target_id = ${draft.targetId}::uuid AND status = 'active'`) };
+			}
+
+			const issueIds = new Map<string, string>();
+			const createdIssueReferences: string[] = [];
+			for (const issue of draft.issues) {
+				if (issueIds.has(issue.key)) {
+					throw new Error(`Issue-breakdown draft contains duplicate issue key: ${issue.key}`);
+				}
+				const parentId = issue.parentKey ? issueIds.get(issue.parentKey) : draft.targetId;
+				if (!parentId) {
+					throw new Error(`Issue-breakdown draft contains an unknown parent key: ${issue.parentKey}`);
+				}
+				const created = await createEntity(executor, { kind: "issue", title: issue.title, parentId, body: formatIssueBody(issue) }, this.projectIdentity, actorId);
+				issueIds.set(issue.key, created.id);
+				createdIssueReferences.push(created.reference);
+			}
+			for (const issue of draft.issues) {
+				for (const relation of issue.relationReferences) {
+					const targetId = relation.targetKey ? issueIds.get(relation.targetKey) : relation.targetId ?? relation.targetReference;
+					if (!targetId) {
+						throw new Error(`Issue-breakdown draft contains an unresolved relation target for ${issue.key}`);
+					}
+					await linkEntities(executor, { fromId: issueIds.get(issue.key)!, relationType: relation.relationType, toId: targetId }, actorId);
+				}
+			}
+
+			const approvedAt = new Date().toISOString();
+			await executor.execute(sql`UPDATE issue_breakdown_drafts
+				SET status = 'approved', approved_at = ${approvedAt}, created_issue_references = ${JSON.stringify(createdIssueReferences)}, updated_at = ${approvedAt}
+				WHERE tenant_id = ${executor.tenantId} AND id = ${draft.id}::uuid`);
+			return { status: "approved", targetReference: draft.targetReference, createdIssueReferences };
+		});
 	}
 
 	public async createPlanEntry(input: Parameters<StorageDriver["createPlanEntry"]>[0]) {
@@ -541,6 +692,26 @@ export class PgStore implements StorageDriver {
 			throw new Error(`Entity not found: ${entityId}`);
 		}
 	}
+}
+
+function formatIssueBody(issue: IssueBreakdownDraft["issues"][number]): string {
+	return [
+		"## Work Mode",
+		"",
+		issue.workMode,
+		"",
+		"## Outcome",
+		"",
+		issue.outcome,
+		"",
+		"## Scope",
+		"",
+		...issue.scope.map((item) => `- ${item}`),
+		"",
+		"## Acceptance Criteria",
+		"",
+		...issue.acceptanceCriteria.map((item) => `- ${item}`)
+	].join("\n");
 }
 
 async function validateReferencedIssueIds(executor: TenantExecutor, referencedIssueIds: string[]): Promise<string[]> {

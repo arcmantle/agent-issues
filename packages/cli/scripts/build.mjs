@@ -3,11 +3,33 @@ import { chmodSync, cpSync, rmSync } from "node:fs";
 import { build } from "esbuild";
 import { writeBuildInfoFile } from "@agent-issues/api-local";
 
+import { buildPlugin } from "./build-plugin.mjs";
+
 rmSync("dist", { force: true, recursive: true });
 rmSync("site/dist", { force: true, recursive: true });
 rmSync("kanban/dist", { force: true, recursive: true });
 cpSync("../site/dist", "site/dist", { recursive: true });
 cpSync("../kanban/dist", "kanban/dist", { recursive: true });
+
+await build({
+	bundle: true,
+	entryPoints: ["src/plan-preview/main.ts"],
+	format: "esm",
+	minify: true,
+	outfile: "dist/plan-preview.js",
+	platform: "browser",
+	target: "es2024"
+});
+
+await build({
+	bundle: true,
+	entryPoints: ["src/issue-preview/main.ts"],
+	format: "esm",
+	minify: true,
+	outfile: "dist/issue-preview.js",
+	platform: "browser",
+	target: "es2024"
+});
 
 await build({
 	banner: {
@@ -26,5 +48,6 @@ await build({
 	target: "node24"
 });
 
+buildPlugin({ sourceDir: ".", targetDir: "dist/plugin" });
 writeBuildInfoFile("dist");
 chmodSync("dist/cli.js", 0o755);

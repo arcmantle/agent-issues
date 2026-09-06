@@ -1,11 +1,8 @@
-import type { installAgent, listAgent, uninstallAgent } from "../agent-installer.js";
-import type { BackfillBodiesResult, BackfillableBodyKind } from "../body-backfill.js";
+import type { BackfillBodiesResult, BackfillableBodyKind } from "../backfill/body-backfill.js";
 import type { SynchronizeSummary } from "@agent-issues/core";
 import type { listTenants } from "@agent-issues/api-local";
-import type { installMcp, listMcp, uninstallMcp } from "../mcp-installer.js";
-import type { SavedLoginView } from "../auth-session.js";
+import type { SavedLoginView } from "../auth/auth-session.js";
 import type { startLiveSite } from "../site/index.js";
-import type { installSkills, listSkills, uninstallSkills } from "../skill-installer.js";
 
 export function renderEntityList(
 	kind: string,
@@ -116,72 +113,6 @@ export function renderInitiativeBundle(bundle: {
 		`Blockers: ${bundle.blockerLinks.length ? bundle.blockerLinks.map((link) => `${link.source.reference} -> ${link.target.reference}`).join(", ") : "none"}`,
 		`Constrains: ${bundle.constrainsLinks.length ? bundle.constrainsLinks.map((link) => `${link.adr.reference} -> ${link.issue.reference}`).join(", ") : "none"}`
 	].join("\n");
-}
-
-export function renderInstallSkills(result: ReturnType<typeof installSkills>): string {
-	const lines = [`Installed skills to ${result.targetDir}`];
-
-	for (const item of result.installed) {
-		lines.push(`${item.installedName} ${item.status} ${item.destinationDir}`);
-	}
-
-	return lines.join("\n");
-}
-
-export function renderInstallAgent(result: ReturnType<typeof installAgent>): string {
-	return [
-		`Installed agent to ${result.targetDir}`,
-		`${result.installed.installedName} ${result.installed.status} ${result.installed.agentFile}`,
-		...result.additionalInstalled.map((item) => `${item.host} ${item.installedName} ${item.status} ${item.agentFile}`)
-	].join("\n");
-}
-
-export function renderListSkills(result: ReturnType<typeof listSkills>): string {
-	const lines = [`Packaged skills in ${result.targetDir}`];
-
-	for (const item of result.skills) {
-		lines.push(`${item.installedName} ${item.status} ${item.destinationDir}`);
-	}
-
-	return lines.join("\n");
-}
-
-export function renderListAgent(result: ReturnType<typeof listAgent>): string {
-	return [
-		`Packaged agent in ${result.targetDir}`,
-		`${result.agent.installedName} ${result.agent.status} ${result.agent.agentFile}`,
-		...result.additionalAgents.map((item) => `${item.host} ${item.installedName} ${item.status} ${item.agentFile}`)
-	].join("\n");
-}
-
-export function renderUninstallSkills(result: ReturnType<typeof uninstallSkills>): string {
-	const lines = [`Removed skills from ${result.targetDir}`];
-
-	for (const item of result.removed) {
-		lines.push(`${item.installedName} ${item.status} ${item.destinationDir}`);
-	}
-
-	return lines.join("\n");
-}
-
-export function renderUninstallAgent(result: ReturnType<typeof uninstallAgent>): string {
-	return [
-		`Removed agent from ${result.targetDir}`,
-		`${result.removed.installedName} ${result.removed.status} ${result.removed.agentFile}`,
-		...result.additionalRemoved.map((item) => `${item.host} ${item.installedName} ${item.status} ${item.agentFile}`)
-	].join("\n");
-}
-
-export function renderInstallMcp(result: ReturnType<typeof installMcp>): string {
-	return `MCP server ${result.server.name} ${result.server.status} in ${result.targetFile}`;
-}
-
-export function renderListMcp(result: ReturnType<typeof listMcp>): string {
-	return `MCP server ${result.server.name} ${result.server.status} in ${result.targetFile}`;
-}
-
-export function renderUninstallMcp(result: ReturnType<typeof uninstallMcp>): string {
-	return `MCP server ${result.server.name} ${result.server.status} in ${result.targetFile}`;
 }
 
 export function renderCurrentTenant(result: {

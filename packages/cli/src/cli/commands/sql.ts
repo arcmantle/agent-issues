@@ -1,7 +1,7 @@
 import { ensureDatabase, querySqlite } from "@agent-issues/api-local";
 import { Option } from "clipanion";
 
-import { getActiveSavedLogin } from "../../auth-session.js";
+import { getActiveSavedLogin } from "../../auth/auth-session.js";
 import { requirePositional, TenantCommand } from "../shared.js";
 
 export class SqlCommand extends TenantCommand {

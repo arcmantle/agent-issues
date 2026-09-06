@@ -30,8 +30,8 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	public entityDetailTab: EntityDetailTab = "overview";
 	protected recordQuery = "";
 	protected recordStatus = "all";
-	protected issueRecordView: RecordView = "list";
-	protected userStoryRecordView: RecordView = "list";
+	protected issueRecordView: RecordView = "tree";
+	protected userStoryRecordView: RecordView = "tree";
 	public visibleGraphKinds = new Set<ProjectGraphKind>(PROJECT_GRAPH_KINDS);
 
 	protected focusPlanEntry(entryId: string, selector = ".ai-plan-entry") {
@@ -117,7 +117,10 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			return;
 		}
 
-		this.store?.selectEntityFromEvent(event);
+		const entityId = (event.currentTarget as HTMLElement).dataset.id;
+		if (entityId) {
+			this.store?.selectEntityFromRecord(entityId);
+		}
 	};
 
 	protected onToggleIssueBranch = (event: Event) => {
@@ -187,7 +190,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 			return;
 		}
 
-		this.store?.selectEntity(record.id);
+		this.store?.selectEntityFromRecord(record.id);
 	};
 
 	protected onNodeOpen = (event: Event) => {
@@ -758,6 +761,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		const bundle = store.bundleForEntityId(entityId);
 		const isAdrSection = store.activeSection.get() === "adrs";
 		const scopeLabel = isAdrSection ? "ADRs" : bundle?.initiative.title ?? "Initiatives";
+		const backLabel = store.entityBackTarget.get()?.title ?? scopeLabel;
 		const crumbScope = isAdrSection ? "ADRs" : bundle?.initiative.title ?? "Workspace";
 		const meta = store.detailMetaFor(entity.id);
 		const renderer = createEntityDetailRenderer(store, entity, this);
@@ -792,7 +796,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 					class="ai-back"
 					@click=${this.onBackClick}
 				>
-					← Back to ${scopeLabel}
+					← Back to ${backLabel}
 				</button>
 				`
 			)}
@@ -1381,7 +1385,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		}
 		.ai-story-block {
 			display: grid;
-			gap: 10px;
+			gap: 8px;
 		}
 		.ai-story-issues {
 			display: grid;

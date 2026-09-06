@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createLocalDaemonServer, openSqliteStore, type LocalDaemonServerHandle } from "@agent-issues/api-local";
-import { resolveWellKnownLocalTenantId, type RunCredentialCommand } from "@agent-issues/core";
+import { projectProposedPlan, resolveWellKnownLocalTenantId, type RunCredentialCommand } from "@agent-issues/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { auditMcpToolRegistrations } from "./mcp-tool-audit.js";
@@ -53,6 +53,183 @@ describe("agent-issues MCP server", () => {
 		const tools = await client.listTools();
 
 		expect(auditMcpToolRegistrations(tools.tools.map((tool) => tool.name))).toEqual({ missing: [] });
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("ships a self-contained Issue Preview resource", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		const result = await client.readResource({ uri: "ui://agent-issues/issue-preview.html" });
+		const content = result.contents[0];
+		const html = content && "text" in content ? content.text : "";
+		expect(html).toContain("<issue-preview-app>");
+		expect(html).toContain("<script type=\"module\">");
+		expect(html).not.toMatch(/<script[^>]+src=/i);
+		expect(html).not.toMatch(/<(?:img|link|script)[^>]+https?:\/\//i);
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("serves the Plan Preview MCP App resource", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		const resources = await client.listResources();
+		const resource = resources.resources.find(({ uri }) => uri === "ui://agent-issues/plan-preview.html");
+		expect(resource).toMatchObject({ mimeType: "text/html;profile=mcp-app" });
+		const tools = await client.listTools();
+		const previewTool = tools.tools.find(({ name }) => name === "plan_preview");
+		expect(previewTool?._meta).toMatchObject({ ui: { resourceUri: "ui://agent-issues/plan-preview.html" } });
+
+		const result = await client.readResource({ uri: "ui://agent-issues/plan-preview.html" });
+		expect(result.contents).toEqual([
+			expect.objectContaining({ mimeType: "text/html;profile=mcp-app", text: expect.stringContaining("<plan-preview-app") })
+		]);
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("serves the Issue Preview MCP App resource and draft snapshot", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Issue Preview target" });
+		const draft = await store.createIssueBreakdownDraft({
+			targetId: initiative.id,
+			issues: [{
+				key: "draft-storage",
+				title: "Add draft storage",
+				outcome: "Store the proposed graph.",
+				scope: ["Add the draft store."],
+				workMode: "AFK",
+				acceptanceCriteria: ["A draft is retrievable."],
+				parentKey: "issue-preview",
+				relationReferences: [{ relationType: "blocks", targetKey: "issue-preview" }]
+			}]
+		});
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		const resources = await client.listResources();
+		expect(resources.resources).toEqual(expect.arrayContaining([
+			expect.objectContaining({ uri: "ui://agent-issues/issue-preview.html", mimeType: "text/html;profile=mcp-app" })
+		]));
+		const tools = await client.listTools();
+		expect(tools.tools.find(({ name }) => name === "issue_breakdown_preview")?._meta).toMatchObject({
+			ui: { resourceUri: "ui://agent-issues/issue-preview.html" }
+		});
+		const result = await client.callTool({ name: "issue_breakdown_preview", arguments: { draftId: draft.id } });
+
+		expect(result).toMatchObject({
+			structuredContent: {
+				draft: expect.objectContaining({
+					id: draft.id,
+					targetReference: initiative.reference,
+					snapshotDigest: draft.snapshotDigest,
+					issues: [expect.objectContaining({ key: "draft-storage", title: "Add draft storage" })]
+				})
+			}
+		});
+		const text = result.content?.find((item) => item.type === "text")?.text ?? "";
+		expect(text).toContain(initiative.reference);
+		expect(text).toContain(draft.snapshotDigest);
+		expect(text).toContain("Add draft storage");
+		expect(text).toContain("Store the proposed graph.");
+		expect(text).toContain("Add the draft store.");
+		expect(text).toContain("AFK");
+		expect(text).toContain("A draft is retrievable.");
+		expect(text).toContain("issue-preview");
+		expect(text).toContain("blocks");
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("approves an Issue Preview draft through the MCP server", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Issue Preview target" });
+		const draft = await store.createIssueBreakdownDraft({
+			targetId: initiative.id,
+			issues: [{
+				key: "approval",
+				title: "Approve the draft",
+				outcome: "The server creates the issue.",
+				scope: ["Create the approved issue."],
+				workMode: "AFK",
+				acceptanceCriteria: ["Approval returns its reference."],
+				relationReferences: []
+			}]
+		});
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		const result = await client.callTool({
+			name: "issue_breakdown_approve",
+			arguments: { draftId: draft.id, snapshotDigest: draft.snapshotDigest }
+		});
+
+		expect(result.structuredContent).toMatchObject({
+			status: "approved",
+			targetReference: initiative.reference,
+			createdIssueReferences: [expect.any(String)]
+		});
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("ships a self-contained Plan Preview resource", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		const result = await client.readResource({ uri: "ui://agent-issues/plan-preview.html" });
+		const content = result.contents[0];
+		const html = content && "text" in content ? content.text : "";
+		expect(html).toContain("<plan-preview-app>");
+		expect(html).toContain("<script type=\"module\">");
+		expect(html).not.toMatch(/<script[^>]+src=/i);
+		expect(html).not.toMatch(/<(?:img|link|script)[^>]+https?:\/\//i);
 
 		await client.close();
 		await server.close();
@@ -362,6 +539,128 @@ describe("agent-issues MCP server", () => {
 		const result = await client.callTool({ name: "entity_show", arguments: { reference: issue.reference } });
 
 		expect(result).toMatchObject({ structuredContent: { entity: { reference: issue.reference, title: "Read through MCP" } } });
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("reports stale Plan confirmation through plan_confirm", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await store.createEntity({ kind: "plan", title: "MCP Plan", parentId: initiative.id });
+		const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Initial decision." });
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const preview = await client.callTool({ name: "plan_preview", arguments: { planId: plan.reference } });
+		const snapshotDigest = (preview.structuredContent as { plan: { snapshotDigest: string } }).plan.snapshotDigest;
+		await store.updatePlanEntry({ entryId: entry.id, body: "Changed decision.", expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
+		const result = await client.callTool({ name: "plan_confirm", arguments: { planId: plan.reference, snapshotDigest } });
+
+		expect(result).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringMatching(/snapshot is stale/i) }] });
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("returns a ready Plan as read-only and confirms its snapshot idempotently", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await store.createEntity({ kind: "plan", title: "Ready MCP Plan", parentId: initiative.id });
+		const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "The Plan is ready." });
+		const readySnapshot = await store.getEntityDetails(plan.reference);
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await store.confirmPlan({
+			planId: plan.id,
+			snapshotDigest: projectProposedPlan(readySnapshot.entity, [await store.getPlanEntry({ entryId: entry.id })]).snapshotDigest
+		});
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const preview = await client.callTool({ name: "plan_preview", arguments: { planId: plan.reference } });
+		const snapshotDigest = (preview.structuredContent as { plan: { snapshotDigest: string } }).plan.snapshotDigest;
+		const confirmation = await client.callTool({ name: "plan_confirm", arguments: { planId: plan.reference, snapshotDigest } });
+
+		expect(preview).toMatchObject({ structuredContent: { plan: { reference: plan.reference, status: "ready" } } });
+		expect(confirmation).toMatchObject({
+			structuredContent: { entity: { reference: plan.reference, status: "ready" }, previousStatus: "ready", confirmed: false }
+		});
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("confirms the exact Proposed Plan snapshot through plan_confirm", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await store.createEntity({ kind: "plan", title: "MCP Plan", parentId: initiative.id });
+		await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Use the confirmation tool." });
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const preview = await client.callTool({ name: "plan_preview", arguments: { planId: plan.reference } });
+		const snapshotDigest = (preview.structuredContent as { plan: { snapshotDigest: string } }).plan.snapshotDigest;
+		const result = await client.callTool({ name: "plan_confirm", arguments: { planId: plan.reference, snapshotDigest } });
+
+		expect(result).toMatchObject({
+			structuredContent: { entity: { reference: plan.reference, status: "ready" }, previousStatus: "in-progress", confirmed: true }
+		});
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("returns a Proposed Plan through plan_preview", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
+		const plan = await store.createEntity({
+			kind: "plan",
+			title: "MCP Plan",
+			body: "## Goal\n\nReview the MCP contract.\n\n## Context\n\nUse a text fallback.",
+			parentId: initiative.id
+		});
+		await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Return structured content." });
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const result = await client.callTool({ name: "plan_preview", arguments: { planId: plan.reference } });
+
+		expect(result).toMatchObject({
+			structuredContent: {
+				plan: {
+					reference: plan.reference,
+					title: "MCP Plan",
+					goal: "Review the MCP contract.",
+					context: "Use a text fallback.",
+					current: [expect.objectContaining({ key: "decisions" })],
+					snapshotDigest: expect.any(String)
+				}
+			}
+		});
+		expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("MCP Plan") }]);
 
 		await client.close();
 		await server.close();

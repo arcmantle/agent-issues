@@ -53,18 +53,26 @@ Ask whether the size of each slice and the dependencies feel right, whether to m
 
 Repeat until the user approves the breakdown.
 
-### 5. Publish the issues in agent-issues
+### 5. Preview and approve the issue breakdown
 
-For each approved slice:
+After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. Create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
 
-1. Write a short markdown issue body from the [Issue recipe](../recipes/issue.md) before you publish it. Keep the substance of the approved slice in the body, not just in the title. Include the slice type (`AFK` or `HITL`), the user-visible outcome, the main implementation seam, the acceptance criteria, and any explicit blocker or dependency from the approved breakdown.
-2. The **Entity Create And Edit** recipe sends the body as direct MCP text. Its CLI fallback reads the body from standard input; do not place multiline text in a shell argument.
-3. Run the **Entity Create And Edit** recipe to create the issue under the correct structural parent: the initiative for top-level work or the parent issue for a sub-issue.
-4. If you reuse an existing issue whose body is missing or old, run the **Entity Create And Edit** recipe to update its body before you link anything else.
-5. Run the **Entity Relations** recipe to link each leaf issue to every user story it satisfies with `fixes`.
-6. For Plan-based work, run the **Plan Entry Issue Link** recipe to link each issue to every active Plan entry it implements with `informs`. Issue creation owns these links.
-7. Run the **Entity Relations** recipe to record dependencies with `blocks`.
+For an MCP host that can render apps:
 
-Publish blockers first, so later issues can link to real issue IDs.
+1. Call `issue_breakdown_preview` with the draft ID immediately before issue creation.
+2. Wait for the user to select Approve in Issue Preview.
+3. The app calls `issue_breakdown_approve` with the displayed draft ID and snapshot digest. This authoritative operation creates the approved issue graph.
 
-Return a short summary that shows each created issue ID, its linked Plan entries and user stories, and its blockers.
+For an MCP host that cannot render apps:
+
+1. Return the same complete proposed issue graph and snapshot digest as text and structured tool data.
+2. Ask for explicit chat confirmation of that snapshot.
+3. After confirmation, call the authoritative approval operation with the draft ID and snapshot digest.
+
+When approval reports a changed snapshot, return the current draft for a new review. Do not create issue records outside the authoritative approval operation.
+
+### 6. Publish the issues in agent-issues
+
+After the authoritative approval operation creates the issue graph:
+
+Return a short summary that shows each created issue ID, its linked Plan entries and user stories, and its blockers. Do not create or add links after approval because the approved graph already contains them.

@@ -1,8 +1,8 @@
 import { resolveDatabasePath } from "@agent-issues/api-local";
 
-import { spawnLocalDaemon } from "./daemon/local-daemon-store.js";
-import { runMcpStdioServer } from "./mcp-server/stdio.js";
-import { resolveProjectIdentity } from "./project-identity.js";
+import { spawnLocalDaemon } from "../daemon/local-daemon-store.js";
+import { runMcpStdioServer } from "./stdio.js";
+import { resolveProjectIdentity } from "../runtime/project-identity.js";
 
 export const MCP_SERVER_FLAG = "--mcp";
 

@@ -5,8 +5,8 @@ import { Command, Option, type BaseContext } from "clipanion";
 
 import type { StorageDriver } from "@agent-issues/core";
 import { readBuildContentHash, type ContextDirectoryView, type DatabaseLocationOptions } from "@agent-issues/api-local";
-import type { SavedLoginStoreOptions } from "../auth-session.js";
-import { openStorageDriver } from "../open-storage-driver.js";
+import type { SavedLoginStoreOptions } from "../auth/auth-session.js";
+import { openStorageDriver } from "../runtime/open-storage-driver.js";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;

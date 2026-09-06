@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 
 it("keeps typed facts and graph relations outside recipe body prose", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -14,7 +14,7 @@ it("keeps typed facts and graph relations outside recipe body prose", () => {
 
 it("distinguishes authored placeholders from generated content", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -24,7 +24,7 @@ it("distinguishes authored placeholders from generated content", () => {
 
 it("links each current recipe from the catalog index", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -37,7 +37,7 @@ it("links each current recipe from the catalog index", () => {
 
 it("links each management recipe from the catalog index", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -49,7 +49,7 @@ it("links each management recipe from the catalog index", () => {
 
 it("links the PRD recipe from the catalog index", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -58,7 +58,7 @@ it("links the PRD recipe from the catalog index", () => {
 
 it("provides a PRD recipe with its required headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/prd.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/prd.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -74,11 +74,11 @@ it("provides a PRD recipe with its required headings", () => {
 
 it("provides a discoverable user-story recipe", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/user-story.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/user-story.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -90,11 +90,11 @@ it("provides a discoverable user-story recipe", () => {
 
 it("provides a discoverable issue recipe with its required headings", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/issue.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/issue.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -110,11 +110,11 @@ it("provides a discoverable issue recipe with its required headings", () => {
 
 it("provides a discoverable ADR recipe with its current short form", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/adr.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/adr.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -127,11 +127,11 @@ it("provides a discoverable ADR recipe with its current short form", () => {
 
 it("provides a discoverable handoff recipe with continuity details", () => {
 	const catalog = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/README.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/README.md", import.meta.url)),
 		"utf8"
 	);
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/handoff.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/handoff.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -146,7 +146,7 @@ it("provides a discoverable handoff recipe with continuity details", () => {
 
 it("provides a project recipe with its required headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/project.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/project.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -158,7 +158,7 @@ it("provides a project recipe with its required headings", () => {
 
 it("provides an epic recipe with its required headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/epic.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/epic.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -170,7 +170,7 @@ it("provides an epic recipe with its required headings", () => {
 
 it("provides a version recipe with its required headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/version.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/version.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -180,7 +180,7 @@ it("provides a version recipe with its required headings", () => {
 
 it("provides an initiative recipe with its required headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/initiative.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/initiative.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -192,7 +192,7 @@ it("provides an initiative recipe with its required headings", () => {
 
 it("provides a context-summary recipe with its required headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/context-summary.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/context-summary.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -203,7 +203,7 @@ it("provides a context-summary recipe with its required headings", () => {
 
 it("provides a compact context-term recipe without section headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/context-term.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/context-term.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -212,7 +212,7 @@ it("provides a compact context-term recipe without section headings", () => {
 
 it("provides an issue-comment recipe with optional supporting sections", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/issue-comment.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/issue-comment.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -223,7 +223,7 @@ it("provides an issue-comment recipe with optional supporting sections", () => {
 
 it("provides a Pioneer map recipe with its current headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/pioneer-map.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/pioneer-map.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -236,7 +236,7 @@ it("provides a Pioneer map recipe with its current headings", () => {
 
 it("provides a Pioneer ticket recipe with its current headings", () => {
 	const recipe = readFileSync(
-		fileURLToPath(new URL("../skills/recipes/pioneer-ticket.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/recipes/pioneer-ticket.md", import.meta.url)),
 		"utf8"
 	);
 
@@ -259,7 +259,7 @@ it("links each body-writing skill to only its applicable recipes", () => {
 
 	for (const [skillFile, expectedRecipes] of expectedRecipesByFile) {
 		const skill = readFileSync(
-			fileURLToPath(new URL(`../skills/${skillFile}`, import.meta.url)),
+			fileURLToPath(new URL(`../../skills/${skillFile}`, import.meta.url)),
 			"utf8"
 		);
 		const recipes = [...skill.matchAll(/(?:\.\.\/)+recipes\/([\w-]+\.md)/g)]
@@ -268,4 +268,16 @@ it("links each body-writing skill to only its applicable recipes", () => {
 
 		expect(recipes).toEqual(expectedRecipes);
 	}
+});
+
+it("requires Issue Preview approval before ai-to-issues creates records", () => {
+	const skill = readFileSync(
+		fileURLToPath(new URL("../../skills/ai-to-issues/SKILL.md", import.meta.url)),
+		"utf8"
+	);
+
+	expect(skill).toMatch(/validate every parent and relation reference/i);
+	expect(skill).toContain("Issue Preview");
+	expect(skill).toContain("explicit chat confirmation");
+	expect(skill).toContain("authoritative approval operation");
 });

@@ -1642,6 +1642,9 @@ export async function setEntityBody(
 	}
 
 	await appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
+	if (current.kind === "plan" && current.status === "ready" && current.body !== input.body) {
+		await updateEntityStatus(executor, { entityId: current.id, status: "in-progress" }, actorId);
+	}
 	return getEntityOrThrow(executor, current.id);
 }
 
@@ -1708,6 +1711,9 @@ export async function updateEntity(
 		...(input.priority !== undefined && { priorPriority: current.priority }),
 		...(input.type !== undefined && { priorType: current.type })
 	});
+	if (current.kind === "plan" && current.status === "ready" && (current.title !== title || current.body !== body)) {
+		await updateEntityStatus(executor, { entityId: current.id, status: "in-progress" }, actorId);
+	}
 	return getEntityOrThrow(executor, current.id);
 }
 

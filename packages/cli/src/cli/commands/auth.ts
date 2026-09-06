@@ -11,8 +11,8 @@ import {
 	toSavedLoginView,
 	type SavedLoginStoreOptions,
 	type RemoteSavedLogin
-} from "../../auth-session.js";
-import { discoverServiceAuth } from "../../service-discovery.js";
+} from "../../auth/auth-session.js";
+import { discoverServiceAuth } from "../../auth/service-discovery.js";
 
 import { renderAuthList, renderAuthLogin, renderAuthLogout, renderAuthStatus, renderAuthSwitch } from "../renderers.js";
 import { BaseCommand } from "../shared.js";
@@ -94,7 +94,7 @@ export class AuthLoginCommand extends BaseCommand {
 		const { name, serviceUrl } = await this.resolveRemoteInput();
 		const dependencies = this.context.authLoginDependencies;
 		const deviceCodeLogin = dependencies?.deviceCodeLogin
-			?? (await import("../../entra-device-login.js")).acquireEntraDeviceCodeSession;
+			?? (await import("../../auth/entra-device-login.js")).acquireEntraDeviceCodeSession;
 
 		return performRemoteLogin(
 			{ name, serviceUrl },

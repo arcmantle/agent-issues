@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { getHelpPayload, renderHelp } from "../../help.js";
+import { getHelpPayload, renderHelp } from "../help.js";
 
 import { BaseCommand, BodyTenantCommand, TenantCommand, requireOption, requirePositional, withStore } from "../shared.js";
 

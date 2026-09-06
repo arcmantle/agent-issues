@@ -1397,6 +1397,50 @@ describe("browser detail routes", () => {
 		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=entity&entity=ISS1");
 	});
 
+	it("loads the result project before opening an entity target", async () => {
+		const issue = makeEntity({ id: "ISS2", kind: "issue", title: "Other project result" });
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ kind: "available", snapshot: makeSnapshot({ entities: [issue] }) }), { status: 200 })
+		);
+
+		await store.openSearchTarget({ type: "entity", entityId: issue.id }, "PROJ2");
+
+		expect(store.selectedProjectId.get()).toBe("PROJ2");
+		expect(store.selectedId.get()).toBe(issue.id);
+		expect(window.location.hash).toBe("#tenant=demo&project=PROJ2&page=entity&entity=ISS2");
+		fetchMock.mockRestore();
+	});
+
+	it("keeps global search open when the result project is unavailable", async () => {
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.activeSection.set("context");
+		store.globalSearchOpen.set(true);
+		store.globalSearchQuery.set("other project result");
+		store.globalSearchResponse.set({ results: [], state: "available" });
+		const fetchMock = vi.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(null, { status: 500 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				kind: "available",
+				project: makeEntity({ id: "PROJ1", kind: "project", title: "Current project" }),
+				epics: [],
+				counts: { completedInitiatives: 0, epics: 0, initiatives: 0 }
+			}), { status: 200 }));
+
+		await expect(store.openSearchTarget({ type: "entity", entityId: "ISS2" }, "PROJ2")).resolves.toBe(false);
+
+		expect(store.selectedProjectId.get()).toBe("PROJ1");
+		expect(store.activeSection.get()).toBe("context");
+		expect(store.globalSearchOpen.get()).toBe(true);
+		expect(store.globalSearchQuery.get()).toBe("other project result");
+		expect(store.globalSearchResponse.get()).toEqual({ results: [], state: "available" });
+		fetchMock.mockRestore();
+	});
+
 	it("opens an issue-comment target in its issue", () => {
 		const issue = makeEntity({ id: "ISS1", kind: "issue", title: "Search discussion" });
 		const store = new AgentIssuesStore();
@@ -1424,6 +1468,36 @@ describe("browser detail routes", () => {
 		expect(store.contextTab.get()).toBe("initiatives");
 		expect(store.selectedContextInitiativeId.get()).toBe("INIT1");
 		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=project&section=context&target=context-term&target-id=Search%20document&target-scope=INIT1");
+	});
+
+	it("loads scoped context before completing context-term search navigation", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const shared = makeSnapshot().contexts.shared;
+		const scoped = {
+			context: {
+				createdAt: null,
+				exists: true,
+				key: initiative.id,
+				scopeEntityId: initiative.id,
+				scopeKind: "initiative" as const,
+				scopeLabel: initiative.title,
+				summary: "Search terminology.",
+				title: "Search context",
+				updatedAt: null
+			},
+			terms: [{ avoid: [], createdAt: "", definition: "Visible debt records.", term: "debt graph visibility", updatedAt: "" }]
+		};
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ duplicateTerms: [], initiatives: [scoped], shared, terms: [] }), { status: 200 })
+		);
+
+		await store.openSearchTarget({ type: "context-term", scopeRef: initiative.id, term: "debt graph visibility" });
+
+		expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/project-context?tenant=demo"), expect.anything());
+		expect(store.getContextForInitiative(initiative.id)).toEqual(scoped);
 	});
 
 	it("clears a nested target when navigating to another initiative", () => {
@@ -1454,6 +1528,36 @@ describe("browser detail routes", () => {
 
 		expect(store.selectedNestedTarget.get()).toBeNull();
 		expect(window.location.hash).toBe("#tenant=demo&project=PROJ1&page=initiative&initiative=INIT1&tab=overview");
+	});
+
+	it("returns through record navigation before closing to the initiative", () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Search work" });
+		const story = makeEntity({ id: "US1", kind: "userStory", title: "Source story" });
+		const parentIssue = makeEntity({ id: "ISS1", kind: "issue", title: "Parent issue" });
+		const childIssue = makeEntity({ id: "ISS2", kind: "issue", title: "Child issue" });
+		const store = new AgentIssuesStore();
+		store.snapshot.set(makeSnapshot({
+			entities: [initiative, story, parentIssue, childIssue],
+			initiatives: [makeBundle(initiative, { issues: [parentIssue, childIssue], userStories: [story] })]
+		}));
+		store.selectedTenant.set("demo");
+		store.selectedProjectId.set("PROJ1");
+		store.selectEntity(story.id);
+		store.selectEntityFromRecord(parentIssue.id);
+		store.selectEntityFromRecord(childIssue.id);
+
+		expect(store.entityBackTarget.get()?.id).toBe(parentIssue.id);
+		store.closeEntity();
+		expect(store.selectedId.get()).toBe(parentIssue.id);
+		expect(store.entityBackTarget.get()?.id).toBe(story.id);
+
+		store.closeEntity();
+		expect(store.selectedId.get()).toBe(story.id);
+		expect(store.entityBackTarget.get()).toBeNull();
+
+		store.closeEntity();
+		expect(store.selectedId.get()).toBeNull();
+		expect(store.selectedInitiativeId.get()).toBe(initiative.id);
 	});
 
 	it("restores a scoped context-term target from a direct hash route", () => {
@@ -2691,6 +2795,7 @@ describe("tenant and project route scope", () => {
 		const store = new AgentIssuesStore();
 		store.selectedProjectId.set("PROJ1");
 		store.selectedId.set("ISS1");
+		store.entityBackStack.set(["US1"]);
 		window.location.hash = "tenant=demo";
 
 		store.onHashChange();
@@ -2698,6 +2803,7 @@ describe("tenant and project route scope", () => {
 		expect(store.selectedTenant.get()).toBe("demo");
 		expect(store.selectedProjectId.get()).toBeNull();
 		expect(store.selectedId.get()).toBeNull();
+		expect(store.entityBackStack.get()).toEqual([]);
 		expect(window.location.hash).toBe("#tenant=demo");
 	});
 
@@ -2740,6 +2846,7 @@ describe("tenant and project route scope", () => {
 		store.selectedInitiativeId.set("INIT1");
 		store.cascadePath.set(["INIT1", "ISS1"]);
 		store.reRootTrail.set([["INIT1", "ISS1"]]);
+		store.entityBackStack.set(["US1"]);
 		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ kind: "available", projects: [] }), { status: 200 })
 		);
@@ -2752,6 +2859,7 @@ describe("tenant and project route scope", () => {
 		expect(store.selectedInitiativeId.get()).toBeNull();
 		expect(store.cascadePath.get()).toEqual([]);
 		expect(store.reRootTrail.get()).toEqual([]);
+		expect(store.entityBackStack.get()).toEqual([]);
 		expect(store.globalSearchCapability.get()).toBeNull();
 		expect(store.globalSearchQuery.get()).toBe("");
 		expect(store.globalSearchResponse.get()).toBeNull();

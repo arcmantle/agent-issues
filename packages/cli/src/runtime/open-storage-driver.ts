@@ -1,8 +1,8 @@
 import { HttpStore, type StorageDriver } from "@agent-issues/core";
 import { openLocalDaemonStore, openSqliteStore, resolveDatabasePath, type LocalDaemonStoreOptions, type DatabaseLocationOptions } from "@agent-issues/api-local";
-import { getActiveSavedLogin, type SavedLoginStoreOptions } from "./auth-session.js";
+import { getActiveSavedLogin, type SavedLoginStoreOptions } from "../auth/auth-session.js";
 import { BUILD_MODE } from "./build-mode.js";
-import { spawnLocalDaemon } from "./daemon/local-daemon-store.js";
+import { spawnLocalDaemon } from "../daemon/local-daemon-store.js";
 import { resolveProjectIdentity } from "./project-identity.js";
 
 export type OpenStorageDriverOptions = {

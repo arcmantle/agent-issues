@@ -1,4 +1,8 @@
-import { isDirectEntitySelector, isStructuralRelationType, measureHistory, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type ProjectSummary, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
+import { randomUUID } from "node:crypto";
+
+import { sql } from "drizzle-orm";
+
+import { isDirectEntitySelector, isStructuralRelationType, measureHistory, projectProposedIssueBreakdown, projectProposedPlan, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type IssueBreakdownApprovalResult, type IssueBreakdownDraft, type ProjectSummary, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
 import type { CanonicalChainBundle } from "@agent-issues/core";
 import { LocalSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import * as localSynchronizeStore from "./features/synchronize/canonical-chain-store.js";
@@ -185,6 +189,104 @@ export class SqliteStore implements StorageDriver {
 
 	public async listIssueCommentHistory(input: Parameters<StorageDriver["listIssueCommentHistory"]>[0]) {
 		return this.issueCommentStore.listIssueCommentHistory(input);
+	}
+
+	public async confirmPlan(input: Parameters<StorageDriver["confirmPlan"]>[0]) {
+		this.assertSelectedProjectEntity(input.planId);
+		return this.mutate((actorId) => {
+			const details = localEntityStore.getEntityDetails(this.executor, input.planId);
+			if (details.entity.kind !== "plan") {
+				throw new Error(`Plan not found: ${input.planId}`);
+			}
+			const proposedPlan = projectProposedPlan(details.entity, this.planEntryStore.listPlanEntries({ planId: details.entity.id }));
+			if (proposedPlan.snapshotDigest !== input.snapshotDigest) {
+				throw new Error(`Plan snapshot is stale: ${input.planId}`);
+			}
+			if (proposedPlan.hasActiveQuestions) {
+				throw new Error(`Plan has active questions: ${input.planId}`);
+			}
+			if (details.entity.status === "ready") {
+				return { entity: toEntitySummary(details.entity), previousStatus: "ready", confirmed: false };
+			}
+			if (details.entity.status !== "in-progress") {
+				throw new Error(`Plan is not ready for confirmation: ${input.planId}`);
+			}
+			return { ...localEntityStore.updateEntityStatus(this.executor, { entityId: details.entity.id, status: "ready" }, actorId), confirmed: true };
+		}, { synchronizeSearch: (result) => result.confirmed ? this.searchStore.synchronizeEntitySearchDocumentsForChange(result.entity.id) : undefined });
+	}
+
+	public async createIssueBreakdownDraft(input: Parameters<StorageDriver["createIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownDraft> {
+		this.assertSelectedProjectEntity(input.targetId);
+		return this.mutate(() => {
+			const target = getSqliteEntityOrThrow(this.executor, input.targetId);
+			if (!["initiative", "userStory"].includes(target.kind)) {
+				throw new Error(`Issue-breakdown draft target must be an initiative or user story: ${input.targetId}`);
+			}
+			const projected = projectProposedIssueBreakdown({ targetId: target.id, targetReference: target.reference, issues: input.issues });
+			const id = randomUUID();
+			const now = new Date().toISOString();
+			this.executor.drizzle.run(sql`UPDATE issue_breakdown_drafts SET status = 'superseded', updated_at = ${now}
+				WHERE tenant_id = ${this.executor.tenantId} AND target_id = ${target.id} AND status = 'active'`);
+			this.executor.drizzle.run(sql`INSERT INTO issue_breakdown_drafts (tenant_id, id, target_id, status, snapshot_json, snapshot_digest, created_at, updated_at)
+				VALUES (${this.executor.tenantId}, ${id}, ${target.id}, 'active', ${JSON.stringify(projected)}, ${projected.snapshotDigest}, ${now}, ${now})`);
+			return { id, status: "active", approvedAt: null, createdIssueReferences: [], ...projected };
+		});
+	}
+
+	public async getIssueBreakdownDraft(input: Parameters<StorageDriver["getIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownDraft> {
+		return this.getIssueBreakdownDraftByWhere(sql`id = ${input.draftId}`);
+	}
+
+	public async getLatestIssueBreakdownDraft(input: Parameters<StorageDriver["getLatestIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownDraft> {
+		this.assertSelectedProjectEntity(input.targetId);
+		return this.getIssueBreakdownDraftByWhere(sql`target_id = ${input.targetId} AND status = 'active'`);
+	}
+
+	public async approveIssueBreakdownDraft(input: Parameters<StorageDriver["approveIssueBreakdownDraft"]>[0]): Promise<IssueBreakdownApprovalResult> {
+		return this.mutate((actorId) => {
+			const draft = this.getIssueBreakdownDraftByWhere(sql`id = ${input.draftId}`);
+			if (draft.status === "approved" && draft.snapshotDigest === input.snapshotDigest) {
+				return { status: "approved", targetReference: draft.targetReference, createdIssueReferences: draft.createdIssueReferences };
+			}
+			if (draft.snapshotDigest !== input.snapshotDigest || draft.status === "superseded") {
+				return { status: "stale", draft: draft.status === "approved" ? draft : this.getIssueBreakdownDraftByWhere(sql`target_id = ${draft.targetId} AND status = 'active'`) };
+			}
+
+			const issueIds = new Map<string, string>();
+			const createdIssueReferences: string[] = [];
+			for (const issue of draft.issues) {
+				if (issueIds.has(issue.key)) {
+					throw new Error(`Issue-breakdown draft contains duplicate issue key: ${issue.key}`);
+				}
+				const parentId = issue.parentKey ? issueIds.get(issue.parentKey) : draft.targetId;
+				if (!parentId) {
+					throw new Error(`Issue-breakdown draft contains an unknown parent key: ${issue.parentKey}`);
+				}
+				const created = localEntityStore.createEntity(this.executor, {
+					kind: "issue",
+					title: issue.title,
+					parentId,
+					body: formatIssueBody(issue)
+				}, actorId);
+				issueIds.set(issue.key, created.id);
+				createdIssueReferences.push(created.reference);
+			}
+			for (const issue of draft.issues) {
+				for (const relation of issue.relationReferences) {
+					const targetId = relation.targetKey ? issueIds.get(relation.targetKey) : relation.targetId ?? relation.targetReference;
+					if (!targetId) {
+						throw new Error(`Issue-breakdown draft contains an unresolved relation target for ${issue.key}`);
+					}
+					localEntityStore.linkEntities(this.executor, { fromId: issueIds.get(issue.key)!, relationType: relation.relationType, toId: targetId }, actorId);
+				}
+			}
+
+			const approvedAt = new Date().toISOString();
+			this.executor.drizzle.run(sql`UPDATE issue_breakdown_drafts
+				SET status = 'approved', approved_at = ${approvedAt}, created_issue_references = ${JSON.stringify(createdIssueReferences)}, updated_at = ${approvedAt}
+				WHERE tenant_id = ${this.executor.tenantId} AND id = ${draft.id}`);
+			return { status: "approved", targetReference: draft.targetReference, createdIssueReferences };
+		});
 	}
 
 	public async createPlanEntry(input: Parameters<StorageDriver["createPlanEntry"]>[0]) {
@@ -478,6 +580,32 @@ export class SqliteStore implements StorageDriver {
 		}
 	}
 
+	protected getIssueBreakdownDraftByWhere(where: ReturnType<typeof sql>): IssueBreakdownDraft {
+		const row = this.executor.drizzle.get(sql`SELECT * FROM issue_breakdown_drafts WHERE tenant_id = ${this.executor.tenantId} AND ${where} ORDER BY created_at DESC LIMIT 1`) as {
+			id: string;
+			target_id: string;
+			status: "active" | "approved" | "superseded";
+			snapshot_json: string;
+			approved_at: string | null;
+			created_issue_references: string;
+		} | undefined;
+		if (!row) {
+			throw new Error("Issue-breakdown draft not found.");
+		}
+		this.assertSelectedProjectEntity(row.target_id);
+		try {
+			return {
+				id: row.id,
+				status: row.status,
+				approvedAt: row.approved_at,
+				createdIssueReferences: JSON.parse(row.created_issue_references) as string[],
+				...(JSON.parse(row.snapshot_json) as ReturnType<typeof projectProposedIssueBreakdown>)
+			};
+		} catch (error) {
+			throw new Error(`Issue-breakdown draft contains malformed JSON: ${row.id}`, { cause: error });
+		}
+	}
+
 	protected mutate<T>(operation: (actorId: string) => T, options: { synchronizeSearch?: false | ((result: T) => void) } = {}): T {
 		return this.executor.drizzle.transaction(() => {
 			const username = resolveLocalUsername();
@@ -492,6 +620,26 @@ export class SqliteStore implements StorageDriver {
 			return result;
 		});
 	}
+}
+
+function formatIssueBody(issue: IssueBreakdownDraft["issues"][number]): string {
+	return [
+		"## Work Mode",
+		"",
+		issue.workMode,
+		"",
+		"## Outcome",
+		"",
+		issue.outcome,
+		"",
+		"## Scope",
+		"",
+		...issue.scope.map((item) => `- ${item}`),
+		"",
+		"## Acceptance Criteria",
+		"",
+		...issue.acceptanceCriteria.map((item) => `- ${item}`)
+	].join("\n");
 }
 
 export async function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenSqliteStoreResult> {

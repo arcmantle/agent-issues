@@ -195,7 +195,7 @@ describe("Drizzle runtime access boundary", () => {
 	});
 
 	it("keeps backend runtime source behind the Drizzle boundary", () => {
-		const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+		const repositoryRoot = fileURLToPath(new URL("../../../..", import.meta.url));
 
 		expect(findRuntimeAccessBoundaryViolations(repositoryRoot)).toEqual([]);
 	});

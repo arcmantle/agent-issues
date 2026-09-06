@@ -113,6 +113,8 @@ export function createPlanEntry(
 	appendPlanEntryDelta(executor, id, 1, state, state, actorId, createdAt);
 	if (plan.status === "draft" && !hasExistingEntries) {
 		updateEntityStatus(executor, { entityId: plan.id, status: "in-progress" }, actorId);
+	} else if (plan.status === "ready") {
+		reopenReadyPlan(executor, plan.id, actorId);
 	}
 
 	return {
@@ -196,6 +198,7 @@ export function updatePlanEntry(
 		throw new PlanEntryConflictError(current.id, current.revision, current.contentHash);
 	}
 	appendPlanEntryDelta(executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
+	reopenReadyPlan(executor, existing.planId, actorId);
 	return getPlanEntry(executor, existing.id);
 }
 
@@ -242,6 +245,7 @@ export function deletePlanEntry(
 		throw new PlanEntryConflictError(current.id, current.revision, current.contentHash);
 	}
 	appendPlanEntryDelta(executor, existing.id, revision, successor, predecessor, actorId, updatedAt);
+	reopenReadyPlan(executor, existing.planId, actorId);
 	return getPlanEntry(executor, existing.id);
 }
 
@@ -324,6 +328,13 @@ function appendPlanEntryDelta(executor: SqliteExecutor, entryId: string, revisio
 	const transition = createReverseFieldPatch(successor, predecessor, PLAN_ENTRY_REVERSE_PATCH_REGISTRY);
 	executor.drizzle.run(sql`INSERT INTO revision_entries (id, tenant_id, project_id, record_kind, record_key, revision, author, patch_format, reverse_patch, source_hash, target_hash, restored_from_revision, created_at)
 		VALUES (${randomUUID()}, ${executor.tenantId}, ${executor.currentProjectId}, 'plan-entry', ${encodePlanEntryRecordKey(entryId)}, ${revision}, ${author}, ${transition.patchFormat}, ${Buffer.from(transition.reversePatch)}, ${encodeRevisionPatchHash(transition.sourceHash)}, ${encodeRevisionPatchHash(transition.targetHash)}, NULL, ${createdAt})`);
+}
+
+function reopenReadyPlan(executor: SqliteExecutor, planId: string, actorId: string): void {
+	const plan = getSqliteEntityOrThrow(executor, planId);
+	if (plan.status === "ready") {
+		updateEntityStatus(executor, { entityId: plan.id, status: "in-progress" }, actorId);
+	}
 }
 
 function revisePlanEntryReferences(executor: SqliteExecutor, entry: PlanEntryRecord, referencedEntityIds: string[], actorId: string): PlanEntryRecord {

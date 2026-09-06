@@ -6,8 +6,8 @@ import { ENTITY_KINDS, mergeProjectChangeEventDetails, projectChangeEventForWrit
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
-import type { SavedLoginStoreOptions } from "../auth-session.js";
-import { openStorageDriver } from "../open-storage-driver.js";
+import type { SavedLoginStoreOptions } from "../auth/auth-session.js";
+import { openStorageDriver } from "../runtime/open-storage-driver.js";
 
 export type LiveSiteInfo = {
 	dbPath: string;

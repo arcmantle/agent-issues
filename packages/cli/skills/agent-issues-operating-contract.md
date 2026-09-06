@@ -167,7 +167,7 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Host.
 
-These operations have no MCP equivalent. Use the CLI: `install-mcp`, `list-mcp`, `uninstall-mcp`, `install-agent`, `list-agent`, `uninstall-agent`, `install-skills`, `list-skills`, `uninstall-skills`, and `site`.
+These operations have no MCP equivalent. Use the Copilot or Claude Code plugin manager for plugin lifecycle operations. Use the Agent Plugins view in VS Code to enable, disable, inspect, or uninstall plugins. Use `agent-issues site` for the local site lifecycle.
 
 ## Record body recipes
 

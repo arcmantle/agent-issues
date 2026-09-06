@@ -1,5 +1,5 @@
 import { synchronizeStores } from "@agent-issues/core";
-import { openSynchronizeStores } from "../../open-synchronize-stores.js";
+import { openSynchronizeStores } from "../../runtime/open-synchronize-stores.js";
 
 import { renderSynchronize } from "../renderers.js";
 import { BaseCommand } from "../shared.js";

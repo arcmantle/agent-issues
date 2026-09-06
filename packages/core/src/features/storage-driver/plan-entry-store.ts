@@ -1,7 +1,15 @@
 import type { LinkResult, UnlinkResult } from "../entity-store/store-types.js";
+import type { EntitySummary } from "../entity-store/domain.js";
 import type { PlanEntryHistoryEntry, PlanEntryPage, PlanEntryRecord, PlanEntryRole, PlanEntryScopeDirection, PlanEntrySummary } from "../plan-entry/plan-entry-types.js";
 
+export type PlanConfirmationResult = {
+	entity: EntitySummary;
+	previousStatus: string;
+	confirmed: boolean;
+};
+
 export interface PlanEntryStore {
+	confirmPlan(input: { planId: string; snapshotDigest: string }): Promise<PlanConfirmationResult>;
 	createPlanEntry(input: {
 		planId: string;
 		role: PlanEntryRole;

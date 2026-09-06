@@ -7,13 +7,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { shortEntityReference } from "@agent-issues/core";
-import { isEntrypointInvocation, runCli, shouldRunLocalDaemon, shouldRunMcpServer } from "./cli.js";
-import { main } from "./cli/index.js";
+import { isEntrypointInvocation, runCli, shouldRunLocalDaemon, shouldRunMcpServer } from "../cli.js";
+import { main } from "./index.js";
 import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listTenants, materializeEntityRevision, openSqliteStore } from "@agent-issues/api-local";
-import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
-import { MCP_SERVER_FLAG } from "./mcp.js";
-import { startLiveSite } from "./site/index.js";
-import packageJson from "../package.json" with { type: "json" };
+import { LOCAL_DAEMON_SPAWN_FLAG } from "../daemon/local-daemon-store.js";
+import { MCP_SERVER_FLAG } from "../mcp-server/runner.js";
+import { startLiveSite } from "../site/index.js";
+import packageJson from "../../package.json" with { type: "json" };
 
 let tempDir: string | null = null;
 const liveSiteClosers = new Set<() => void>();
@@ -239,6 +239,86 @@ describe("cli", () => {
 				stdout: statusOutput.stream
 			})).toBe(0);
 			expect(JSON.parse(statusOutput.read())).toMatchObject({ operation: "status", reference: plan.reference, status: "ready", previousStatus: "draft" });
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
+	it("creates and reads an issue-breakdown draft", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "issue-breakdown.db");
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const initiativeOutput = createCapture();
+			expect(await runCli(["create", "initiative", "--title", "Draft target", "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: initiativeOutput.stream
+			})).toBe(0);
+			const initiative = JSON.parse(initiativeOutput.read()) as { reference: string };
+			const inputPath = path.join(root, "issue-breakdown.json");
+			writeFileSync(inputPath, JSON.stringify({
+				issues: [{
+					key: "draft-storage",
+					title: "Add draft storage",
+					outcome: "Store the proposed graph.",
+					scope: ["Add the draft store."],
+					workMode: "AFK",
+					acceptanceCriteria: ["A draft is retrievable."],
+					relationReferences: []
+				}]
+			}));
+			const createdOutput = createCapture();
+			expect(await runCli(["issue-breakdown", "create", initiative.reference, "--input-file", inputPath, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: createdOutput.stream
+			})).toBe(0);
+			const draft = JSON.parse(createdOutput.read()) as { id: string; snapshotDigest: string; targetReference: string };
+			expect(draft).toMatchObject({ targetReference: initiative.reference, snapshotDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+
+			const readOutput = createCapture();
+			expect(await runCli(["issue-breakdown", "show", draft.id, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: readOutput.stream
+			})).toBe(0);
+			expect(JSON.parse(readOutput.read())).toMatchObject({
+				id: draft.id,
+				issues: [expect.objectContaining({ key: "draft-storage", title: "Add draft storage" })]
+			});
+
+			const latestOutput = createCapture();
+			expect(await runCli(["issue-breakdown", "latest", initiative.reference, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: latestOutput.stream
+			})).toBe(0);
+			expect(JSON.parse(latestOutput.read())).toMatchObject({ id: draft.id });
+
+			const approvalOutput = createCapture();
+			expect(await runCli(["issue-breakdown", "approve", draft.id, "--snapshot-digest", draft.snapshotDigest, "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: approvalOutput.stream
+			})).toBe(0);
+			expect(JSON.parse(approvalOutput.read())).toMatchObject({
+				status: "approved",
+				targetReference: initiative.reference,
+				createdIssueReferences: [expect.any(String)]
+			});
+
+			await expect(runCli(["issue-breakdown", "approve", draft.id, "--snapshot-digest", "invalid", "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: createCapture().stream
+			})).rejects.toThrow("--snapshot-digest must be a 64-character lowercase SHA-256 digest.");
 		} finally {
 			if (previousNoDaemon === undefined) {
 				delete process.env.AGENT_ISSUES_NO_DAEMON;
@@ -680,13 +760,34 @@ describe("cli", () => {
 		}
 
 		const capabilitiesStdout = createCapture();
-		const capabilitiesExitCode = await runCli(["capabilities", "--target", createTempDir(), "--json"], { stdout: capabilitiesStdout.stream, stderr: createCapture().stream });
+		const capabilitiesExitCode = await runCli(["capabilities", "--json"], { stdout: capabilitiesStdout.stream, stderr: createCapture().stream });
 
 		expect(capabilitiesExitCode).toBe(0);
-		expect(JSON.parse(capabilitiesStdout.read()).schema).toEqual(expect.objectContaining({
+		const capabilities = JSON.parse(capabilitiesStdout.read());
+		expect(capabilities).not.toHaveProperty("skills");
+		expect(capabilities.schema).toEqual(expect.objectContaining({
 			entityCategories: ["technical", "product", "operational", "security", "process", "other"],
 			entityPriorities: ["low", "medium", "high", "critical"]
 		}));
+	});
+
+	it("does not expose the removed VS Code compatibility commands", async () => {
+		const removedCommands = ["install-vscode", "update-vscode", "list-vscode", "uninstall-vscode"];
+		const helpStdout = createCapture();
+
+		expect(await runCli(["help", "--json"], {
+			stderr: createCapture().stream,
+			stdout: helpStdout.stream
+		})).toBe(0);
+		const commandNames = JSON.parse(helpStdout.read()).commands.map((command: { name: string }) => command.name);
+		expect(commandNames).not.toEqual(expect.arrayContaining(removedCommands));
+
+		for (const command of removedCommands) {
+			await expect(runCli([command], {
+				stderr: createCapture().stream,
+				stdout: createCapture().stream
+			})).rejects.toThrow(`Command not implemented yet: ${command}`);
+		}
 	});
 
 	it.each(["list", "relations", "show"])("does not document a JSON view option for %s", async (command) => {
@@ -825,7 +926,7 @@ describe("cli", () => {
 
 	it("treats a symlinked argv path as a direct invocation", async () => {
 		const root = createTempDir();
-		const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
+		const cliPath = fileURLToPath(new URL("../cli.ts", import.meta.url));
 		const linkedPath = path.join(root, "agent-issues");
 
 		symlinkSync(cliPath, linkedPath);

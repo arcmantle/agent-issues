@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunCredentialCommand } from "@agent-issues/core";
 import { saveSavedLogin, type SavedLoginStoreOptions } from "./auth-session.js";
 
-import { runCli } from "./cli.js";
+import { runCli } from "../cli.js";
 
 function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {
 	const store = new Map<string, string>();

@@ -445,6 +445,9 @@ export function setEntityBody(
 		}
 
 		appendDeltaEntry(executor, current.id, newRevision, current.title, current.body, current.bodySource, actorId, updatedAt);
+		if (current.kind === "plan" && current.status === "ready" && current.body !== input.body) {
+			updateEntityStatus(executor, { entityId: current.id, status: "in-progress" }, actorId);
+		}
 		return getEntityOrThrow(executor, current.id);
 	});
 }
@@ -514,6 +517,9 @@ export function updateEntity(
 			...(input.priority !== undefined && { priorPriority: current.priority }),
 			...(input.type !== undefined && { priorType: current.type })
 		});
+		if (current.kind === "plan" && current.status === "ready" && (current.title !== title || current.body !== body)) {
+			updateEntityStatus(executor, { entityId: current.id, status: "in-progress" }, actorId);
+		}
 		return getEntityOrThrow(executor, current.id);
 	});
 }

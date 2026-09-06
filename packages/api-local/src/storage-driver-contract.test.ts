@@ -739,7 +739,7 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 		}
 	});
 
-	it("enforces the selected project for current-project searches", async () => {
+	it("uses the requested project for current-project searches", async () => {
 		const firstProjectStore = await openTestStoreForProject("first-project");
 		const secondProjectStore = await openTestStoreForProject("second-project");
 
@@ -749,10 +749,20 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 				title: "First project search result",
 				body: "Isolated search result."
 			});
+			await secondProjectStore.createEntity({ kind: "initiative", title: "Second project record" });
+			const firstProject = (await firstProjectStore.getDatabaseSnapshot()).entities.find(({ kind }) => kind === "project")!;
+			const secondProject = (await secondProjectStore.getDatabaseSnapshot()).entities.find(({ kind }) => kind === "project")!;
 
 			await expect(secondProjectStore.search({
 				query: "isolated result",
-				scope: { type: "current-project", projectId: entity.id }
+				scope: { type: "current-project", projectId: firstProject.id }
+			})).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+			}));
+			await expect(secondProjectStore.search({
+				query: "isolated result",
+				scope: { type: "current-project", projectId: secondProject.id }
 			})).resolves.toEqual({ state: "available", results: [] });
 			await expect(secondProjectStore.search({
 				query: "isolated result",

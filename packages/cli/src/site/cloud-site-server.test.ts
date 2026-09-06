@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { RunCredentialCommand } from "@agent-issues/core";
-import { saveSavedLogin, type SavedLoginStoreOptions } from "../auth-session.js";
+import { saveSavedLogin, type SavedLoginStoreOptions } from "../auth/auth-session.js";
 
 import { startLiveSite, type LiveSiteHandle } from "./index.js";
 

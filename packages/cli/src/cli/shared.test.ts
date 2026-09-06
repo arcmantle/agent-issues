@@ -28,7 +28,7 @@ describe("resolveMarkdownFileOption", () => {
 });
 
 const openStorageDriverMock = vi.hoisted(() => vi.fn());
-vi.mock("../open-storage-driver.js", () => ({ openStorageDriver: openStorageDriverMock }));
+vi.mock("../runtime/open-storage-driver.js", () => ({ openStorageDriver: openStorageDriverMock }));
 
 const readBuildContentHashMock = vi.hoisted(() => vi.fn(() => "test-build-hash"));
 vi.mock("@agent-issues/api-local", () => ({ readBuildContentHash: readBuildContentHashMock }));

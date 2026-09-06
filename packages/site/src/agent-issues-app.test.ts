@@ -280,6 +280,7 @@ describe("three-pane console shell", () => {
 			}],
 			state: "available"
 		});
+		const openSearchTarget = vi.spyOn(store, "openSearchTarget");
 		const app = await mountApp(store);
 		app.shadowRoot?.querySelector<HTMLButtonElement>("[data-global-search-trigger]")?.click();
 		await app.updateComplete;
@@ -294,8 +295,9 @@ describe("three-pane console shell", () => {
 		);
 		await app.updateComplete;
 
+		expect(openSearchTarget).toHaveBeenCalledWith({ entityId: resultEntity.id, type: "entity" }, "PROJ1");
 		expect(store.selectedId.get()).toBe(resultEntity.id);
-		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+		await vi.waitFor(() => expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull());
 	});
 
 	it("changes the active global search result with Arrow keys and opens it by mouse", async () => {
@@ -331,7 +333,7 @@ describe("three-pane console shell", () => {
 		await app.updateComplete;
 
 		expect(store.selectedId.get()).toBe(secondEntity.id);
-		expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull();
+		await vi.waitFor(() => expect(app.shadowRoot?.querySelector("agent-issues-global-search-overlay")).toBeNull());
 	});
 
 	it("updates global search scope and record-kind filters", async () => {
@@ -770,6 +772,53 @@ describe("three-pane console shell", () => {
 		const masterItems = app.shadowRoot?.querySelectorAll('[data-pane="master"] [data-initiative]');
 		const initiativeIds = [...(masterItems ?? [])].map((element) => element.getAttribute("data-initiative"));
 		expect(initiativeIds).toEqual(["INIT1", "INIT2"]);
+	});
+
+	it("sorts initiatives by last changed by default and shows created and changed dates", async () => {
+		const snapshot = makeSnapshot({
+			initiatives: [
+				makeBundle(makeEntity({ createdAt: "2026-01-03T00:00:00.000Z", id: "INIT1", title: "Earlier change", updatedAt: "2026-02-01T00:00:00.000Z" })),
+				makeBundle(makeEntity({ createdAt: "2026-01-01T00:00:00.000Z", id: "INIT2", title: "Later change", updatedAt: "2026-03-01T00:00:00.000Z" }))
+			]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+
+		const cards = [...app.shadowRoot?.querySelectorAll<HTMLElement>('[data-pane="master"] [data-initiative]') ?? []];
+		expect(cards.map((card) => card.dataset.initiative)).toEqual(["INIT2", "INIT1"]);
+		const dates = cards[0]?.querySelector(".m-dates");
+		expect([...dates?.querySelectorAll("i") ?? []].map((label) => label.textContent)).toEqual(["created", "changed"]);
+		expect([...dates?.querySelectorAll("b") ?? []].map((date) => date.textContent)).toEqual([
+			store.formatTimestamp("2026-01-01T00:00:00.000Z"),
+			store.formatTimestamp("2026-03-01T00:00:00.000Z")
+		]);
+		expect(cards[0]?.lastElementChild).toBe(dates);
+		expect(app.shadowRoot?.querySelector<HTMLSelectElement>("[data-initiative-sort]")?.value).toBe("changed");
+	});
+
+	it("changes the initiative sort criterion", async () => {
+		const snapshot = makeSnapshot({
+			initiatives: [
+				makeBundle(makeEntity({ createdAt: "2026-02-01T00:00:00.000Z", id: "INIT1", title: "Zulu", updatedAt: "2026-03-01T00:00:00.000Z" })),
+				makeBundle(makeEntity({ createdAt: "2026-01-01T00:00:00.000Z", id: "INIT2", title: "Alpha", updatedAt: "2026-02-01T00:00:00.000Z" }))
+			]
+		});
+		const store = makeStore(makeConfig(), snapshot);
+		const app = await mountApp(store);
+		const sort = app.shadowRoot?.querySelector<HTMLSelectElement>("[data-initiative-sort]");
+
+		if (!sort) {
+			throw new Error("Expected initiative sort control");
+		}
+		sort.value = "created";
+		sort.dispatchEvent(new Event("change", { bubbles: true }));
+		await app.updateComplete;
+		expect([...app.shadowRoot?.querySelectorAll<HTMLElement>('[data-pane="master"] [data-initiative]') ?? []].map((card) => card.dataset.initiative)).toEqual(["INIT1", "INIT2"]);
+
+		sort.value = "title";
+		sort.dispatchEvent(new Event("change", { bubbles: true }));
+		await app.updateComplete;
+		expect([...app.shadowRoot?.querySelectorAll<HTMLElement>('[data-pane="master"] [data-initiative]') ?? []].map((card) => card.dataset.initiative)).toEqual(["INIT2", "INIT1"]);
 	});
 
 	it("groups initiatives beneath their owning epic", async () => {

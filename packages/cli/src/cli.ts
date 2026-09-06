@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { main, runCli, type AgentIssuesContext } from "./cli/index.js";
 import { runDaemonProcess } from "./daemon/daemon-main.js";
 import { LOCAL_DAEMON_SPAWN_FLAG } from "./daemon/local-daemon-store.js";
-import { MCP_SERVER_FLAG, runMcpServer } from "./mcp.js";
+import { MCP_SERVER_FLAG, runMcpServer } from "./mcp-server/runner.js";
 
 export { runCli, type AgentIssuesContext };
 

@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { RunCredentialCommand } from "@agent-issues/core";
-import { saveSavedLogin, type SavedLoginStoreOptions } from "../../auth-session.js";
+import { saveSavedLogin, type SavedLoginStoreOptions } from "../../auth/auth-session.js";
 import { runCli } from "../index.js";
 
 let tempDirectory: string | undefined;

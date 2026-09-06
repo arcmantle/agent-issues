@@ -24,6 +24,11 @@ const SEARCH_SOURCE_TYPE_OPTIONS: Array<{ label: string; value: SearchSourceType
 
 const MAX_SEARCH_RESULTS = 20;
 
+export type GlobalSearchOpenTargetDetail = {
+	projectId: string | null;
+	target: SearchNavigationTarget;
+};
+
 export class GlobalSearchOverlay extends SignalWatcher(LitElement) {
 	public store: AgentIssuesStore | null = null;
 	protected activeResultIndex = 0;
@@ -61,7 +66,7 @@ export class GlobalSearchOverlay extends SignalWatcher(LitElement) {
 			return;
 		}
 
-		this.openResult(result.navigationTarget);
+		this.openResult(result.navigationTarget, result.projectId);
 	};
 
 	protected onRecentClick = (event: Event) => {
@@ -71,7 +76,7 @@ export class GlobalSearchOverlay extends SignalWatcher(LitElement) {
 			return;
 		}
 
-		this.openResult(recent.target);
+		this.openResult(recent.target, this.store?.selectedProjectId.get() ?? null);
 	};
 
 	protected onRetry = () => {
@@ -111,7 +116,7 @@ export class GlobalSearchOverlay extends SignalWatcher(LitElement) {
 			}
 
 			event.preventDefault();
-			this.openResult(result.navigationTarget);
+			this.openResult(result.navigationTarget, result.projectId);
 			return;
 		}
 
@@ -166,11 +171,11 @@ export class GlobalSearchOverlay extends SignalWatcher(LitElement) {
 		return this.store?.globalSearchRecentRecords.get() ?? [];
 	}
 
-	protected openResult(target: SearchNavigationTarget) {
-		this.dispatchEvent(new CustomEvent<SearchNavigationTarget>("global-search-open-target", {
+	protected openResult(target: SearchNavigationTarget, projectId: string | null) {
+		this.dispatchEvent(new CustomEvent<GlobalSearchOpenTargetDetail>("global-search-open-target", {
 			bubbles: true,
 			composed: true,
-			detail: target
+			detail: { projectId, target }
 		}));
 	}
 
@@ -647,7 +652,7 @@ declare global {
 		"agent-issues-global-search-overlay": GlobalSearchOverlay;
 	}
 	interface HTMLElementEventMap {
-		"global-search-open-target": CustomEvent<SearchNavigationTarget>;
+		"global-search-open-target": CustomEvent<GlobalSearchOpenTargetDetail>;
 		"global-search-retry": CustomEvent;
 	}
 }

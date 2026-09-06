@@ -63,8 +63,8 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	protected collapsedOverviewSectionIds = new Set<string>();
 	protected recordQuery = "";
 	protected recordStatus = "all";
-	protected issueRecordView: RecordView = "list";
-	protected userStoryRecordView: RecordView = "list";
+	protected issueRecordView: RecordView = "tree";
+	protected userStoryRecordView: RecordView = "tree";
 	protected visibleGraphKinds = new Set<ProjectGraphKind>(INITIATIVE_GRAPH_KINDS);
 
 	protected activeBundle() {
@@ -258,7 +258,6 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 					@click=${this.onSelectEntityClick}
 				>
 				<span class="idtag">${store.shortRef(node.issue)}</span>
-				<span class=${`issue-dot ${store.issueStatusTone(node.issue.status)}`}></span>
 				<span class="child-title">${node.issue.title}</span>
 				<span class=${`badge ${store.badgeTone(node.issue.status)}`}>${node.issue.status}</span>
 				</button>
@@ -1028,18 +1027,12 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 		.record-tab-list {
 			display: grid;
-			gap: 2px;
+			gap: 8px;
 			padding: 8px;
 		}
 		.record-tree {
 			display: grid;
 			gap: 8px;
-		}
-		.story-tree-block {
-			border-bottom: 1px solid var(--border-muted);
-		}
-		.story-tree-block:last-child {
-			border-bottom: 0;
 		}
 		.context-tab-summary {
 			padding: 14px 16px 0;
@@ -1123,27 +1116,25 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 			padding: 16px;
 		}
 		.story-head:hover,
-		.child:hover,
-		.line:hover {
+		.child:hover {
+			border-color: var(--accent);
 			background: var(--surface-muted);
 		}
 		.story-head.is-active-ref,
 		.child.is-active-ref,
 		.handoff-focus.is-active-ref {
+			border-color: var(--accent);
 			background: var(--surface-muted);
 			box-shadow: inset 3px 0 0 0 var(--accent);
 		}
 		.issue-branch {
 			display: grid;
-			gap: 6px;
+			gap: 8px;
 		}
 		.issue-branch-row {
 			display: flex;
 			gap: 8px;
 			align-items: stretch;
-		}
-		.issue-branch + .issue-branch {
-			margin-top: 6px;
 		}
 		.branch-toggle,
 		.branch-spacer {
@@ -1167,7 +1158,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 		.issue-branch-children {
 			display: grid;
-			gap: 6px;
+			gap: 8px;
 			margin-left: 22px;
 			padding-left: 12px;
 			border-left: 1px solid var(--border-muted);
@@ -1177,7 +1168,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 		.issue-tree {
 			display: grid;
-			gap: 6px;
+			gap: 8px;
 		}
 		.empty-children {
 			padding: 12px 8px;
@@ -1199,41 +1190,29 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				padding-bottom: 0;
 			}
 		}
-		.child,
-		.line {
+		.child {
 			display: flex;
-			gap: 10px;
+			gap: 12px;
 			align-items: center;
 			width: stretch;
-			padding: 8px;
-			border: 0;
-			border-radius: 6px;
-			background: transparent;
+			padding: 10px 12px;
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			background: var(--surface);
+			color: inherit;
 			cursor: pointer;
+			font: inherit;
 			text-align: left;
 		}
-		.child-title,
-		.line-title {
+		.child-title {
 			flex: 1;
+			font-weight: 600;
 		}
 		.idtag {
+			min-width: 56px;
 			color: var(--muted);
 			font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 			font-size: 12px;
-		}
-		.issue-dot {
-			flex-shrink: 0;
-			width: 10px;
-			height: 10px;
-			border-radius: 50%;
-			border: 2px solid var(--success);
-		}
-		.issue-dot.done {
-			border-color: var(--done);
-			background: var(--done);
-		}
-		.issue-dot.blocked {
-			border-color: var(--danger);
 		}
 		.subtab-count {
 			box-sizing: border-box;

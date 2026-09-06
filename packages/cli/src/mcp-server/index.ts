@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { openLocalDaemonStore, readBuildContentHash, type LocalDaemonStoreOptions } from "@agent-issues/api-local";
 import {
@@ -7,16 +10,34 @@ import {
 	computeEntityContentHash,
 	PLAN_ENTRY_ROLES,
 	PLAN_ENTRY_SCOPE_DIRECTIONS,
+	projectProposedPlan,
 	type EntityRecord,
 	type EntitySummary,
 	type RelationDirection,
 	type RelationType,
 	type StorageDriver
 } from "@agent-issues/core";
+import { registerAppResource, registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import packageJson from "../../package.json" with { type: "json" };
+
+const PLAN_PREVIEW_RESOURCE_URI = "ui://agent-issues/plan-preview.html";
+const PLAN_PREVIEW_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const ISSUE_PREVIEW_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const PLAN_PREVIEW_RESOURCE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const PLAN_PREVIEW_RESOURCE_SCRIPT = readFileSync(
+	path.resolve(PLAN_PREVIEW_RESOURCE_DIRECTORY, path.basename(PLAN_PREVIEW_RESOURCE_DIRECTORY) === "dist" ? "plan-preview.js" : "../../dist/plan-preview.js"),
+	"utf8"
+);
+const PLAN_PREVIEW_RESOURCE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><plan-preview-app></plan-preview-app><script type="module">${PLAN_PREVIEW_RESOURCE_SCRIPT}</script></body></html>`;
+const ISSUE_PREVIEW_RESOURCE_URI = "ui://agent-issues/issue-preview.html";
+const ISSUE_PREVIEW_RESOURCE_SCRIPT = readFileSync(
+	path.resolve(PLAN_PREVIEW_RESOURCE_DIRECTORY, path.basename(PLAN_PREVIEW_RESOURCE_DIRECTORY) === "dist" ? "issue-preview.js" : "../../dist/issue-preview.js"),
+	"utf8"
+);
+const ISSUE_PREVIEW_RESOURCE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><issue-preview-app></issue-preview-app><script type="module">${ISSUE_PREVIEW_RESOURCE_SCRIPT}</script></body></html>`;
 
 export type McpServerOptions = {
 	projectIdentity?: string;
@@ -53,6 +74,7 @@ export type McpServerOptions = {
 			| "unlinkPlanEntryIssue"
 			| "listPlanEntries"
 			| "listPlanEntryHistory"
+			| "confirmPlan"
 			| "moveEntity"
 			| "updateEntityStatus"
 			| "linkEntities"
@@ -66,6 +88,8 @@ export type McpServerOptions = {
 			| "restoreEntityRevision"
 			| "getDatabaseSnapshot"
 			| "setEntityBody"
+			| "getIssueBreakdownDraft"
+			| "approveIssueBreakdownDraft"
 			| "tenantId"
 		>
 	>;
@@ -75,6 +99,24 @@ export type McpServerOptions = {
 export function createMcpServer(options: McpServerOptions): McpServer {
 	const server = new McpServer({ name: "agent-issues", version: packageJson.version });
 	const confirmationTokens = new ConfirmationTokenStore(options.now ?? Date.now);
+	registerAppResource(
+		server,
+		"Plan Preview",
+		PLAN_PREVIEW_RESOURCE_URI,
+		{},
+		async () => ({
+			contents: [{ uri: PLAN_PREVIEW_RESOURCE_URI, mimeType: PLAN_PREVIEW_RESOURCE_MIME_TYPE, text: PLAN_PREVIEW_RESOURCE_HTML }]
+		})
+	);
+	registerAppResource(
+		server,
+		"Issue Preview",
+		ISSUE_PREVIEW_RESOURCE_URI,
+		{},
+		async () => ({
+			contents: [{ uri: ISSUE_PREVIEW_RESOURCE_URI, mimeType: ISSUE_PREVIEW_RESOURCE_MIME_TYPE, text: ISSUE_PREVIEW_RESOURCE_HTML }]
+		})
+	);
 
 	server.registerTool(
 		"project_identity",
@@ -222,6 +264,58 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			const details = await store.getEntityDetails(reference);
 			return toolResult(details.entity.kind === "initiative" ? await store.getInitiativeBundle(reference) : details);
 		}
+	);
+
+	registerAppTool(
+		server,
+		"plan_preview",
+		{
+			description: "Get a Proposed Plan for review.",
+			inputSchema: { planId: z.string().min(1) },
+			_meta: { ui: { resourceUri: PLAN_PREVIEW_RESOURCE_URI } }
+		},
+		async ({ planId }) => {
+			const store = await options.openStore();
+			const details = await store.getEntityDetails(planId);
+			if (details.entity.kind !== "plan") {
+				throw new Error(`Plan preview requires a Plan: ${planId}`);
+			}
+			const proposedPlan = projectProposedPlan(details.entity, await store.listPlanEntries({ planId: details.entity.id }));
+			const plan = { ...proposedPlan, status: details.entity.status };
+			return textToolResult(formatPlanPreview(plan), { plan });
+		}
+	);
+
+	registerAppTool(
+		server,
+		"issue_breakdown_preview",
+		{
+			description: "Get a proposed issue breakdown for review.",
+			inputSchema: { draftId: z.string().min(1) },
+			_meta: { ui: { resourceUri: ISSUE_PREVIEW_RESOURCE_URI } }
+		},
+		async ({ draftId }) => {
+			const draft = await (await options.openStore()).getIssueBreakdownDraft({ draftId });
+			return textToolResult(formatIssueBreakdownPreview(draft), { draft });
+		}
+	);
+
+	server.registerTool(
+		"issue_breakdown_approve",
+		{
+			description: "Approve the exact proposed issue breakdown and create its issue graph.",
+			inputSchema: { draftId: z.string().min(1), snapshotDigest: z.string().length(64).regex(/^[a-f0-9]+$/) }
+		},
+		async (input) => toolResult(await (await options.openStore()).approveIssueBreakdownDraft(input))
+	);
+
+	server.registerTool(
+		"plan_confirm",
+		{
+			description: "Confirm the exact Proposed Plan snapshot as ready.",
+			inputSchema: { planId: z.string().min(1), snapshotDigest: z.string().length(64).regex(/^[a-f0-9]+$/) }
+		},
+		async (input) => toolResult(await (await options.openStore()).confirmPlan(input))
 	);
 
 	server.registerTool(
@@ -724,6 +818,45 @@ function toolResult(result: unknown): { content: Array<{ type: "text"; text: str
 		content: [{ type: "text", text: JSON.stringify(result) }],
 		structuredContent: result as Record<string, unknown>
 	};
+}
+
+function textToolResult(text: string, structuredContent: Record<string, unknown>): { content: Array<{ type: "text"; text: string }>; structuredContent: Record<string, unknown> } {
+	return { content: [{ type: "text", text }], structuredContent };
+}
+
+function formatPlanPreview(plan: { title: string; goal: string; context: string; current: Array<{ title: string; entries: Array<{ body?: string }> }> }): string {
+	const sections = [
+		`# ${plan.title}`,
+		`## Goal\n\n${plan.goal || "No Goal recorded."}`,
+		`## Context\n\n${plan.context || "No Context recorded."}`,
+		...plan.current.map((group) => `## ${group.title}\n\n${group.entries.map((entry) => entry.body || "").join("\n\n")}`)
+	];
+	return sections.join("\n\n");
+}
+
+function formatIssueBreakdownPreview(draft: {
+	targetReference: string;
+	snapshotDigest: string;
+	issues: Array<{
+		title: string;
+		outcome: string;
+		scope: string[];
+		workMode: string;
+		acceptanceCriteria: string[];
+		parentKey?: string;
+		relationReferences: Array<{ relationType: string; targetKey?: string; targetReference?: string }>;
+	}>;
+}): string {
+	const issues = draft.issues.map((issue, index) => [
+		`## ${index + 1}. ${issue.title}`,
+		`Outcome: ${issue.outcome}`,
+		`Scope:\n${issue.scope.map((item) => `- ${item}`).join("\n") || "- None"}`,
+		`Work mode: ${issue.workMode}`,
+		`Acceptance criteria:\n${issue.acceptanceCriteria.map((item) => `- ${item}`).join("\n") || "- None"}`,
+		`Parent: ${issue.parentKey ?? "None"}`,
+		`Relations:\n${issue.relationReferences.map((relation) => `- ${relation.relationType}: ${relation.targetKey ?? relation.targetReference ?? "None"}`).join("\n") || "- None"}`
+	].join("\n\n"));
+	return [`# Issue breakdown for ${draft.targetReference}`, `Snapshot digest: ${draft.snapshotDigest}`, ...issues].join("\n\n");
 }
 
 type NextWorkItem = {

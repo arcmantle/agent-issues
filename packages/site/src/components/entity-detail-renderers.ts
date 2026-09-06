@@ -151,7 +151,7 @@ export abstract class EntityDetailRenderer {
 			...directIssueRecords,
 			...directIssueRecords.flatMap((record) => bundle ? this.recordsInIssueTree(this.store.subIssueTreeForIssue(bundle, record.id)) : []),
 			...linkedRecords.filter((record) => record.kind === "issue")
-		]);
+		]).filter((record) => record.id !== this.entity.id);
 		const issueRecordIds = new Set(issueRecords.map((record) => record.id));
 		const userStoryRecords = this.uniqueRecords([
 			...linkedRecords.filter((record) => record.kind === "userStory"),
@@ -393,7 +393,7 @@ export abstract class EntityDetailRenderer {
 		relatedRecords: Entity[]
 	): EntityDetailTabDefinition[] {
 		const candidateTabs: Array<EntityDetailTabDefinition & { visible: () => boolean }> = [
-			{ label: "Issues", recordCount: issueRecords.length, tab: "issues", visible: () => issueRecords.some((record) => record.id !== context.entity.id) },
+			{ label: "Issues", recordCount: issueRecords.length, tab: "issues", visible: () => issueRecords.length > 0 },
 			{ label: "Plans", recordCount: planRecords.length, tab: "plans", visible: () => planRecords.length > 0 },
 			{ label: "PRDs", recordCount: prdRecords.length, tab: "prds", visible: () => prdRecords.length > 0 },
 			{ label: "ADRs", recordCount: adrRecords.length, tab: "adrs", visible: () => adrRecords.length > 0 },

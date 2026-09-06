@@ -141,10 +141,7 @@ describe("entity detail pane", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
-		updateIssueRecordView(view, "issues", "tree");
-		await view.updateComplete;
-		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-ref[data-id="ISS1"]')).not.toBeNull();
-		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-issue-tree-children .ai-ref[data-id="ISS2"]')).not.toBeNull();
+		expect(view.shadowRoot?.querySelector<HTMLElement & { treeView: string }>("agent-issues-record-filter-toolbar")?.treeView).toBe("tree");
 	});
 
 	it("provides ADRs with the shared record tabs, filters, and issue hierarchy", async () => {
@@ -170,6 +167,8 @@ describe("entity detail pane", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
 		updateIssueRecordFilter(view, { query: "searchable architecture field" });
 		await view.updateComplete;
 		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS1", "ISS2"]);
@@ -179,6 +178,9 @@ describe("entity detail pane", () => {
 		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-issue-tree-children .ai-ref[data-id="ISS2"]')).not.toBeNull();
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="userStories"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector<HTMLElement & { treeView: string }>("agent-issues-record-filter-toolbar")?.treeView).toBe("tree");
+		updateIssueRecordView(view, "userStories", "list");
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="US1"]')).not.toBeNull();
 	});
@@ -216,6 +218,8 @@ describe("entity detail pane", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
 
 		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id))
 			.toEqual(["ISS4", "ISS5", "ISS1", "ISS2", "ISS3"]);
@@ -249,8 +253,8 @@ describe("entity detail pane", () => {
 		const view = await mountDetail(store);
 
 		expect(tabLabels(view)).toEqual(["Overview", "Issues", "Plans", "ADRs", "User stories", "Graph"]);
-		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "2", plans: "1", userStories: "1" });
-		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 2 records");
+		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "1", plans: "1", userStories: "1" });
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 1 records");
 		expect(view.shadowRoot?.querySelector('[data-tab="issues"] .ai-subtab-count')?.getAttribute("aria-hidden")).toBe("true");
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="adrs"]')?.click();
 		await view.updateComplete;
@@ -261,9 +265,11 @@ describe("entity detail pane", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
 		updateIssueRecordFilter(view, { query: "priority phrase" });
 		await view.updateComplete;
-		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS_FULL_REFERENCE_123", "ISS2"]);
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS2"]);
 		updateIssueRecordFilter(view, { status: "done" });
 		await view.updateComplete;
 		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS2"]);
@@ -278,7 +284,6 @@ describe("entity detail pane", () => {
 		await view.updateComplete;
 		updateIssueRecordView(view, "issues", "tree");
 		await view.updateComplete;
-		expect(view.shadowRoot?.querySelector('.ai-record-tree .ai-issue-tree-children .ai-ref[data-id="ISS2"]')).not.toBeNull();
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="userStories"]')?.click();
 		await view.updateComplete;
@@ -652,6 +657,8 @@ describe("entity detail pane", () => {
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="HO1"]')).not.toBeNull();
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ISS1"]')).not.toBeNull();
 		updateIssueRecordView(view, "issues", "tree");
 		await view.updateComplete;
@@ -732,6 +739,8 @@ describe("entity detail pane", () => {
 		expect(tabLabels(view)).toEqual(["Overview", "Issues"]);
 		expect(view.shadowRoot?.querySelector('[role="tabpanel"] .ai-body')?.textContent).toContain("Handoff overview content.");
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ISS1"]')).not.toBeNull();
 	});
@@ -998,12 +1007,14 @@ describe("entity detail pane", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
 		const ref = view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS9"]');
 		expect(ref?.shadowRoot?.querySelector(".idtag")?.textContent?.trim()).toBe(store.shortRef(issue));
 		expect(ref?.shadowRoot?.querySelector(".line-title")?.textContent?.trim()).toBe("Wire the detail pane");
 	});
 
-	it("opens a linked child record in the detail pane when its ref is clicked", async () => {
+	it("returns to the source record after opening a linked child record", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const story = makeEntity({ id: "US7", kind: "userStory", status: "draft", title: "Open any record" });
 		const issue = makeEntity({ id: "ISS9", kind: "issue", status: "done", title: "Wire the detail pane" });
@@ -1018,12 +1029,21 @@ describe("entity detail pane", () => {
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
 		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
 		const ref = view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS9"]');
 		ref?.shadowRoot?.querySelector<HTMLButtonElement>("button")?.click();
 		await view.updateComplete;
 
 		expect(store.selectedId.get()).toBe("ISS9");
 		expect(view.shadowRoot?.querySelector(".ai-d-title")?.textContent).toContain("Wire the detail pane");
+		expect(view.shadowRoot?.querySelector(".ai-back")?.textContent).toContain("Open any record");
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>(".ai-back")?.click();
+		await view.updateComplete;
+
+		expect(store.selectedId.get()).toBe("US7");
+		expect(view.shadowRoot?.querySelector(".ai-d-title")?.textContent).toContain("Open any record");
 	});
 
 	it("renders sub-issues as a nested tree for a parent issue", async () => {
@@ -1052,8 +1072,31 @@ describe("entity detail pane", () => {
 		updateIssueRecordView(view, "issues", "tree");
 		await view.updateComplete;
 		const nestedRefs = [...(view.shadowRoot?.querySelectorAll(".ai-record-tree .ai-ref .r-id") ?? [])].map((node) => node.textContent?.trim());
-		expect(nestedRefs).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
-		expect(view.shadowRoot?.querySelector(".ai-issue-tree-children .ai-issue-tree-children .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(nestedSubIssue));
+		expect(nestedRefs).toEqual([store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
+		expect(view.shadowRoot?.querySelector(".ai-issue-tree-children .ai-ref .r-id")?.textContent?.trim()).toBe(store.shortRef(nestedSubIssue));
+	});
+
+	it("excludes the open issue from its related Issues tab", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
+		const openIssue = makeEntity({ id: "ISS1", kind: "issue", status: "todo", title: "Open issue" });
+		const relatedIssue = makeEntity({ id: "ISS2", kind: "issue", status: "todo", title: "Related issue" });
+		const store = makeStore(makeSnapshot({
+			entities: [initiative, openIssue, relatedIssue],
+			initiatives: [makeBundle(initiative, {
+				issues: [openIssue, relatedIssue],
+				subIssueLinks: [{ issue: relatedIssue, parent: openIssue }]
+			})]
+		}));
+		store.selectEntity(openIssue.id);
+		const view = await mountDetail(store);
+
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
+		await view.updateComplete;
+
+		expect(view.shadowRoot?.querySelector(`.record-row[data-id="${openIssue.id}"]`)).toBeNull();
+		expect(view.shadowRoot?.querySelector(`.record-row[data-id="${relatedIssue.id}"]`)).not.toBeNull();
 	});
 
 	it("renders the parent issue section when a sub-issue is open", async () => {
@@ -1069,6 +1112,8 @@ describe("entity detail pane", () => {
 		const view = await mountDetail(store);
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS1"]')?.shadowRoot?.querySelector(".idtag")?.textContent?.trim()).toBe(store.shortRef(parentIssue));
 	});
@@ -1127,6 +1172,8 @@ describe("entity detail pane", () => {
 		await view.updateComplete;
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="issues"]')?.click();
+		await view.updateComplete;
+		updateIssueRecordView(view, "issues", "list");
 		await view.updateComplete;
 		const crossRef = view.shadowRoot?.querySelector<HTMLElement>('.record-browser-list .record-row[data-id="ISS40"]');
 		crossRef?.shadowRoot?.querySelector<HTMLButtonElement>("button")?.click();
@@ -1199,11 +1246,11 @@ describe("entity detail pane", () => {
 		toggle?.click();
 		await view.updateComplete;
 		expect(view.shadowRoot?.querySelector('.ai-issue-tree-children .ai-ref .r-id')?.textContent?.trim()).not.toBe(store.shortRef(nestedSubIssue));
-		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue)]);
+		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(subIssue)]);
 
 		toggle?.click();
 		await view.updateComplete;
-		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(parentIssue), store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
+		expect([...view.shadowRoot?.querySelectorAll('.ai-issue-tree .ai-ref .r-id') ?? []].map((node) => node.textContent?.trim())).toEqual([store.shortRef(subIssue), store.shortRef(nestedSubIssue)]);
 	});
 
 	it("offers a back control that closes the open record", async () => {

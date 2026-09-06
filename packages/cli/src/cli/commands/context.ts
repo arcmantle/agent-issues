@@ -9,12 +9,12 @@ import {
 	renderContextSearchTermsOnly,
 	renderContextTermResult,
 	toContextSearchTermsOnly
-} from "../../context-cli.js";
+} from "../../context/context-cli.js";
 import {
 	toCompactContextDefineAcknowledgement,
 	toCompactContextForgetAcknowledgement,
 	toCompactContextSetAcknowledgement
-} from "../../entity-projection.js";
+} from "../../context/entity-projection.js";
 
 import {
 	CONTEXT_SUBCOMMANDS,

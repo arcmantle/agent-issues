@@ -98,7 +98,7 @@ export class LocalSearchStore {
 				return this.recordSearchResponse({ state: "parse-error", error: parsedQuery.error }, startedAt, candidateCounts);
 			}
 
-			const projectId = input.scope.type === "current-project" ? this.executor.currentProjectId : null;
+			const projectId = input.scope.type === "current-project" ? input.scope.projectId : null;
 			const resultLimit = Math.min(input.limit ?? MAXIMUM_SEARCH_RESULTS, MAXIMUM_SEARCH_RESULTS);
 			const sourceTypes = input.filters?.sourceTypes;
 			const includeEntities = Number(sourceTypes?.includes("entity") ?? true);

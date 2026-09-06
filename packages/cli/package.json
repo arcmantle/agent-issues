@@ -9,10 +9,7 @@
 	"files": [
 		"dist",
 		"site/dist",
-		"kanban/dist",
-		".github/agents",
-		".github/hooks",
-		"skills"
+		"kanban/dist"
 	],
 	"engines": {
 		"node": ">=24"
@@ -21,11 +18,13 @@
 		"build": "node ./scripts/build.mjs",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"typecheck": "tsc --noEmit -p tsconfig.json"
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"validate:plugin:claude": "node ./scripts/validate-claude-plugin.mjs",
+		"validate:plugin:copilot": "node ./scripts/validate-copilot-plugin.mjs"
 	},
 	"devDependencies": {
-		"@agent-issues/api-pg": "workspace:*",
 		"@agent-issues/api-local": "workspace:*",
+		"@agent-issues/api-pg": "workspace:*",
 		"@agent-issues/core": "workspace:*",
 		"@azure/msal-node": "catalog:",
 		"@babel/parser": "catalog:",
@@ -33,11 +32,16 @@
 		"@types/node": "catalog:",
 		"clipanion": "catalog:",
 		"esbuild": "catalog:",
+		"happy-dom": "catalog:",
 		"typescript": "catalog:",
 		"vitest": "catalog:",
 		"zod": "catalog:"
 	},
 	"dependencies": {
-		"better-sqlite3": "catalog:"
+		"@modelcontextprotocol/ext-apps": "^1.7.5",
+		"better-sqlite3": "catalog:",
+		"dompurify": "catalog:",
+		"lit": "catalog:",
+		"marked": "catalog:"
 	}
 }

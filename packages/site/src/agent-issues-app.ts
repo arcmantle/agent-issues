@@ -11,7 +11,8 @@ import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
 import "./components/relationship-graph.js";
 import "./components/relationship-graph-filters.js";
-import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, DebtFilter, Entity, EpicInitiativeGroup, InitiativeBundle, InitiativeRollup, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup, ProjectSummaryEpicGroup } from "./models.js";
+import type { GlobalSearchOpenTargetDetail } from "./components/global-search-overlay.js";
+import type { AdrRailEntry, ConsoleSection, ContextDetails, ContextPageTab, DebtFilter, Entity, EpicInitiativeGroup, InitiativeBundle, InitiativeRollup, InitiativeSortCriterion, ProjectContextTermEntry, ProjectContextTermSource, ProjectGraphKind, ProjectRollup, ProjectSummaryEpicGroup } from "./models.js";
 import { AgentIssuesStore } from "./services/agent-issues-store.js";
 import { issueBrowserControlStyles, issueBrowserTypographyStyles } from "./styles/issue-browser-shared-styles.js";
 
@@ -97,9 +98,11 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		this.globalSearchTrigger?.focus();
 	};
 
-	protected onOpenGlobalSearchTarget = (event: Event) => {
-		this.store.openSearchTarget((event as CustomEvent<import("@agent-issues/core").SearchNavigationTarget>).detail);
-		this.onCloseGlobalSearch();
+	protected onOpenGlobalSearchTarget = async (event: Event) => {
+		const { projectId, target } = (event as CustomEvent<GlobalSearchOpenTargetDetail>).detail;
+		if (await this.store.openSearchTarget(target, projectId)) {
+			this.onCloseGlobalSearch();
+		}
 	};
 
 	protected onRetryGlobalSearch = () => {
@@ -198,6 +201,10 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		this.store.setMasterStatusFilter(section, status);
 	};
 
+	protected onSetInitiativeSort = (event: Event) => {
+		this.store.setInitiativeSort((event.currentTarget as HTMLSelectElement).value as InitiativeSortCriterion);
+	};
+
 	protected onSetDebtFilter = (event: Event) => {
 		const target = event.currentTarget as HTMLElement;
 		const filter = target.dataset.debtFilter as DebtFilter | undefined;
@@ -228,6 +235,18 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		}
 
 		return status.split("-").map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" ");
+	}
+
+	protected sortInitiatives(rollups: InitiativeRollup[], criterion: InitiativeSortCriterion): InitiativeRollup[] {
+		return [...rollups].sort((left, right) => {
+			if (criterion === "title") {
+				return left.initiative.title.localeCompare(right.initiative.title) || left.initiative.id.localeCompare(right.initiative.id);
+			}
+
+			const field = criterion === "created" ? "createdAt" : "updatedAt";
+			const dateComparison = new Date(right.initiative[field]).getTime() - new Date(left.initiative[field]).getTime();
+			return dateComparison || left.initiative.id.localeCompare(right.initiative.id);
+		});
 	}
 
 	protected onProjectNodeOpen = (event: Event) => {
@@ -577,6 +596,10 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				<span><b>${rollup.completedIssueCount}/${rollup.issueCount}</b> issues</span>
 			</div>
 			<div class="miniprog"><span style=${`width:${progress}%`}></span></div>
+			<div class="m-dates">
+				<span><i>created</i> <b>${store.formatTimestamp(initiative.createdAt)}</b></span>
+				<span><i>changed</i> <b>${store.formatTimestamp(initiative.updatedAt)}</b></span>
+			</div>
 		</button>
 		`;
 	}
@@ -896,12 +919,13 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			return left.localeCompare(right);
 		});
 
+		const initiativeSort = store.initiativeSort.get();
 		const epicGroups = store.projectSummaryEpicGroups.get().map((group) => ({
 			...group,
-			initiatives: group.initiatives.filter((rollup) =>
+			initiatives: this.sortInitiatives(group.initiatives.filter((rollup) =>
 				(statusFilter === "all" || rollup.initiative.status === statusFilter) &&
 				`${rollup.initiative.title} ${rollup.initiative.id}`.toLowerCase().includes(query)
-			)
+			), initiativeSort)
 		})).filter((group) => group.initiatives.length > 0);
 		const adrEntries = store.adrRailEntries.get().filter((entry) =>
 			(statusFilter === "all" || entry.adr.status === statusFilter) &&
@@ -973,6 +997,24 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 							`
 						)}
 					</div>
+					${when(
+						!isAdrs,
+						() => html`
+						<label class="master-sort-control">
+							<span>Sort by</span>
+							<select
+								data-initiative-sort
+								.value=${initiativeSort}
+								@change=${this.onSetInitiativeSort}
+							>
+								<option value="changed">Last changed</option>
+								<option value="created">Date created</option>
+								<option value="title">Title</option>
+							</select>
+						</label>
+						`,
+						() => nothing
+					)}
 					`
 				)}
 			</div>
@@ -1542,6 +1584,24 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			color: var(--text);
 			font-weight: 600;
 		}
+		.master-sort-control {
+			display: grid;
+			grid-template-columns: auto minmax(0, 1fr);
+			gap: 8px;
+			align-items: center;
+			margin-top: 10px;
+			color: var(--muted);
+			font-size: 12px;
+		}
+		.master-sort-control select {
+			min-width: 0;
+			padding: 5px 8px;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			background: var(--surface);
+			color: var(--text);
+			font: inherit;
+		}
 		.master-list {
 			flex: 1;
 			overflow-y: auto;
@@ -1677,6 +1737,22 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			display: block;
 			height: 100%;
 			background: var(--done);
+		}
+		.m-dates {
+			display: flex;
+			gap: 6px 12px;
+			justify-content: space-between;
+			flex-wrap: wrap;
+			margin-top: 8px;
+			color: var(--muted);
+			font-size: 11px;
+		}
+		.m-dates i {
+			font-style: italic;
+		}
+		.m-dates b {
+			color: var(--text);
+			font-weight: 600;
 		}
 		.detail {
 			overflow-y: auto;

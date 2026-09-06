@@ -1,6 +1,6 @@
 import { computed, signal } from "@lit-labs/signals";
 import type { ProjectChangeEvent, SearchCapability, SearchNavigationTarget, SearchResponse, SearchResult, SearchSourceType } from "@agent-issues/core";
-import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EntityDetails, type EntitySummary, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeDetail, type InitiativeRollup, type InitiativeTab, type InitiativeTabData, type IssueCommentPage, type PageMode, type PlanEntry, type PlanEntryPage, type ProjectAdrSectionData, type ProjectContextSectionData, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type ProjectSummary, type ProjectSummaryEpicGroup, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
+import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EntityDetails, type EntitySummary, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeDetail, type InitiativeRollup, type InitiativeSortCriterion, type InitiativeTab, type InitiativeTabData, type IssueCommentPage, type PageMode, type PlanEntry, type PlanEntryPage, type ProjectAdrSectionData, type ProjectContextSectionData, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type ProjectSummary, type ProjectSummaryEpicGroup, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SHORT_CODE_LENGTH = 6;
@@ -251,6 +251,7 @@ export class AgentIssuesStore {
 	public selectedContextInitiativeId = signal<string | null>(null);
 	public visibleProjectGraphKinds = signal<Set<ProjectGraphKind>>(new Set(PROJECT_GRAPH_KINDS));
 	public initiativeStatusFilter = signal("all");
+	public initiativeSort = signal<InitiativeSortCriterion>("changed");
 	public adrStatusFilter = signal("all");
 	public debtLifecycleFilter = signal("open");
 	public debtCategoryFilter = signal("all");
@@ -260,6 +261,7 @@ export class AgentIssuesStore {
 	public selectedProjectId = signal<string | null>(null);
 	public selectedInitiativeId = signal<string | null>(null);
 	public selectedId = signal<string | null>(null);
+	public entityBackStack = signal<string[]>([]);
 	public selectedNestedTarget = signal<NestedRouteTarget | null>(null);
 	public cascadePath = signal<string[]>([]);
 	public cascadeAvailableWidth = signal<number>(0);
@@ -700,6 +702,7 @@ export class AgentIssuesStore {
 	}
 
 	public selectedEntity = computed(() => this.entityForId(this.selectedId.get()));
+	public entityBackTarget = computed(() => this.entityForId(this.entityBackStack.get().at(-1)));
 
 	public bundleForEntityId(entityId: string | null): InitiativeBundle | null {
 		if (!entityId) {
@@ -1311,6 +1314,10 @@ export class AgentIssuesStore {
 		this.adrStatusFilter.set(status);
 	}
 
+	public setInitiativeSort(criterion: InitiativeSortCriterion) {
+		this.initiativeSort.set(criterion);
+	}
+
 	public setDebtFilter(filter: DebtFilter, value: string) {
 		if (filter === "lifecycle") {
 			this.debtLifecycleFilter.set(value);
@@ -1365,22 +1372,29 @@ export class AgentIssuesStore {
 		this.activeView.set(nextView);
 	};
 
-	public openSearchTarget(target: SearchNavigationTarget) {
+	public async openSearchTarget(target: SearchNavigationTarget, projectId: string | null = this.selectedProjectId.get()): Promise<boolean> {
+		if (projectId && projectId !== this.selectedProjectId.get()) {
+			await this.selectProject(projectId, { preserveGlobalSearch: true });
+			if (this.selectedProjectId.get() !== projectId) {
+				return false;
+			}
+		}
+
 		this.recordGlobalSearchRecent(target);
 
 		if (target.type === "entity") {
 			this.selectEntity(target.entityId);
-			return;
+			return true;
 		}
 
 		if (target.type === "plan-entry") {
 			this.selectEntity(target.planId, { id: target.entryId, type: target.type });
-			return;
+			return true;
 		}
 
 		if (target.type === "issue-comment") {
 			this.selectEntity(target.issueId, { id: target.commentId, type: target.type });
-			return;
+			return true;
 		}
 
 		if (target.type === "context" || target.type === "context-term") {
@@ -1394,7 +1408,10 @@ export class AgentIssuesStore {
 				? { id: null, scopeRef: target.scopeRef, type: target.type }
 				: { id: target.term, scopeRef: target.scopeRef, type: target.type });
 			this.writeRoute(this.currentRoute());
+			await this.loadProjectContext();
 		}
+
+		return true;
 	}
 
 	protected globalSearchRecentsStorageKey(): string | null {
@@ -1442,6 +1459,7 @@ export class AgentIssuesStore {
 		}
 
 		this.cascadePath.set([]);
+		this.entityBackStack.set([]);
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(entityId);
 		this.selectedNestedTarget.set(target);
@@ -1450,6 +1468,15 @@ export class AgentIssuesStore {
 		void this.loadEntityDetail(entityId);
 		if (this.entityForId(entityId)?.kind === "issue") {
 			void this.loadIssueCommentPage(entityId);
+		}
+	}
+
+	public selectEntityFromRecord(entityId: string) {
+		const sourceId = this.selectedId.get();
+		const backStack = this.entityBackStack.get();
+		this.selectEntity(entityId);
+		if (sourceId && sourceId !== entityId) {
+			this.entityBackStack.set([...backStack, sourceId]);
 		}
 	}
 
@@ -1586,6 +1613,7 @@ export class AgentIssuesStore {
 	public selectInitiative(initiativeId: string) {
 		this.cancelInitiativeTabPrefetch();
 		this.selectedId.set(null);
+		this.entityBackStack.set([]);
 		this.selectedInitiativeId.set(initiativeId);
 		this.selectedNestedTarget.set(null);
 		this.activePage.set("initiative");
@@ -1606,6 +1634,7 @@ export class AgentIssuesStore {
 		this.clearMasterOverrideIfShallow();
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(null);
+		this.entityBackStack.set([]);
 		this.selectedNestedTarget.set(null);
 		this.activePage.set("list");
 		this.activeView.set("overview");
@@ -1641,14 +1670,16 @@ export class AgentIssuesStore {
 		await this.reloadProjectDiscovery();
 	}
 
-	public async selectProject(projectId: string) {
+	public async selectProject(projectId: string, options: { preserveGlobalSearch?: boolean } = {}) {
 		const tenantId = this.selectedTenant.get();
 		if (!tenantId || !projectId || projectId === this.selectedProjectId.get()) {
 			return;
 		}
 
+		const previousRoute = this.currentRoute();
+		const previousProjectId = previousRoute.projectId;
 		this.selectedProjectId.set(projectId);
-		this.resetScopeDetail();
+		this.resetScopeDetail(options);
 		this.writeRoute(this.currentRoute());
 		this.stopLiveUpdates();
 		this.syncLabel.set("connecting");
@@ -1657,6 +1688,20 @@ export class AgentIssuesStore {
 			await this.reloadProjectSummary();
 			this.connectEvents();
 		} catch (error) {
+			if (options.preserveGlobalSearch && previousProjectId) {
+				this.selectedProjectId.set(previousProjectId);
+				this.writeRoute(this.currentRoute(), true);
+				try {
+					await this.reloadProjectSummary();
+					this.applyRoute(previousRoute);
+					this.writeRoute(previousRoute, true);
+					this.connectEvents();
+					this.errorMessage.set(error instanceof Error ? error.message : String(error));
+					return;
+				} catch {
+					// Continue to the unavailable-project state when recovery also fails.
+				}
+			}
 			this.selectedProjectId.set(null);
 			this.snapshot.set(null);
 			this.projectSummary.set(null);
@@ -2452,6 +2497,21 @@ export class AgentIssuesStore {
 	}
 
 	public closeEntity() {
+		const backStack = this.entityBackStack.get();
+		const sourceId = backStack.at(-1);
+		if (sourceId) {
+			this.entityBackStack.set(backStack.slice(0, -1));
+			this.selectedId.set(sourceId);
+			this.selectedNestedTarget.set(null);
+			this.activePage.set("entity");
+			this.writeRoute(this.currentRoute());
+			void this.loadEntityDetail(sourceId);
+			if (this.entityForId(sourceId)?.kind === "issue") {
+				void this.loadIssueCommentPage(sourceId);
+			}
+			return;
+		}
+
 		const bundle = this.selectedBundle.get();
 		this.selectedId.set(null);
 		this.selectedNestedTarget.set(null);
@@ -2932,14 +2992,16 @@ export class AgentIssuesStore {
 		}
 	}
 
-	protected resetScopeDetail() {
+	protected resetScopeDetail(options: { preserveGlobalSearch?: boolean } = {}) {
 		this.cancelInitiativeTabPrefetch();
 		this.cancelGlobalSearchRequest();
-		this.globalSearchCapability.set(null);
-		this.globalSearchQuery.set("");
-		this.globalSearchResponse.set(null);
-		this.globalSearchProgress.set(false);
-		this.globalSearchOpen.set(false);
+		if (!options.preserveGlobalSearch) {
+			this.globalSearchCapability.set(null);
+			this.globalSearchQuery.set("");
+			this.globalSearchResponse.set(null);
+			this.globalSearchProgress.set(false);
+			this.globalSearchOpen.set(false);
+		}
 		this.entityDetails.set(new Map());
 		this.projectAdrsCache.set({ data: null, error: null, loading: false });
 		this.projectDebtCache.set({ data: null, error: null, loading: false });
@@ -2954,6 +3016,7 @@ export class AgentIssuesStore {
 		this.selectedNestedTarget.set(null);
 		this.cascadePath.set([]);
 		this.reRootTrail.set([]);
+		this.entityBackStack.set([]);
 		this.activeSection.set("initiatives");
 		this.activePage.set("list");
 		this.activeView.set("overview");
@@ -3383,6 +3446,7 @@ export class AgentIssuesStore {
 		}
 		this.cascadePath.set([]);
 		this.reRootTrail.set([]);
+		this.entityBackStack.set([]);
 		this.clearMasterOverrideIfShallow();
 		this.activePage.set(normalizedRoute.page);
 		this.activeView.set("overview");

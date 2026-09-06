@@ -1,6 +1,6 @@
 import { PublicClientApplication } from "@azure/msal-node";
 
-import type { DeviceCodeLoginFn } from "./cli/commands/auth.js";
+import type { DeviceCodeLoginFn } from "../cli/commands/auth.js";
 
 /**
  * Real Entra ID device-code login (ADR12's client-side leg). This is the

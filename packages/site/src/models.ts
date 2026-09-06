@@ -70,6 +70,8 @@ export type InitiativeDetail = {
 	initiative: Entity;
 };
 
+export type InitiativeSortCriterion = "changed" | "created" | "title";
+
 export type EntityDetails = {
 	entity: Entity;
 	incoming: Array<{ relationType: string; entity: EntitySummary }>;

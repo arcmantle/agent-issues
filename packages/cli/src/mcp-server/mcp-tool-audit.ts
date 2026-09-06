@@ -45,9 +45,14 @@ const INCLUDED_MCP_DATA_COMMANDS: readonly McpDataCommand[] = [
 	{ command: "backfill-bodies", toolNames: ["body_backfill_inspect", "body_backfill"] }
 ];
 
+const MCP_APP_TOOLS = ["plan_preview", "plan_confirm"] as const;
+
 export function auditMcpToolRegistrations(registeredToolNames: Iterable<string>): { missing: Array<{ command: string; toolName: string }> } {
 	const registeredTools = new Set(registeredToolNames);
-	const missing = INCLUDED_MCP_DATA_COMMANDS.flatMap(({ command, toolNames }) =>
+	const missing = [
+		...INCLUDED_MCP_DATA_COMMANDS,
+		{ command: "Plan Preview", toolNames: MCP_APP_TOOLS }
+	].flatMap(({ command, toolNames }) =>
 		toolNames.filter((toolName) => !registeredTools.has(toolName)).map((toolName) => ({ command, toolName }))
 	);
 

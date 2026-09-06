@@ -12,7 +12,6 @@ import {
 	type EntityKind
 } from "@agent-issues/core";
 import { DEFAULT_CONTEXT_KEY } from "@agent-issues/api-local";
-import type { ListSkillsResult } from "./skill-installer.js";
 
 type OptionSpec = {
 	name: string;
@@ -56,7 +55,6 @@ export type HelpPayload = {
 export type CapabilitiesPayload = {
 	help: HelpPayload;
 	schema: SchemaPayload;
-	skills: ListSkillsResult;
 };
 
 export type SchemaPayload = {
@@ -299,6 +297,40 @@ const COMMAND_SPECS: CommandSpec[] = [
 		output: {
 			human: ["One comment record, a comment page, or revision history"],
 			json: ["id", "reference", "issueId", "body", "referencedIssueIds", "revision", "contentHash", "comments", "total", "nextBefore"]
+		}
+	},
+	{
+		name: "issue-breakdown",
+		summary: "Create, read, and approve issue-breakdown drafts before issue creation.",
+		usage: [
+			"agent-issues issue-breakdown",
+			"agent-issues issue-breakdown create <targetId> --input-file <path>",
+			"agent-issues issue-breakdown show <draftId>",
+			"agent-issues issue-breakdown latest <targetId>",
+			"agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest>"
+		],
+		positionals: [
+			{ name: "subcommand", description: "Issue-breakdown action.", allowedValues: ["create", "show", "latest", "approve"] },
+			{ name: "targetId", description: "Target initiative or user-story ID or reference." },
+			{ name: "draftId", description: "Issue-breakdown draft ID." }
+		],
+		options: [
+			{ name: "--input-file <path>", description: "Read a JSON object with an issues array." },
+			{ name: "--snapshot-digest <digest>", description: "Approve only this exact issue-breakdown snapshot." }
+		],
+		examples: [
+			"agent-issues issue-breakdown create INIT1 --input-file /tmp/issues.json --json",
+			"agent-issues issue-breakdown latest INIT1 --json",
+			"agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest> --json"
+		],
+		notes: [
+			"The JSON input has an issues array of complete proposed issue specifications.",
+			"Creating a draft does not create issue records.",
+			"Approval creates the complete graph only when the digest matches the reviewed snapshot."
+		],
+		output: {
+			human: ["One issue-breakdown draft or approval result."],
+			json: ["id", "status", "targetReference", "issues", "snapshotDigest", "createdIssueReferences"]
 		}
 	},
 	{
@@ -1081,167 +1113,6 @@ const COMMAND_SPECS: CommandSpec[] = [
 		examples: ["agent-issues help", "agent-issues help create --json", "agent-issues create --help"]
 	},
 	{
-		name: "install-skills",
-		summary: "Install the packaged agent-issues skills into an agent skills directory.",
-		usage: ["agent-issues install-skills [--target <path>] [--force]", "agent-issues install-skills --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "Destination directory for installed skills. Defaults to ~/.agents/skills."
-			},
-			{
-				name: "--force",
-				description: "Overwrite existing installed copies of the packaged skills."
-			}
-		],
-		examples: [
-			"agent-issues install-skills",
-			"agent-issues install-skills --target ./tmp/skills --json",
-			"agent-issues install-skills --force"
-		],
-		notes: [
-			"Installed skill identities are prefixed with `ai-` to keep them short and avoid clashing with existing generic skills.",
-			"The command copies the packaged skill directories and rewrites the installed skill name to match the prefixed identity."
-		],
-		output: {
-			human: [
-				"Installed skills to <targetDir>",
-				"One line per skill: <installedName> <status> <destinationDir>"
-			],
-			json: ["targetDir", "installed"]
-		}
-	},
-	{
-		name: "install-agent",
-		summary: "Install the packaged Agent Issues custom agent for VS Code, Copilot, and Claude.",
-		usage: ["agent-issues install-agent [--target <path>] [--force]", "agent-issues install-agent --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "Destination directory for one VS Code-compatible custom agent. When set, the command does not also install the default Copilot and Claude agents."
-			},
-			{
-				name: "--force",
-				description: "Overwrite the existing installed custom agent and hook files."
-			}
-		],
-		examples: [
-			"agent-issues install-agent",
-			"agent-issues install-agent --target ./tmp/prompts --json",
-			"agent-issues install-agent --force"
-		],
-		notes: [
-			"Without --target, this installs user-level agents in the VS Code prompts directory, ~/.copilot/agents, and ~/.claude/agents.",
-			"Each installed agent rewrites its hook command to point at its installed hook file.",
-			"Enable `chat.useCustomAgentHooks` in VS Code so the custom agent can enforce issue-context preloading when it is active."
-		],
-		output: {
-			human: [
-				"Installed agent to <targetDir>",
-				"Status lines plus the installed agent file and hook file paths"
-			],
-			json: ["targetDir", "installed", "additionalInstalled"]
-		}
-	},
-	{
-		name: "list-skills",
-		summary: "Report whether the packaged ai skills are installed in an agent skills directory.",
-		usage: ["agent-issues list-skills [--target <path>]", "agent-issues list-skills --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "Directory to inspect. Defaults to ~/.agents/skills."
-			}
-		],
-		examples: [
-			"agent-issues list-skills",
-			"agent-issues list-skills --target ./tmp/skills --json"
-		],
-		notes: [
-			"Only the packaged `ai-*` skill directories are reported.",
-			"This command does not modify the target directory."
-		],
-		output: {
-			human: [
-				"Packaged skills in <targetDir>",
-				"One line per skill: <installedName> <status> <destinationDir>"
-			],
-			json: ["targetDir", "skills"]
-		}
-	},
-	{
-		name: "list-agent",
-		summary: "Report whether the packaged Agent Issues custom agent is installed for VS Code, Copilot, and Claude.",
-		usage: ["agent-issues list-agent [--target <path>]", "agent-issues list-agent --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "One VS Code-compatible directory to inspect. When omitted, the command inspects the default VS Code, Copilot, and Claude directories."
-			}
-		],
-		examples: ["agent-issues list-agent", "agent-issues list-agent --target ./tmp/prompts --json"],
-		notes: [
-			"The command reports whether each custom agent file and its hook file are present.",
-			"A partial status means one file exists without the other."
-		],
-		output: {
-			human: [
-				"Packaged agent in <targetDir>",
-				"Status lines plus the expected installed agent file and hook file paths"
-			],
-			json: ["targetDir", "agent", "additionalAgents"]
-		}
-	},
-	{
-		name: "uninstall-skills",
-		summary: "Remove the packaged ai skills from an agent skills directory.",
-		usage: ["agent-issues uninstall-skills [--target <path>]", "agent-issues uninstall-skills --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "Directory from which the packaged skills should be removed. Defaults to ~/.agents/skills."
-			}
-		],
-		examples: [
-			"agent-issues uninstall-skills",
-			"agent-issues uninstall-skills --target ./tmp/skills --json"
-		],
-		notes: [
-					"Packaged `ai-*` skill directories are removed. Shared skill files are removed only when they still match the packaged copies.",
-			"Missing skill directories are reported but do not cause the command to fail."
-		],
-		output: {
-			human: [
-				"Removed skills from <targetDir>",
-				"One line per skill: <installedName> <status> <destinationDir>"
-			],
-			json: ["targetDir", "removed"]
-		}
-	},
-	{
-		name: "uninstall-agent",
-		summary: "Remove the packaged Agent Issues custom agent for VS Code, Copilot, and Claude.",
-		usage: ["agent-issues uninstall-agent [--target <path>]", "agent-issues uninstall-agent --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "One VS Code-compatible directory from which the custom agent should be removed. When omitted, the command removes the default VS Code, Copilot, and Claude agents."
-			}
-		],
-		examples: ["agent-issues uninstall-agent", "agent-issues uninstall-agent --target ./tmp/prompts --json"],
-		notes: [
-			"Each custom agent file and its hook file are removed.",
-			"Missing files are reported but do not cause the command to fail."
-		],
-		output: {
-			human: [
-				"Removed agent from <targetDir>",
-				"Status lines plus the removed agent file and hook file paths"
-			],
-			json: ["targetDir", "removed", "additionalRemoved"]
-		}
-	},
-	{
 		name: "schema",
 		summary: "Show machine-discoverable workflow schema and relation rules.",
 		usage: ["agent-issues schema", "agent-issues schema --json"],
@@ -1263,27 +1134,17 @@ const COMMAND_SPECS: CommandSpec[] = [
 	{
 		name: "capabilities",
 		summary: "Show combined help and schema data in one discovery payload.",
-		usage: ["agent-issues capabilities [--target <path>]", "agent-issues capabilities --json"],
-		options: [
-			{
-				name: "--target <path>",
-				description: "Directory whose packaged skill installation state should be included. Defaults to ~/.agents/skills."
-			}
-		],
+		usage: ["agent-issues capabilities", "agent-issues capabilities --json"],
 		examples: [
 			"agent-issues capabilities",
-			"agent-issues capabilities --json",
-			"agent-issues capabilities --target ./tmp/skills --json"
+			"agent-issues capabilities --json"
 		],
-		notes: [
-			"Use this command when an agent wants the command catalog, workflow schema, and packaged skill installation state in one round trip."
-		],
+		notes: ["Use this command when an agent wants the command catalog and workflow schema in one round trip."],
 		output: {
 			human: [
-				"General help text followed by the workflow schema summary",
-				"Packaged skill installation summary for the inspected target"
+				"General help text followed by the workflow schema summary"
 			],
-			json: ["help", "schema", "skills"]
+			json: ["help", "schema"]
 		}
 	}
 ];
@@ -1338,23 +1199,16 @@ export function getHelpPayload(commandName?: string): HelpPayload {
 			"Use `agent-issues schema --json` for entity kinds, statuses, and relation rules.",
 			"Use `agent-issues site --json` to launch a detached local server with snapshot and event endpoints.",
 			"Use `agent-issues site --stop --json` to stop the local server on the default or selected port.",
-			"Use `agent-issues install-agent --json` to install the packaged Agent Issues custom agent into the default VS Code prompts directory.",
-			"Use `agent-issues list-agent --json` to inspect the packaged custom agent state in a prompts directory.",
-			"Use `agent-issues uninstall-agent --json` to remove the packaged custom agent from a prompts directory.",
-			"Use `agent-issues install-skills --json` to install the packaged agent-issues skill set.",
-			"Use `agent-issues list-skills --json` to inspect the packaged agent-issues skill set in a target directory.",
-			"Use `agent-issues uninstall-skills --json` to remove the packaged agent-issues skill set.",
-			"Use `agent-issues capabilities --json` to fetch help, schema, and packaged skill installation state in one call."
+			"Use `agent-issues capabilities --json` to fetch help and schema data in one call."
 		],
 		command
 	};
 }
 
-export function getCapabilitiesPayload(skills: ListSkillsResult): CapabilitiesPayload {
+export function getCapabilitiesPayload(): CapabilitiesPayload {
 	return {
 		help: getHelpPayload(),
-		schema: getSchemaPayload(),
-		skills
+		schema: getSchemaPayload()
 	};
 }
 

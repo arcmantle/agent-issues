@@ -7,7 +7,7 @@ import { MCP_SERVER_FLAG, runAgentIssuesMcpProxy } from "./proxy.js";
 
 describe("runAgentIssuesMcpProxy", () => {
 	it("uses the permanent MCP mode contract supported by the CLI", () => {
-		const cliMcpSource = readFileSync(new URL("../../cli/src/mcp.ts", import.meta.url), "utf8");
+		const cliMcpSource = readFileSync(new URL("../../cli/src/mcp-server/runner.ts", import.meta.url), "utf8");
 		expect(cliMcpSource).toContain(`export const MCP_SERVER_FLAG = ${JSON.stringify(MCP_SERVER_FLAG)};`);
 	});
 

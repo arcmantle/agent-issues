@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RunCredentialCommand } from "@agent-issues/core";
 import type { SavedLoginStoreOptions } from "./auth-session.js";
-import { runCli, type AgentIssuesContext } from "./cli.js";
+import { runCli, type AgentIssuesContext } from "../cli.js";
 
 type RpcRequest = {
 	authorization: string | undefined;

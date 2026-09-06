@@ -3,6 +3,7 @@ import { classMap } from "lit/directives/class-map.js";
 import { when } from "lit/directives/when.js";
 
 import type { Entity } from "../models.js";
+import { issueBrowserControlStyles } from "../styles/issue-browser-shared-styles.js";
 
 export type RecordBrowserView = "list" | "tree";
 
@@ -50,44 +51,44 @@ class RecordListItem extends LitElement {
 		`;
 	}
 
-	static styles = css`
+	static styles = [issueBrowserControlStyles, css`
 	:host {
 		display: block;
 	}
 	.line {
 		display: flex;
-		gap: 10px;
+		gap: 12px;
 		align-items: center;
 		width: stretch;
-		padding: 8px;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
+		padding: 10px 12px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--surface);
+		color: inherit;
 		cursor: pointer;
+		font: inherit;
 		text-align: left;
 	}
-	.line:hover,
-	.line.active {
+	.line:hover {
+		border-color: var(--accent);
 		background: var(--surface-muted);
 	}
 	.line.active {
+		border-color: var(--accent);
+		background: var(--surface-muted);
 		box-shadow: inset 3px 0 0 0 var(--accent);
 	}
 	.line-title {
 		flex: 1;
+		font-weight: 600;
 	}
 	.idtag {
+		min-width: 56px;
 		color: var(--muted);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 12px;
 	}
-	.badge {
-		padding: 2px 6px;
-		border-radius: 999px;
-		font-size: 11px;
-		font-weight: 600;
-	}
-	`;
+	`];
 }
 
 class RecordFilterToolbar extends LitElement {

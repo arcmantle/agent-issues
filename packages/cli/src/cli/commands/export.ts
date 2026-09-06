@@ -4,8 +4,8 @@ import path from "node:path";
 import { Option } from "clipanion";
 import type { IssueCommentRecord } from "@agent-issues/core";
 
-import { writeInitiativeDirectoryExport, writeProjectDirectoryExport } from "../../export-files.js";
-import { renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "../../export-markdown.js";
+import { writeInitiativeDirectoryExport, writeProjectDirectoryExport } from "../../export/export-files.js";
+import { renderInitiativeMarkdownExport, renderProjectMarkdownExport } from "../../export/export-markdown.js";
 
 import { requirePositional, withStore } from "../shared.js";
 import { MutableTenantCommand } from "../shared.js";

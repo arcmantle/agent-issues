@@ -56,7 +56,7 @@ The MCP server scopes tracker reads and writes to one project identity. For a VS
 }
 ```
 
-The VS Code MCP provider and the configuration created by `agent-issues install-mcp` pass this value to the server. An explicit workspace value takes precedence over `.agent-issues.json`, `.agent-issues`, the `.code-workspace` filename, Git remote name, `package.json` name, and folder name.
+The VS Code MCP provider passes this value to the server. An explicit workspace value takes precedence over `.agent-issues.json`, `.agent-issues`, the `.code-workspace` filename, Git remote name, `package.json` name, and folder name.
 
 Outside VS Code, set the same identity in either `.agent-issues.json` or `.agent-issues`:
 
@@ -106,12 +106,6 @@ agent-issues init --tenant payments
 agent-issues site --port 4300
 agent-issues site --tenant payments
 agent-issues site --stop
-agent-issues install-agent --json
-agent-issues list-agent --json
-agent-issues uninstall-agent --json
-agent-issues install-skills --json
-agent-issues list-skills --json
-agent-issues uninstall-skills --json
 agent-issues archive ISS1
 agent-issues create initiative --title "Platform cleanup"
 agent-issues delete ISS2
@@ -201,60 +195,18 @@ agent-issues auth logout work
 - `capabilities` returns both the help catalog and the workflow schema in one call.
 - `site` starts a local HTTP view in the background and prints its URL.
 - `site --stop` asks the local live server on the selected port to stop.
-- `install-agent` installs the packaged Agent Issues custom agent and hook for VS Code, Copilot, and Claude.
-- `list-agent` reports whether the packaged Agent Issues custom agent is present for VS Code, Copilot, and Claude.
-- `uninstall-agent` removes the packaged Agent Issues custom agent and hook for VS Code, Copilot, and Claude.
-- `capabilities --target /path/to/skills` also includes the packaged skill installation state for that target.
-- `install-skills` installs the packaged `ai-*` skills into an agent skills directory.
-- `list-skills` reports whether the packaged `ai-*` skills are installed in an agent skills directory.
-- `uninstall-skills` removes the packaged `ai-*` skills from an agent skills directory.
 - `agent-issues help <command> --json` is the main LLM-facing command discovery surface.
 - `agent-issues schema --json` is the main LLM-facing workflow schema surface.
 - `agent-issues capabilities --json` is the fastest single-shot discovery call for an LLM.
 - `agent-issues site` is the quickest way to inspect the full graph with live refresh.
 
-## Skill installation
+## Agent integration installation
 
-- The packaged skills install under these names to avoid conflicts with generic originals:
-	- `ai-agent-issues`
-	- `ai-grill-with-docs`
-	- `ai-handoff`
-	- `ai-implement`
-	- `ai-migrate-docs`
-	- `ai-prepare`
-	- `ai-start-work`
-	- `ai-tdd`
-	- `ai-to-issues`
-	- `ai-to-prd`
-- `ai-agent-issues` is the internal orientation skill for agents to refresh how the `agent-issues` CLI, entity model, and workflow fit together before taking action.
-- Default install target: `~/.agents/skills`
-- Override target: `agent-issues install-skills --target /path/to/skills`
-- Inspect a target without changing it: `agent-issues list-skills --target /path/to/skills`
-- Get schema, help, and packaged skill status for a target in one call: `agent-issues capabilities --target /path/to/skills --json`
-- Replace existing installed copies: `agent-issues install-skills --force`
-- Remove installed copies from the default target: `agent-issues uninstall-skills`
-- Remove installed copies from a custom target: `agent-issues uninstall-skills --target /path/to/skills`
-
-## Custom agent
-
-- Install into the default VS Code prompts directory: `agent-issues install-agent`
-- Install into the default user directories: `agent-issues install-agent`
-- Inspect the installed state: `agent-issues list-agent`
-- Remove it again: `agent-issues uninstall-agent`
-- Override the VS Code-compatible destination directory: `agent-issues install-agent --target /path/to/prompts`
-- Force-refresh an existing installed copy: `agent-issues install-agent --force`
-- Workspace source agent: `packages/cli/.github/agents/agent-issues.agent.md`
-- Workspace source Claude agent: `packages/cli/.github/agents/agent-issues.claude.md`
-- Workspace source hook: `packages/cli/.github/hooks/agent-issues-enforcer.mjs`
-- Default VS Code agent path: `~/Library/Application Support/Code/User/prompts/agent-issues.agent.md` (macOS), `%APPDATA%\Code\User\prompts\agent-issues.agent.md` (Windows), or `~/.config/Code/User/prompts/agent-issues.agent.md` (Linux)
-- Default Copilot agent path: `~/.copilot/agents/agent-issues.agent.md`
-- Default Claude agent path: `~/.claude/agents/agent-issues.md`
-- Each default directory includes an `agent-issues-enforcer.mjs` hook file and the Agent Issues language and recipe files.
-- Enable `chat.useCustomAgentHooks` in VS Code so the inline hooks run only while the Agent Issues custom agent is active.
-- When the active prompt includes an `ISS` id, the hook blocks edits and unrelated terminal commands until these preload commands have run:
-	- `agent-issues show <ISS-ID> --json`
-	- `agent-issues relations <ISS-ID> --json`
-	- `agent-issues context show <ISS-ID> --json`
+- Copilot CLI and VS Code: run `copilot plugin marketplace add arcmantle/agent-issues`, then `copilot plugin install agent-issues@agent-issues`. VS Code automatically discovers the installed plugin in `~/.copilot/installed-plugins/` and loads its supported agents, skills, and MCP servers. Make sure `chat.plugins.enabled` is `true` in VS Code.
+- Copilot updates: run `copilot plugin marketplace update agent-issues` and `copilot plugin update agent-issues`. Remove the shared installation with `copilot plugin uninstall agent-issues`.
+- VS Code management: use the Agent Plugins - Installed view to inspect, enable, disable, or uninstall the plugin. You can also install it in VS Code from its configured marketplace or Git source.
+- Claude Code: run `claude plugin marketplace add arcmantle/agent-issues`, then `claude plugin install agent-issues@agent-issues`. For updates, run `claude plugin marketplace update agent-issues` and `claude plugin update agent-issues@agent-issues`. Remove it with `claude plugin uninstall agent-issues@agent-issues`.
+- Migration: replace `install-agent`, `install-skills`, `install-mcp`, and the VS Code compatibility lifecycle commands with host plugin installation. Use the Copilot CLI installation for both Copilot CLI and VS Code.
 
 ## Browser viewer
 

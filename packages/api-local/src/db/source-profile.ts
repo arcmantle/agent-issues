@@ -47,7 +47,8 @@ const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	"8d7d1a1254ac3e5737f2385c3fc30ee4fa195b63a6b951d8ec4274700afd02ff",
 	"6c4e5d5e7b55c93c9131d9a58a52329331225e7ea7931e4be95c85aaeef5a1d3",
 	"77424dc75798c6a57ef3e08c17e4e29afe1948cc2650e347731ac92d3f2e9c50",
-	"bbcb57583c51629c48796a92d5eeb462e014688821c770549b199f36d72b8a1b"
+	"bbcb57583c51629c48796a92d5eeb462e014688821c770549b199f36d72b8a1b",
+	"7e4da79023e5dfae7dca9af6237cc8d682e4204cec24a28f43c0e71908853862"
 ]);
 const DIRECT_FINAL_SCHEMA_SIGNATURE = "892a43c929f85fd4f71f334c02aa664bc7e8a5f2203929654a10e11229d541ff";
 const DIRECT_USER_DIRECTORY_SCHEMA_SIGNATURE = "8b16a9b6f6ed70905c50813482a2301d7dc9859775abba2c2dfc2300f8b225fe";
@@ -107,7 +108,7 @@ export function inspectSqliteSourceProfile(database: SqliteInternalConnection, e
 		&& ledgerIds[0] === "legacy-v7-direct") {
 		return { evidence, profile: "current-final", supported: true };
 	}
-	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE)
+	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE || schemaSignature === "902792184b29f07529230b5a5e49e09b7642ae65059a55a00e14280adcdf9b1e")
 		&& ledgerIds.length === expectedLedgerIds.length + 1
 		&& ledgerIds[0] === "legacy-v7-direct"
 		&& ledgerIds.slice(1).every((id, index) => id === expectedLedgerIds[index])) {

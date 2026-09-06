@@ -25,7 +25,7 @@ describe("api migrations chain", () => {
 	});
 
 	it("registers the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "pioneer-entity-types"]);
+		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "pioneer-entity-types", "issue-breakdown-drafts"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -275,6 +275,7 @@ describe("api migrations chain", () => {
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
 				{ table_name: "entities" },
+				{ table_name: "issue_breakdown_drafts" },
 				{ table_name: "issue_comment_references" },
 				{ table_name: "issue_comments" },
 				{ table_name: "plan_entries" },
@@ -299,7 +300,8 @@ describe("api migrations chain", () => {
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
-				{ id: "pioneer-entity-types" }
+				{ id: "pioneer-entity-types" },
+				{ id: "issue-breakdown-drafts" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -330,7 +332,8 @@ describe("api migrations chain", () => {
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
-				{ id: "pioneer-entity-types" }
+				{ id: "pioneer-entity-types" },
+				{ id: "issue-breakdown-drafts" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -347,7 +350,7 @@ describe("api migrations chain", () => {
 			await runMigrations(schemaPool, productionMigrations.slice(0, -1));
 			await migratePgDatabase(schemaPool);
 
-			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "pioneer-entity-types" });
+			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "issue-breakdown-drafts" });
 		} finally {
 			await schemaPool.end();
 			await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
@@ -395,6 +398,7 @@ describe("api migrations chain", () => {
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
 				{ table_name: "entities" },
+				{ table_name: "issue_breakdown_drafts" },
 				{ table_name: "issue_comment_references" },
 				{ table_name: "issue_comments" },
 				{ table_name: "plan_entries" },
@@ -411,6 +415,7 @@ describe("api migrations chain", () => {
 				{ id: "debt-metadata" },
 				{ id: "entity-type" },
 				{ id: "final-baseline" },
+				{ id: "issue-breakdown-drafts" },
 				{ id: "issue-comments" },
 				{ id: "legacy-v7-direct" },
 				{ id: "pioneer-entity-types" },
@@ -1171,6 +1176,7 @@ describe("api migrations chain", () => {
 				"contexts",
 				"counters",
 				"entities",
+				"issue_breakdown_drafts",
 				"issue_comment_references",
 				"issue_comments",
 				"plan_entries",
@@ -1196,6 +1202,8 @@ describe("api migrations chain", () => {
 				"contexts_tenant_short_reference_idx",
 				"entities_tenant_reference_idx",
 				"entities_tenant_short_reference_idx",
+				"issue_breakdown_drafts_active_target_idx",
+				"issue_breakdown_drafts_target_idx",
 				"issue_comment_references_tenant_issue_idx",
 				"issue_comments_tenant_id_reference_key",
 				"issue_comments_tenant_issue_idx",
@@ -1215,14 +1223,14 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(policyRows.map((row) => row.tablename)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"].sort()
+				["context_terms", "contexts", "counters", "entities", "issue_breakdown_drafts", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"].sort()
 			);
 			expect(policyRows.every((row) => row.qual === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			expect(policyRows.every((row) => row.with_check === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			const { rows: securityRows } = await schemaPool.query(
 				`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
 				 WHERE relnamespace = $1::regnamespace AND relname = ANY($2) ORDER BY relname`,
-				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"]]
+				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_breakdown_drafts", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"]]
 			);
 			expect(securityRows).toEqual(securityRows.map((row) => ({ ...row, relforcerowsecurity: true, relrowsecurity: true })));
 
@@ -1277,7 +1285,8 @@ describe("api migrations chain", () => {
 				{ id: "short-record-reference" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
-				{ id: "pioneer-entity-types" }
+				{ id: "pioneer-entity-types" },
+				{ id: "issue-breakdown-drafts" }
 			]);
 
 			const { rows: identityColumns } = await schemaPool.query(

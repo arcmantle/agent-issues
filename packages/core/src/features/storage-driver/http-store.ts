@@ -413,6 +413,26 @@ export class HttpStore implements StorageDriver {
 		return this.call("createPlanEntry", input);
 	}
 
+	public confirmPlan(input: Parameters<StorageDriver["confirmPlan"]>[0]): ReturnType<StorageDriver["confirmPlan"]> {
+		return this.call("confirmPlan", input);
+	}
+
+	public createIssueBreakdownDraft(input: Parameters<StorageDriver["createIssueBreakdownDraft"]>[0]): ReturnType<StorageDriver["createIssueBreakdownDraft"]> {
+		return this.call("createIssueBreakdownDraft", input);
+	}
+
+	public getIssueBreakdownDraft(input: Parameters<StorageDriver["getIssueBreakdownDraft"]>[0]): ReturnType<StorageDriver["getIssueBreakdownDraft"]> {
+		return this.call("getIssueBreakdownDraft", input);
+	}
+
+	public getLatestIssueBreakdownDraft(input: Parameters<StorageDriver["getLatestIssueBreakdownDraft"]>[0]): ReturnType<StorageDriver["getLatestIssueBreakdownDraft"]> {
+		return this.call("getLatestIssueBreakdownDraft", input);
+	}
+
+	public approveIssueBreakdownDraft(input: Parameters<StorageDriver["approveIssueBreakdownDraft"]>[0]): ReturnType<StorageDriver["approveIssueBreakdownDraft"]> {
+		return this.call("approveIssueBreakdownDraft", input);
+	}
+
 	public getPlanEntry(input: Parameters<StorageDriver["getPlanEntry"]>[0]): ReturnType<StorageDriver["getPlanEntry"]> {
 		return this.call("getPlanEntry", input);
 	}

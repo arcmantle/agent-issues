@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { HttpStore, type RunCredentialCommand } from "@agent-issues/core";
 import { LocalDaemonStore, saveDaemonState, saveDaemonToken } from "@agent-issues/api-local";
-import { saveSavedLogin } from "./auth-session.js";
+import { saveSavedLogin } from "../auth/auth-session.js";
 import { openSynchronizeStores } from "./open-synchronize-stores.js";
 
 /** Fake in-memory OS credential store, mirroring `daemon-token.test.ts`'s helper, so this suite never shells out to a real native tool. */

@@ -4,8 +4,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runCli } from "./cli.js";
-import { performRemoteLogin, type DeviceCodeLoginFn } from "./cli/commands/auth.js";
+import { runCli } from "../cli.js";
+import { performRemoteLogin, type DeviceCodeLoginFn } from "../cli/commands/auth.js";
 import {
 	getActiveSavedLogin,
 	listSavedLogins,
