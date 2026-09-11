@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { createLocalDaemonServer, openSqliteStore, type LocalDaemonServerHandle 
 import { projectProposedPlan, resolveWellKnownLocalTenantId, type RunCredentialCommand } from "@agent-issues/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { auditMcpToolRegistrations } from "./mcp-tool-audit.js";
 import { createLocalMcpServer, createMcpServer } from "./index.js";
 
@@ -53,6 +55,13 @@ describe("agent-issues MCP server", () => {
 		const tools = await client.listTools();
 
 		expect(auditMcpToolRegistrations(tools.tools.map((tool) => tool.name))).toEqual({ missing: [] });
+		expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+			"issue_breakdown_create",
+			"issue_breakdown_show",
+			"issue_breakdown_latest",
+			"issue_breakdown_preview",
+			"issue_breakdown_approve"
+		]));
 
 		await client.close();
 		await server.close();
@@ -105,6 +114,59 @@ describe("agent-issues MCP server", () => {
 		expect(result.contents).toEqual([
 			expect.objectContaining({ mimeType: "text/html;profile=mcp-app", text: expect.stringContaining("<plan-preview-app") })
 		]);
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("creates an Issue Preview draft through the MCP server", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Issue Preview target" });
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+
+		const result = await client.callTool({
+			name: "issue_breakdown_create",
+			arguments: {
+				targetId: initiative.reference,
+				issues: [{
+					key: "child",
+					title: "Test Issue Preview draft validation",
+					outcome: "The preview can show hierarchy and a dependency.",
+					scope: ["Create a child test issue in the draft."],
+					workMode: "HITL",
+					acceptanceCriteria: ["Issue Preview shows the parent and blocking relation."],
+					parentKey: "parent",
+					relationReferences: [{ relationType: "blocks", targetKey: "parent" }]
+				}, {
+					key: "parent",
+					title: "Test Issue Preview draft foundation",
+					outcome: "The preview can show a parent test issue.",
+					scope: ["Create a test-only draft record."],
+					workMode: "AFK",
+					acceptanceCriteria: ["Issue Preview shows this issue before creation."],
+					relationReferences: []
+				}]
+			}
+		});
+
+		expect(result.structuredContent).toMatchObject({
+			draft: expect.objectContaining({
+				targetReference: initiative.reference,
+				snapshotDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+				issues: [
+					expect.objectContaining({ key: "child", parentKey: "parent" }),
+					expect.objectContaining({ key: "parent" })
+				]
+			})
+		});
 
 		await client.close();
 		await server.close();
@@ -236,6 +298,14 @@ describe("agent-issues MCP server", () => {
 		await store.close();
 	});
 
+	it("publishes Plan Preview in the CLI package files", () => {
+		const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8")) as { files: string[] };
+		expect(packageJson.files).toContain("dist");
+		const previewScript = readFileSync(fileURLToPath(new URL("../../dist/plan-preview.js", import.meta.url)), "utf8");
+		expect(previewScript).toContain("plan-preview-app");
+		expect(previewScript).toContain("Confirm");
+	});
+
 	it("reports the resolved project identity", async () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
 		directories.push(directory);
@@ -268,6 +338,43 @@ describe("agent-issues MCP server", () => {
 		const result = await client.callTool({ name: "project_identity", arguments: {} });
 
 		expect(result).toMatchObject({ structuredContent: { projectIdentity: null } });
+
+		await client.close();
+		await server.close();
+		await store.close();
+	});
+
+	it("resolves project identity from the client chat folder", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const chatFolder = path.join(directory, "chat-folder");
+		mkdirSync(path.join(chatFolder, ".git"), { recursive: true });
+		writeFileSync(
+			path.join(chatFolder, ".git", "config"),
+			`[remote "origin"]\n\turl = https://github.com/arcmantle/agent-issues.git\n`
+		);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		let seenScope: { projectIdentity?: string; workspaceRoot?: string } | undefined;
+		const server = createMcpServer({
+			fallbackWorkspaceRoot: path.join(directory, "wrong-home"),
+			openStore: async (scope) => {
+				seenScope = scope;
+				return store;
+			}
+		});
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" }, { capabilities: { roots: {} } });
+		client.setRequestHandler(ListRootsRequestSchema, async () => ({
+			roots: [{ uri: pathToFileURL(chatFolder).href }]
+		}));
+
+		await server.connect(serverTransport);
+		await client.connect(clientTransport);
+		const identity = await client.callTool({ name: "project_identity", arguments: {} });
+		await client.callTool({ name: "entity_create", arguments: { kind: "issue", title: "Scoped to chat folder" } });
+
+		expect(identity).toMatchObject({ structuredContent: { projectIdentity: "agent-issues", workspaceRoot: chatFolder } });
+		expect(seenScope).toEqual({ projectIdentity: "agent-issues", workspaceRoot: chatFolder });
 
 		await client.close();
 		await server.close();

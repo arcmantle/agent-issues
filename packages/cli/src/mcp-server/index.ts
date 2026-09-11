@@ -21,6 +21,8 @@ import { registerAppResource, registerAppTool } from "@modelcontextprotocol/ext-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import { resolveProjectIdentity } from "../runtime/project-identity.js";
+import { resolveMcpWorkspaceScope, type McpWorkspaceScope } from "./client-workspace.js";
 import packageJson from "../../package.json" with { type: "json" };
 
 const PLAN_PREVIEW_RESOURCE_URI = "ui://agent-issues/plan-preview.html";
@@ -39,9 +41,28 @@ const ISSUE_PREVIEW_RESOURCE_SCRIPT = readFileSync(
 );
 const ISSUE_PREVIEW_RESOURCE_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><issue-preview-app></issue-preview-app><script type="module">${ISSUE_PREVIEW_RESOURCE_SCRIPT}</script></body></html>`;
 
+const issueBreakdownRelationSchema = z.object({
+	relationType: z.string().min(1),
+	targetId: z.string().min(1).optional(),
+	targetKey: z.string().min(1).optional(),
+	targetReference: z.string().min(1).optional()
+});
+
+const issueBreakdownIssueSchema = z.object({
+	key: z.string().min(1),
+	title: z.string().min(1),
+	outcome: z.string().min(1),
+	scope: z.array(z.string().min(1)),
+	workMode: z.string().min(1),
+	acceptanceCriteria: z.array(z.string().min(1)),
+	parentKey: z.string().min(1).optional(),
+	relationReferences: z.array(issueBreakdownRelationSchema)
+});
+
 export type McpServerOptions = {
 	projectIdentity?: string;
-	openStore: () => Promise<
+	fallbackWorkspaceRoot?: string;
+	openStore: (scope?: McpWorkspaceScope) => Promise<
 		Pick<
 			StorageDriver,
 			| "createEntity"
@@ -89,6 +110,8 @@ export type McpServerOptions = {
 			| "getDatabaseSnapshot"
 			| "setEntityBody"
 			| "getIssueBreakdownDraft"
+			| "getLatestIssueBreakdownDraft"
+			| "createIssueBreakdownDraft"
 			| "approveIssueBreakdownDraft"
 			| "tenantId"
 		>
@@ -99,6 +122,21 @@ export type McpServerOptions = {
 export function createMcpServer(options: McpServerOptions): McpServer {
 	const server = new McpServer({ name: "agent-issues", version: packageJson.version });
 	const confirmationTokens = new ConfirmationTokenStore(options.now ?? Date.now);
+
+	async function resolveScope(): Promise<McpWorkspaceScope> {
+		return resolveMcpWorkspaceScope({
+			listRoots: () => server.server.listRoots(),
+			capabilities: server.server.getClientCapabilities(),
+			fallbackWorkspaceRoot: options.fallbackWorkspaceRoot,
+			projectIdentity: options.projectIdentity,
+			resolveIdentity: (workspaceRoot) => resolveProjectIdentity(workspaceRoot).identity
+		});
+	}
+
+	async function openStore(): Promise<Awaited<ReturnType<McpServerOptions["openStore"]>>> {
+		return options.openStore(await resolveScope());
+	}
+
 	registerAppResource(
 		server,
 		"Plan Preview",
@@ -124,7 +162,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get the resolved project identity for this MCP server.",
 			inputSchema: {}
 		},
-		async () => toolResult({ projectIdentity: options.projectIdentity ?? null })
+		async () => {
+			const scope = await resolveScope();
+			return toolResult({ projectIdentity: scope.projectIdentity ?? null, workspaceRoot: scope.workspaceRoot ?? null });
+		}
 	);
 
 	server.registerTool(
@@ -144,7 +185,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const entity = await (await options.openStore()).createEntity(input);
+			const entity = await (await openStore()).createEntity(input);
 			const result = { entity };
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
@@ -169,7 +210,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const entity = await (await options.openStore()).updateEntity(input);
+			const entity = await (await openStore()).updateEntity(input);
 			const result = { entity };
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
@@ -184,7 +225,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Archive a tracker entity.",
 			inputSchema: { entityId: z.string().min(1) }
 		},
-		async ({ entityId }) => toolResult(await (await options.openStore()).archiveEntity({ entityId }))
+		async ({ entityId }) => toolResult(await (await openStore()).archiveEntity({ entityId }))
 	);
 
 	server.registerTool(
@@ -194,7 +235,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: { entityId: z.string().min(1) }
 		},
 		async ({ entityId }) => {
-			const impact = await (await options.openStore()).getEntityDetails(entityId);
+			const impact = await (await openStore()).getEntityDetails(entityId);
 			const confirmation = confirmationTokens.issue("entity_delete", { entityId });
 			return toolResult({ impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
 		}
@@ -208,7 +249,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		},
 		async ({ entityId, confirmationToken }) => {
 			confirmationTokens.consume(confirmationToken, "entity_delete", { entityId });
-			return toolResult(await (await options.openStore()).deleteEntity({ entityId }));
+			return toolResult(await (await openStore()).deleteEntity({ entityId }));
 		}
 	);
 
@@ -218,7 +259,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Move a tracker entity to a new parent.",
 			inputSchema: { entityId: z.string().min(1), newParentId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await options.openStore()).moveEntity(input))
+		async (input) => toolResult(await (await openStore()).moveEntity(input))
 	);
 
 	server.registerTool(
@@ -227,7 +268,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Update a tracker entity status.",
 			inputSchema: { entityId: z.string().min(1), status: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await options.openStore()).updateEntityStatus(input))
+		async (input) => toolResult(await (await openStore()).updateEntityStatus(input))
 	);
 
 	server.registerTool(
@@ -241,7 +282,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				limit: z.number().int().positive().optional()
 			}
 		},
-		async (input) => toolResult(await (await options.openStore()).queryEntities(input))
+		async (input) => toolResult(await (await openStore()).queryEntities(input))
 	);
 
 	server.registerTool(
@@ -250,7 +291,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get a tracker entity at a historical revision.",
 			inputSchema: { entityId: z.string().min(1), revision: z.number().int().positive() }
 		},
-		async (input) => toolResult(await (await options.openStore()).materializeEntityRevision(input))
+		async (input) => toolResult(await (await openStore()).materializeEntityRevision(input))
 	);
 
 	server.registerTool(
@@ -260,7 +301,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: { reference: z.string().min(1) }
 		},
 		async ({ reference }) => {
-			const store = await options.openStore();
+			const store = await openStore();
 			const details = await store.getEntityDetails(reference);
 			return toolResult(details.entity.kind === "initiative" ? await store.getInitiativeBundle(reference) : details);
 		}
@@ -275,14 +316,56 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			_meta: { ui: { resourceUri: PLAN_PREVIEW_RESOURCE_URI } }
 		},
 		async ({ planId }) => {
-			const store = await options.openStore();
+			const store = await openStore();
 			const details = await store.getEntityDetails(planId);
 			if (details.entity.kind !== "plan") {
 				throw new Error(`Plan preview requires a Plan: ${planId}`);
 			}
 			const proposedPlan = projectProposedPlan(details.entity, await store.listPlanEntries({ planId: details.entity.id }));
-			const plan = { ...proposedPlan, status: details.entity.status };
+			const plan = { ...proposedPlan, status: details.entity.status, revision: details.entity.revision };
 			return textToolResult(formatPlanPreview(plan), { plan });
+		}
+	);
+
+	server.registerTool(
+		"issue_breakdown_create",
+		{
+			description: "Create an issue-breakdown draft without creating issue records.",
+			inputSchema: {
+				targetId: z.string().min(1),
+				issues: z.array(issueBreakdownIssueSchema).min(1)
+			}
+		},
+		async (input) => {
+			const store = await openStore();
+			const target = await store.getEntityDetails(input.targetId);
+			const draft = await store.createIssueBreakdownDraft({
+				targetId: target.entity.id,
+				issues: input.issues
+			});
+			return toolResult({ draft });
+		}
+	);
+
+	server.registerTool(
+		"issue_breakdown_show",
+		{
+			description: "Get an issue-breakdown draft.",
+			inputSchema: { draftId: z.string().min(1) }
+		},
+		async ({ draftId }) => toolResult({ draft: await (await openStore()).getIssueBreakdownDraft({ draftId }) })
+	);
+
+	server.registerTool(
+		"issue_breakdown_latest",
+		{
+			description: "Get the latest issue-breakdown draft for a target.",
+			inputSchema: { targetId: z.string().min(1) }
+		},
+		async ({ targetId }) => {
+			const store = await openStore();
+			const target = await store.getEntityDetails(targetId);
+			return toolResult({ draft: await store.getLatestIssueBreakdownDraft({ targetId: target.entity.id }) });
 		}
 	);
 
@@ -295,7 +378,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			_meta: { ui: { resourceUri: ISSUE_PREVIEW_RESOURCE_URI } }
 		},
 		async ({ draftId }) => {
-			const draft = await (await options.openStore()).getIssueBreakdownDraft({ draftId });
+			const draft = await (await openStore()).getIssueBreakdownDraft({ draftId });
 			return textToolResult(formatIssueBreakdownPreview(draft), { draft });
 		}
 	);
@@ -306,7 +389,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Approve the exact proposed issue breakdown and create its issue graph.",
 			inputSchema: { draftId: z.string().min(1), snapshotDigest: z.string().length(64).regex(/^[a-f0-9]+$/) }
 		},
-		async (input) => toolResult(await (await options.openStore()).approveIssueBreakdownDraft(input))
+		async (input) => toolResult(await (await openStore()).approveIssueBreakdownDraft(input))
 	);
 
 	server.registerTool(
@@ -315,7 +398,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Confirm the exact Proposed Plan snapshot as ready.",
 			inputSchema: { planId: z.string().min(1), snapshotDigest: z.string().length(64).regex(/^[a-f0-9]+$/) }
 		},
-		async (input) => toolResult(await (await options.openStore()).confirmPlan(input))
+		async (input) => toolResult(await (await openStore()).confirmPlan(input))
 	);
 
 	server.registerTool(
@@ -324,7 +407,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "List tracker contexts.",
 			inputSchema: {}
 		},
-		async () => toolResult(await (await options.openStore()).listContexts())
+		async () => toolResult(await (await openStore()).listContexts())
 	);
 
 	server.registerTool(
@@ -333,7 +416,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get tracker context details and terms.",
 			inputSchema: { scopeRef: z.string().min(1).optional() }
 		},
-		async ({ scopeRef }) => toolResult(await (await options.openStore()).getContextDetails({ scopeRef }))
+		async ({ scopeRef }) => toolResult(await (await openStore()).getContextDetails({ scopeRef }))
 	);
 
 	server.registerTool(
@@ -342,7 +425,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get the tracker context directory.",
 			inputSchema: {}
 		},
-		async () => toolResult(await (await options.openStore()).getContextDirectory())
+		async () => toolResult(await (await openStore()).getContextDirectory())
 	);
 
 	server.registerTool(
@@ -354,7 +437,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				view: z.enum(["all", "global", "initiatives"]).optional()
 			}
 		},
-		async (input) => toolResult(await (await options.openStore()).queryContextDirectory(input))
+		async (input) => toolResult(await (await openStore()).queryContextDirectory(input))
 	);
 
 	server.registerTool(
@@ -366,7 +449,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				view: z.enum(["all", "initiatives"]).optional()
 			}
 		},
-		async ({ query, view }) => toolResult(await (await options.openStore()).queryContextDirectory({ conflictsOnly: true, query, view }))
+		async ({ query, view }) => toolResult(await (await openStore()).queryContextDirectory({ conflictsOnly: true, query, view }))
 	);
 
 	server.registerTool(
@@ -381,7 +464,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				expectedContentHash: z.string().min(1).optional()
 			}
 		},
-		async (input) => toolResult(await (await options.openStore()).upsertContext(input))
+		async (input) => toolResult(await (await openStore()).upsertContext(input))
 	);
 
 	server.registerTool(
@@ -397,7 +480,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				expectedContentHash: z.string().min(1).optional()
 			}
 		},
-		async (input) => toolResult(await (await options.openStore()).defineContextTerm(input))
+		async (input) => toolResult(await (await openStore()).defineContextTerm(input))
 	);
 
 	server.registerTool(
@@ -411,7 +494,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				expectedContentHash: z.string().min(1).optional()
 			}
 		},
-		async (input) => toolResult(await (await options.openStore()).forgetContextTerm(input))
+		async (input) => toolResult(await (await openStore()).forgetContextTerm(input))
 	);
 
 	server.registerTool(
@@ -420,7 +503,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get a tracker context revision.",
 			inputSchema: { scopeRef: z.string().min(1).optional(), revision: z.number().int().positive() }
 		},
-		async (input) => toolResult(await (await options.openStore()).materializeContextRevision(input))
+		async (input) => toolResult(await (await openStore()).materializeContextRevision(input))
 	);
 
 	server.registerTool(
@@ -429,7 +512,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get a tracker context term revision.",
 			inputSchema: { scopeRef: z.string().min(1).optional(), term: z.string().min(1), revision: z.number().int().positive() }
 		},
-		async (input) => toolResult(await (await options.openStore()).materializeContextTermRevision(input))
+		async (input) => toolResult(await (await openStore()).materializeContextTermRevision(input))
 	);
 
 	server.registerTool(
@@ -443,7 +526,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const store = await options.openStore();
+			const store = await openStore();
 			const referencedIssueIds = input.referencedIssueIds === undefined ? undefined : await resolveEntityIds(store, input.referencedIssueIds);
 			const comment = await store.createIssueComment({ ...input, referencedIssueIds });
 			return toolResult({ comment });
@@ -463,7 +546,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const store = await options.openStore();
+			const store = await openStore();
 			const referencedIssueIds = input.referencedIssueIds === undefined ? undefined : await resolveEntityIds(store, input.referencedIssueIds);
 			const comment = await store.updateIssueComment({ ...input, referencedIssueIds });
 			return toolResult({ comment });
@@ -481,7 +564,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const comment = await (await options.openStore()).deleteIssueComment(input);
+			const comment = await (await openStore()).deleteIssueComment(input);
 			return toolResult({ comment });
 		}
 	);
@@ -496,7 +579,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				all: z.boolean().optional()
 			}
 		},
-		async (input) => toolResult(await (await options.openStore()).listIssueComments(input))
+		async (input) => toolResult(await (await openStore()).listIssueComments(input))
 	);
 
 	server.registerTool(
@@ -505,7 +588,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get issue comment revision history.",
 			inputSchema: { commentId: z.string().min(1) }
 		},
-		async ({ commentId }) => toolResult({ history: await (await options.openStore()).listIssueCommentHistory({ commentId }) })
+		async ({ commentId }) => toolResult({ history: await (await openStore()).listIssueCommentHistory({ commentId }) })
 	);
 
 	server.registerTool(
@@ -522,7 +605,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const store = await options.openStore();
+			const store = await openStore();
 			const referencedEntityIds = input.referencedEntityIds === undefined ? undefined : await resolveEntityIds(store, input.referencedEntityIds);
 			const supersededEntryIds = input.supersededEntryIds === undefined ? undefined : await resolvePlanEntryIds(store, input.supersededEntryIds);
 			const entry = await store.createPlanEntry({ ...input, referencedEntityIds, supersededEntryIds });
@@ -542,7 +625,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const entry = await (await options.openStore()).updatePlanEntry(input);
+			const entry = await (await openStore()).updatePlanEntry(input);
 			return toolResult({ entry });
 		}
 	);
@@ -558,7 +641,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async (input) => {
-			const entry = await (await options.openStore()).deletePlanEntry(input);
+			const entry = await (await openStore()).deletePlanEntry(input);
 			return toolResult({ entry });
 		}
 	);
@@ -569,7 +652,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "List Plan entries.",
 			inputSchema: { planId: z.string().min(1) }
 		},
-		async ({ planId }) => toolResult({ entries: await (await options.openStore()).listPlanEntries({ planId }) })
+		async ({ planId }) => toolResult({ entries: await (await openStore()).listPlanEntries({ planId }) })
 	);
 
 	server.registerTool(
@@ -578,7 +661,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get Plan entry revision history.",
 			inputSchema: { entryId: z.string().min(1) }
 		},
-		async ({ entryId }) => toolResult({ history: await (await options.openStore()).listPlanEntryHistory({ entryId }) })
+		async ({ entryId }) => toolResult({ history: await (await openStore()).listPlanEntryHistory({ entryId }) })
 	);
 
 	server.registerTool(
@@ -587,7 +670,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Link a Plan entry to an issue.",
 			inputSchema: { entryId: z.string().min(1), issueId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await options.openStore()).linkPlanEntryIssue(input))
+		async (input) => toolResult(await (await openStore()).linkPlanEntryIssue(input))
 	);
 
 	server.registerTool(
@@ -596,7 +679,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Remove a Plan entry issue link.",
 			inputSchema: { entryId: z.string().min(1), issueId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await options.openStore()).unlinkPlanEntryIssue(input))
+		async (input) => toolResult(await (await openStore()).unlinkPlanEntryIssue(input))
 	);
 
 	server.registerTool(
@@ -606,7 +689,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: {}
 		},
 		async () => {
-			const tenants = await (await options.openStore()).listTenants();
+			const tenants = await (await openStore()).listTenants();
 			return {
 				content: [{ type: "text", text: JSON.stringify(tenants) }],
 				structuredContent: { tenants }
@@ -621,7 +704,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: { previousTenantId: z.string().min(1), newTenantId: z.string().min(1) }
 		},
 		async ({ previousTenantId, newTenantId }) => {
-			const result = await (await options.openStore()).renameTenant(previousTenantId, newTenantId);
+			const result = await (await openStore()).renameTenant(previousTenantId, newTenantId);
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
 				structuredContent: result
@@ -636,7 +719,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: { tenantId: z.string().min(1) }
 		},
 		async ({ tenantId }) => {
-			const impact = (await (await options.openStore()).listTenants()).find((tenant) => tenant.id === tenantId);
+			const impact = (await (await openStore()).listTenants()).find((tenant) => tenant.id === tenantId);
 			if (!impact) {
 				throw new Error(`Tenant not found: ${tenantId}`);
 			}
@@ -658,7 +741,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		},
 		async ({ tenantId, confirmationToken }) => {
 			confirmationTokens.consume(confirmationToken, "tenant_delete", { tenantId });
-			const result = await (await options.openStore()).deleteTenant(tenantId);
+			const result = await (await openStore()).deleteTenant(tenantId);
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
 				structuredContent: result
@@ -673,7 +756,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: { entityId: z.string().min(1), revision: z.number().int().positive() }
 		},
 		async ({ entityId, revision }) => {
-			const impact = await (await options.openStore()).materializeEntityRevision({ entityId, revision });
+			const impact = await (await openStore()).materializeEntityRevision({ entityId, revision });
 			const confirmation = confirmationTokens.issue("entity_restore", { entityId, revision });
 			const result = { impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt };
 			return {
@@ -691,7 +774,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		},
 		async ({ entityId, revision, confirmationToken }) => {
 			confirmationTokens.consume(confirmationToken, "entity_restore", { entityId, revision });
-			const store = await options.openStore();
+			const store = await openStore();
 			const target = await store.materializeEntityRevision({ entityId, revision });
 			const head = await store.materializeEntityRevision({ entityId, revision: target.headRevision });
 			const result = await store.restoreEntityRevision({
@@ -715,7 +798,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		},
 		async ({ kinds, force }) => {
 			const input = { kinds: kinds ?? [...BACKFILLABLE_BODY_KINDS], force: force ?? false };
-			const impact = await backfillBodies(await options.openStore(), { ...input, dryRun: true });
+			const impact = await backfillBodies(await openStore(), { ...input, dryRun: true });
 			const confirmation = confirmationTokens.issue("body_backfill", input);
 			const result = { impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt };
 			return {
@@ -738,7 +821,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		async ({ kinds, force, confirmationToken }) => {
 			const input = { kinds: kinds ?? [...BACKFILLABLE_BODY_KINDS], force: force ?? false };
 			confirmationTokens.consume(confirmationToken, "body_backfill", input);
-			const result = await backfillBodies(await options.openStore(), input);
+			const result = await backfillBodies(await openStore(), input);
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
 				structuredContent: result
@@ -752,7 +835,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Link two tracker entities with a relation.",
 			inputSchema: { fromId: z.string().min(1), relationType: z.string().min(1), toId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await options.openStore()).linkEntities(input))
+		async (input) => toolResult(await (await openStore()).linkEntities(input))
 	);
 
 	server.registerTool(
@@ -761,7 +844,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Remove a relation between two tracker entities.",
 			inputSchema: { fromId: z.string().min(1), relationType: z.string().min(1), toId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await options.openStore()).unlinkEntities(input))
+		async (input) => toolResult(await (await openStore()).unlinkEntities(input))
 	);
 
 	server.registerTool(
@@ -775,7 +858,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async ({ entityId, direction, types }) =>
-			toolResult(await (await options.openStore()).queryEntityRelations({ entityId, direction, types: types as RelationType[] | undefined }))
+			toolResult(await (await openStore()).queryEntityRelations({ entityId, direction, types: types as RelationType[] | undefined }))
 	);
 
 	server.registerTool(
@@ -784,7 +867,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Get an initiative and all of its tracked work.",
 			inputSchema: { initiativeId: z.string().min(1) }
 		},
-		async ({ initiativeId }) => toolResult(await (await options.openStore()).getInitiativeBundle(initiativeId))
+		async ({ initiativeId }) => toolResult(await (await openStore()).getInitiativeBundle(initiativeId))
 	);
 
 	server.registerTool(
@@ -794,7 +877,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			inputSchema: { scopeId: z.string().min(1) }
 		},
 		async ({ scopeId }) => {
-			const store = await options.openStore();
+			const store = await openStore();
 			const initiative = await resolveContainingInitiative(store, scopeId);
 			const [bundle, allIssues] = await Promise.all([store.getInitiativeBundle(initiative.id), store.queryEntities({ kind: "issue" })]);
 			return toolResult(deriveNextWork(bundle, allIssues.openBlockers ?? {}));
@@ -807,7 +890,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "List tracker entities that have no structural parent.",
 			inputSchema: { kind: z.string().min(1).optional() }
 		},
-		async ({ kind }) => toolResult({ entities: await (await options.openStore()).listOrphans(kind) })
+		async ({ kind }) => toolResult({ entities: await (await openStore()).listOrphans(kind) })
 	);
 
 	return server;
@@ -824,14 +907,21 @@ function textToolResult(text: string, structuredContent: Record<string, unknown>
 	return { content: [{ type: "text", text }], structuredContent };
 }
 
-function formatPlanPreview(plan: { title: string; goal: string; context: string; current: Array<{ title: string; entries: Array<{ body?: string }> }> }): string {
+function formatPlanPreview(plan: {
+	title: string;
+	goal: string;
+	context: string;
+	revision?: number;
+	current: Array<{ title: string; entries: Array<{ body?: string }> }>;
+}): string {
 	const sections = [
 		`# ${plan.title}`,
+		plan.revision === undefined ? "" : `Revision ${plan.revision}`,
 		`## Goal\n\n${plan.goal || "No Goal recorded."}`,
 		`## Context\n\n${plan.context || "No Context recorded."}`,
 		...plan.current.map((group) => `## ${group.title}\n\n${group.entries.map((entry) => entry.body || "").join("\n\n")}`)
 	];
-	return sections.join("\n\n");
+	return sections.filter((section) => section.length > 0).join("\n\n");
 }
 
 function formatIssueBreakdownPreview(draft: {
@@ -973,8 +1063,14 @@ function hashConfirmationInput(input: Record<string, unknown>): string {
 
 export function createLocalMcpServer(options: LocalDaemonStoreOptions): McpServer {
 	return createMcpServer({
+		fallbackWorkspaceRoot: options.workspaceRoot,
 		projectIdentity: options.projectIdentity,
-		openStore: () => openLocalDaemonStore({ ...options, buildHash: options.buildHash ?? readBuildContentHash() })
+		openStore: (scope) => openLocalDaemonStore({
+			...options,
+			buildHash: options.buildHash ?? readBuildContentHash(),
+			projectIdentity: scope?.projectIdentity ?? options.projectIdentity,
+			workspaceRoot: scope?.workspaceRoot ?? options.workspaceRoot
+		})
 	});
 }
 

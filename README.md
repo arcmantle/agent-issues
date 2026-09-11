@@ -58,6 +58,8 @@ The MCP server scopes tracker reads and writes to one project identity. For a VS
 
 The VS Code MCP provider passes this value to the server. An explicit workspace value takes precedence over `.agent-issues.json`, `.agent-issues`, the `.code-workspace` filename, Git remote name, `package.json` name, and folder name.
 
+When the MCP client advertises roots, the server resolves identity from the first `file:` root. That root is the chat folder. If the client does not send roots, the server uses the process working directory.
+
 Outside VS Code, set the same identity in either `.agent-issues.json` or `.agent-issues`:
 
 ```json

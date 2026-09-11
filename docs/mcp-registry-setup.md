@@ -127,7 +127,7 @@ You can also open Claude Code and use:
 
 ## Project identity
 
-By default, Agent Issues derives the project identity from the current workspace. To use an explicit shared identity, add one of these files to the project root:
+By default, Agent Issues derives the project identity from the chat folder. The MCP server asks the client for roots and uses the first `file:` root. If the client does not send roots, the server uses the process working directory. To use an explicit shared identity, add one of these files to the project root:
 
 ```json
 {
