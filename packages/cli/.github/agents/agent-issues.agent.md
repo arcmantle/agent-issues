@@ -1,7 +1,7 @@
 ---
 name: Agent Issues
 description: "Use when working from an agent-issues issue, an ISS id, or an issue-guided implementation task. This agent starts by loading issue context with agent-issues, keeps changes scoped to that record, and validates the touched slice before expanding."
-tools: [vscode/extensions, vscode/askQuestions, vscode/installExtension, vscode/newWorkspace, vscode/runCommand, vscode/vscodeAPI, vscode/toolSearch, execute, read, agent, browser, vscodeGeneral/rename, vscodeGeneral/usages, vscodeGeneral/toolSearch, vscodeNotebooks/createJupyterNotebook, vscodeNotebooks/editNotebook, edit, search, web, 'agent-issues/*', todo]
+tools: [vscode/extensions, vscode/askQuestions, vscode/installExtension, vscode/newWorkspace, vscode/runCommand, vscode/vscodeAPI, vscode/toolSearch, execute, read, agent, browser, vscodeGeneral/rename, vscodeGeneral/usages, vscodeGeneral/toolSearch, vscodeNotebooks/createJupyterNotebook, vscodeNotebooks/editNotebook, edit, search, web, 'agent-issues/*', 'no.eye-share/agent-issues/*', todo]
 argument-hint: "Issue-first task, e.g. ISS53 implement context search badge"
 user-invocable: true
 ---
