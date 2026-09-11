@@ -19,7 +19,8 @@ Look for these traits:
 - Uses the public API only.
 - Survives an internal refactor.
 - Describes what the code does, not how.
-- Has one logical assertion per test.
+- Has one behavior per test. More than one assertion is permitted when the assertions specify the same behavior.
+- Stays as a keeper only when no other public-interface test already fails for the same reason.
 
 ## Bad tests
 
@@ -43,6 +44,9 @@ Watch for these warning signs:
 - Checking through an external system instead of through the interface.
 - Restating a static object, manifest, route table, schema, or constant map.
 - Failing on an intentional declaration edit when no caller behavior changed.
+- Restating the same public API and the same code path with a small fixture change.
+- Existing only to complete a red-green cycle after another keeper already pins the behavior.
+- Failing only when a broader public-interface test also fails.
 
 ```typescript
 test("groups accounting setup modules", () => {
