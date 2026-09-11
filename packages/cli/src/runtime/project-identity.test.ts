@@ -177,4 +177,15 @@ describe("project identity resolution", () => {
 			source: "git-repository"
 		});
 	});
+
+	it("skips a .agent-issues directory instead of reading it as a project file", () => {
+		const workspaceRoot = createWorkspace("home-directory");
+		mkdirSync(path.join(workspaceRoot, PROJECT_IDENTITY_FILENAME_WITHOUT_JSON));
+		writeGitRemote(workspaceRoot, "https://github.com/arcmantle/agent-issues.git");
+
+		expect(resolveProjectIdentity(workspaceRoot)).toEqual({
+			identity: "agent-issues",
+			source: "git-repository"
+		});
+	});
 });

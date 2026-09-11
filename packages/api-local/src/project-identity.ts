@@ -44,7 +44,7 @@ function resolveFromEnvironment(environment: NodeJS.ProcessEnv): ProjectIdentity
 function resolveFromProjectFile(root: string): ProjectIdentityResolution | undefined {
 	for (const projectIdentityFilename of [PROJECT_IDENTITY_FILENAME, PROJECT_IDENTITY_FILENAME_WITHOUT_JSON]) {
 		const projectFilePath = path.join(root, projectIdentityFilename);
-		if (!existsSync(projectFilePath)) continue;
+		if (!isRegularFile(projectFilePath)) continue;
 
 		const projectIdentity = parseJsonStringField(readFileSync(projectFilePath, "utf8"), "projectIdentity");
 		if (!projectIdentity) continue;
@@ -60,7 +60,7 @@ function resolveFromProjectFile(root: string): ProjectIdentityResolution | undef
 
 function resolveFromPackageJson(root: string): ProjectIdentityResolution | undefined {
 	const packageJsonPath = path.join(root, "package.json");
-	if (!existsSync(packageJsonPath)) return undefined;
+	if (!isRegularFile(packageJsonPath)) return undefined;
 
 	const name = parseJsonStringField(readFileSync(packageJsonPath, "utf8"), "name");
 	if (!name) return undefined;
@@ -69,6 +69,10 @@ function resolveFromPackageJson(root: string): ProjectIdentityResolution | undef
 	if (!identity) return undefined;
 
 	return { identity, source: "package-json" };
+}
+
+function isRegularFile(filePath: string): boolean {
+	return existsSync(filePath) && statSync(filePath).isFile();
 }
 
 function parseJsonStringField(contents: string, field: string): string | undefined {
