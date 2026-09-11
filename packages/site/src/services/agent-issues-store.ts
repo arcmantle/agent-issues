@@ -702,7 +702,7 @@ export class AgentIssuesStore {
 	}
 
 	public selectedEntity = computed(() => this.entityForId(this.selectedId.get()));
-	public entityBackTarget = computed(() => this.entityForId(this.entityBackStack.get().at(-1)));
+	public entityBackTarget = computed(() => this.entityForId(this.entityBackStack.get().at(-1) ?? null));
 
 	public bundleForEntityId(entityId: string | null): InitiativeBundle | null {
 		if (!entityId) {
