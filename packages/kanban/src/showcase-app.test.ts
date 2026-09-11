@@ -146,6 +146,109 @@ describe("Kanban application routes", () => {
 		expect(navigationTree?.shadowRoot?.querySelector("button[aria-current=page]")?.textContent).toContain("Implement Navigation tree component");
 	});
 
+	it("renders the deterministic Shortcut hint fixture at its component route", async () => {
+		window.history.replaceState({}, "", "/components/kanban-shortcut-hint");
+		const app = document.createElement("kanban-app");
+		document.body.append(app);
+		await app.updateComplete;
+
+		const showcase = app.shadowRoot?.querySelector<HTMLElement & { componentId?: string; updateComplete: Promise<boolean> }>("kanban-showcase");
+		expect(showcase?.componentId).toBe("kanban-shortcut-hint");
+		await showcase?.updateComplete;
+
+		const shortcutHint = showcase?.shadowRoot?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>("kanban-shortcut-hint");
+		expect(shortcutHint).not.toBeNull();
+		await shortcutHint?.updateComplete;
+		expect(shortcutHint?.shadowRoot?.textContent).toContain("Cmd");
+		expect(shortcutHint?.shadowRoot?.textContent).toContain("K");
+	});
+
+	it("renders the deterministic Skeleton fixture at its component route", async () => {
+		window.history.replaceState({}, "", "/components/kanban-skeleton");
+		const app = document.createElement("kanban-app");
+		document.body.append(app);
+		await app.updateComplete;
+
+		const showcase = app.shadowRoot?.querySelector<HTMLElement & { componentId?: string; updateComplete: Promise<boolean> }>("kanban-showcase");
+		expect(showcase?.componentId).toBe("kanban-skeleton");
+		await showcase?.updateComplete;
+
+		const skeleton = showcase?.shadowRoot?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>("kanban-skeleton");
+		expect(skeleton).not.toBeNull();
+		await skeleton?.updateComplete;
+		expect(skeleton?.shadowRoot?.querySelector("[role=status]")?.getAttribute("aria-label")).toBe("Loading card");
+		expect(skeleton?.shadowRoot?.querySelector(".skeleton-card")).not.toBeNull();
+	});
+
+	it("renders the deterministic Priority badge fixture at its component route", async () => {
+		window.history.replaceState({}, "", "/components/kanban-priority-badge");
+		const app = document.createElement("kanban-app");
+		document.body.append(app);
+		await app.updateComplete;
+
+		const showcase = app.shadowRoot?.querySelector<HTMLElement & { componentId?: string; updateComplete: Promise<boolean> }>("kanban-showcase");
+		expect(showcase?.componentId).toBe("kanban-priority-badge");
+		await showcase?.updateComplete;
+
+		const badge = showcase?.shadowRoot?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>("kanban-priority-badge");
+		expect(badge).not.toBeNull();
+		await badge?.updateComplete;
+		expect(badge?.shadowRoot?.querySelector("[role=status]")?.textContent).toContain("High");
+		expect(badge?.shadowRoot?.querySelector(".is-high")).not.toBeNull();
+	});
+
+	it("renders the deterministic Icon button fixture at its component route", async () => {
+		window.history.replaceState({}, "", "/components/kanban-icon-button");
+		const app = document.createElement("kanban-app");
+		document.body.append(app);
+		await app.updateComplete;
+
+		const showcase = app.shadowRoot?.querySelector<HTMLElement & { componentId?: string; updateComplete: Promise<boolean> }>("kanban-showcase");
+		expect(showcase?.componentId).toBe("kanban-icon-button");
+		await showcase?.updateComplete;
+
+		const iconButton = showcase?.shadowRoot?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>("kanban-icon-button");
+		expect(iconButton).not.toBeNull();
+		await iconButton?.updateComplete;
+		expect(iconButton?.shadowRoot?.querySelector("button")?.getAttribute("aria-label")).toBe("Create");
+		expect(iconButton?.shadowRoot?.querySelector("button")?.textContent).toContain("+");
+	});
+
+	it("renders the deterministic Select menu fixture at its component route", async () => {
+		window.history.replaceState({}, "", "/components/kanban-select-menu");
+		const app = document.createElement("kanban-app");
+		document.body.append(app);
+		await app.updateComplete;
+
+		const showcase = app.shadowRoot?.querySelector<HTMLElement & { componentId?: string; updateComplete: Promise<boolean> }>("kanban-showcase");
+		expect(showcase?.componentId).toBe("kanban-select-menu");
+		await showcase?.updateComplete;
+
+		const selectMenu = showcase?.shadowRoot?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>("kanban-select-menu");
+		expect(selectMenu).not.toBeNull();
+		await selectMenu?.updateComplete;
+		expect(selectMenu?.shadowRoot?.querySelector("label")?.textContent).toContain("Status");
+		expect(selectMenu?.shadowRoot?.querySelector("select")?.value).toBe("Todo");
+	});
+
+	it("renders the deterministic Keyboard focus fixture at its component route", async () => {
+		window.history.replaceState({}, "", "/components/kanban-keyboard-focus");
+		const app = document.createElement("kanban-app");
+		document.body.append(app);
+		await app.updateComplete;
+
+		const showcase = app.shadowRoot?.querySelector<HTMLElement & { componentId?: string; updateComplete: Promise<boolean> }>("kanban-showcase");
+		expect(showcase?.componentId).toBe("kanban-keyboard-focus");
+		await showcase?.updateComplete;
+
+		const keyboardFocus = showcase?.shadowRoot?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>("kanban-keyboard-focus");
+		expect(keyboardFocus).not.toBeNull();
+		await keyboardFocus?.updateComplete;
+		expect(keyboardFocus?.shadowRoot?.querySelector("h2")?.textContent).toBe("Record actions");
+		expect(keyboardFocus?.shadowRoot?.querySelector("button:not([disabled])")?.textContent).toContain("Save changes");
+		expect(keyboardFocus?.shadowRoot?.querySelector("button[disabled]")?.textContent).toContain("Archive issue");
+	});
+
 	it("renders a return-to-catalog state for an unknown component", async () => {
 		window.history.replaceState({}, "", "/components/unknown-component");
 		const app = document.createElement("kanban-app");

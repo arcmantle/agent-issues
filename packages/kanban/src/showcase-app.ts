@@ -8,14 +8,28 @@ import { when } from "lit/directives/when.js";
 import { kanbanButtonRenderServiceContext } from "./components/button/kanban-button.js";
 import { kanbanBreadcrumbTrailRenderServiceContext } from "./components/breadcrumb-trail/kanban-breadcrumb-trail.js";
 import { kanbanCommentRenderServiceContext } from "./components/comment-item/kanban-comment-item.js";
+import { kanbanIconButtonRenderServiceContext } from "./components/icon-button/kanban-icon-button.js";
+import { kanbanKeyboardFocusRenderServiceContext } from "./components/keyboard-focus/kanban-keyboard-focus.js";
 import { kanbanNavigationTreeRenderServiceContext } from "./components/navigation-tree/kanban-navigation-tree.js";
+import { kanbanPriorityBadgeRenderServiceContext } from "./components/priority-badge/kanban-priority-badge.js";
+import { kanbanSelectMenuRenderServiceContext } from "./components/select-menu/kanban-select-menu.js";
 import { kanbanSidebarRenderServiceContext } from "./components/sidebar/kanban-sidebar.js";
+import { kanbanShortcutHintRenderServiceContext } from "./components/shortcut-hint/kanban-shortcut-hint.js";
+import { kanbanSkeletonRenderServiceContext } from "./components/skeleton/kanban-skeleton.js";
+import { kanbanStatusBadgeRenderServiceContext } from "./components/status-badge/kanban-status-badge.js";
 import { kanbanTabsRenderServiceContext } from "./components/tabs/kanban-tabs.js";
 import { createButtonShowcaseFixture, type ButtonFixtureRenderService } from "./fixtures/button-fixture.js";
 import { createBreadcrumbTrailShowcaseFixture, type BreadcrumbTrailFixtureRenderService } from "./fixtures/breadcrumb-trail-fixture.js";
 import { createCommentShowcaseFixture, type CommentFixtureRenderService } from "./fixtures/comment-fixture.js";
+import { createKeyboardFocusShowcaseFixture, type KeyboardFocusFixtureRenderService } from "./fixtures/keyboard-focus-fixture.js";
+import { createIconButtonShowcaseFixture, type IconButtonFixtureRenderService } from "./fixtures/icon-button-fixture.js";
 import { createNavigationTreeShowcaseFixture, type NavigationTreeFixtureRenderService } from "./fixtures/navigation-tree-fixture.js";
+import { createPriorityBadgeShowcaseFixture, type PriorityBadgeFixtureRenderService } from "./fixtures/priority-badge-fixture.js";
+import { createSelectMenuShowcaseFixture, type SelectMenuFixtureRenderService } from "./fixtures/select-menu-fixture.js";
 import { createSidebarShowcaseFixture, type SidebarFixtureRenderService } from "./fixtures/sidebar-fixture.js";
+import { createShortcutHintShowcaseFixture, type ShortcutHintFixtureRenderService } from "./fixtures/shortcut-hint-fixture.js";
+import { createSkeletonShowcaseFixture, type SkeletonFixtureRenderService } from "./fixtures/skeleton-fixture.js";
+import { createStatusBadgeShowcaseFixture, type StatusBadgeFixtureRenderService } from "./fixtures/status-badge-fixture.js";
 import { createTabsShowcaseFixture, type TabsFixtureRenderService } from "./fixtures/tabs-fixture.js";
 import { getShowcaseCase, showcaseCases } from "./showcase-cases.js";
 
@@ -33,11 +47,32 @@ export class KanbanShowcase extends LitElement {
 	@provide({ context: kanbanCommentRenderServiceContext })
 	public commentFixtureService: CommentFixtureRenderService = createCommentShowcaseFixture();
 
+	@provide({ context: kanbanIconButtonRenderServiceContext })
+	public iconButtonFixtureService: IconButtonFixtureRenderService = createIconButtonShowcaseFixture();
+
+	@provide({ context: kanbanKeyboardFocusRenderServiceContext })
+	public keyboardFocusFixtureService: KeyboardFocusFixtureRenderService = createKeyboardFocusShowcaseFixture();
+
 	@provide({ context: kanbanNavigationTreeRenderServiceContext })
 	public navigationTreeFixtureService: NavigationTreeFixtureRenderService = createNavigationTreeShowcaseFixture();
 
+	@provide({ context: kanbanPriorityBadgeRenderServiceContext })
+	public priorityBadgeFixtureService: PriorityBadgeFixtureRenderService = createPriorityBadgeShowcaseFixture();
+
+	@provide({ context: kanbanSelectMenuRenderServiceContext })
+	public selectMenuFixtureService: SelectMenuFixtureRenderService = createSelectMenuShowcaseFixture();
+
 	@provide({ context: kanbanSidebarRenderServiceContext })
 	public sidebarFixtureService: SidebarFixtureRenderService = createSidebarShowcaseFixture();
+
+	@provide({ context: kanbanShortcutHintRenderServiceContext })
+	public shortcutHintFixtureService: ShortcutHintFixtureRenderService = createShortcutHintShowcaseFixture();
+
+	@provide({ context: kanbanSkeletonRenderServiceContext })
+	public skeletonFixtureService: SkeletonFixtureRenderService = createSkeletonShowcaseFixture();
+
+	@provide({ context: kanbanStatusBadgeRenderServiceContext })
+	public statusBadgeFixtureService: StatusBadgeFixtureRenderService = createStatusBadgeShowcaseFixture();
 
 	@property({ type: String })
 	public componentId: string | undefined;
