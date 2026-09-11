@@ -7,13 +7,14 @@ import { when } from "lit/directives/when.js";
 
 import type { ProposedPlan } from "@agent-issues/core";
 
-export type PlanPreview = ProposedPlan & { status: string };
+export type PlanPreview = ProposedPlan & { status: string; revision: number };
 
 export class PlanPreviewApp extends LitElement {
 	static properties = {
 		plan: { attribute: false },
 		confirmPlan: { attribute: false },
 		returnToPlanning: { attribute: false },
+		openLink: { attribute: false },
 		errorMessage: { attribute: false },
 		retryAction: { attribute: false }
 	};
@@ -21,6 +22,7 @@ export class PlanPreviewApp extends LitElement {
 	declare public plan: PlanPreview | null;
 	declare public confirmPlan: (() => Promise<void>) | undefined;
 	declare public returnToPlanning: (() => Promise<void>) | undefined;
+	declare public openLink: ((url: string) => Promise<void>) | undefined;
 	declare public errorMessage: string | null;
 	declare public retryAction: (() => Promise<void>) | undefined;
 
@@ -36,6 +38,19 @@ export class PlanPreviewApp extends LitElement {
 		await this.retryAction?.();
 	}
 
+	protected async onMarkdownClick(event: MouseEvent): Promise<void> {
+		const target = event.target;
+		if (!(target instanceof HTMLAnchorElement)) {
+			return;
+		}
+
+		event.preventDefault();
+		const url = target.getAttribute("href");
+		if (url) {
+			await this.openLink?.(url);
+		}
+	}
+
 	public render() {
 		const plan = this.plan;
 		return html`
@@ -49,6 +64,7 @@ export class PlanPreviewApp extends LitElement {
 							Plan review
 						</div>
 						<p class="reference">${currentPlan.reference}</p>
+						<p data-revision="plan">Revision ${currentPlan.revision}</p>
 						<h1>${currentPlan.title}</h1>
 					</header>
 					<section class="summary-card goal-card" data-section="goal">
@@ -88,7 +104,17 @@ export class PlanPreviewApp extends LitElement {
 					)}
 					${when(
 						this.errorMessage,
-						(message) => html`<aside role="alert">${message}<button @click=${this.onRetry}>Retry</button></aside>`,
+						(message) => html`
+							<aside role="alert">
+								${message}
+								<button
+									data-action="retry"
+									@click=${this.onRetry}
+								>
+								Retry
+								</button>
+							</aside>
+						`,
 						() => nothing
 					)}
 					${when(
@@ -96,8 +122,20 @@ export class PlanPreviewApp extends LitElement {
 						() => html`<p data-state="ready" role="status"><span aria-hidden="true">&#10003;</span> Plan ready</p>`,
 						() => html`
 							<footer>
-								<button class="return" @click=${this.onReturnToPlanning}>Return to planning</button>
-								<button class="confirm" @click=${this.onConfirm}>Confirm</button>
+								<button
+									class="return"
+									data-action="return"
+									@click=${this.onReturnToPlanning}
+								>
+								Return to planning
+								</button>
+								<button
+									class="confirm"
+									data-action="confirm"
+									@click=${this.onConfirm}
+								>
+								Confirm
+								</button>
 							</footer>
 						`
 					)}
@@ -372,7 +410,17 @@ export class PlanPreviewApp extends LitElement {
 			return emptyMessage ? html`<p class="empty">${emptyMessage}</p>` : nothing;
 		}
 
-		return html`<div class="markdown">${unsafeHTML(DOMPurify.sanitize(marked.parse(markdown, { async: false })))}</div>`;
+		const htmlContent = marked.parse(markdown.replace(/<script[\s\S]*?<\/script>/gi, ""), { async: false });
+		const sanitized = DOMPurify.sanitize(htmlContent, { FORBID_TAGS: ["script", "iframe", "object"] })
+			.replace(/<script[\s\S]*?<\/script>/gi, "");
+		return html`
+		<div
+			class="markdown"
+			@click=${this.onMarkdownClick}
+		>
+		${unsafeHTML(sanitized)}
+		</div>
+		`;
 	}
 }
 
