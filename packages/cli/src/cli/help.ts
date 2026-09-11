@@ -315,7 +315,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 			{ name: "draftId", description: "Issue-breakdown draft ID." }
 		],
 		options: [
-			{ name: "--input-file <path>", description: "Read a JSON object with an issues array." },
+			{ name: "--input-file <path>", description: "Read a JSON object with an issues array of proposed issue specifications." },
 			{ name: "--snapshot-digest <digest>", description: "Approve only this exact issue-breakdown snapshot." }
 		],
 		examples: [
@@ -324,7 +324,9 @@ const COMMAND_SPECS: CommandSpec[] = [
 			"agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest> --json"
 		],
 		notes: [
-			"The JSON input has an issues array of complete proposed issue specifications.",
+			"The JSON input has a non-empty issues array.",
+			"Each issue requires key, title, outcome, workMode, scope, acceptanceCriteria, and relationReferences. parentKey is optional.",
+			"Each relation reference requires relationType and one of targetId, targetKey, or targetReference.",
 			"Creating a draft does not create issue records.",
 			"Approval creates the complete graph only when the digest matches the reviewed snapshot."
 		],

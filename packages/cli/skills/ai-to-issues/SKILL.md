@@ -55,13 +55,14 @@ Repeat until the user approves the breakdown.
 
 ### 5. Preview and approve the issue breakdown
 
-After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. Create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
+After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. Run the **Issue Breakdown** recipe to create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
 
 For an MCP host that can render apps:
 
-1. Call `issue_breakdown_preview` with the draft ID immediately before issue creation.
-2. Wait for the user to select Approve in Issue Preview.
-3. The app calls `issue_breakdown_approve` with the displayed draft ID and snapshot digest. This authoritative operation creates the approved issue graph.
+1. Call `issue_breakdown_create` with the target ID and the complete proposed issue array.
+2. Call `issue_breakdown_preview` with the returned draft ID immediately before issue creation.
+3. Wait for the user to select Approve in Issue Preview.
+4. The app calls `issue_breakdown_approve` with the displayed draft ID and snapshot digest. This authoritative operation creates the approved issue graph.
 
 For an MCP host that cannot render apps:
 

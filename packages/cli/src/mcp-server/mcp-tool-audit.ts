@@ -42,10 +42,14 @@ const INCLUDED_MCP_DATA_COMMANDS: readonly McpDataCommand[] = [
 	{ command: "tenant rename", toolNames: ["tenant_rename"] },
 	{ command: "tenant delete", toolNames: ["tenant_delete_inspect", "tenant_delete"] },
 	{ command: "restore", toolNames: ["entity_restore_inspect", "entity_restore"] },
-	{ command: "backfill-bodies", toolNames: ["body_backfill_inspect", "body_backfill"] }
+	{ command: "backfill-bodies", toolNames: ["body_backfill_inspect", "body_backfill"] },
+	{ command: "issue-breakdown create", toolNames: ["issue_breakdown_create"] },
+	{ command: "issue-breakdown show", toolNames: ["issue_breakdown_show"] },
+	{ command: "issue-breakdown latest", toolNames: ["issue_breakdown_latest"] },
+	{ command: "issue-breakdown approve", toolNames: ["issue_breakdown_approve"] }
 ];
 
-const MCP_APP_TOOLS = ["plan_preview", "plan_confirm"] as const;
+const MCP_APP_TOOLS = ["plan_preview", "plan_confirm", "issue_breakdown_preview"] as const;
 
 export function auditMcpToolRegistrations(registeredToolNames: Iterable<string>): { missing: Array<{ command: string; toolName: string }> } {
 	const registeredTools = new Set(registeredToolNames);

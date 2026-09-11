@@ -81,6 +81,8 @@ Use the exact named recipe for the job:
 - Read revision history: **Revision Read** recipe. Record issue discussion: **Issue Comment Read** recipe or **Issue Comment Write** recipe.
 - Manage vocabulary: **Context Read** recipe or **Context Write** recipe.
 - Create or edit Plan entries: **Plan Entry Write** recipe. Read Plan entries: **Plan Entry Read** recipe. Link Plan entries: **Plan Entry Issue Link** recipe.
+- Review and approve a proposed issue graph: **Issue Breakdown** recipe.
+- Review and confirm a Proposed Plan: **Plan Preview** recipe.
 - Preserve continuity: **Handoff Read** recipe or **Handoff Write** recipe.
 - Use **Host Operations** recipe only for site lifecycle, agent or skill installation, and MCP installation.
 

@@ -114,6 +114,26 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 - CLI fallback: `agent-issues link <planEntryId> informs <issueId> --json` or `agent-issues unlink <planEntryId> informs <issueId> --json`.
 - The MCP operation accepts an issue target only. For existing Plan-entry-to-PRD provenance, MCP is unavailable; use `agent-issues link <planEntryId> informs <prdId> --json` or its unlink fallback.
 
+### Issue Breakdown
+
+**Kind:** Write.
+
+- MCP create: `issue_breakdown_create({ targetId, issues })`.
+- MCP read: `issue_breakdown_show({ draftId })` or `issue_breakdown_latest({ targetId })`.
+- MCP preview: `issue_breakdown_preview({ draftId })`.
+- MCP approve: `issue_breakdown_approve({ draftId, snapshotDigest })`.
+- CLI fallback: `agent-issues issue-breakdown create <targetId> --input-file <path> --json`, `agent-issues issue-breakdown show <draftId> --json`, `agent-issues issue-breakdown latest <targetId> --json`, or `agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest> --json`.
+- Each proposed issue requires `key`, `title`, `outcome`, `workMode`, `scope`, `acceptanceCriteria`, and `relationReferences`. `parentKey` is optional.
+- Creating a draft does not create issue records. Approval creates the complete graph only when the digest matches the reviewed snapshot.
+
+### Plan Preview
+
+**Kind:** Write.
+
+- MCP preview: `plan_preview({ planId })`.
+- MCP confirm: `plan_confirm({ planId, snapshotDigest })`.
+- CLI fallback: unavailable. Use the MCP tools.
+
 ### Issue Comment Read
 
 **Kind:** Read.

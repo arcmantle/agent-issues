@@ -278,6 +278,20 @@ it("requires Issue Preview approval before ai-to-issues creates records", () => 
 
 	expect(skill).toMatch(/validate every parent and relation reference/i);
 	expect(skill).toContain("Issue Preview");
+	expect(skill).toContain("issue_breakdown_create");
+	expect(skill).toContain("issue_breakdown_preview");
 	expect(skill).toContain("explicit chat confirmation");
 	expect(skill).toContain("authoritative approval operation");
+});
+
+it("documents Issue Breakdown and Plan Preview recipes", () => {
+	const contract = readFileSync(
+		fileURLToPath(new URL("../../skills/agent-issues-operating-contract.md", import.meta.url)),
+		"utf8"
+	);
+
+	expect(contract).toContain("### Issue Breakdown");
+	expect(contract).toContain("issue_breakdown_create({ targetId, issues })");
+	expect(contract).toContain("### Plan Preview");
+	expect(contract).toContain("plan_preview({ planId })");
 });
