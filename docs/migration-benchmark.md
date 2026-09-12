@@ -1,6 +1,6 @@
 # Migration benchmark
 
-This is the deterministic migration review contract. Its numeric thresholds come from `MIGRATION_BENCHMARK`, and a core test checks that this table stays synchronized with those executable constants. Wall-clock timing is intentionally excluded from CI because it is machine-dependent.
+This is a review summary of the migration routes. The executable thresholds live in `MIGRATION_BENCHMARK`. SQLite backup and transform counts are asserted in the local schema-migration tests. Postgres statement counts are asserted by the instrumented direct-route test. Wall-clock timing is intentionally excluded from CI because it is machine-dependent.
 
 ## Route cost
 
