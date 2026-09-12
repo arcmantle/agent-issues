@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { createJsonRpcApp, DEFAULT_PROJECT_ID, LocalAuthProvider, type StorageDriver } from "@agent-issues/core";
+import { createJsonRpcApp, DEFAULT_PROJECT_ID, deriveMigratedEntityIdentity, LocalAuthProvider, type StorageDriver } from "@agent-issues/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
@@ -132,7 +132,7 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 				method: "search",
 				params: {
 					query: created.body.result.reference,
-					scope: { type: "current-project", projectId: DEFAULT_PROJECT_ID },
+					scope: { type: "current-project", projectId: deriveMigratedEntityIdentity("project", DEFAULT_PROJECT_ID).stableId },
 					filters: { sourceTypes: ["entity"] }
 				}
 			});

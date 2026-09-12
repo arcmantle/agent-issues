@@ -168,6 +168,7 @@ describe("tenant resolution", () => {
 				{ name: "contexts" },
 				{ name: "counters" },
 				{ name: "entities" },
+				{ name: "issue_breakdown_drafts" },
 				{ name: "issue_comment_references" },
 				{ name: "issue_comments" },
 				{ name: "plan_entries" },
@@ -210,7 +211,8 @@ describe("tenant resolution", () => {
 				{ id: "token-search" },
 				{ id: "trigram-search" },
 				{ id: "search-typo-vocabulary" },
-				{ id: "pioneer-entity-types" }
+				{ id: "pioneer-entity-types" },
+				{ id: "issue-breakdown-drafts" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -224,6 +226,8 @@ describe("tenant resolution", () => {
 				{ name: "contexts_tenant_short_reference_idx" },
 				{ name: "entities_tenant_reference_idx" },
 				{ name: "entities_tenant_short_reference_idx" },
+				{ name: "issue_breakdown_drafts_active_target_idx" },
+				{ name: "issue_breakdown_drafts_target_idx" },
 				{ name: "issue_comment_references_tenant_issue_idx" },
 				{ name: "issue_comments_tenant_issue_idx" },
 				{ name: "issue_comments_tenant_short_reference_idx" },
@@ -320,7 +324,8 @@ describe("tenant resolution", () => {
 				{ id: "token-search" },
 				{ id: "trigram-search" },
 				{ id: "search-typo-vocabulary" },
-				{ id: "pioneer-entity-types" }
+				{ id: "pioneer-entity-types" },
+				{ id: "issue-breakdown-drafts" }
 			]);
 		} finally {
 			upgraded.db.close();
