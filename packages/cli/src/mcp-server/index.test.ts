@@ -218,7 +218,11 @@ describe("agent-issues MCP server", () => {
 				})
 			}
 		});
-		const text = result.content?.find((item) => item.type === "text")?.text ?? "";
+		const text = Array.isArray(result.content)
+			? result.content.find((item): item is { type: "text"; text: string } =>
+				typeof item === "object" && item !== null && "type" in item && item.type === "text" && "text" in item && typeof item.text === "string"
+			)?.text ?? ""
+			: "";
 		expect(text).toContain(initiative.reference);
 		expect(text).toContain(draft.snapshotDigest);
 		expect(text).toContain("Add draft storage");
