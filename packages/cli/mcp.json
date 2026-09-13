@@ -6,7 +6,7 @@
 			"command": "npx",
 			"args": [
 				"-y",
-				"agent-issues-mcp@0.1.0"
+				"agent-issues-mcp@0.1.1"
 			]
 		}
 	}

@@ -79,7 +79,7 @@ describe("portable plugin package", () => {
 		expect(mcpConfiguration.mcpServers?.["agent-issues"]).toEqual({
 			type: "stdio",
 			command: "npx",
-			args: ["-y", "agent-issues-mcp@0.1.0"]
+			args: ["-y", "agent-issues-mcp@0.1.1"]
 		});
 	});
 
