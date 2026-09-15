@@ -16,5 +16,6 @@ const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 for (const packageName of packages) {
   execFileSync(pnpm, ['--filter', packageName, 'build'], {
     stdio: 'inherit',
+	 shell: process.platform === 'win32'
   });
 }
