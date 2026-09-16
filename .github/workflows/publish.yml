@@ -5,15 +5,25 @@ on:
   push:
 
 jobs:
-  test-tools:
-    name: Test tools (${{ matrix.os }})
+  test:
+    name: Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    env:
+      AGENT_ISSUES_TEST_PG_URL: postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues
+      AGENT_ISSUES_TEST_PG_APP_URL: postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-latest
-          - windows-latest
+        include:
+          - name: ubuntu-latest
+            os: ubuntu-latest
+            postgres: true
+          - name: macos-latest
+            os: macos-latest
+            postgres: false
+          - name: windows-latest
+            os: windows-latest
+            postgres: false
     steps:
       - uses: actions/checkout@v4
 
@@ -29,35 +39,64 @@ jobs:
       - name: Install dependencies.
         run: pnpm install --frozen-lockfile
 
-      - name: Build tools.
+      - name: Start PostgreSQL.
+        if: matrix.postgres
+        run: |
+          docker run --detach --name agent-issues-postgres \
+            --env POSTGRES_USER=agent_issues \
+            --env POSTGRES_PASSWORD=agent_issues_dev_only \
+            --env POSTGRES_DB=agent_issues \
+            --publish 5433:5432 \
+            --health-cmd "pg_isready -U agent_issues -d agent_issues" \
+            --health-interval 5s \
+            --health-timeout 5s \
+            --health-retries 10 \
+            postgres:16-alpine
+          for retry in {1..30}; do
+            health=$(docker inspect --format='{{.State.Health.Status}}' agent-issues-postgres)
+            if test "$health" = "healthy"; then
+              exit 0
+            fi
+            if test "$health" = "unhealthy"; then
+              docker logs agent-issues-postgres
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs agent-issues-postgres
+          exit 1
+
+      - name: Initialize PostgreSQL application role.
+        if: matrix.postgres
+        run: >-
+          docker run --rm --network host
+          --volume "$PWD/docker/postgres-init:/docker-entrypoint-initdb.d:ro"
+          postgres:16-alpine
+          psql "$AGENT_ISSUES_TEST_PG_URL"
+          --set ON_ERROR_STOP=1
+          --file /docker-entrypoint-initdb.d/01-app-role.sql
+
+      - name: Typecheck project.
+        run: pnpm typecheck
+
+      - name: Build project.
         run: pnpm build
 
+      - name: Test project.
+        if: matrix.postgres
+        run: pnpm --workspace-concurrency=1 -r test
+
       - name: Test CLI.
+        if: ${{ !matrix.postgres }}
         run: pnpm --filter agent-issues test
 
       - name: Test MCP server.
+        if: ${{ !matrix.postgres }}
         run: pnpm --filter agent-issues-mcp test
 
   publish-npm:
-    needs: test-tools
+    needs: test
     runs-on: ubuntu-latest
-    env:
-      AGENT_ISSUES_TEST_PG_URL: postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues
-      AGENT_ISSUES_TEST_PG_APP_URL: postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: agent_issues
-          POSTGRES_PASSWORD: agent_issues_dev_only
-          POSTGRES_DB: agent_issues
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U agent_issues -d agent_issues"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,24 +114,6 @@ jobs:
 
       - name: Install dependencies.
         run: pnpm install --frozen-lockfile
-
-      - name: Initialize PostgreSQL application role.
-        run: >-
-          docker run --rm --network host
-          --volume "$PWD/docker/postgres-init:/docker-entrypoint-initdb.d:ro"
-          postgres:16-alpine
-          psql "$AGENT_ISSUES_TEST_PG_URL"
-          --set ON_ERROR_STOP=1
-          --file /docker-entrypoint-initdb.d/01-app-role.sql
-
-      - name: Typecheck project.
-        run: pnpm typecheck
-
-      - name: Build test assets.
-        run: pnpm --filter @agent-issues/site build && pnpm --filter @agent-issues/kanban build && pnpm --filter agent-issues build
-
-      - name: Test project.
-        run: pnpm --workspace-concurrency=1 -r test
 
       - name: Calculate version with Prospector
         id: version
@@ -130,7 +151,11 @@ jobs:
 
       - name: Publish CLI package to NPM
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: pnpm --dir packages/cli publish --access public --no-git-checks
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          if ! npm view "agent-issues@$version" version >/dev/null 2>&1; then
+            pnpm --dir packages/cli publish --access public --no-git-checks
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}
           NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
