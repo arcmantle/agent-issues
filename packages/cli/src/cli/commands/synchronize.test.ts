@@ -107,6 +107,7 @@ async function dispatch(store: SqliteStore, method: string, params: unknown): Pr
 describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	let homeDirectory: string;
 	let originalHome: string | undefined;
+	let originalUserProfile: string | undefined;
 	let projectDirectory: string;
 	let projectRoot: string;
 	let cloudDirectory: string;
@@ -117,7 +118,9 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 	beforeEach(async () => {
 		homeDirectory = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-home-"));
 		originalHome = process.env.HOME;
+		originalUserProfile = process.env.USERPROFILE;
 		process.env.HOME = homeDirectory;
+		process.env.USERPROFILE = homeDirectory;
 		projectRoot = mkdtempSync(path.join(tmpdir(), "agent-issues-synchronize-cli-project-"));
 		projectDirectory = path.join(projectRoot, "default-project");
 		mkdirSync(projectDirectory);
@@ -134,6 +137,7 @@ describe("synchronize CLI command (ISS59/ADR15, ADR16)", () => {
 		await localDaemon.close();
 		await cloudStore.close();
 		process.env.HOME = originalHome;
+		process.env.USERPROFILE = originalUserProfile;
 		rmSync(homeDirectory, { force: true, recursive: true });
 		rmSync(projectRoot, { force: true, recursive: true });
 		rmSync(cloudDirectory, { force: true, recursive: true });

@@ -16,13 +16,18 @@ import {
 } from "@agent-issues/api-local";
 
 let tempDir: string | null = null;
+let database: { close(): void } | null = null;
 
 async function openTestDatabase() {
 	tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-export-files-"));
-	return (await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" })).executor;
+	const result = await ensureDatabase(path.join(tempDir, "test.db"), { tenant: "test" });
+	database = result.db;
+	return result.executor;
 }
 
 afterEach(() => {
+	database?.close();
+	database = null;
 	if (tempDir) {
 		rmSync(tempDir, { force: true, recursive: true });
 		tempDir = null;

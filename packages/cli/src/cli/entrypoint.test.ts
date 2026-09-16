@@ -47,16 +47,26 @@ function createCapture() {
 
 // Opens a real SSE connection and resolves once a `snapshot-changed` event
 // arrives (mirrors `cloud-site-server.test.ts`'s helper of the same name).
-function waitForSnapshotChangedEvent(url: string): { event: Promise<unknown>; stop: () => void } {
+function waitForSnapshotChangedEvent(url: string): { event: Promise<unknown>; ready: Promise<void>; stop: () => void } {
 	let resolveEvent!: (value: unknown) => void;
 	const promise = new Promise<unknown>((resolve) => {
 		resolveEvent = resolve;
+	});
+	let resolveReady!: () => void;
+	let rejectReady!: (reason?: unknown) => void;
+	const ready = new Promise<void>((resolve, reject) => {
+		resolveReady = resolve;
+		rejectReady = reject;
 	});
 
 	const controller = new AbortController();
 	void (async () => {
 		const response = await fetch(url, { signal: controller.signal });
-		if (!response.body) return;
+		if (!response.body) {
+			rejectReady(new Error("SSE response has no body."));
+			return;
+		}
+		resolveReady();
 		const decoder = new TextDecoder();
 		let buffer = "";
 		try {
@@ -76,12 +86,15 @@ function waitForSnapshotChangedEvent(url: string): { event: Promise<unknown>; st
 					boundary = buffer.indexOf("\n\n");
 				}
 			}
-		} catch {
+		} catch (error) {
+			if (!controller.signal.aborted) {
+				rejectReady(error);
+			}
 			// aborted
 		}
 	})();
 
-	return { event: promise, stop: () => controller.abort() };
+	return { event: promise, ready, stop: () => controller.abort() };
 }
 
 afterEach(() => {
@@ -2511,6 +2524,7 @@ describe("cli", () => {
 		});
 
 		const listener = waitForSnapshotChangedEvent(`http://127.0.0.1:${port}/events`);
+		await listener.ready;
 
 		try {
 			const { db: writeDb, executor: writeExecutor } = await ensureDatabase(dbPath, { tenant: "test-tenant" });
