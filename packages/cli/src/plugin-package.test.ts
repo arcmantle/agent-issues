@@ -21,6 +21,13 @@ describe("portable plugin package", () => {
 
 		buildPlugin(pluginDir);
 
+		expect(readFileSync(path.join(pluginDir, "README.md"), "utf8")).toContain(
+			"# Agent Issues Plugin"
+		);
+		expect(readFileSync(path.join(pluginDir, "README.md"), "utf8")).toContain(
+			"npm install --global agent-issues agent-issues-mcp"
+		);
+
 		const sourceSkills = readdirSync("skills", { withFileTypes: true })
 			.filter(
 				(entry) =>

@@ -208,6 +208,7 @@ jobs:
           cp -R packages/cli/dist/plugin/. "$plugin_repository/"
           test -f "$plugin_repository/plugin.json"
           test -f "$plugin_repository/mcp.json"
+          test -f "$plugin_repository/README.md"
           test -f "$plugin_repository/com.github.copilot/agents/agent-issues.agent.md"
           test -d "$plugin_repository/skills"
           git -C "$plugin_repository" add --all

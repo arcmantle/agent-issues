@@ -27,11 +27,13 @@ export function buildPlugin({ sourceDir, targetDir }) {
 	const sourceRoot = path.resolve(sourceDir);
 	const outputRoot = path.resolve(targetDir);
 	const sourceSkillsDir = path.join(sourceRoot, "skills");
+	const sourcePluginReadme = path.join(sourceRoot, "plugin", "README.md");
 	const sourceClaudeAgent = path.join(sourceRoot, ".github", "agents", "agent-issues.claude.md");
 	const sourceCopilotAgent = path.join(sourceRoot, ".github", "agents", "agent-issues.agent.md");
 	const packageJsonPath = path.join(sourceRoot, "package.json");
 
 	assertFile(packageJsonPath);
+	assertFile(sourcePluginReadme);
 	assertFile(sourceClaudeAgent);
 	assertFile(sourceCopilotAgent);
 	if (!existsSync(sourceSkillsDir)) {
@@ -60,6 +62,7 @@ export function buildPlugin({ sourceDir, targetDir }) {
 	}
 
 	rmSync(outputRoot, { force: true, recursive: true });
+	cpSync(sourcePluginReadme, path.join(outputRoot, "README.md"));
 	const outputSkillsDir = path.join(outputRoot, "skills");
 	mkdirSync(outputSkillsDir, { recursive: true });
 	for (const skillName of skillNames) {
@@ -154,6 +157,7 @@ export function validatePlugin(pluginDir) {
 	}
 
 	const skillsDir = path.join(pluginRoot, "skills");
+	assertFile(path.join(pluginRoot, "README.md"));
 	assertFile(path.join(pluginRoot, "com.github.copilot", "agents", "agent-issues.agent.md"));
 	for (const relativePath of REQUIRED_SHARED_PATHS) {
 		assertFile(path.join(skillsDir, relativePath));
