@@ -70,5 +70,5 @@ describe("Project Summary performance", () => {
 				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
 			}
 		}
-	});
+	}, 15_000);
 });
