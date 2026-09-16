@@ -24,19 +24,22 @@ describe("Project Summary performance", () => {
 		const workspace = path.join(temporaryDirectory, "large-project");
 		const dbPath = path.join(temporaryDirectory, "agent-issues.db");
 		const { db, executor } = await ensureDatabase(dbPath, { tenant: TENANT });
-		const project = createEntity(executor, { kind: "project", title: "Large project" });
-		const epic = createEntity(executor, { kind: "epic", parentId: project.id, title: "Delivery" });
-		const detailBody = "Detailed project record content. ".repeat(20);
-		for (let initiativeIndex = 0; initiativeIndex < 20; initiativeIndex += 1) {
-			const initiative = createEntity(executor, { body: detailBody, kind: "initiative", parentId: epic.id, title: `Initiative ${initiativeIndex}` });
-			const prd = createEntity(executor, { body: detailBody, kind: "prd", parentId: initiative.id, title: `Requirements ${initiativeIndex}` });
-			for (let issueIndex = 0; issueIndex < 20; issueIndex += 1) {
-				createEntity(executor, { body: detailBody, kind: "issue", parentId: initiative.id, title: `Issue ${initiativeIndex}-${issueIndex}` });
+		const project = executor.drizzle.transaction(() => {
+			const project = createEntity(executor, { kind: "project", title: "Large project" });
+			const epic = createEntity(executor, { kind: "epic", parentId: project.id, title: "Delivery" });
+			const detailBody = "Detailed project record content. ".repeat(20);
+			for (let initiativeIndex = 0; initiativeIndex < 20; initiativeIndex += 1) {
+				const initiative = createEntity(executor, { body: detailBody, kind: "initiative", parentId: epic.id, title: `Initiative ${initiativeIndex}` });
+				const prd = createEntity(executor, { body: detailBody, kind: "prd", parentId: initiative.id, title: `Requirements ${initiativeIndex}` });
+				for (let issueIndex = 0; issueIndex < 20; issueIndex += 1) {
+					createEntity(executor, { body: detailBody, kind: "issue", parentId: initiative.id, title: `Issue ${initiativeIndex}-${issueIndex}` });
+				}
+				for (let storyIndex = 0; storyIndex < 5; storyIndex += 1) {
+					createEntity(executor, { body: detailBody, kind: "userStory", parentId: prd.id, title: `Story ${initiativeIndex}-${storyIndex}` });
+				}
 			}
-			for (let storyIndex = 0; storyIndex < 5; storyIndex += 1) {
-				createEntity(executor, { body: detailBody, kind: "userStory", parentId: prd.id, title: `Story ${initiativeIndex}-${storyIndex}` });
-			}
-		}
+			return project;
+		});
 		db.close();
 
 		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
