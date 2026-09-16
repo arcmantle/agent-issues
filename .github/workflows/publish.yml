@@ -145,6 +145,17 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}
           NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
 
+      - name: Publish CLI package to NPM
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          if ! npm view "agent-issues@$version" version >/dev/null 2>&1; then
+            pnpm --dir packages/cli publish --access public --no-git-checks
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}
+          NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
+
   publish-plugin:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -178,23 +189,21 @@ jobs:
       - name: Build plugin.
         run: pnpm build
 
+      - name: Checkout plugin distribution
+        uses: actions/checkout@v4
+        with:
+          repository: arcmantle/agent-issues-plugin
+          token: ${{ secrets.AGENT_ISSUES_PLUGIN_REPOSITORY_TOKEN }}
+          path: plugin-distribution
+
       - name: Publish plugin distribution
-        env:
-          PLUGIN_REPOSITORY_TOKEN: ${{ secrets.AGENT_ISSUES_PLUGIN_REPOSITORY_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -z "$PLUGIN_REPOSITORY_TOKEN" ]]; then
-            echo "Missing AGENT_ISSUES_PLUGIN_REPOSITORY_TOKEN repository secret."
-            exit 1
-          fi
           test -f packages/cli/dist/plugin/plugin.json
           test -f packages/cli/dist/plugin/mcp.json
           test -f packages/cli/dist/plugin/com.github.copilot/agents/agent-issues.agent.md
           test -d packages/cli/dist/plugin/skills
-          plugin_repository="$RUNNER_TEMP/agent-issues-plugin"
-          git -c http.extraheader="AUTHORIZATION: bearer $PLUGIN_REPOSITORY_TOKEN" clone \
-            "https://github.com/arcmantle/agent-issues-plugin.git" "$plugin_repository"
-          git -C "$plugin_repository" checkout main
+          plugin_repository="$GITHUB_WORKSPACE/plugin-distribution"
           find "$plugin_repository" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -R packages/cli/dist/plugin/. "$plugin_repository/"
           test -f "$plugin_repository/plugin.json"
@@ -209,15 +218,4 @@ jobs:
           git -C "$plugin_repository" config user.name "github-actions[bot]"
           git -C "$plugin_repository" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C "$plugin_repository" commit -m "Update plugin from $GITHUB_SHA"
-          git -C "$plugin_repository" -c http.extraheader="AUTHORIZATION: bearer $PLUGIN_REPOSITORY_TOKEN" push origin HEAD:main
-
-      - name: Publish CLI package to NPM
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          version=$(node -p "require('./packages/cli/package.json').version")
-          if ! npm view "agent-issues@$version" version >/dev/null 2>&1; then
-            pnpm --dir packages/cli publish --access public --no-git-checks
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}
-          NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
+          git -C "$plugin_repository" push origin HEAD:main
