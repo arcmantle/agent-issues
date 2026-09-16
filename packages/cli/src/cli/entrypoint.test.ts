@@ -1260,7 +1260,8 @@ describe("cli", () => {
 		const runJson = async (args: string[]) => {
 			const stdout = createCapture();
 			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
-			return { output: stdout.read(), value: JSON.parse(stdout.read()) };
+			const output = stdout.read();
+			return { output, value: JSON.parse(output) };
 		};
 
 		const set = await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, summary)]);
@@ -1275,7 +1276,8 @@ describe("cli", () => {
 		const runJson = async (args: string[]) => {
 			const stdout = createCapture();
 			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
-			return { output: stdout.read(), value: JSON.parse(stdout.read()) };
+			const output = stdout.read();
+			return { output, value: JSON.parse(output) };
 		};
 
 		const set = await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
