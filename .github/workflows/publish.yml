@@ -121,12 +121,10 @@ jobs:
         with:
           dir: '.'
 
-      - name: Set package versions
+      - name: Set CLI package version
         run: |
           echo "Setting packages/cli version to ${{ steps.version.outputs.version }}"
           npm version ${{ steps.version.outputs.version }} --no-git-tag-version --prefix packages/cli
-          echo "Setting packages/mcp-server version to ${{ steps.version.outputs.version }}"
-          npm version ${{ steps.version.outputs.version }} --no-git-tag-version --prefix packages/mcp-server
 
       - name: Build project.
         run: pnpm build
@@ -134,9 +132,7 @@ jobs:
       - name: Verify package versions
         run: |
           cli_version=$(node -p "require('./packages/cli/package.json').version")
-          mcp_version=$(node -p "require('./packages/mcp-server/package.json').version")
           test "$cli_version" = "${{ steps.version.outputs.version }}"
-          test "$mcp_version" = "${{ steps.version.outputs.version }}"
 
       - name: Publish MCP package to NPM
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

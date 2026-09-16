@@ -10,7 +10,7 @@ Add this object to the `servers` array in the company MCP registry:
   "name": "no.eye-share/agent-issues",
   "title": "Agent Issues",
   "description": "Manage project context, initiatives, decisions, stories, and issues",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "repository": {
     "url": "https://github.com/arcmantle/agent-issues",
     "source": "github"
@@ -19,7 +19,7 @@ Add this object to the `servers` array in the company MCP registry:
     {
       "registryType": "npm",
       "identifier": "agent-issues-mcp",
-      "version": "0.2.0",
+      "version": "0.2.5",
       "transport": {
         "type": "stdio"
       }
@@ -28,7 +28,7 @@ Add this object to the `servers` array in the company MCP registry:
 }
 ```
 
-The npm package `agent-issues-mcp@0.2.0` must be published before a client can install this registry entry. Keep this registry version fixed unless the proxy contract itself must change.
+The npm package `agent-issues-mcp@0.2.5` must be published before a client can install this registry entry. Keep this registry version fixed unless the proxy contract itself must change.
 
 ## How it works
 
@@ -36,7 +36,7 @@ The registry package is a small, stable proxy:
 
 ```text
 MCP client
-  -> globally installed agent-issues-mcp@0.2.0
+  -> globally installed agent-issues-mcp@0.2.5
   -> agent-issues --mcp
   -> current MCP tools, local daemon, and storage
 ```
@@ -45,7 +45,7 @@ The proxy forwards MCP messages over standard input and output. It does not cont
 
 This split has two update paths:
 
-- Install and approve `agent-issues-mcp@0.2.0` once.
+- Install and approve `agent-issues-mcp@0.2.5` once.
 - Update `agent-issues` when new commands, tools, or fixes are released.
 
 The proxy requires the `agent-issues` command to be on `PATH`. Both packages require Node.js 24 or newer.
@@ -55,7 +55,7 @@ The proxy requires the `agent-issues` command to be on `PATH`. Both packages req
 Install the current Agent Issues CLI and the approved MCP proxy before starting the MCP server:
 
 ```bash
-npm install --global agent-issues agent-issues-mcp@0.2.0
+npm install --global agent-issues agent-issues-mcp@0.2.5
 ```
 
 Confirm that both commands are available after the MCP package is installed:
@@ -95,7 +95,7 @@ copilot mcp get agent-issues
 If registry search is unavailable, install and configure the approved proxy directly:
 
 ```bash
-npm install --global agent-issues-mcp@0.2.0
+npm install --global agent-issues-mcp@0.2.5
 copilot mcp add agent-issues -- agent-issues-mcp
 ```
 
@@ -106,7 +106,7 @@ From the shell, use `copilot mcp get agent-issues`. Inside an interactive Copilo
 Claude Code does not install from the Copilot custom registry. Install the approved npm proxy, then add its command as a local stdio server:
 
 ```bash
-npm install --global agent-issues-mcp@0.2.0
+npm install --global agent-issues-mcp@0.2.5
 claude mcp add --transport stdio --scope user agent-issues -- agent-issues-mcp
 ```
 
