@@ -3,11 +3,43 @@ name: Pnpm Publish
 on:
   pull_request:
   push:
-    branches:
-      - main
 
 jobs:
+  test-tools:
+    name: Test tools (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build tools.
+        run: pnpm build
+
+      - name: Test CLI.
+        run: pnpm --filter agent-issues test
+
+      - name: Test MCP server.
+        run: pnpm --filter agent-issues-mcp test
+
   publish-npm:
+    needs: test-tools
     runs-on: ubuntu-latest
     env:
       AGENT_ISSUES_TEST_PG_URL: postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues
@@ -42,7 +74,7 @@ jobs:
           version: 11
 
       - name: Install dependencies.
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Initialize PostgreSQL application role.
         run: >-
@@ -68,21 +100,25 @@ jobs:
         with:
           dir: '.'
 
-      - name: Set package version
+      - name: Set package versions
         run: |
           echo "Setting packages/cli version to ${{ steps.version.outputs.version }}"
           npm version ${{ steps.version.outputs.version }} --no-git-tag-version --prefix packages/cli
+          echo "Setting packages/mcp-server version to ${{ steps.version.outputs.version }}"
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version --prefix packages/mcp-server
 
       - name: Build project.
         run: pnpm build
 
       - name: Verify package versions
         run: |
-          actual=$(node -p "require('./packages/cli/package.json').version")
-          test "$actual" = "${{ steps.version.outputs.version }}"
+          cli_version=$(node -p "require('./packages/cli/package.json').version")
+          mcp_version=$(node -p "require('./packages/mcp-server/package.json').version")
+          test "$cli_version" = "${{ steps.version.outputs.version }}"
+          test "$mcp_version" = "${{ steps.version.outputs.version }}"
 
       - name: Publish MCP package to NPM
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           version=$(node -p "require('./packages/mcp-server/package.json').version")
           if ! npm view "agent-issues-mcp@$version" version >/dev/null 2>&1; then
@@ -93,7 +129,7 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
 
       - name: Publish CLI package to NPM
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: pnpm --dir packages/cli publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}

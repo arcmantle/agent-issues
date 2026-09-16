@@ -19,7 +19,7 @@ export const LOCAL_DAEMON_SPAWN_FLAG = "--spawn-daemon";
  * than the currently-running daemon serves), it's appended so the freshly
  * spawned daemon opens that db instead of the default.
  */
-export function spawnLocalDaemon(options?: { dbPath?: string }): void {
+export function spawnLocalDaemon(options?: { dbPath?: string; platform?: NodeJS.Platform }): void {
 	const entrypoint = process.argv[1];
 	if (!entrypoint) {
 		throw new Error("Cannot spawn the local daemon: no process entrypoint (process.argv[1]) is available.");
@@ -30,5 +30,9 @@ export function spawnLocalDaemon(options?: { dbPath?: string }): void {
 		args.push("--db", options.dbPath);
 	}
 
-	spawnChildProcess(process.execPath, args, { detached: true, stdio: "ignore" }).unref();
+	spawnChildProcess(process.execPath, args, {
+		detached: true,
+		stdio: "ignore",
+		windowsHide: (options?.platform ?? process.platform) === "win32"
+	}).unref();
 }

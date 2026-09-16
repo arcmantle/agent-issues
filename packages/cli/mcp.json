@@ -3,11 +3,8 @@
 	"mcpServers": {
 		"agent-issues": {
 			"type": "stdio",
-			"command": "npx",
-			"args": [
-				"-y",
-				"agent-issues-mcp@0.1.1"
-			]
+			"command": "agent-issues-mcp",
+			"args": []
 		}
 	}
 }

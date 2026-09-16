@@ -15,9 +15,26 @@ describe("runAgentIssuesMcpProxy", () => {
 		const child = new EventEmitter() as ChildProcess;
 		const spawn = vi.fn((_command: string, _args: readonly string[], _options: SpawnOptions) => child);
 
-		runAgentIssuesMcpProxy({ spawn });
+		runAgentIssuesMcpProxy({ platform: "darwin", spawn });
 
-		expect(spawn).toHaveBeenCalledWith("agent-issues", [MCP_SERVER_FLAG], { stdio: "inherit" });
+		expect(spawn).toHaveBeenCalledWith("agent-issues", [MCP_SERVER_FLAG], {
+			stdio: "inherit",
+			shell: false,
+			windowsHide: false
+		});
+	});
+
+	it("starts the Windows command shim in a hidden shell", () => {
+		const child = new EventEmitter() as ChildProcess;
+		const spawn = vi.fn((_command: string, _args: readonly string[], _options: SpawnOptions) => child);
+
+		runAgentIssuesMcpProxy({ platform: "win32", spawn });
+
+		expect(spawn).toHaveBeenCalledWith("agent-issues", [MCP_SERVER_FLAG], {
+			stdio: "inherit",
+			shell: true,
+			windowsHide: true
+		});
 	});
 
 	it("reports a missing CLI", () => {

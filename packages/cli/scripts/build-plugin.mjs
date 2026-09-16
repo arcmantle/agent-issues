@@ -23,19 +23,15 @@ const PLUGIN_FIELDS = new Set([
 	"extensions"
 ]);
 
-export function buildPlugin({ sourceDir, targetDir, mcpPackageJson }) {
+export function buildPlugin({ sourceDir, targetDir }) {
 	const sourceRoot = path.resolve(sourceDir);
 	const outputRoot = path.resolve(targetDir);
 	const sourceSkillsDir = path.join(sourceRoot, "skills");
 	const sourceClaudeAgent = path.join(sourceRoot, ".github", "agents", "agent-issues.claude.md");
 	const sourceCopilotAgent = path.join(sourceRoot, ".github", "agents", "agent-issues.agent.md");
 	const packageJsonPath = path.join(sourceRoot, "package.json");
-	const mcpPackageJsonPath = path.resolve(
-		mcpPackageJson ?? path.join(sourceRoot, "..", "mcp-server", "package.json")
-	);
 
 	assertFile(packageJsonPath);
-	assertFile(mcpPackageJsonPath);
 	assertFile(sourceClaudeAgent);
 	assertFile(sourceCopilotAgent);
 	if (!existsSync(sourceSkillsDir)) {
@@ -61,10 +57,6 @@ export function buildPlugin({ sourceDir, targetDir, mcpPackageJson }) {
 	const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 	if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
 		throw new Error(`Package version not found in: ${packageJsonPath}`);
-	}
-	const mcpPackage = JSON.parse(readFileSync(mcpPackageJsonPath, "utf8"));
-	if (typeof mcpPackage.version !== "string" || mcpPackage.version.length === 0) {
-		throw new Error(`Package version not found in: ${mcpPackageJsonPath}`);
 	}
 
 	rmSync(outputRoot, { force: true, recursive: true });
@@ -92,8 +84,8 @@ export function buildPlugin({ sourceDir, targetDir, mcpPackageJson }) {
 		mcpServers: {
 			"agent-issues": {
 				type: "stdio",
-				command: "npx",
-				args: ["-y", `agent-issues-mcp@${mcpPackage.version}`]
+				command: "agent-issues-mcp",
+				args: []
 			}
 		}
 	};
@@ -144,7 +136,7 @@ export function buildPlugin({ sourceDir, targetDir, mcpPackageJson }) {
 	);
 	validatePlugin(outputRoot);
 
-	return { outputRoot, skillNames, version: packageJson.version, mcpVersion: mcpPackage.version };
+	return { outputRoot, skillNames, version: packageJson.version };
 }
 
 export function validatePlugin(pluginDir) {
@@ -183,10 +175,9 @@ export function validatePlugin(pluginDir) {
 		throw new Error("mcp.json must define the agent-issues server");
 	}
 	assertExactValue(server.type, "stdio", "agent-issues MCP server type");
-	assertExactValue(server.command, "npx", "agent-issues MCP server command");
-	const pinnedPackagePattern = /^agent-issues-mcp@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-	if (!Array.isArray(server.args) || !server.args.some((argument) => pinnedPackagePattern.test(argument))) {
-		throw new Error("agent-issues MCP server must pin agent-issues-mcp to an explicit version");
+	assertExactValue(server.command, "agent-issues-mcp", "agent-issues MCP server command");
+	if (!Array.isArray(server.args) || server.args.length !== 0) {
+		throw new Error("agent-issues MCP server must not have arguments");
 	}
 
 	return { pluginRoot, skillNames: skillNames.sort(), version: manifest.version };
@@ -235,13 +226,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 	} else {
 		buildPlugin({
 			sourceDir: readArgument("--source-dir"),
-			targetDir: readArgument("--target-dir"),
-			mcpPackageJson: readOptionalArgument("--mcp-package-json")
+			targetDir: readArgument("--target-dir")
 		});
 	}
-}
-
-function readOptionalArgument(name) {
-	const index = process.argv.indexOf(name);
-	return index === -1 ? undefined : process.argv[index + 1];
 }

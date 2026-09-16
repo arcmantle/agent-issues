@@ -11,8 +11,8 @@ import { deleteCredential, getCredential, setCredential, type RunCredentialComma
 const execFileAsync = promisify(execFile);
 
 describe("os-credential-store dispatch (ISS184)", () => {
-	function recordingRunner(): { runCommand: RunCredentialCommand; calls: Array<{ file: string; args: string[]; input?: string }> } {
-		const calls: Array<{ file: string; args: string[]; input?: string }> = [];
+	function recordingRunner(): { runCommand: RunCredentialCommand; calls: Array<{ file: string; args: string[]; input?: string; windowsHide?: boolean }> } {
+		const calls: Array<{ file: string; args: string[]; input?: string; windowsHide?: boolean }> = [];
 		const runCommand: RunCredentialCommand = async (command) => {
 			calls.push(command);
 			return { stdout: "", exitCode: 0 };
@@ -47,14 +47,17 @@ describe("os-credential-store dispatch (ISS184)", () => {
 		]);
 	});
 
-	it("shells out to PowerShell (Windows Credential Manager via CredWrite) to store a credential", async () => {
+	it("hides PowerShell for every Windows credential operation", async () => {
 		const { runCommand, calls } = recordingRunner();
 
 		await setCredential("agent-issues-daemon", "local-daemon-token", "s3cr3t", { platform: "win32", runCommand });
+		await getCredential("agent-issues-daemon", "local-daemon-token", { platform: "win32", runCommand });
+		await deleteCredential("agent-issues-daemon", "local-daemon-token", { platform: "win32", runCommand });
 
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(3);
 		expect(calls[0].file).toBe("powershell.exe");
 		expect(calls[0].args).toContain("-EncodedCommand");
+		expect(calls.every(({ windowsHide }) => windowsHide === true)).toBe(true);
 	});
 
 	it("reads back a stored credential via the injected runner", async () => {

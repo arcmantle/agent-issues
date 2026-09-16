@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe("portable plugin package", () => {
-	it("assembles every canonical skill with portable metadata and a pinned MCP server", () => {
+	it("assembles every canonical skill with portable metadata and a global MCP server", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-plugin-"));
 		const pluginDir = path.join(targetDir, "plugin");
 		mkdirSync(pluginDir);
@@ -75,11 +75,12 @@ describe("portable plugin package", () => {
 			$schema?: unknown;
 			mcpServers?: Record<string, { type?: unknown; command?: unknown; args?: unknown }>;
 		};
+
 		expect(mcpConfiguration.$schema).toBe("https://agent-plugins.org/schemas/1.0.0/mcp.schema.json");
 		expect(mcpConfiguration.mcpServers?.["agent-issues"]).toEqual({
 			type: "stdio",
-			command: "npx",
-			args: ["-y", "agent-issues-mcp@0.1.1"]
+			command: "agent-issues-mcp",
+			args: []
 		});
 	});
 
@@ -176,14 +177,15 @@ describe("portable plugin package", () => {
 		});
 	});
 
-	it("rejects an unpinned MCP package", () => {
+	it("rejects an MCP server that does not use the global command", () => {
 		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-plugin-"));
 		const pluginDir = path.join(targetDir, "plugin");
 		buildPlugin(pluginDir);
 		const mcpPath = path.join(pluginDir, "mcp.json");
 		const mcpConfiguration = JSON.parse(readFileSync(mcpPath, "utf8")) as {
-			mcpServers: Record<string, { args: string[] }>;
+			mcpServers: Record<string, { command: string; args: string[] }>;
 		};
+		mcpConfiguration.mcpServers["agent-issues"].command = "npx";
 		mcpConfiguration.mcpServers["agent-issues"].args = ["-y", "agent-issues-mcp"];
 		writeFileSync(mcpPath, JSON.stringify(mcpConfiguration));
 
@@ -194,7 +196,7 @@ describe("portable plugin package", () => {
 		);
 
 		expect(validation.status).toBe(1);
-		expect(validation.stderr).toContain("must pin agent-issues-mcp to an explicit version");
+		expect(validation.stderr).toContain("agent-issues MCP server command must be agent-issues-mcp");
 	});
 
 	it("rejects a missing canonical shared asset", () => {
@@ -242,48 +244,6 @@ describe("portable plugin package", () => {
 		expect(validation.stderr).toContain("unsupported portable field: skills");
 	});
 
-	it("pins the published MCP package version independently of the plugin version", () => {
-		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-plugin-"));
-		const sourceDir = path.join(targetDir, "source");
-		const pluginDir = path.join(targetDir, "plugin");
-		const mcpPackagePath = path.join(targetDir, "mcp-package.json");
-		mkdirSync(sourceDir);
-		cpSync("skills", path.join(sourceDir, "skills"), { recursive: true });
-		mkdirSync(path.join(sourceDir, ".github", "agents"), { recursive: true });
-		cpSync(
-			path.join(".github", "agents", "agent-issues.claude.md"),
-			path.join(sourceDir, ".github", "agents", "agent-issues.claude.md")
-		);
-		cpSync(
-			path.join(".github", "agents", "agent-issues.agent.md"),
-			path.join(sourceDir, ".github", "agents", "agent-issues.agent.md")
-		);
-		writeFileSync(path.join(sourceDir, "package.json"), JSON.stringify({ version: "2.0.0" }));
-		writeFileSync(mcpPackagePath, JSON.stringify({ version: "1.4.0" }));
-
-		execFileSync(
-			process.execPath,
-			[
-				"scripts/build-plugin.mjs",
-				"--source-dir",
-				sourceDir,
-				"--target-dir",
-				pluginDir,
-				"--mcp-package-json",
-				mcpPackagePath
-			],
-			{ stdio: "pipe" }
-		);
-
-		const manifest = JSON.parse(readFileSync(path.join(pluginDir, "plugin.json"), "utf8")) as {
-			version: string;
-		};
-		const mcpConfiguration = JSON.parse(readFileSync(path.join(pluginDir, "mcp.json"), "utf8")) as {
-			mcpServers: Record<string, { args: string[] }>;
-		};
-		expect(manifest.version).toBe("2.0.0");
-		expect(mcpConfiguration.mcpServers["agent-issues"].args).toContain("agent-issues-mcp@1.4.0");
-	});
 });
 
 function buildPlugin(pluginDir: string): void {

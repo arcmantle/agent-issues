@@ -117,8 +117,8 @@ function assertPluginInventory(plugins, pluginId) {
 		throw new Error(`Claude did not load ${pluginId}`);
 	}
 	const server = plugin.mcpServers?.["agent-issues"];
-	if (server?.command !== "npx" || !server.args?.some((argument) => /^agent-issues-mcp@\d+\.\d+\.\d+/.test(argument))) {
-		throw new Error(`${pluginId} does not expose the pinned Agent Issues MCP server`);
+	if (server?.command !== "agent-issues-mcp" || !Array.isArray(server.args) || server.args.length !== 0) {
+		throw new Error(`${pluginId} does not expose the global Agent Issues MCP server`);
 	}
 	return plugin;
 }

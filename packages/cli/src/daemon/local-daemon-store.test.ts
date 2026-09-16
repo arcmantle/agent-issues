@@ -333,6 +333,23 @@ describe("spawnLocalDaemon (ISS190)", () => {
 		}
 	});
 
+	it("hides the detached daemon window on Windows", () => {
+		const originalArgv1 = process.argv[1];
+		process.argv[1] = "/path/to/entrypoint.js";
+
+		try {
+			spawnLocalDaemon({ platform: "win32" });
+
+			expect(spawnMock).toHaveBeenCalledWith(
+				process.execPath,
+				["/path/to/entrypoint.js", LOCAL_DAEMON_SPAWN_FLAG],
+				expect.objectContaining({ detached: true, windowsHide: true })
+			);
+		} finally {
+			process.argv[1] = originalArgv1;
+		}
+	});
+
 	it("throws when no process entrypoint is available to re-invoke", () => {
 		const originalArgv1 = process.argv[1];
 		process.argv[1] = undefined as unknown as string;

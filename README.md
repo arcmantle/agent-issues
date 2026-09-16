@@ -26,7 +26,7 @@ Set `AGENT_ISSUES_DB=/path/to/agent-issues.db` before starting the dev server if
 npm install --global agent-issues agent-issues-mcp
 ```
 
-The `agent-issues` package installs the CLI and owns the MCP implementation. The fixed-version `agent-issues-mcp` package installs a stable stdio proxy that starts `agent-issues` from `PATH`, so MCP behavior updates with the CLI.
+The `agent-issues` package installs the CLI and owns the MCP implementation. The globally installed `agent-issues-mcp` package installs a stable stdio proxy that starts `agent-issues` from `PATH`, so MCP behavior updates with the CLI.
 
 ## Storage
 

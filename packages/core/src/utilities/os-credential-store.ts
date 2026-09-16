@@ -6,7 +6,7 @@ const NOT_FOUND_EXIT_CODE: Partial<Record<NodeJS.Platform, number>> = {
 	win32: 44
 };
 
-export type CredentialCommand = { file: string; args: string[]; input?: string };
+export type CredentialCommand = { file: string; args: string[]; input?: string; windowsHide?: boolean };
 export type CredentialCommandResult = { stdout: string; exitCode: number; stderr?: string };
 export type RunCredentialCommand = (command: CredentialCommand) => Promise<CredentialCommandResult>;
 
@@ -25,7 +25,7 @@ export type OsCredentialStoreOptions = {
 
 function runRealCommand(command: CredentialCommand): Promise<CredentialCommandResult> {
 	return new Promise((resolve, reject) => {
-		const child: ChildProcess = execFile(command.file, command.args, { encoding: "utf8" }, (error, stdout, stderr) => {
+		const child: ChildProcess = execFile(command.file, command.args, { encoding: "utf8", windowsHide: command.windowsHide }, (error, stdout, stderr) => {
 			if (error && (error as NodeJS.ErrnoException).code === "ENOENT") {
 				reject(error);
 				return;
@@ -129,7 +129,11 @@ function buildWindowsCommand(action: "set" | "get" | "delete", service: string, 
 	const target = `${service}:${account}`;
 	const script = buildWindowsScript(action, target, secret);
 	const encoded = Buffer.from(script, "utf16le").toString("base64");
-	return { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded] };
+	return {
+		file: "powershell.exe",
+		args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+		windowsHide: true
+	};
 }
 
 function buildCommand(

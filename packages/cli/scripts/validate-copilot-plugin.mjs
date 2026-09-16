@@ -126,11 +126,11 @@ function validateComponents(installedPluginDir, environment) {
 	const mcpServer = mcpConfiguration?.["agent-issues"];
 	if (
 		mcpServer?.source !== "plugin" ||
-		mcpServer.command !== "npx" ||
+		mcpServer.command !== "agent-issues-mcp" ||
 		!Array.isArray(mcpServer.args) ||
-		!mcpServer.args.some((argument) => /^agent-issues-mcp@\d+\.\d+\.\d+/.test(argument))
+		mcpServer.args.length !== 0
 	) {
-		throw new Error("Copilot did not expose the pinned Agent Issues MCP server");
+		throw new Error("Copilot did not expose the global Agent Issues MCP server");
 	}
 	return mcpServer;
 }
