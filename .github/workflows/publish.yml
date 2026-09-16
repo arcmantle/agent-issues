@@ -145,6 +145,72 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH }}
           NPM_TOKEN: ${{ secrets.NPM_PUBLISH }}
 
+  publish-plugin:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies.
+        run: pnpm install --frozen-lockfile
+
+      - name: Calculate version with Prospector
+        id: version
+        uses: arcmantle/prospector@main
+        with:
+          dir: '.'
+
+      - name: Set CLI package version
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version --prefix packages/cli
+
+      - name: Build plugin.
+        run: pnpm build
+
+      - name: Publish plugin distribution
+        env:
+          PLUGIN_REPOSITORY_TOKEN: ${{ secrets.AGENT_ISSUES_PLUGIN_REPOSITORY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PLUGIN_REPOSITORY_TOKEN" ]]; then
+            echo "Missing AGENT_ISSUES_PLUGIN_REPOSITORY_TOKEN repository secret."
+            exit 1
+          fi
+          test -f packages/cli/dist/plugin/plugin.json
+          test -f packages/cli/dist/plugin/mcp.json
+          test -f packages/cli/dist/plugin/com.github.copilot/agents/agent-issues.agent.md
+          test -d packages/cli/dist/plugin/skills
+          plugin_repository="$RUNNER_TEMP/agent-issues-plugin"
+          git -c http.extraheader="AUTHORIZATION: bearer $PLUGIN_REPOSITORY_TOKEN" clone \
+            "https://github.com/arcmantle/agent-issues-plugin.git" "$plugin_repository"
+          git -C "$plugin_repository" checkout main
+          find "$plugin_repository" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R packages/cli/dist/plugin/. "$plugin_repository/"
+          test -f "$plugin_repository/plugin.json"
+          test -f "$plugin_repository/mcp.json"
+          test -f "$plugin_repository/com.github.copilot/agents/agent-issues.agent.md"
+          test -d "$plugin_repository/skills"
+          git -C "$plugin_repository" add --all
+          if git -C "$plugin_repository" diff --cached --quiet; then
+            echo "Plugin distribution is already current."
+            exit 0
+          fi
+          git -C "$plugin_repository" config user.name "github-actions[bot]"
+          git -C "$plugin_repository" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$plugin_repository" commit -m "Update plugin from $GITHUB_SHA"
+          git -C "$plugin_repository" -c http.extraheader="AUTHORIZATION: bearer $PLUGIN_REPOSITORY_TOKEN" push origin HEAD:main
+
       - name: Publish CLI package to NPM
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |

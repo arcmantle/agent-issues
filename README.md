@@ -2,31 +2,69 @@
 
 `agent-issues` is a TypeScript ESM CLI for managing shared context, initiatives, PRDs, user stories, ADRs, and issues in a local SQLite database.
 
-The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds the shared domain (schema, database, and store layers), `agent-issues` (the CLI) compiles to `dist/` and depends on core, `@agent-issues/site` is a separate Lit app that builds with Vite and is served live by the CLI, and `@agent-issues/api-pg` is a deployable cloud API service scaffold. The older terminal prototype remains under `workflow-prototype/` and stays separate from the installable CLI.
+## Install and use
 
 ## Requirements
 
 - Node.js 24 or newer
-- pnpm for development in this repo
 
-## Development
-
-```bash
-pnpm install
-pnpm run build
-```
-
-For frontend development, run `pnpm site:dev` from the repo root or `pnpm --filter @agent-issues/site dev`.
-The Vite dev server now auto-starts the live backend used for `site-config.json`, `/api/snapshot`, and `/events`.
-Set `AGENT_ISSUES_DB=/path/to/agent-issues.db` before starting the dev server if you want the browser to point at a non-default database.
-
-## Global install
+Install both packages globally. `agent-issues` provides the command-line interface. `agent-issues-mcp` provides the MCP server executable. You need both packages for complete CLI and MCP use.
 
 ```bash
 npm install --global agent-issues agent-issues-mcp
 ```
 
-The `agent-issues` package installs the CLI and owns the MCP implementation. The globally installed `agent-issues-mcp` package installs a stable stdio proxy that starts `agent-issues` from `PATH`, so MCP behavior updates with the CLI.
+Confirm that npm installed both global packages:
+
+```bash
+npm list --global --depth=0 agent-issues agent-issues-mcp
+```
+
+Initialize the database in a workspace, then use the CLI:
+
+```bash
+cd /path/to/workspace
+agent-issues init
+agent-issues create initiative --title "Platform cleanup"
+```
+
+### MCP registration
+
+MCP registration calls `agent-issues-mcp` with no arguments. This executable starts `agent-issues --mcp`. Both commands must be globally installed and available on your `PATH`:
+
+```json
+{
+	"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+	"mcpServers": {
+		"agent-issues": {
+			"type": "stdio",
+			"command": "agent-issues-mcp",
+			"args": []
+		}
+	}
+}
+```
+
+Use the host plugin instructions in [Agent integration installation](#agent-integration-installation) to configure Copilot CLI, VS Code, or Claude Code.
+
+## Develop from source
+
+This path is for contributors to this repository. It requires pnpm in addition to Node.js 24 or newer.
+
+The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds the shared domain (schema, database, and store layers), `agent-issues` is the CLI, `agent-issues-mcp` is the MCP server executable, `@agent-issues/site` is a Lit app built with Vite and served by the CLI, and `@agent-issues/api-pg` is a deployable cloud API service scaffold.
+
+```bash
+git clone https://github.com/arcmantle/agent-issues.git
+cd agent-issues
+pnpm install
+pnpm run build
+```
+
+For frontend development, run `pnpm site:dev` from the repository root or `pnpm --filter @agent-issues/site dev`. The Vite dev server starts the live backend for `site-config.json`, `/api/snapshot`, and `/events`.
+
+### Publish the plugin
+
+The `publish-plugin` workflow job builds `packages/cli/dist/plugin/` and publishes its contents to `arcmantle/agent-issues-plugin` after each successful push to `main`. Set the `AGENT_ISSUES_PLUGIN_REPOSITORY_TOKEN` repository secret to a GitHub App installation token or a fine-grained personal access token with `Contents: Read and write` access to that repository.
 
 ## Storage
 
@@ -204,11 +242,41 @@ agent-issues auth logout work
 
 ## Agent integration installation
 
-- Copilot CLI and VS Code: run `copilot plugin marketplace add arcmantle/agent-issues`, then `copilot plugin install agent-issues@agent-issues`. VS Code automatically discovers the installed plugin in `~/.copilot/installed-plugins/` and loads its supported agents, skills, and MCP servers. Make sure `chat.plugins.enabled` is `true` in VS Code.
-- Copilot updates: run `copilot plugin marketplace update agent-issues` and `copilot plugin update agent-issues`. Remove the shared installation with `copilot plugin uninstall agent-issues`.
-- VS Code management: use the Agent Plugins - Installed view to inspect, enable, disable, or uninstall the plugin. You can also install it in VS Code from its configured marketplace or Git source.
-- Claude Code: run `claude plugin marketplace add arcmantle/agent-issues`, then `claude plugin install agent-issues@agent-issues`. For updates, run `claude plugin marketplace update agent-issues` and `claude plugin update agent-issues@agent-issues`. Remove it with `claude plugin uninstall agent-issues@agent-issues`.
-- Migration: replace `install-agent`, `install-skills`, `install-mcp`, and the VS Code compatibility lifecycle commands with host plugin installation. Use the Copilot CLI installation for both Copilot CLI and VS Code.
+Install both global packages before you install a host plugin. The plugin registers the `agent-issues-mcp` command described in [MCP registration](#mcp-registration).
+
+### Copilot CLI and VS Code
+
+```bash
+copilot plugin marketplace add arcmantle/agent-issues
+copilot plugin install agent-issues@agent-issues
+```
+
+VS Code discovers this shared plugin from `~/.copilot/installed-plugins/` and loads its agents, skills, and MCP server. Set `chat.plugins.enabled` to `true` in VS Code.
+
+Update the marketplace, then update the installed plugin:
+
+```bash
+copilot plugin marketplace update agent-issues
+copilot plugin update agent-issues
+```
+
+Remove the shared plugin with `copilot plugin uninstall agent-issues`. In VS Code, use the Agent Plugins - Installed view to inspect, enable, disable, or uninstall plugins.
+
+### Claude Code
+
+```bash
+claude plugin marketplace add arcmantle/agent-issues
+claude plugin install agent-issues@agent-issues
+```
+
+Update the marketplace, then update the installed plugin:
+
+```bash
+claude plugin marketplace update agent-issues
+claude plugin update agent-issues@agent-issues
+```
+
+Remove the plugin with `claude plugin uninstall agent-issues@agent-issues`.
 
 ## Browser viewer
 
