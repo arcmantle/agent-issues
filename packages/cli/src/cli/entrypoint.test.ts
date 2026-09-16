@@ -1253,11 +1253,10 @@ describe("cli", () => {
 		expect(await runRelation("unlink")).toEqual({ operation: "unlink", fromId: source.id, toId: target.id, type: "blocks", removed: true });
 	});
 
-	it("returns compact context write and restore acknowledgements without authored content", async () => {
+	it("returns a compact context set acknowledgement without authored content", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const summary = "Context summary that must not be echoed. ".repeat(100);
-		const definition = "Term definition that must not be echoed. ".repeat(100);
 		const runJson = async (args: string[]) => {
 			const stdout = createCapture();
 			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
@@ -1267,38 +1266,122 @@ describe("cli", () => {
 		const set = await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, summary)]);
 		expect(set.value).toEqual({ operation: "context-set", reference: expect.stringMatching(/^CTX_/), revision: 1 });
 		expect(set.output).not.toContain(summary);
+	});
+
+	it("returns a compact context definition acknowledgement without authored content", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const definition = "Term definition that must not be echoed. ".repeat(100);
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return { output: stdout.read(), value: JSON.parse(stdout.read()) };
+		};
+
+		const set = await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
 
 		const define = await runJson(["context", "define", "Order", "--body-file", writeBodyFile(root, definition)]);
 		expect(define.value).toEqual(expect.objectContaining({ operation: "context-define", contextReference: set.value.reference, term: "Order", created: true, revision: 1 }));
 		expect(define.output).not.toContain(definition);
+	});
 
+	it("returns a compact context definition update acknowledgement", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read());
+		};
+
+		await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
+		await runJson(["context", "define", "Order", "--body-file", writeBodyFile(root, "Term definition")]);
 		const redefine = await runJson(["context", "define", "Order", "--body-file", writeBodyFile(root, "Updated definition")]);
-		expect(redefine.value).toEqual(expect.objectContaining({ operation: "context-define", term: "Order", created: false, revision: 2 }));
+		expect(redefine).toEqual(expect.objectContaining({ operation: "context-define", term: "Order", created: false, revision: 2 }));
+	});
 
+	it("returns a compact context term removal acknowledgement", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read());
+		};
+
+		const set = await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
+		await runJson(["context", "define", "Order", "--body-file", writeBodyFile(root, "Term definition")]);
 		const forget = await runJson(["context", "forget", "Order"]);
-		expect(forget.value).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.value.reference, term: "Order", removed: true }));
+		expect(forget).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.reference, term: "Order", removed: true }));
+	});
+
+	it("returns a compact no-op context term removal acknowledgement", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read());
+		};
+
+		const set = await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
+		await runJson(["context", "define", "Order", "--body-file", writeBodyFile(root, "Term definition")]);
+		const forget = await runJson(["context", "forget", "Order"]);
 		const forgetNoop = await runJson(["context", "forget", "Order"]);
-		expect(forgetNoop.value).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.value.reference, term: "Order", removed: false }));
+		expect(forget).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.reference, term: "Order", removed: true }));
+		expect(forgetNoop).toEqual(expect.objectContaining({ operation: "context-forget", reference: set.reference, term: "Order", removed: false }));
+	});
 
+	it("returns compact context restoration acknowledgements", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read());
+		};
+
+		await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
 		const contextRestore = await runJson(["restore", "--context", "default", "--revision", "1"]);
-		expect(contextRestore.value).toEqual({ operation: "context-restore", contextKey: "default", revision: 2, restoredFromRevision: 1 });
-		const termRestore = await runJson(["restore", "--context", "default", "--term", "Order", "--revision", "1"]);
-		expect(termRestore.value).toEqual(expect.objectContaining({ operation: "context-term-restore", contextKey: "default", term: "Order", restoredFromRevision: 1 }));
+		expect(contextRestore).toEqual({ operation: "context-restore", contextKey: "default", revision: 2, restoredFromRevision: 1 });
+	});
 
+	it("returns a compact context term restoration acknowledgement", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const runJson = async (args: string[]) => {
+			const stdout = createCapture();
+			await runCli([...args, "--view", "compact", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
+			return JSON.parse(stdout.read());
+		};
+
+		await runJson(["context", "set", "--title", "Compact context", "--body-file", writeBodyFile(root, "Context summary")]);
+		await runJson(["context", "define", "Order", "--body-file", writeBodyFile(root, "Term definition")]);
+		const termRestore = await runJson(["restore", "--context", "default", "--term", "Order", "--revision", "1"]);
+		expect(termRestore).toEqual(expect.objectContaining({ operation: "context-term-restore", contextKey: "default", term: "Order", restoredFromRevision: 1 }));
+	});
+
+	it("returns a compact entity restoration acknowledgement", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
 		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
-		const entity = await store.createEntity({ kind: "issue", title: "Original", body: "Original body" });
-		await store.updateEntity({
-			entityId: entity.id,
-			title: "Edited",
-			expectedRevision: entity.revision,
-			expectedContentHash: entity.contentHash
-		});
-		await store.close();
+		let entity;
+		try {
+			entity = await store.createEntity({ kind: "issue", title: "Original", body: "Original body" });
+			await store.updateEntity({
+				entityId: entity.id,
+				title: "Edited",
+				expectedRevision: entity.revision,
+				expectedContentHash: entity.contentHash
+			});
+		} finally {
+			await store.close();
+		}
 		const entityRestoreOutput = createCapture();
-		await runCli(["restore", entity.reference, "--revision", "1", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: entityRestoreOutput.stream });
+		await runCli(["restore", entity!.reference, "--revision", "1", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: entityRestoreOutput.stream });
 		expect(JSON.parse(entityRestoreOutput.read())).toEqual({
 			operation: "restore",
-			id: entity.id,
+			id: entity!.id,
 			revision: 3,
 			restoredFromRevision: 1
 		});
