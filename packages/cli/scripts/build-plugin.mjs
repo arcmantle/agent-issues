@@ -47,7 +47,6 @@ export function buildPlugin({ sourceDir, targetDir }) {
 		.filter(
 			(entry) =>
 				entry.isDirectory() &&
-				entry.name.startsWith("ai-") &&
 				existsSync(path.join(sourceSkillsDir, entry.name, "SKILL.md"))
 		)
 		.map((entry) => entry.name)

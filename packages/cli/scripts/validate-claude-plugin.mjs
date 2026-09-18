@@ -51,7 +51,7 @@ try {
 	);
 	assertIncludes(details, "Agents (1)  agent-issues", "Claude agent inventory");
 	assertIncludes(details, "MCP servers (1)  agent-issues", "Claude MCP inventory");
-	assertIncludes(details, "ai-start-work", "Claude namespaced skill inventory");
+	assertIncludes(details, "start-work", "Claude namespaced skill inventory");
 
 	const server = installedPlugin.mcpServers?.["agent-issues"];
 	if (typeof server?.command !== "string" || !Array.isArray(server.args)) {

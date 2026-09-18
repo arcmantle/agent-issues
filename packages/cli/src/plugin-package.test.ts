@@ -32,7 +32,6 @@ describe("portable plugin package", () => {
 			.filter(
 				(entry) =>
 					entry.isDirectory() &&
-					entry.name.startsWith("ai-") &&
 					existsSync(path.join("skills", entry.name, "SKILL.md"))
 			)
 			.map((entry) => entry.name)

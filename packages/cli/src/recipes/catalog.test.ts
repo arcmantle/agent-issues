@@ -247,14 +247,14 @@ it("provides a Pioneer ticket recipe with its current headings", () => {
 
 it("links each body-writing skill to only its applicable recipes", () => {
 	const expectedRecipesByFile = new Map([
-		["ai-domain-modeling/ADR-FORMAT.md", ["adr.md"]],
-		["ai-domain-modeling/CONTEXT-FORMAT.md", ["context-summary.md", "context-term.md"]],
-		["ai-handoff/SKILL.md", ["handoff.md"]],
-		["ai-migrate-docs/SKILL.md", ["adr.md", "context-summary.md", "context-term.md", "initiative.md", "issue.md", "prd.md", "user-story.md"]],
-			["ai-prototype/SKILL.md", ["issue.md"]],
-		["ai-to-issues/SKILL.md", ["issue.md"]],
-		["ai-to-prd/SKILL.md", ["prd.md", "user-story.md"]],
-			["ai-pioneer/SKILL.md", ["pioneer-map.md", "pioneer-ticket.md"]]
+		["domain-modeling/ADR-FORMAT.md", ["adr.md"]],
+		["domain-modeling/CONTEXT-FORMAT.md", ["context-summary.md", "context-term.md"]],
+		["handoff/SKILL.md", ["handoff.md"]],
+		["migrate-docs/SKILL.md", ["adr.md", "context-summary.md", "context-term.md", "initiative.md", "issue.md", "prd.md", "user-story.md"]],
+			["prototype/SKILL.md", ["issue.md"]],
+		["to-issues/SKILL.md", ["issue.md"]],
+		["to-prd/SKILL.md", ["prd.md", "user-story.md"]],
+			["pioneer/SKILL.md", ["pioneer-map.md", "pioneer-ticket.md"]]
 	]);
 
 	for (const [skillFile, expectedRecipes] of expectedRecipesByFile) {
@@ -270,9 +270,9 @@ it("links each body-writing skill to only its applicable recipes", () => {
 	}
 });
 
-it("requires Issue Preview approval before ai-to-issues creates records", () => {
+it("requires Issue Preview approval before to-issues creates records", () => {
 	const skill = readFileSync(
-		fileURLToPath(new URL("../../skills/ai-to-issues/SKILL.md", import.meta.url)),
+		fileURLToPath(new URL("../../skills/to-issues/SKILL.md", import.meta.url)),
 		"utf8"
 	);
 

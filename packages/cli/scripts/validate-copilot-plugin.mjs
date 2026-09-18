@@ -115,9 +115,9 @@ function validateComponents(installedPluginDir, environment) {
 	if (!Array.isArray(skills)) {
 		throw new Error("Copilot skill list did not return an array");
 	}
-	const startWorkSkill = skills.find((skill) => skill?.name === "ai-start-work");
+	const startWorkSkill = skills.find((skill) => skill?.name === "start-work");
 	if (startWorkSkill?.source !== "plugin") {
-		throw new Error("Copilot did not expose the ai-start-work plugin skill");
+		throw new Error("Copilot did not expose the start-work plugin skill");
 	}
 
 	const mcpConfiguration = readJsonOutput(
