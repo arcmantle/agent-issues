@@ -64,18 +64,25 @@ For each remaining behavior:
 ```
 RED:   Write next test, or reuse the existing failing test -> fails
 GREEN: Minimal code to pass -> passes
+REFACTOR CHECKPOINT: Use the [refactoring guidance](refactoring.md) to inspect and improve the slice if useful, then rerun focused tests -> passes
 ```
 
 Run one failing test at a time. Write only enough code to pass it. Then move to the next behavior. Do not add a new test when the current suite already fails for the correct reason.
 
-### 4. Refactor
+### 4. Refactor workflow
 
-Refactor only while the tests are green. Complete both parts before you continue. Use the [refactoring guidance](refactoring.md). Run the focused tests again after each step.
+Refactoring occurs at two points: after each green slice during the loop, and as a mandatory final gate before review. Refactoring is required work, even when the result is that no change is needed. After every green slice, pause before the next red and use the [refactoring guidance](refactoring.md). Inspect the changed production code and tests for one small, behavior-preserving improvement. Record either the improvement or why no refactor is justified.
+
+Do not combine a refactor with a behavior change. If the code needs a new test to define behavior, return to `RED`. If a refactor is useful, make one small change at a time and run the focused tests after each change. Stop when the next change would add risk without improving clarity, duplication, ownership, or test-contract quality.
+
+After all required behaviors are green, complete both final passes before review:
 
 - **Code refactor:** Remove duplication in production code. Keep the tests on the public interface.
 - **Test-contract refactor:** Map each new test to one behavior from the planning list. Remove a test if another public-interface test already fails for the same reason. Merge near-duplicate tests that pin the same API. Keep the smallest set that still pins the issue contract.
 
-Do not mark this step complete while a subsumed test remains. Do not keep a driving test as history.
+Run the focused tests after every production-code refactor and after every test-contract change. Do not mark this gate complete until the final focused suite is green, every test maps to a required behavior, and the refactor result has been recorded in the active issue progress or completion report. Do not keep a driving test as history.
+
+Use one line for each checkpoint: `REFACTOR: <change and benefit>` or `REFACTOR: no justified change; <reason>`. Do not add a code comment only to satisfy this record.
 
 ### 5. Implementation review gate
 
@@ -111,8 +118,9 @@ If you need a paragraph-long comment to justify a workaround, the code is wrong.
 [ ] Test does not restate a static declaration unless that shape is an external contract
 [ ] Test covers current or newly supported behavior, not only the absence of removed behavior
 [ ] Obsolete tests were removed or updated
-[ ] Subsumed driving tests were deleted or merged behavior, not only the absence of removed behavior
-[ ] Obsolete tests were removed or updated
+[ ] Subsumed driving tests were deleted or merged, not kept only for a completed red-green cycle
 [ ] Code is minimal for this test
+[ ] Refactor checkpoint was completed after each green slice, or no refactor was recorded as justified
+[ ] Final code and test-contract refactors were completed before review
 [ ] No speculative features added
 ```
