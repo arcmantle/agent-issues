@@ -212,6 +212,62 @@ describe("cli", () => {
 		expect(stdout.read()).toContain("agent-issues help");
 	});
 
+	it.each([
+		{
+			host: "copilot",
+			expected: [
+				["copilot", "plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"],
+				["copilot", "plugin", "install", "agent-issues@agent-issues"]
+			]
+		},
+		{
+			host: "claude",
+			expected: [
+				["claude", "plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"],
+				["claude", "plugin", "install", "agent-issues@agent-issues", "--scope", "user"]
+			]
+		}
+	])("installs the plugin through $host", async ({ host, expected }) => {
+		const stdout = createCapture();
+		const commands: string[][] = [];
+
+		expect(await runCli(["plugin", "install", host, "--json"], {
+			cwd: createTempDir(),
+			stderr: createCapture().stream,
+			stdout: stdout.stream,
+			pluginInstallDependencies: {
+				run: async (command, args) => {
+					commands.push([command, ...args]);
+				}
+			}
+		})).toBe(0);
+
+		expect(commands).toEqual(expected);
+		expect(JSON.parse(stdout.read())).toEqual({
+			command: "plugin-install",
+			host,
+			marketplace: "arcmantle/agent-issues-plugin",
+			plugin: "agent-issues@agent-issues"
+		});
+	});
+
+	it("rejects an unsupported plugin host", async () => {
+		await expect(runCli(["plugin", "install", "cursor"])).rejects.toThrow(
+			"Unsupported plugin host: cursor. Use copilot or claude."
+		);
+	});
+
+	it("propagates a host command failure", async () => {
+		await expect(runCli(["plugin", "install", "copilot"], {
+			cwd: createTempDir(),
+			pluginInstallDependencies: {
+				run: async () => {
+					throw new Error("Could not run copilot: command not found");
+				}
+			}
+		})).rejects.toThrow("Could not run copilot: command not found");
+	});
+
 	it("creates an initiative-owned Plan and marks it ready", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "plan.db");

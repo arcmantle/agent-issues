@@ -244,10 +244,17 @@ agent-issues auth logout work
 
 Install both global packages before you install a host plugin. The plugin registers the `agent-issues-mcp` command described in [MCP registration](#mcp-registration).
 
+Use one command to install the plugin for a supported host:
+
+```bash
+agent-issues plugin install copilot
+agent-issues plugin install claude
+```
+
 ### Copilot CLI and VS Code
 
 ```bash
-copilot plugin marketplace add arcmantle/agent-issues
+copilot plugin marketplace add arcmantle/agent-issues-plugin
 copilot plugin install agent-issues@agent-issues
 ```
 
@@ -265,8 +272,8 @@ Remove the shared plugin with `copilot plugin uninstall agent-issues`. In VS Cod
 ### Claude Code
 
 ```bash
-claude plugin marketplace add arcmantle/agent-issues
-claude plugin install agent-issues@agent-issues
+claude plugin marketplace add arcmantle/agent-issues-plugin
+claude plugin install agent-issues@agent-issues --scope user
 ```
 
 Update the marketplace, then update the installed plugin:

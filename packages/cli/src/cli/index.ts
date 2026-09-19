@@ -29,6 +29,7 @@ import {
 import { ExportCommand } from "./commands/export.js";
 import { FallbackCommand } from "./commands/fallback.js";
 import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
+import { PluginInstallCommand } from "./commands/plugin.js";
 import { SiteCommand } from "./commands/site.js";
 import { SqlCommand } from "./commands/sql.js";
 import { SynchronizeCommand } from "./commands/synchronize.js";
@@ -54,6 +55,7 @@ function buildCli(): Cli<AgentIssuesContext> {
 	cli.register(HelpCommand);
 	cli.register(SchemaCommand);
 	cli.register(CapabilitiesCommand);
+	cli.register(PluginInstallCommand);
 	cli.register(SiteCommand);
 	cli.register(InitCommand);
 	cli.register(CurrentTenantCommand);

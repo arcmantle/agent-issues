@@ -10,11 +10,23 @@ Install the two required commands first. The plugin uses `agent-issues-mcp`, whi
 npm install --global agent-issues agent-issues-mcp
 ```
 
-Then add this plugin marketplace and install Agent Issues:
+Then install the plugin for Copilot CLI or Claude Code:
+
+```bash
+agent-issues plugin install copilot
+agent-issues plugin install claude
+```
+
+The commands add this plugin marketplace and install Agent Issues:
 
 ```bash
 copilot plugin marketplace add arcmantle/agent-issues-plugin
 copilot plugin install agent-issues@agent-issues
+```
+
+```bash
+claude plugin marketplace add arcmantle/agent-issues-plugin
+claude plugin install agent-issues@agent-issues --scope user
 ```
 
 In VS Code, enable `chat.plugins.enabled`. VS Code loads the installed plugin from the shared Copilot plugin directory.

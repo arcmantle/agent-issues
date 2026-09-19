@@ -10,6 +10,9 @@ import { openStorageDriver } from "../runtime/open-storage-driver.js";
 
 export type AgentIssuesContext = BaseContext & {
 	cwd: string;
+	pluginInstallDependencies?: {
+		run: PluginInstallRunner;
+	};
 	authLoginDependencies?: {
 		deviceCodeLogin?: (options: {
 			tenantId: string;
@@ -35,6 +38,12 @@ export type AgentIssuesContext = BaseContext & {
 	 */
 	credentialStoreOptions?: SavedLoginStoreOptions;
 };
+
+export type PluginInstallRunner = (
+	command: string,
+	args: string[],
+	options: { quiet: boolean }
+) => Promise<void>;
 
 export type EntityView = "compact" | "full";
 
