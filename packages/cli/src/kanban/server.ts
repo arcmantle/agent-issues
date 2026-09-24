@@ -25,6 +25,19 @@ export type StopKanbanServerResult = {
 
 export const KANBAN_HEALTH_PATH = "/__agent_issues/kanban/health";
 export const KANBAN_STOP_PATH = "/__agent_issues/kanban/stop";
+export const KANBAN_DISCOVERY_PATH = "/__agent_issues/kanban/discovery";
+
+const KANBAN_DISCOVERY = {
+	projects: [
+		{
+			id: "agent-issues",
+			name: "Agent Issues",
+			boards: [
+				{ id: "active-work", name: "Active work" }
+			]
+		}
+	]
+};
 
 export async function startKanbanServer(input: { host?: string; port?: number } = {}): Promise<KanbanServerHandle> {
 	const host = input.host ?? "127.0.0.1";
@@ -133,6 +146,16 @@ function handleRequest(input: { request: IncomingMessage; response: ServerRespon
 		return;
 	}
 
+	if (requestUrl.pathname === KANBAN_DISCOVERY_PATH) {
+		if (input.request.method !== "GET") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+
+		writeJson(input.response, 200, KANBAN_DISCOVERY);
+		return;
+	}
+
 	if (input.request.method !== "GET") {
 		writeText(input.response, 405, "Method Not Allowed");
 		return;
@@ -157,4 +180,9 @@ function handleRequest(input: { request: IncomingMessage; response: ServerRespon
 function writeText(response: ServerResponse, statusCode: number, body: string) {
 	response.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8" });
 	response.end(body);
+}
+
+function writeJson(response: ServerResponse, statusCode: number, body: unknown) {
+	response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+	response.end(JSON.stringify(body));
 }

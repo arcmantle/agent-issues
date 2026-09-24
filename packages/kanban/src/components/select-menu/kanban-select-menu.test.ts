@@ -11,8 +11,25 @@ afterEach(() => {
 	document.body.replaceChildren();
 });
 
+function installPopoverApi(element: HTMLElement) {
+	function dispatchToggle(newState: "closed" | "open") {
+		const event = new Event("toggle") as ToggleEvent;
+		Object.defineProperty(event, "newState", { value: newState });
+		element.dispatchEvent(event);
+	}
+
+	Object.defineProperties(element, {
+		hidePopover: {
+			value: () => dispatchToggle("closed")
+		},
+		showPopover: {
+			value: () => dispatchToggle("open")
+		}
+	});
+}
+
 describe("KanbanSelectMenu", () => {
-	it("renders a labeled native select from its typed render service", async () => {
+	it("renders a labeled Popover listbox from its typed render service", async () => {
 		new ContextProvider(document.body, kanbanSelectMenuRenderServiceContext, {
 			select: () => undefined,
 			selectMenu: signal<KanbanSelectMenuState>({
@@ -33,12 +50,14 @@ describe("KanbanSelectMenu", () => {
 		await element.updateComplete;
 
 		const label = element.shadowRoot?.querySelector("label");
-		const nativeSelect = element.shadowRoot?.querySelector<HTMLSelectElement>("select");
+		const trigger = element.shadowRoot?.querySelector<HTMLButtonElement>("button");
+		const listbox = element.shadowRoot?.querySelector<HTMLElement>("[role=listbox]");
 		expect(label?.textContent).toContain("Status");
-		expect(label?.htmlFor).toBe(nativeSelect?.id);
-		expect(nativeSelect?.name).toBe("status");
-		expect(nativeSelect?.value).toBe("Todo");
-		expect([ ...(nativeSelect?.options ?? []) ].map((option) => option.value)).toEqual([
+		expect(trigger?.textContent).toContain("Todo");
+		expect(trigger?.getAttribute("aria-controls")).toBe(listbox?.id);
+		expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+		expect(listbox?.getAttribute("popover")).toBe("auto");
+		expect([ ...(listbox?.querySelectorAll<HTMLElement>("[role=option]") ?? []) ].map((option) => option.textContent?.trim())).toEqual([
 			"Todo",
 			"In progress",
 			"Blocked",
@@ -46,7 +65,7 @@ describe("KanbanSelectMenu", () => {
 		]);
 	});
 
-	it("sends a select intent when the native control changes", async () => {
+	it("sends a select intent when a listbox option is chosen", async () => {
 		const select = vi.fn();
 		new ContextProvider(document.body, kanbanSelectMenuRenderServiceContext, {
 			select,
@@ -67,13 +86,12 @@ describe("KanbanSelectMenu", () => {
 		document.body.append(element);
 		await element.updateComplete;
 
-		const nativeSelect = element.shadowRoot?.querySelector<HTMLSelectElement>("select");
-		if (nativeSelect === undefined || nativeSelect === null) {
-			throw new Error("expected a native select");
+		const option = element.shadowRoot?.querySelector<HTMLElement>("[data-value='In progress']");
+		if (option === undefined || option === null) {
+			throw new Error("expected an In progress option");
 		}
 
-		nativeSelect.value = "In progress";
-		nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+		option.click();
 		await element.updateComplete;
 
 		expect(select).toHaveBeenCalledWith("In progress");
@@ -116,12 +134,14 @@ describe("KanbanSelectMenu", () => {
 		});
 		await element.updateComplete;
 
-		const nativeSelect = element.shadowRoot?.querySelector<HTMLSelectElement>("select");
+		const trigger = element.shadowRoot?.querySelector<HTMLButtonElement>("button");
+		const selectedOption = element.shadowRoot?.querySelector<HTMLElement>("[data-value=Done]");
 		expect(element.shadowRoot?.querySelector("label")?.textContent).toContain("Workflow status");
-		expect(nativeSelect?.value).toBe("Done");
+		expect(trigger?.textContent).toContain("Done");
+		expect(selectedOption?.getAttribute("aria-selected")).toBe("true");
 	});
 
-	it("renders a disabled native select without sending a select intent", async () => {
+	it("renders a disabled trigger without sending a select intent", async () => {
 		const select = vi.fn();
 		new ContextProvider(document.body, kanbanSelectMenuRenderServiceContext, {
 			select,
@@ -142,10 +162,123 @@ describe("KanbanSelectMenu", () => {
 		document.body.append(element);
 		await element.updateComplete;
 
-		const nativeSelect = element.shadowRoot?.querySelector<HTMLSelectElement>("select");
-		expect(nativeSelect?.disabled).toBe(true);
-		nativeSelect?.dispatchEvent(new Event("change", { bubbles: true }));
+		const trigger = element.shadowRoot?.querySelector<HTMLButtonElement>("button");
+		const option = element.shadowRoot?.querySelector<HTMLElement>("[data-value=Done]");
+		expect(trigger?.disabled).toBe(true);
+		trigger?.click();
+		option?.click();
 		expect(select).not.toHaveBeenCalled();
 		expect(intent).not.toHaveBeenCalled();
+	});
+
+	it("opens, moves through, and selects a listbox option with the keyboard", async () => {
+		const select = vi.fn();
+		new ContextProvider(document.body, kanbanSelectMenuRenderServiceContext, {
+			select,
+			selectMenu: signal<KanbanSelectMenuState>({
+				disabled: false,
+				label: "Status",
+				name: "status",
+				options: [
+					{ label: "Todo", value: "Todo" },
+					{ label: "In progress", value: "In progress" }
+				],
+				value: "Todo"
+			})
+		});
+		const element = document.createElement("kanban-select-menu");
+		document.body.append(element);
+		await element.updateComplete;
+
+		const trigger = element.shadowRoot?.querySelector<HTMLButtonElement>("button");
+		const todoOption = element.shadowRoot?.querySelector<HTMLElement>("[data-value=Todo]");
+		const inProgressOption = element.shadowRoot?.querySelector<HTMLElement>("[data-value='In progress']");
+		const listbox = element.shadowRoot?.querySelector<HTMLElement>("[role=listbox]");
+		if (listbox === undefined || listbox === null) {
+			throw new Error("expected a listbox");
+		}
+
+		installPopoverApi(listbox);
+		trigger?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+		await element.updateComplete;
+
+		expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+		expect(element.shadowRoot?.activeElement).toBe(todoOption);
+		todoOption?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+		expect(element.shadowRoot?.activeElement).toBe(inProgressOption);
+		inProgressOption?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+		await element.updateComplete;
+
+		expect(select).toHaveBeenCalledWith("In progress");
+		expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+	});
+
+	it("opens with focus on the final option when ArrowUp is pressed", async () => {
+		new ContextProvider(document.body, kanbanSelectMenuRenderServiceContext, {
+			select: () => undefined,
+			selectMenu: signal<KanbanSelectMenuState>({
+				disabled: false,
+				label: "Status",
+				name: "status",
+				options: [
+					{ label: "Todo", value: "Todo" },
+					{ label: "In progress", value: "In progress" }
+				],
+				value: "Todo"
+			})
+		});
+		const element = document.createElement("kanban-select-menu");
+		document.body.append(element);
+		await element.updateComplete;
+
+		const trigger = element.shadowRoot?.querySelector<HTMLButtonElement>("button");
+		const inProgressOption = element.shadowRoot?.querySelector<HTMLElement>("[data-value='In progress']");
+		const listbox = element.shadowRoot?.querySelector<HTMLElement>("[role=listbox]");
+		if (listbox === undefined || listbox === null) {
+			throw new Error("expected a listbox");
+		}
+
+		installPopoverApi(listbox);
+		trigger?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" }));
+		await element.updateComplete;
+
+		expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+		expect(element.shadowRoot?.activeElement).toBe(inProgressOption);
+	});
+
+	it("dismisses the listbox and restores trigger focus when Escape is pressed", async () => {
+		new ContextProvider(document.body, kanbanSelectMenuRenderServiceContext, {
+			select: () => undefined,
+			selectMenu: signal<KanbanSelectMenuState>({
+				disabled: false,
+				label: "Status",
+				name: "status",
+				options: [
+					{ label: "Todo", value: "Todo" },
+					{ label: "Done", value: "Done" }
+				],
+				value: "Todo"
+			})
+		});
+		const element = document.createElement("kanban-select-menu");
+		document.body.append(element);
+		await element.updateComplete;
+
+		const trigger = element.shadowRoot?.querySelector<HTMLButtonElement>("button");
+		const option = element.shadowRoot?.querySelector<HTMLElement>("[data-value=Todo]");
+		const listbox = element.shadowRoot?.querySelector<HTMLElement>("[role=listbox]");
+		if (listbox === undefined || listbox === null) {
+			throw new Error("expected a listbox");
+		}
+
+		installPopoverApi(listbox);
+		trigger?.click();
+		await element.updateComplete;
+		option?.focus();
+		option?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+		await element.updateComplete;
+
+		expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+		expect(element.shadowRoot?.activeElement).toBe(trigger);
 	});
 });

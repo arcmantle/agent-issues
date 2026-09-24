@@ -2,7 +2,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { startKanbanServer, type KanbanServerHandle } from "./server.js";
+import { KANBAN_DISCOVERY_PATH, startKanbanServer, type KanbanServerHandle } from "./server.js";
 import { runCli } from "../cli.js";
 
 let handle: KanbanServerHandle | undefined;
@@ -43,6 +43,23 @@ describe("Kanban server", () => {
 		expect(componentResponse.status).toBe(200);
 		expect(await rootResponse.text()).toContain('<div id="app"></div>');
 		expect(await componentResponse.text()).toContain('<div id="app"></div>');
+	});
+
+	it("serves available projects and boards through the Kanban discovery route", async () => {
+		handle = await startKanbanServer({ port: 0 });
+
+		const response = await fetch(`${handle.info.url}${KANBAN_DISCOVERY_PATH}`);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			projects: expect.arrayContaining([
+				expect.objectContaining({
+					id: expect.any(String),
+					name: expect.any(String),
+					boards: expect.arrayContaining([expect.objectContaining({ id: expect.any(String), name: expect.any(String) })])
+				})
+			])
+		});
 	});
 
 	it("stops a running Kanban server through the CLI", async () => {
