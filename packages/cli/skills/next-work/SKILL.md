@@ -1,6 +1,6 @@
 ---
 name: next-work
-description: Selects the next workable issue from a tracked scope and reports the reason to work on it next. Use after completing an issue or when choosing the next implementation slice.
+description: Selects and recommends the next workable issue from a tracked scope, then reports the reason to work on it next. Use after completing an issue or when choosing the next implementation slice.
 argument-hint: Initiative or issue ID
 ---
 
@@ -27,13 +27,21 @@ Use the refreshed graph each time. Do not rely on state you captured before the 
 
 ## Result
 
-Return the selected issue's:
+When one or more issues are workable, always return one explicit recommendation. Do not ask the user to choose between workable issues. The caller can ask for confirmation before it starts the recommended issue.
+
+Return, in this order:
+
+1. **Recommendation:** The selected issue's reference and title.
+2. **Why this issue:** A short comparison that states its unfinished unblock count and the tracer-bullet tie-break used against other workable issues.
+3. **Also workable:** Every other available issue, with its reference and title.
+4. The selected issue's:
 
 - Reference and title.
 - parent or leaf classification
 - user stories it `fixes`
 - open blockers
-- short reason for the selection
+
+Even when only one issue is workable, label it as the recommendation and state why it is the only current choice.
 
 If no issue is workable, return one of:
 
