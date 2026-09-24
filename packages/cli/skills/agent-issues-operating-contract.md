@@ -8,8 +8,9 @@ All bundled `ai-*` skills follow this contract. They also follow the shared [lan
 
 - Use the exact operation recipe named by the active skill. Start with its MCP tool. Use the listed CLI fallback only when the MCP server is unavailable or lacks that operation.
 - Before you plan, implement, migrate, or hand off work, run the **Entity Read** recipe, the **Relation Query** recipe, and the **Context Read** recipe to find the active tracked scope.
-- Do not leave a new workstream, ADR, or implementation follow-up untracked. Run the **Entity Create And Edit** recipe to create the missing record when its parent is clear. If not, ask one routing question.
+- Do not leave a new initiative, ADR, or implementation follow-up untracked. Run the **Entity Create And Edit** recipe to create the missing record when its parent is clear. If not, ask one routing question.
 - For new feature planning, create a new initiative by default. Reuse an existing initiative only when the user asks for that directly.
+- A Plan is required for every planning effort. Resolve an explicit Plan reference first. If it is unavailable in the current tracker scope, report that fact, then select an existing Plan under the active initiative or create a replacement Plan there. Do not use the unavailable reference for Plan-entry operations.
 - Run the **Entity State And Structure** recipe to change issue status and Plan status. Derive user story and PRD status from their linked issues. An ADR is `current` unless it is `superseded` or `archived`.
 - Treat each entity's complete `reference` field as its public tracker identity. Copy it exactly as returned by the tracker whenever you report or use an entity. Never abbreviate or truncate it, and never replace it with the internal `id`.
 

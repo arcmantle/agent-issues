@@ -12,7 +12,7 @@ A PRD is not created until the `prd` entity exists and its user stories exist as
 
 ## Process
 
-1. Require one explicit ready Plan reference. If it is missing or resolves to more than one Plan, stop and ask for the reference. Do not infer a Plan from conversation context.
+1. A ready Plan is required. Resolve the supplied Plan reference when one exists. If no reference is supplied or it is unavailable in the current tracker scope, resolve the active initiative and list its Plans. Use the one ready Plan when exactly one exists. If no ready Plan exists, create one replacement Plan under the active initiative and start `plan` to make it ready; do not create a PRD until that work is complete. If more than one ready Plan exists, ask the user to select one. Do not use an unavailable reference for Plan-entry operations.
 
 2. Run the **Entity Read** recipe for the Plan and the **Relation Query** recipe for its direct incoming `owns` relation. Reject a record that is not a Plan or is not `ready`. The Plan must have one initiative owner.
 

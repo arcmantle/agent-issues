@@ -20,8 +20,10 @@ Run the **Initiative Read** recipe and the **Relation Query** recipe for the act
 
 - the parent initiative that must structurally own the new issues
 - the PRD and user stories the issues must satisfy
-- the active Plan entries that each new issue implements, when the work comes from a Plan
+- the required ready Plan and its active entries that each new issue implements
 - any existing issues or blockers you must reuse instead of duplicate
+
+If the supplied Plan reference is unavailable in the current tracker scope, report that fact and select an existing ready Plan under the active initiative. If none exists, create a replacement Plan under that initiative and start `plan`; do not create an issue breakdown until the Plan is ready. If more than one ready Plan exists, ask the user to select one.
 
 ### 2. Explore the codebase
 

@@ -23,7 +23,7 @@ Once you have this information, act. Do not keep explaining the task to yourself
 
 `agent-issues` tracks work as a graph. It does not track work as loose markdown files.
 
-- `initiative`: the top-level workstream.
+- `initiative`: the top-level record.
 - `plan`: the planning record that tracks questions and decisions before it becomes ready for PRD conversion.
 - `prd`: the plan or product requirement for an initiative.
 - `userStory`: the user-visible slice that the PRD commits to.
@@ -56,7 +56,7 @@ For an entity's complete working context, run the **Relation Query** recipe once
 
 For real work, start with compact discovery and edge inspection. Use authored or initiative-wide content only when the task needs it:
 
-- To resume a workstream, run the **Handoff Read** recipe. Its selected handoff body carries the session context.
+- To resume tracked work, run the **Handoff Read** recipe. Its selected handoff body carries the session context.
 - Use filtered compact lists and relations to move from the target to the active issue and its blockers.
 - Run the **Initiative Read** recipe only when the task needs the whole initiative graph and authored records.
 - Run the **Context Read** recipe with it, so your language and plan match the glossary.

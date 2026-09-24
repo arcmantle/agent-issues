@@ -23,6 +23,8 @@ Every map and ticket is an issue, so it has a **title**. In everything the human
 
 The map is a single `agent-issues` issue under the active initiative — the canonical artifact. Its tickets are child issues of the map.
 
+Each pioneering effort requires one initiative-owned Plan. The Plan holds the detailed planning state; the map holds only its ticket frontier and concise links to ticket resolutions. Resolve an explicit Plan reference first. If it is unavailable in the current tracker scope, report that fact, then select an existing Plan under the active initiative or create one replacement Plan there. Record the selected Plan reference in the map Notes. Do not use an unavailable reference for Plan-entry operations or create a Plan per ticket.
+
 The map is an **index**, not a store. It lists the decisions made and points at the tickets that hold their detail; a decision lives in exactly one place — its ticket — so the map never restates it, only gists it and links.
 
 Use `agent-issues` as the source of truth. Run the **Entity Create And Edit** recipe to create the map as a `pioneer-map` issue under the initiative and each ticket as a `pioneer-ticket` child of the map. Run the **Entity Relations** recipe to add dependencies after creation with `blocks` relations.
@@ -47,7 +49,7 @@ Run the **Entity Create And Edit** recipe to record the answer in `## Resolution
 
 ### Plan-backed ticket planning
 
-For a grilling ticket, give `plan` the complete ticket reference. It runs the **Entity Create And Edit** recipe to create an initiative-owned Plan for a new effort, or resumes only an explicit Plan reference. Every Plan entry from that session uses the **Plan Entry Write** recipe to link back to the ticket reference.
+For a grilling ticket, resume the map's Plan and give `plan` the complete ticket reference. Every Plan entry from that session uses the **Plan Entry Write** recipe to link back to the ticket reference.
 
 The Plan is the canonical detailed resolution. When the ticket is done, retain its Question and status, and use a concise Resolution link to the Plan. Do not copy the detailed reasoning into the ticket. A Plan does not inform a Pioneer map.
 
@@ -89,8 +91,8 @@ Two modes. Either way, **never resolve more than one ticket per session** — wi
 
 User invokes with a loose idea.
 
-1. **Resolve the tracked scope.** Run the **Entity Read** recipe and the **Context Read** recipe to find the active initiative and read its context. For a new feature, run the **Entity Create And Edit** recipe to create a new initiative by default. Do not create a map outside an initiative.
-2. **Name the destination.** Run `plan` with `domain-modeling` active to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so settle it first.
+1. **Resolve the tracked scope and Plan.** Run the **Entity Read** recipe and the **Context Read** recipe to find the active initiative and read its context. For a new feature, run the **Entity Create And Edit** recipe to create a new initiative by default. Do not create a map outside an initiative. Resolve a supplied Plan reference, or select an existing Plan under that initiative. If the reference is unavailable or no Plan exists, report the unavailable reference when applicable and create one replacement initiative-owned Plan.
+2. **Name the destination.** Run `plan` with `domain-modeling` active against the selected Plan to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so settle it first.
 3. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surface the open decisions and the first steps that are possible now. **If this finds no fog** — the way to the destination is already clear and small enough for one session — do not create a map. Ask the user how to proceed.
 4. **Create the map** as a `pioneer-map` child issue of the initiative: Destination and Notes filled in, Decisions-so-far empty, and the fog recorded in **Not yet specified**.
 5. **Create the tickets you can specify now** as `pioneer-ticket` child issues of the map. Then wire `blocks` relations in a second pass, because issues need references before they can link to each other. This separates the frontier from blocked tickets. Keep everything you cannot yet specify in **Not yet specified**.

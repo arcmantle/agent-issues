@@ -10,7 +10,7 @@ Use the `domain-modeling` skill for this interview.
 
 ## Persist Plan State
 
-At the start of a new planning effort, run the **Entity Read** recipe for the active initiative. Run the **Entity Create And Edit** recipe to create one initiative-owned Plan with a stable Goal and Context body. If the user gives an explicit Plan reference, resume that Plan instead. Do not infer a Plan to resume or create a duplicate Plan.
+At the start of a new planning effort, run the **Entity Read** recipe for the active initiative. A Plan is required. If the user gives an explicit Plan reference, resolve it first. Resume it when it is a Plan owned by the active initiative. If it is unavailable in the current tracker scope, state that fact and create one replacement initiative-owned Plan with a stable Goal and Context body. Otherwise, create one initiative-owned Plan. Do not use an unavailable reference for Plan-entry operations or create a duplicate Plan.
 
 Use the **Plan Entry Write** recipe to record planning state as it changes:
 
