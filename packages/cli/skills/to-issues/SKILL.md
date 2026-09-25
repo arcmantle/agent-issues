@@ -42,12 +42,22 @@ Rules:
 - Merge changes only when they share one implementation boundary and one acceptance check.
 - Use sub-issues when related changes must roll up under one parent issue. In this shape, leaf sub-issues normally carry the `fixes` links to user stories.
 
+### Blocker direction
+
+`A blocks B` means B cannot start until A is done. The `blocks` relation always points from the prerequisite to the dependent issue.
+
+- If B is blocked by A, add `{ relationType: "blocks", targetKey: "B" }` to A's `relationReferences`.
+- Do not add `{ relationType: "blocks", targetKey: "A" }` to B's `relationReferences`.
+- Before you create a breakdown draft, list each edge as `blocker -> blocked` and check it against the proposed dependencies.
+- Root issues have no incoming `blocks` relations. Each non-root issue has an incoming `blocks` relation from every stated prerequisite.
+
 ### 4. Quiz the user
 
 Present the proposed breakdown as a numbered list. For each slice, show:
 
 - Title
 - Type: `HITL` or `AFK`
+- Blocks
 - Blocked by
 - User stories covered
 
@@ -57,7 +67,7 @@ Repeat until the user approves the breakdown.
 
 ### 5. Preview and approve the issue breakdown
 
-After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. Run the **Issue Breakdown** recipe to create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
+After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. For every dependency, verify that the `blocks` source is the prerequisite and the target is the dependent issue. Run the **Issue Breakdown** recipe to create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
 
 For an MCP host that can render apps:
 

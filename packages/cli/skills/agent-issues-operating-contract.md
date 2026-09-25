@@ -92,6 +92,7 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 - MCP: `relation_link({ fromId, relationType, toId })` or `relation_unlink({ fromId, relationType, toId })`.
 - CLI fallback: `agent-issues link <fromId> <relationType> <toId> --json` or `agent-issues unlink <fromId> <relationType> <toId> --json`.
+- For dependencies, `A blocks B` means B cannot start until A is done. The blocker is the source and the blocked issue is the target. If B is blocked by A, link A with `blocks` to B.
 
 ### Plan Entry Read
 
@@ -125,6 +126,7 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 - MCP approve: `issue_breakdown_approve({ draftId, snapshotDigest })`.
 - CLI fallback: `agent-issues issue-breakdown create <targetId> --input-file <path> --json`, `agent-issues issue-breakdown show <draftId> --json`, `agent-issues issue-breakdown latest <targetId> --json`, or `agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest> --json`.
 - Each proposed issue requires `key`, `title`, `outcome`, `workMode`, `scope`, `acceptanceCriteria`, and `relationReferences`. `parentKey` is optional.
+- For a proposed `blocks` relation, place the relation reference on the blocker and set its target to the blocked issue. Before draft creation, express every dependency as `blocker -> blocked` and verify that each dependent has the required incoming blockers.
 - Creating a draft does not create issue records. Approval creates the complete graph only when the digest matches the reviewed snapshot.
 
 ### Plan Preview
