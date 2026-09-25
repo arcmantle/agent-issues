@@ -48,7 +48,11 @@ const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	"6c4e5d5e7b55c93c9131d9a58a52329331225e7ea7931e4be95c85aaeef5a1d3",
 	"77424dc75798c6a57ef3e08c17e4e29afe1948cc2650e347731ac92d3f2e9c50",
 	"bbcb57583c51629c48796a92d5eeb462e014688821c770549b199f36d72b8a1b",
-	"7e4da79023e5dfae7dca9af6237cc8d682e4204cec24a28f43c0e71908853862"
+	"7e4da79023e5dfae7dca9af6237cc8d682e4204cec24a28f43c0e71908853862",
+	"99e12d737bc7fcd0b7ebf9ade320608691b793b95f04fdaa6df8dd4d72048c96"
+	,"b6f00a4c2cdc47d8e396c119e104449d6c97f0a111c0fc30f14af6813b0ee4af"
+	,"49bfea4a6c0e95767f42dd3fd1ecbe1bfc0ac064984133cae2cac85f31bcdff8"
+	,"3c78b8616ce76f2fe5cc44aec3c3eb25ff86b294f725cdffea4bf68ce3c905ab"
 ]);
 const DIRECT_FINAL_SCHEMA_SIGNATURE = "892a43c929f85fd4f71f334c02aa664bc7e8a5f2203929654a10e11229d541ff";
 const DIRECT_USER_DIRECTORY_SCHEMA_SIGNATURE = "8b16a9b6f6ed70905c50813482a2301d7dc9859775abba2c2dfc2300f8b225fe";
@@ -108,7 +112,7 @@ export function inspectSqliteSourceProfile(database: SqliteInternalConnection, e
 		&& ledgerIds[0] === "legacy-v7-direct") {
 		return { evidence, profile: "current-final", supported: true };
 	}
-	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE || schemaSignature === "902792184b29f07529230b5a5e49e09b7642ae65059a55a00e14280adcdf9b1e")
+	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE || schemaSignature === "902792184b29f07529230b5a5e49e09b7642ae65059a55a00e14280adcdf9b1e" || schemaSignature === "98a02c352e93cc53bc916a26402f9828065db6050dc038e83b96edbe8739d848" || schemaSignature === "cb1ce82c75f132e1e08795cbb31574e856339d76f3e8add625e7943c04aa032b")
 		&& ledgerIds.length === expectedLedgerIds.length + 1
 		&& ledgerIds[0] === "legacy-v7-direct"
 		&& ledgerIds.slice(1).every((id, index) => id === expectedLedgerIds[index])) {

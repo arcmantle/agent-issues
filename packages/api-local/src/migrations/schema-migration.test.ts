@@ -110,7 +110,7 @@ afterEach(() => {
 
 describe("golden-fixture migration wall", () => {
 	it("registers the SQLite production migration plan", () => {
-		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "entity-search", "record-search", "token-search", "trigram-search", "search-typo-vocabulary", "pioneer-entity-types", "issue-breakdown-drafts"]);
+		expect(migrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "entity-search", "record-search", "token-search", "trigram-search", "search-typo-vocabulary", "pioneer-entity-types", "issue-breakdown-drafts", "project-settings", "completion-observations", "completion-observation-version-state"]);
 	});
 
 	it("implements the SQLite legacy route without clone or historical migration replay", () => {
@@ -487,6 +487,8 @@ describe("fresh install schema parity", () => {
 			const applied = db2.prepare(`SELECT id FROM schema_migrations ORDER BY id`).all() as Array<{ id: string }>;
 			expect(applied).toEqual([
 				{ id: "adr-status-to-current" },
+				{ id: "completion-observation-version-state" },
+				{ id: "completion-observations" },
 				{ id: "context-term-provenance" },
 				{ id: "debt-metadata" },
 				{ id: "entity-search" },
@@ -497,6 +499,7 @@ describe("fresh install schema parity", () => {
 				{ id: "pioneer-entity-types" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
+				{ id: "project-settings" },
 				{ id: "record-provenance" },
 				{ id: "record-search" },
 				{ id: "relation-provenance" },

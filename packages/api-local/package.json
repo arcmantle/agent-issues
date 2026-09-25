@@ -35,6 +35,7 @@
 	},
 	"dependencies": {
 		"@agent-issues/core": "workspace:*",
+		"@arcmantle/prospector": "^1.1.2",
 		"better-sqlite3": "catalog:",
 		"drizzle-orm": "catalog:",
 		"marked": "catalog:"

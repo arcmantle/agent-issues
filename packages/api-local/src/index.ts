@@ -4,6 +4,8 @@ export * from "./features/entity-store/store.js";
 export * from "./features/context/context-store.js";
 export * from "./sqlite-store.js";
 export * from "./project-identity.js";
+export * from "./prospector.js";
+export * from "./workspace-observation.js";
 export * from "./daemon/daemon-state.js";
 export * from "./daemon/daemon-lifecycle.js";
 export * from "./daemon/local-daemon-store.js";

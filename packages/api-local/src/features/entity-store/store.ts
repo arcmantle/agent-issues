@@ -12,10 +12,12 @@ import { entities } from "../../schema.js";
 import { getContextDetails, type ContextDetails } from "../context/context-store.js";
 import {
 	collectReachableIds,
+	compareCodeCompatibility,
 	computeEntityContentHash,
 	applyReversePatch,
 	createReverseFieldPatch,
 	deriveMigratedEntityIdentity,
+	deriveVersionCoverage,
 	encodeEntityRecordKey,
 	ENTITY_REVERSE_PATCH_REGISTRY,
 	EntityConflictError,
@@ -24,10 +26,12 @@ import {
 	getAllowedRelationType,
 	getAllowedRelationTypes,
 	generateCanonicalIdentity,
+	getActivePlanReferencedEntityIds,
 	deriveEntityStatuses,
 	DEFAULT_EPIC_ID,
 	DEFAULT_PROJECT_ID,
 	getInitialStatus,
+	getCodeCompatibility,
 	isBodySource,
 	isEntityCategory,
 	isAllowedRelation,
@@ -38,11 +42,13 @@ import {
 	isStructuralRelationType,
 	isValidStatus,
 	materializeFromPatches,
+	projectPlanEntries,
 	RESERVED_SYSTEM_AUTHOR,
 	shortEntityReference,
 	STRUCTURAL_RELATION_TYPES,
 	toEntitySummary,
 	type BodySource,
+	type CompletionObservation,
 	type DatabaseSnapshot,
 	type DeleteResult,
 	type EntityDetails,
@@ -64,11 +70,13 @@ import {
 	type ProjectDiscovery,
 	type ProjectSummary,
 	type ProjectSnapshot,
+	type QueryEntitiesInput,
 	type QueryEntitiesResult,
 	type RelationRecord,
 	type RelationType,
 	type StatusUpdateResult,
 	type UnlinkResult,
+	type WorkspaceObservation,
 	wouldOrphanSubtree as wouldOrphanSubtreeInGraph
 } from "@agent-issues/core";
 
@@ -323,7 +331,7 @@ function linkEntitiesInTransaction(
 
 export function updateEntityStatus(
 	executor: SqliteExecutor,
-	input: { entityId: string; status: string; author?: string },
+	input: { entityId: string; status: string; author?: string; workspaceObservation?: WorkspaceObservation },
 	actorId: string = RESERVED_SYSTEM_AUTHOR
 ): StatusUpdateResult {
 	const entity = getEntityOrThrow(executor, input.entityId);
@@ -409,6 +417,9 @@ export function updateEntityStatus(
 	appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 		priorStatus: entity.status
 	});
+	if (entity.kind === "issue" && entity.status !== "done" && input.status === "done" && input.workspaceObservation) {
+		insertCompletionObservation(executor, entity.id, input.workspaceObservation);
+	}
 
 	return {
 		entity: toEntitySummary({ ...entity, status: input.status, revision: newRevision, updatedBy: actorId, updatedAt }),
@@ -884,13 +895,18 @@ export function deleteEntity(executor: SqliteExecutor, input: { entityId: string
 		});
 }
 
-export function getEntityDetails(executor: SqliteExecutor, entityId: string): EntityDetails {
+export function getEntityDetails(executor: SqliteExecutor, entityId: string, projectScoped: boolean = false): EntityDetails {
 	const entity = getEntityOrThrow(executor, entityId);
+	const incomingProjectFilter = projectScoped
+		? sql`AND (entities.project_id = ${executor.currentProjectId} OR (entities.id = ${executor.currentProjectId} AND relations.type IN (${sql.join(STRUCTURAL_RELATION_TYPES.map((relationType) => sql`${relationType}`), sql`, `)})))`
+		: sql``;
+	const outgoingProjectFilter = projectScoped ? sql`AND entities.project_id = ${executor.currentProjectId}` : sql``;
 	const incomingRows = all<EntitySummaryRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.to_id = ${entity.id}
+			${incomingProjectFilter}
 			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
 	const outgoingRows = all<EntitySummaryRow & { relation_type: string }>(executor, sql`SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
@@ -898,10 +914,19 @@ export function getEntityDetails(executor: SqliteExecutor, entityId: string): En
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND relations.from_id = ${entity.id}
+			${outgoingProjectFilter}
 			AND entities.tombstone = FALSE
 		ORDER BY entities.id`);
 
 	const statusMap = getDerivedStatusMap(executor);
+	const completionObservations = entity.kind === "issue" ? listCompletionObservations(executor, entity.id) : [];
+	const versionCoverage = entity.kind === "plan"
+		? deriveVersionCoverage(
+			getActivePlanReferencedEntityIds(listPlanEntries(executor, { planId: entity.id }))
+				.filter((entityId) => getEntityOrThrow(executor, entityId).kind === "issue")
+				.flatMap((issueId) => listCompletionObservations(executor, issueId))
+		)
+		: [];
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
 		incoming: incomingRows.map((row) => ({
@@ -912,15 +937,64 @@ export function getEntityDetails(executor: SqliteExecutor, entityId: string): En
 			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
-		planEntries: entity.kind === "issue" ? getRelatedPlanEntries(executor, entity.id) : []
+		planEntries: entity.kind === "issue" ? getRelatedPlanEntries(executor, entity.id) : [],
+		completionObservations,
+		currentCompletionObservation: completionObservations.at(-1) ?? null,
+		versionCoverage
 	};
+}
+
+function insertCompletionObservation(executor: SqliteExecutor, issueId: string, observation: WorkspaceObservation): void {
+	const id = randomUUID();
+	const ordinal = first<{ completion_ordinal: number }>(executor, sql`SELECT COALESCE(MAX(completion_ordinal), 0) + 1 AS completion_ordinal
+		FROM completion_observations WHERE tenant_id = ${executor.tenantId} AND issue_id = ${issueId}`)!.completion_ordinal;
+	const diagnostics = observation.state === "unknown" ? observation.diagnostics : observation.calculatedVersion.state === "unknown" ? observation.calculatedVersion.diagnostics : [];
+	const available = observation.state === "available" ? observation : undefined;
+	const calculatedVersionState = available?.calculatedVersion.state ?? "unknown";
+	const calculatedVersion = available?.calculatedVersion.state === "available" ? available.calculatedVersion.version : null;
+	executor.drizzle.run(sql`INSERT INTO completion_observations (
+		tenant_id, id, issue_id, completion_ordinal, repository_identity, commit_sha, branch, dirty, captured_at, calculated_version_state, calculated_version, diagnostics
+	) VALUES (
+		${executor.tenantId}, ${id}, ${issueId}, ${ordinal}, ${available?.repositoryIdentity ?? null}, ${available?.commitSha ?? null}, ${available?.branch ?? null}, ${available ? Number(available.dirty) : null}, ${observation.capturedAt}, ${calculatedVersionState}, ${calculatedVersion}, ${JSON.stringify(diagnostics)}
+	)`);
+}
+
+function listCompletionObservations(executor: SqliteExecutor, issueId: string): CompletionObservation[] {
+	return all<{
+		id: string;
+		issue_id: string;
+		completion_ordinal: number;
+		repository_identity: string | null;
+		commit_sha: string | null;
+		branch: string | null;
+		dirty: number | null;
+		captured_at: string;
+		calculated_version_state: "available" | "unknown";
+		calculated_version: string | null;
+		diagnostics: string;
+	}>(executor, sql`SELECT * FROM completion_observations
+		WHERE tenant_id = ${executor.tenantId} AND issue_id = ${issueId}
+		ORDER BY completion_ordinal`).map((row) => ({
+		id: row.id,
+		issueId: row.issue_id,
+		completionOrdinal: row.completion_ordinal,
+		repositoryIdentity: row.repository_identity,
+		commitSha: row.commit_sha,
+		branch: row.branch,
+		dirty: row.dirty === null ? null : row.dirty !== 0,
+		capturedAt: row.captured_at,
+		calculatedVersionState: row.calculated_version_state,
+		calculatedVersion: row.calculated_version,
+		diagnostics: JSON.parse(row.diagnostics) as Array<{ code: string; message: string }>
+	}));
 }
 
 export function queryEntityRelations(
 	executor: SqliteExecutor,
-	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] }
+	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] },
+	projectScoped: boolean = false
 ): EntityRelations {
-	const details = getEntityDetails(executor, input.entityId);
+	const details = getEntityDetails(executor, input.entityId, projectScoped);
 	const types = input.types?.length ? new Set(input.types) : undefined;
 	const includeIncoming = input.direction === undefined || input.direction === "both" || input.direction === "incoming";
 	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
@@ -970,6 +1044,7 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 	const statusMap = getDerivedStatusMap(executor);
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, statusMap));
 	const entityById = new Map(derivedEntities.map((entity) => [entity.id, entity]));
+	const issues = derivedEntities.filter((entity) => entity.kind === "issue");
 
 	return {
 		initiative: applyDerivedStatus(initiative, statusMap),
@@ -977,7 +1052,7 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 		prds: derivedEntities.filter((entity) => entity.kind === "prd"),
 		userStories: derivedEntities.filter((entity) => entity.kind === "userStory"),
 		adrs: derivedEntities.filter((entity) => entity.kind === "adr"),
-		issues: derivedEntities.filter((entity) => entity.kind === "issue"),
+		issues,
 		fixLinks: filteredRelationRows
 			.filter((relation) => relation.type === "fixes")
 			.map((relation) => ({
@@ -1001,7 +1076,8 @@ export function getInitiativeBundle(executor: SqliteExecutor, initiativeId: stri
 			.map((relation) => ({
 				adr: entityById.get(relation.from_id)!,
 				issue: entityById.get(relation.to_id)!
-			}))
+			})),
+		versionCoverage: deriveVersionCoverage(issues.flatMap((issue) => listCompletionObservations(executor, issue.id)))
 	};
 }
 
@@ -1090,7 +1166,7 @@ export function listEntities(executor: SqliteExecutor, kind: string): EntitySumm
 
 export function queryEntities(
 	executor: SqliteExecutor,
-	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
+	input: QueryEntitiesInput
 ): QueryEntitiesResult {
 	let selected = listEntities(executor, input.kind);
 	let parents: EntitySummary[] | undefined;
@@ -1100,7 +1176,8 @@ export function queryEntities(
 		selected = selected.filter((entity) => statuses.has(entity.status));
 	}
 	if (input.parentId) {
-		const parentRows = resolveSqliteEntities(executor, input.parentId);
+		const parentRows = resolveSqliteEntities(executor, input.parentId)
+			.filter((parent) => parent.projectId === executor.currentProjectId);
 		if (parentRows.length === 0) {
 			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
@@ -1112,12 +1189,32 @@ export function queryEntities(
 			.map((relation) => relation.toId));
 		selected = selected.filter((entity) => childIds.has(entity.id));
 	}
+	if (input.kind === "issue" && input.retrievalContext !== undefined) {
+		const retrievalContext = input.retrievalContext;
+		const compatibilityByIssueId = new Map(selected
+			.filter((entity) => entity.status === "done")
+			.map((entity) => [entity.id, getCodeCompatibility(listCompletionObservations(executor, entity.id).at(-1) ?? {
+				repositoryIdentity: null,
+				commitSha: null,
+				calculatedVersionState: "unknown" as const,
+				calculatedVersion: null
+			}, retrievalContext)]));
+		const completedIssues = selected
+			.filter((entity) => entity.status === "done")
+			.map((entity) => ({ ...entity, codeCompatibility: compatibilityByIssueId.get(entity.id)! }));
+		if (retrievalContext.diagnostics.length === 0) {
+			completedIssues.sort((left, right) => compareCodeCompatibility(left.codeCompatibility!, right.codeCompatibility!));
+		}
+		let completedIssueIndex = 0;
+		selected = selected.map((entity) => entity.status === "done" ? completedIssues[completedIssueIndex++]! : entity);
+	}
 
 	const limited = input.limit === undefined ? selected : selected.slice(0, input.limit);
 
 	return {
 		entities: limited,
 		total: selected.length,
+		...(input.retrievalContext ? { retrievalDiagnostics: input.retrievalContext.diagnostics } : {}),
 		...(parents && parents.length > 1 ? { parentGroups: parents.map((parent) => ({
 			parent,
 			entities: limited.filter((entity) => structuralRelations.some((relation) => relation.fromId === parent.id && relation.toId === entity.id))
@@ -1147,7 +1244,7 @@ function getOpenBlockers(executor: SqliteExecutor, issues: EntitySummary[]): Rec
 
 	const statusMap = getDerivedStatusMap(executor);
 	const blockingSourceIds = new Set<string>();
-	const blockRelations = listAllRelations(executor).filter((relation) => relation.type === "blocks" && issueIds.has(relation.toId));
+	const blockRelations = getAllRelations(executor).filter((relation) => relation.type === "blocks" && issueIds.has(relation.toId));
 	for (const relation of blockRelations) {
 		const sourceStatus = statusMap.get(relation.fromId);
 		if (sourceStatus && sourceStatus !== "done") {
@@ -2065,7 +2162,10 @@ function computeFileStatSignature(dbPath: string): string {
  * `SqliteStore` composes alongside the other three feature classes.
  */
 export class LocalEntityStore implements EntityStore {
-	public constructor(private readonly executor: SqliteExecutor) {}
+	public constructor(
+		private readonly executor: SqliteExecutor,
+		private readonly projectScoped: boolean = false
+	) {}
 
 	public async createEntity(input: {
 		kind: string;
@@ -2083,11 +2183,11 @@ export class LocalEntityStore implements EntityStore {
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
-		return getEntityDetails(this.executor, entityId);
+		return getEntityDetails(this.executor, entityId, this.projectScoped);
 	}
 
 	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): ReturnType<EntityStore["queryEntityRelations"]> {
-		return queryEntityRelations(this.executor, input);
+		return queryEntityRelations(this.executor, input, this.projectScoped);
 	}
 
 	public async listEntities(kind: string): ReturnType<EntityStore["listEntities"]> {

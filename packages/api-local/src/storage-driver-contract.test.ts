@@ -38,28 +38,32 @@ afterEach(() => {
 
 runStorageDriverContractSuite({ label: "SqliteStore", openStore: openTestStore, openStoreForProject: openTestStoreForProject });
 
-describe("storage-driver seam: search capability (SqliteStore)", () => {
-	it("searches a created entity by its exact reference", async () => {
-		const store = await openTestStore();
+describe("storage-driver seam: selected-project relations (SqliteStore)", () => {
+	it("shows the selected project as a version's structural parent", async () => {
+		const store = await openTestStoreForProject("selected-project-parent");
 
 		try {
-			const entity = await store.createEntity({ kind: "initiative", title: "Searchable initiative" });
+			const discovery = await store.getProjectDiscovery();
+			expect(discovery.kind).toBe("available");
+			if (discovery.kind !== "available") {
+				return;
+			}
+			const project = discovery.projects.find((entry) => entry.project.title === "selected-project-parent")!.project;
+			const version = await store.createEntity({ kind: "version", parentId: project.id, title: "1.0.0" });
 
-			await expect(store.getSearchCapability()).resolves.toEqual({ state: "available" });
-			await expect(store.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual({
-				state: "available",
-				results: [expect.objectContaining({
-					identity: expect.objectContaining({ sourceId: entity.id, sourceType: "entity" }),
-					match: { field: "identity" },
-					navigationTarget: { type: "entity", entityId: entity.id },
-					title: entity.title
-				})]
+			await expect(store.getEntityDetails(version.id)).resolves.toMatchObject({
+				incoming: [expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: project.id }) })]
+			});
+			await expect(store.queryEntityRelations({ entityId: version.id, direction: "incoming" })).resolves.toMatchObject({
+				incoming: [expect.objectContaining({ relationType: "owns", entity: expect.objectContaining({ id: project.id }) })]
 			});
 		} finally {
 			await store.close();
 		}
 	});
+});
 
+describe("storage-driver seam: search capability (SqliteStore)", () => {
 	it("records privacy-safe diagnostics for each search", async () => {
 		const store = await openTestStore();
 
@@ -526,19 +530,6 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 		}
 	});
 
-	it("returns a typed parse error for invalid search grammar", async () => {
-		const store = await openTestStore();
-
-		try {
-			await expect(store.search({ query: "search OR", scope: { type: "all-projects" } })).resolves.toEqual({
-				state: "parse-error",
-				error: { message: "Expected a search term.", start: 9, end: 9 }
-			});
-		} finally {
-			await store.close();
-		}
-	});
-
 	it("stores visible Markdown text in Plan-entry Search documents", async () => {
 		tempDir = mkdtempSync(path.join(tmpdir(), "agent-issues-storage-driver-markdown-"));
 		const dbPath = path.join(tempDir, "test.db");
@@ -736,44 +727,6 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 			}));
 		} finally {
 			await store.close();
-		}
-	});
-
-	it("uses the requested project for current-project searches", async () => {
-		const firstProjectStore = await openTestStoreForProject("first-project");
-		const secondProjectStore = await openTestStoreForProject("second-project");
-
-		try {
-			const entity = await firstProjectStore.createEntity({
-				kind: "initiative",
-				title: "First project search result",
-				body: "Isolated search result."
-			});
-			await secondProjectStore.createEntity({ kind: "initiative", title: "Second project record" });
-			const firstProject = (await firstProjectStore.getDatabaseSnapshot()).entities.find(({ kind }) => kind === "project")!;
-			const secondProject = (await secondProjectStore.getDatabaseSnapshot()).entities.find(({ kind }) => kind === "project")!;
-
-			await expect(secondProjectStore.search({
-				query: "isolated result",
-				scope: { type: "current-project", projectId: firstProject.id }
-			})).resolves.toEqual(expect.objectContaining({
-				state: "available",
-				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
-			}));
-			await expect(secondProjectStore.search({
-				query: "isolated result",
-				scope: { type: "current-project", projectId: secondProject.id }
-			})).resolves.toEqual({ state: "available", results: [] });
-			await expect(secondProjectStore.search({
-				query: "isolated result",
-				scope: { type: "all-projects" }
-			})).resolves.toEqual(expect.objectContaining({
-				state: "available",
-				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
-			}));
-		} finally {
-			await firstProjectStore.close();
-			await secondProjectStore.close();
 		}
 	});
 

@@ -1,4 +1,4 @@
-import { DEFAULT_PROJECT_ID, deriveMigratedEntityIdentity, encodeCanonicalReference, parseSearchQuery, type SearchCapability, type SearchDiagnostic, type SearchExpression, type SearchRequest, type SearchResponse, type SearchResult, type SearchSourceType } from "@agent-issues/core";
+import { compareCodeCompatibility, DEFAULT_PROJECT_ID, deriveMigratedEntityIdentity, encodeCanonicalReference, getCodeCompatibility, parseSearchQuery, type CodeCompatibility, type SearchCapability, type SearchDiagnostic, type SearchExpression, type SearchRequest, type SearchResponse, type SearchResult, type SearchSourceType, type WorkspaceRetrievalContext } from "@agent-issues/core";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { SqliteExecutor } from "../../db/sqlite-executor.js";
@@ -220,12 +220,20 @@ export class LocalSearchStore {
 				}
 			}
 
+			const rankedRows = [...resultRows.values()]
+				.map((row) => ({ row, codeCompatibility: input.retrievalContext ? this.getCodeCompatibility(row, input.retrievalContext) : undefined }))
+				.sort((left, right) => {
+					const textDifference = compareSearchTextRelevance(left.row, right.row);
+					if (textDifference !== 0 || input.retrievalContext?.diagnostics.length) return textDifference;
+					const compatibilityDifference = compareCodeCompatibility(left.codeCompatibility ?? "unknown", right.codeCompatibility ?? "unknown");
+					return compatibilityDifference !== 0 ? compatibilityDifference : compareSearchRows(left.row, right.row);
+				});
 			return this.recordSearchResponse({
 				state: "available",
-				results: [...resultRows.values()]
-					.sort(compareSearchRows)
+				results: rankedRows
 					.slice(0, resultLimit)
-					.map((row) => toSearchResult(row, parsedQuery.query.expression))
+					.map(({ row, codeCompatibility }) => toSearchResult(row, parsedQuery.query.expression, codeCompatibility)),
+				...(input.retrievalContext ? { retrievalDiagnostics: input.retrievalContext.diagnostics } : {})
 			}, startedAt, candidateCounts);
 		} catch (error) {
 			this.recordSearchDiagnostic({
@@ -254,6 +262,30 @@ export class LocalSearchStore {
 		if (this.searchDiagnostics.length > MAXIMUM_SEARCH_DIAGNOSTICS) {
 			this.searchDiagnostics.splice(0, this.searchDiagnostics.length - MAXIMUM_SEARCH_DIAGNOSTICS);
 		}
+	}
+
+	protected getCodeCompatibility(row: SearchDocumentRow, context: WorkspaceRetrievalContext): CodeCompatibility | undefined {
+		if (row.source_type !== "entity" || row.status_or_role !== "done") return undefined;
+		const observation = this.executor.drizzle.get<{
+			repository_identity: string | null;
+			commit_sha: string | null;
+			calculated_version_state: "available" | "unknown";
+			calculated_version: string | null;
+		}>(sql`SELECT repository_identity, commit_sha, calculated_version_state, calculated_version
+			FROM completion_observations
+			WHERE tenant_id = ${this.executor.tenantId} AND issue_id = ${row.source_id}
+			ORDER BY completion_ordinal DESC LIMIT 1`);
+		return getCodeCompatibility(observation ? {
+			repositoryIdentity: observation.repository_identity,
+			commitSha: observation.commit_sha,
+			calculatedVersionState: observation.calculated_version_state,
+			calculatedVersion: observation.calculated_version
+		} : {
+			repositoryIdentity: null,
+			commitSha: null,
+			calculatedVersionState: "unknown",
+			calculatedVersion: null
+		}, context);
 	}
 
 	public synchronizeEntitySearchDocuments(): void {
@@ -732,7 +764,7 @@ function escapeLike(value: string): string {
 	return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
-function toSearchResult(row: SearchDocumentRow, expression?: SearchExpression): SearchResult {
+function toSearchResult(row: SearchDocumentRow, expression?: SearchExpression, codeCompatibility?: CodeCompatibility): SearchResult {
 	return {
 		id: `${row.source_type}:${row.source_id}`,
 		identity: {
@@ -749,6 +781,7 @@ function toSearchResult(row: SearchDocumentRow, expression?: SearchExpression): 
 		updatedAt: row.updated_at,
 		navigationTarget: toSearchNavigationTarget(row),
 		match: { field: row.match_field },
+			...(codeCompatibility ? { codeCompatibility } : {}),
 		...(row.body && expression && row.match_field === "body" ? { snippet: createSearchSnippet(row.body, expression, row.snippet_match_text) } : {})
 	};
 }
@@ -953,16 +986,15 @@ function combineFts5Candidates(queries: SQL[], operator: "INTERSECT" | "UNION"):
 }
 
 function compareSearchRows(left: SearchDocumentRow, right: SearchDocumentRow): number {
-	const rankDifference = left.match_rank - right.match_rank;
-	if (rankDifference !== 0) {
-		return rankDifference;
-	}
-	const relevanceDifference = left.relevance - right.relevance;
-	if (relevanceDifference !== 0) {
-		return relevanceDifference;
-	}
+	const textDifference = compareSearchTextRelevance(left, right);
+	if (textDifference !== 0) return textDifference;
 	const updateDifference = right.updated_at.localeCompare(left.updated_at);
 	return updateDifference !== 0 ? updateDifference : left.reference.localeCompare(right.reference);
+}
+
+function compareSearchTextRelevance(left: SearchDocumentRow, right: SearchDocumentRow): number {
+	const rankDifference = left.match_rank - right.match_rank;
+	return rankDifference !== 0 ? rankDifference : left.relevance - right.relevance;
 }
 
 function createSearchSnippet(body: string, expression: SearchExpression, matchText: string = findSnippetMatchText(expression)): SearchResult["snippet"] {

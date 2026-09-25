@@ -169,6 +169,35 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 		}
 	});
 	const server = createServer(app);
+
+	async function close(): Promise<void> {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		if (idleTimer) clearTimeout(idleTimer);
+		if (server.listening) {
+			await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+		}
+		await cleanupResources();
+	}
+
+	app.post("/daemon/stop", async (request, response) => {
+		const authHeader = request.header("authorization");
+		if (!authHeader) {
+			response.status(401).json({ error: "Missing Authorization header." });
+			return;
+		}
+
+		try {
+			await authProvider.validateToken(authHeader);
+		} catch {
+			response.status(401).json({ error: "Invalid or expired bearer token." });
+			return;
+		}
+
+		response.status(202).json({ stopping: true });
+		response.once("finish", () => void close());
+	});
+
 	server.on("request", (_request, response) => {
 		resetIdleTimer();
 		inFlightCount++;
@@ -190,14 +219,6 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 
 	return {
 		server,
-		close: async () => {
-			if (shuttingDown) return;
-			shuttingDown = true;
-			if (idleTimer) clearTimeout(idleTimer);
-			if (server.listening) {
-				await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-			}
-			await cleanupResources();
-		}
+		close
 	};
 }

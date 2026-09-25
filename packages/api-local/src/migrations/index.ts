@@ -19,9 +19,12 @@ import { trigramSearchMigration } from "./trigram-search.js";
 import { searchTypoVocabularyMigration } from "./search-typo-vocabulary.js";
 import { pioneerEntityTypesMigration } from "./pioneer-entity-types.js";
 import { issueBreakdownDraftsMigration } from "./issue-breakdown-drafts.js";
+import { projectSettingsMigration } from "./project-settings.js";
+import { completionObservationsMigration } from "./completion-observations.js";
+import { completionObservationVersionStateMigration } from "./completion-observation-version-state.js";
 
 /**
  * Approved runner migrations for an empty SQLite source profile. Legacy v7
  * sources use the direct transformer and do not replay historical migrations.
  */
-export const migrations: Migration[] = [finalBaselineMigration, adrStatusMigration, userDirectoryMigration, recordProvenanceMigration, contextTermProvenanceMigration, relationProvenanceMigration, issueCommentsMigration, debtMetadataMigration, entityTypeMigration, shortEntityReferenceMigration, shortRecordReferenceMigration, planEntriesMigration, planEntrySupersessionPositionMigration, entitySearchMigration, recordSearchMigration, tokenSearchMigration, trigramSearchMigration, searchTypoVocabularyMigration, pioneerEntityTypesMigration, issueBreakdownDraftsMigration];
+export const migrations: Migration[] = [finalBaselineMigration, adrStatusMigration, userDirectoryMigration, recordProvenanceMigration, contextTermProvenanceMigration, relationProvenanceMigration, issueCommentsMigration, debtMetadataMigration, entityTypeMigration, shortEntityReferenceMigration, shortRecordReferenceMigration, planEntriesMigration, planEntrySupersessionPositionMigration, entitySearchMigration, recordSearchMigration, tokenSearchMigration, trigramSearchMigration, searchTypoVocabularyMigration, pioneerEntityTypesMigration, issueBreakdownDraftsMigration, projectSettingsMigration, completionObservationsMigration, completionObservationVersionStateMigration];

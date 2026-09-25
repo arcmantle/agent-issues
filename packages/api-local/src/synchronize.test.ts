@@ -61,6 +61,8 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 			planEntriesUpdatedLocal: [],
 			planEntriesCreatedCloud: [],
 			planEntriesUpdatedCloud: [],
+			completionObservationsCreatedLocal: [],
+			completionObservationsCreatedCloud: [],
 			usersAppliedToLocal: 0,
 			usersAppliedToCloud: 0
 		});
@@ -73,6 +75,41 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 
 		expect(await cloud.listUsers()).toEqual([user]);
 		expect(summary.usersAppliedToCloud).toBe(1);
+	});
+
+	it("synchronizes repeated completion observations and reports their stable IDs", async () => {
+		const issue = await local.createEntity({ kind: "issue", title: "Observed issue" });
+		const workspaceObservation = (version: string, commitSha: string) => ({
+			state: "available" as const,
+			repositoryIdentity: "a".repeat(64),
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: {
+				state: "available" as const,
+				version,
+				branch: "main",
+				currentCommit: commitSha,
+				isTrunkBranch: true,
+				commitsSinceTag: 0,
+				commitBumps: { major: 0, minor: 0, patch: 0 }
+			},
+			fingerprint: { repositoryIdentity: "a".repeat(64), commitSha, branch: "main", refsHash: "c".repeat(64) }
+		});
+		await local.updateEntityStatus({ entityId: issue.id, status: "done", workspaceObservation: workspaceObservation("1.2.3", "b".repeat(40)) });
+		await local.updateEntityStatus({ entityId: issue.id, status: "in-progress" });
+		await local.updateEntityStatus({ entityId: issue.id, status: "done", workspaceObservation: workspaceObservation("1.2.4", "d".repeat(40)) });
+
+		const summary = await synchronizeStores(local, cloud);
+		const observations = (await local.getEntityDetails(issue.id)).completionObservations;
+
+		expect((await cloud.getEntityDetails(issue.id)).completionObservations).toEqual(observations);
+		expect((await cloud.getEntityDetails(issue.id)).currentCompletionObservation).toMatchObject({ completionOrdinal: 2, calculatedVersion: "1.2.4" });
+		expect(summary.completionObservationsCreatedCloud).toEqual(observations.map((observation) => observation.id));
+
+		const repeatSummary = await synchronizeStores(local, cloud);
+		expect(repeatSummary.completionObservationsCreatedCloud).toEqual([]);
 	});
 
 	it("preserves authenticated entity provenance and revision actors", async () => {
@@ -218,7 +255,7 @@ describe("synchronizeStores (ISS267/ADR55)", () => {
 		expect((await cloud.exportCanonicalChains()).entities.find((chain) => chain.head.id === created.id)?.deltas).toEqual(localChain?.deltas);
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 		await expect(cloud.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
-		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], usersCreated: [], usersUpdated: [] });
+		expect(await cloud.importCanonicalChains(await local.exportCanonicalChains())).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], completionObservationsCreated: [], usersCreated: [], usersUpdated: [] });
 	});
 
 	it("rejects a divergent batch before mutating an earlier compatible record", async () => {

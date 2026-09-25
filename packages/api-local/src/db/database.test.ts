@@ -164,6 +164,7 @@ describe("tenant resolution", () => {
 				"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
 			).all();
 			expect(tables).toEqual([
+				{ name: "completion_observations" },
 				{ name: "context_terms" },
 				{ name: "contexts" },
 				{ name: "counters" },
@@ -174,6 +175,7 @@ describe("tenant resolution", () => {
 				{ name: "plan_entries" },
 				{ name: "plan_entry_references" },
 				{ name: "plan_entry_supersessions" },
+				{ name: "project_settings" },
 				{ name: "relations" },
 				{ name: "revision_entries" },
 				{ name: "schema_migrations" },
@@ -212,11 +214,15 @@ describe("tenant resolution", () => {
 				{ id: "trigram-search" },
 				{ id: "search-typo-vocabulary" },
 				{ id: "pioneer-entity-types" },
-				{ id: "issue-breakdown-drafts" }
+				{ id: "issue-breakdown-drafts" },
+				{ id: "project-settings" },
+				{ id: "completion-observations" },
+				{ id: "completion-observation-version-state" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
 			).all()).toEqual([
+				{ name: "completion_observations_tenant_issue_idx" },
 				{ name: "context_terms_tenant_context_key_idx" },
 				{ name: "context_terms_tenant_id_idx" },
 				{ name: "context_terms_tenant_short_reference_idx" },
@@ -325,7 +331,10 @@ describe("tenant resolution", () => {
 				{ id: "trigram-search" },
 				{ id: "search-typo-vocabulary" },
 				{ id: "pioneer-entity-types" },
-				{ id: "issue-breakdown-drafts" }
+				{ id: "issue-breakdown-drafts" },
+				{ id: "project-settings" },
+				{ id: "completion-observations" },
+				{ id: "completion-observation-version-state" }
 			]);
 		} finally {
 			upgraded.db.close();

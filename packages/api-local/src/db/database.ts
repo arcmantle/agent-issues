@@ -280,6 +280,7 @@ export function renameTenant(db: SqliteInternalConnection, previousTenantId: str
 			db.drizzle.run(sql`UPDATE plan_entry_supersessions SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE plan_entries SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE counters SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
+			db.drizzle.run(sql`UPDATE project_settings SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE entities SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE search_documents SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);
 			db.drizzle.run(sql`UPDATE relations SET tenant_id = ${newTenantId} WHERE tenant_id = ${previousTenantId}`);

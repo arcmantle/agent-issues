@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 
-import { isDirectEntitySelector, isStructuralRelationType, measureHistory, projectProposedIssueBreakdown, projectProposedPlan, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type IssueBreakdownApprovalResult, type IssueBreakdownDraft, type ProjectSummary, type ProjectSnapshot, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
+import { isDirectEntitySelector, isStructuralRelationType, measureHistory, projectProposedIssueBreakdown, projectProposedPlan, resolveLocalUsername, toContextWriteResult, toDefineContextTermAcknowledgement, toEntitySummary, type AuthIdentity, type BodySource, type DatabaseSnapshot, type IssueBreakdownApprovalResult, type IssueBreakdownDraft, type ProjectSummary, type ProjectSnapshot, type ProspectorProjectSettings, type RelationRecord, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse, type StorageDriver } from "@agent-issues/core";
 import type { CanonicalChainBundle } from "@agent-issues/core";
 import { LocalSynchronizeStore } from "./features/synchronize/canonical-chain-store.js";
 import * as localSynchronizeStore from "./features/synchronize/canonical-chain-store.js";
@@ -23,6 +23,7 @@ import { LocalEntityStore } from "./features/entity-store/store.js";
 import * as localEntityStore from "./features/entity-store/store.js";
 import { LocalIssueCommentStore } from "./features/issue-comment/store.js";
 import { LocalPlanEntryStore } from "./features/plan-entry/store.js";
+import * as localProjectSettingsStore from "./features/project-settings/store.js";
 import { LocalSearchStore } from "./features/search/search-store.js";
 
 export type OpenSqliteStoreResult = {
@@ -38,15 +39,16 @@ export type OpenSqliteStoreResult = {
  * can slot in without callers branching on backend.
  */
 export class SqliteStore implements StorageDriver {
-	public constructor(executor: SqliteInternalConnection, actorIdentity?: AuthIdentity, strictProjectScope = false) {
+	public constructor(executor: SqliteInternalConnection, actorIdentity?: AuthIdentity, strictProjectScope = false, hasProjectScope = false) {
 		this.executor = executor;
 		this.actorIdentity = actorIdentity;
 		this.strictProjectScope = strictProjectScope;
+		this.hasProjectScope = hasProjectScope;
 		this.synchronizeStore = new LocalSynchronizeStore(executor);
 		this.userDirectoryStore = new LocalUserDirectoryStore(executor);
 		this.historyDiagnosticsStore = new LocalHistoryDiagnosticsStore(executor);
 		this.contextStore = new LocalContextStore(executor);
-		this.entityStore = new LocalEntityStore(executor);
+		this.entityStore = new LocalEntityStore(executor, hasProjectScope);
 		this.issueCommentStore = new LocalIssueCommentStore(executor);
 		this.planEntryStore = new LocalPlanEntryStore(executor);
 		this.searchStore = new LocalSearchStore(executor);
@@ -55,6 +57,7 @@ export class SqliteStore implements StorageDriver {
 	protected executor: SqliteInternalConnection;
 	protected readonly actorIdentity: AuthIdentity | undefined;
 	protected readonly strictProjectScope: boolean;
+	protected readonly hasProjectScope: boolean;
 	private readonly synchronizeStore: LocalSynchronizeStore;
 	private readonly userDirectoryStore: LocalUserDirectoryStore;
 	private readonly historyDiagnosticsStore: LocalHistoryDiagnosticsStore;
@@ -69,7 +72,7 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver {
-		return new SqliteStore(this.executor, identity, this.strictProjectScope);
+		return new SqliteStore(this.executor, identity, this.strictProjectScope, this.hasProjectScope);
 	}
 
 	public async exportCanonicalChains() {
@@ -94,6 +97,14 @@ export class SqliteStore implements StorageDriver {
 
 	public async getHistoryDiagnostics() {
 		return measureHistory(await this.synchronizeStore.exportCanonicalChains(), await this.historyDiagnosticsStore.getMaterializationDepths());
+	}
+
+	public async getProspectorSettings(): Promise<ProspectorProjectSettings> {
+		return localProjectSettingsStore.getProspectorSettings(this.executor);
+	}
+
+	public async setProspectorSettings(settings: ProspectorProjectSettings): Promise<ProspectorProjectSettings> {
+		return localProjectSettingsStore.setProspectorSettings(this.executor, settings);
 	}
 
 	public async getSearchCapability(): Promise<SearchCapability> {
@@ -135,6 +146,9 @@ export class SqliteStore implements StorageDriver {
 	public async getEntityDetails(entityId: string) {
 		const details = await this.entityStore.getEntityDetails(entityId);
 		if (details.entity.kind !== "issue") {
+			if (this.hasProjectScope) {
+				this.assertCurrentProjectEntity(entityId);
+			}
 			return details;
 		}
 		const entity = getSqliteEntityOrThrow(this.executor, details.entity.id);
@@ -147,6 +161,7 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async queryEntityRelations(input: Parameters<StorageDriver["queryEntityRelations"]>[0]) {
+		this.assertCurrentProjectEntity(input.entityId);
 		return this.entityStore.queryEntityRelations(input);
 	}
 
@@ -159,6 +174,9 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async listEntityHistory(entityId: string) {
+		if (this.hasProjectScope) {
+			this.assertCurrentProjectEntity(entityId, true);
+		}
 		return this.entityStore.listEntityHistory(entityId);
 	}
 
@@ -335,7 +353,12 @@ export class SqliteStore implements StorageDriver {
 	}
 
 	public async listAllRelations() {
-		return this.entityStore.listAllRelations();
+		const relations = await this.entityStore.listAllRelations();
+		return relations.filter((relation) => {
+			const from = resolveSqliteEntity(this.executor, relation.fromId);
+			const to = resolveSqliteEntity(this.executor, relation.toId);
+			return from?.projectId === this.executor.currentProjectId && to?.projectId === this.executor.currentProjectId;
+		});
 	}
 
 	public async applyRelations(relations: RelationRecord[]) {
@@ -358,7 +381,7 @@ export class SqliteStore implements StorageDriver {
 		return this.entityStore.listProjectAdrs();
 	}
 
-	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }) {
+	public async updateEntityStatus(input: Parameters<StorageDriver["updateEntityStatus"]>[0]) {
 		this.assertSelectedProjectEntity(input.entityId);
 		return this.mutate(
 			(actorId) => localEntityStore.updateEntityStatus(this.executor, input, actorId),
@@ -580,6 +603,13 @@ export class SqliteStore implements StorageDriver {
 		}
 	}
 
+	protected assertCurrentProjectEntity(entityId: string, includeTombstone = false): void {
+		const entity = resolveSqliteEntity(this.executor, entityId, includeTombstone);
+		if (!entity || entity.projectId !== this.executor.currentProjectId) {
+			throw new Error(`Entity not found: ${entityId}`);
+		}
+	}
+
 	protected getIssueBreakdownDraftByWhere(where: ReturnType<typeof sql>): IssueBreakdownDraft {
 		const row = this.executor.drizzle.get(sql`SELECT * FROM issue_breakdown_drafts WHERE tenant_id = ${this.executor.tenantId} AND ${where} ORDER BY created_at DESC LIMIT 1`) as {
 			id: string;
@@ -644,5 +674,5 @@ function formatIssueBody(issue: IssueBreakdownDraft["issues"][number]): string {
 
 export async function openSqliteStore(inputPath?: string, options?: DatabaseLocationOptions): Promise<OpenSqliteStoreResult> {
 	const { executor, dbPath } = await ensureDatabase(inputPath, options);
-	return { store: new SqliteStore(executor, undefined, isDirectEntitySelector(options?.projectIdentity ?? "")), dbPath };
+	return { store: new SqliteStore(executor, undefined, isDirectEntitySelector(options?.projectIdentity ?? ""), options?.projectIdentity !== undefined), dbPath };
 }

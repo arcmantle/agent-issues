@@ -201,6 +201,31 @@ describe("local daemon state file lifecycle (ISS189)", () => {
 		expect(readDaemonState({ homeDirectory, dbPath })).toBeUndefined();
 	});
 
+	it("stops through its authenticated control endpoint and clears its state", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		handle = createLocalDaemonServer({
+			authProvider,
+			dbPath,
+			port: 0,
+			homeDirectory
+		});
+		await new Promise<void>((resolve) => handle?.server.once("listening", resolve));
+
+		const address = handle.server.address() as AddressInfo;
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: "daemon-tenant" });
+		const closed = new Promise<void>((resolve) => handle?.server.once("close", resolve));
+		const response = await fetch(`http://127.0.0.1:${address.port}/daemon/stop`, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${bearerToken}` }
+		});
+
+		expect(response.status).toBe(202);
+		expect(await response.json()).toEqual({ stopping: true });
+		await closed;
+		handle = undefined;
+		expect(readDaemonState({ homeDirectory, dbPath })).toBeUndefined();
+	});
+
 	it("writes independently discoverable state for two daemons fronting different db paths under the same home directory (ISS192)", async () => {
 		const dbPathA = path.join(tempDir, "repo-a.db");
 		const dbPathB = path.join(tempDir, "repo-b.db");
