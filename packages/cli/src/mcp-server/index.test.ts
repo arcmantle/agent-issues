@@ -109,6 +109,8 @@ describe("agent-issues MCP server", () => {
 		const tools = await client.listTools();
 		const previewTool = tools.tools.find(({ name }) => name === "plan_preview");
 		expect(previewTool?._meta).toMatchObject({ ui: { resourceUri: "ui://agent-issues/plan-preview.html" } });
+		const confirmationTool = tools.tools.find(({ name }) => name === "plan_confirm");
+		expect(confirmationTool?._meta).toBeUndefined();
 
 		const result = await client.readResource({ uri: "ui://agent-issues/plan-preview.html" });
 		expect(result.contents).toEqual([
@@ -307,7 +309,7 @@ describe("agent-issues MCP server", () => {
 		expect(packageJson.files).toContain("dist");
 		const previewScript = readFileSync(fileURLToPath(new URL("../../dist/plan-preview.js", import.meta.url)), "utf8");
 		expect(previewScript).toContain("plan-preview-app");
-		expect(previewScript).toContain("Confirm");
+		expect(previewScript).toContain("Plan ready");
 	});
 
 	it("reports the resolved project identity", async () => {
@@ -513,6 +515,33 @@ describe("agent-issues MCP server", () => {
 		await client.close();
 		await server.close();
 		await store.close();
+	});
+
+	it("records a workspace observation when the MCP status tool completes an issue", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
+		const issue = await store.createEntity({ kind: "issue", title: "Observed completion" });
+		const server = createMcpServer({ fallbackWorkspaceRoot: directory, openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
+
+		try {
+			await server.connect(serverTransport);
+			await client.connect(clientTransport);
+			await client.callTool({ name: "entity_status", arguments: { entityId: issue.id, status: "done" } });
+			expect((await store.getEntityDetails(issue.id)).completionObservations).toEqual([
+				expect.objectContaining({
+					completionOrdinal: 1,
+					calculatedVersionState: "unknown",
+					diagnostics: [{ code: "workspace-observation-failed", message: expect.any(String) }]
+				})
+			]);
+		} finally {
+			await client.close();
+			await server.close();
+			await store.close();
+		}
 	});
 
 	it("requires inspection before entity_delete", async () => {
@@ -771,7 +800,10 @@ describe("agent-issues MCP server", () => {
 				}
 			}
 		});
-		expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("MCP Plan") }]);
+		const content = (result as { content: Array<{ type: string; text?: string }> }).content;
+		const text = content[0];
+		expect(content).toEqual([{ type: "text", text: expect.stringContaining("MCP Plan") }]);
+		expect(text && "text" in text ? text.text : "").toContain((result.structuredContent as { plan: { snapshotDigest: string } }).plan.snapshotDigest);
 
 		await client.close();
 		await server.close();

@@ -46,10 +46,11 @@ const INCLUDED_MCP_DATA_COMMANDS: readonly McpDataCommand[] = [
 	{ command: "issue-breakdown create", toolNames: ["issue_breakdown_create"] },
 	{ command: "issue-breakdown show", toolNames: ["issue_breakdown_show"] },
 	{ command: "issue-breakdown latest", toolNames: ["issue_breakdown_latest"] },
-	{ command: "issue-breakdown approve", toolNames: ["issue_breakdown_approve"] }
+	{ command: "issue-breakdown approve", toolNames: ["issue_breakdown_approve"] },
+	{ command: "plan confirm", toolNames: ["plan_confirm"] }
 ];
 
-const MCP_APP_TOOLS = ["plan_preview", "plan_confirm", "issue_breakdown_preview"] as const;
+const MCP_APP_TOOLS = ["plan_preview", "issue_breakdown_preview"] as const;
 
 export function auditMcpToolRegistrations(registeredToolNames: Iterable<string>): { missing: Array<{ command: string; toolName: string }> } {
 	const registeredTools = new Set(registeredToolNames);

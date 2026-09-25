@@ -104,6 +104,8 @@ Outside VS Code, set the same identity in either `.agent-issues.json` or `.agent
 { "projectIdentity": "shared-product" }
 ```
 
+For one command from a different folder, use `--project-identity <id>`. For example, `agent-issues list issue --project-identity shared-product --json` reads the `shared-product` project. A direct MCP server can use the same override: `agent-issues --mcp --project-identity shared-product`.
+
 Use `agent-issues project-identity --json` to inspect the CLI's resolved identity and its source. The MCP server exposes the same resolved value through `project_identity`.
 
 ## Context
@@ -244,11 +246,16 @@ agent-issues auth logout work
 
 Install both global packages before you install a host plugin. The plugin registers the `agent-issues-mcp` command described in [MCP registration](#mcp-registration).
 
-Use one command to install the plugin for a supported host:
+Use one command to install the plugin for Copilot CLI or VS Code:
 
 ```bash
-agent-issues plugin install copilot
-agent-issues plugin install claude
+agent-issues agent init
+```
+
+To install for Claude Code, select that host explicitly:
+
+```bash
+agent-issues agent init --host claude
 ```
 
 ### Copilot CLI and VS Code

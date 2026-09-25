@@ -77,7 +77,10 @@ describe("compact CLI entity projections", () => {
 			entity,
 			incoming: [{ relationType: "blocks", entity: incomingEntity }],
 			outgoing: [{ relationType: "fixes", entity: outgoingEntity }],
-			planEntries: [planEntry]
+			planEntries: [planEntry],
+			completionObservations: [],
+			currentCompletionObservation: null,
+			versionCoverage: []
 		};
 
 		const compact = toCompactEntityDetails(details);

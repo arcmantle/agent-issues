@@ -2,45 +2,7 @@ import { Cli } from "clipanion";
 
 import packageJson from "../../package.json" with { type: "json" };
 
-import { AuthListCommand, AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthSwitchCommand } from "./commands/auth.js";
-import { BackfillBodiesCommand } from "./commands/backfill.js";
-import { AddIssueCommentCommand, DeleteIssueCommentCommand, EditIssueCommentCommand, IssueCommentCommand, IssueCommentHistoryCommand, ListIssueCommentsCommand } from "./commands/comments.js";
-import { ApproveIssueBreakdownCommand, CreateIssueBreakdownCommand, IssueBreakdownCommand, LatestIssueBreakdownCommand, ShowIssueBreakdownCommand } from "./commands/issue-breakdowns.js";
-import { AddPlanEntryCommand, DeletePlanEntryCommand, EditPlanEntryCommand, ListPlanEntriesCommand, PlanEntryHistoryCommand } from "./commands/plan-entries.js";
-import { ContextCommand } from "./commands/context.js";
-import { KanbanCommand } from "./commands/kanban.js";
-import {
-	ArchiveCommand,
-	CreateCommand,
-	DeleteCommand,
-	EditCommand,
-	HistoryCommand,
-	LinkCommand,
-	ListCommand,
-	MoveCommand,
-	NextWorkCommand,
-	OrphansCommand,
-	RelationsCommand,
-	RestoreCommand,
-	ShowCommand,
-	StatusCommand,
-	UnlinkCommand
-} from "./commands/entities.js";
-import { ExportCommand } from "./commands/export.js";
-import { FallbackCommand } from "./commands/fallback.js";
-import { CapabilitiesCommand, HelpCommand, SchemaCommand } from "./commands/meta.js";
-import { PluginInstallCommand } from "./commands/plugin.js";
-import { SiteCommand } from "./commands/site.js";
-import { SqlCommand } from "./commands/sql.js";
-import { SynchronizeCommand } from "./commands/synchronize.js";
-import {
-	CurrentTenantCommand,
-	DeleteTenantCommand,
-	InitCommand,
-	ListTenantsCommand,
-	ProjectIdentityCommand,
-	RenameTenantCommand
-} from "./commands/tenants.js";
+import { registerCommandFamily } from "./command-loader.js";
 import { stringifyJson, type AgentIssuesContext } from "./shared.js";
 
 export type { AgentIssuesContext } from "./shared.js";
@@ -52,61 +14,6 @@ function buildCli(): Cli<AgentIssuesContext> {
 		binaryVersion: packageJson.version
 	});
 
-	cli.register(HelpCommand);
-	cli.register(SchemaCommand);
-	cli.register(CapabilitiesCommand);
-	cli.register(PluginInstallCommand);
-	cli.register(SiteCommand);
-	cli.register(InitCommand);
-	cli.register(CurrentTenantCommand);
-	cli.register(ProjectIdentityCommand);
-	cli.register(ListTenantsCommand);
-	cli.register(DeleteTenantCommand);
-	cli.register(RenameTenantCommand);
-	cli.register(BackfillBodiesCommand);
-	cli.register(ContextCommand);
-	cli.register(KanbanCommand);
-	cli.register(IssueCommentCommand);
-	cli.register(AddIssueCommentCommand);
-	cli.register(DeleteIssueCommentCommand);
-	cli.register(EditIssueCommentCommand);
-	cli.register(IssueCommentHistoryCommand);
-	cli.register(ListIssueCommentsCommand);
-	cli.register(IssueBreakdownCommand);
-	cli.register(CreateIssueBreakdownCommand);
-	cli.register(ShowIssueBreakdownCommand);
-	cli.register(LatestIssueBreakdownCommand);
-	cli.register(ApproveIssueBreakdownCommand);
-	cli.register(AddPlanEntryCommand);
-	cli.register(EditPlanEntryCommand);
-	cli.register(DeletePlanEntryCommand);
-	cli.register(ListPlanEntriesCommand);
-	cli.register(PlanEntryHistoryCommand);
-	cli.register(CreateCommand);
-	cli.register(EditCommand);
-	cli.register(HistoryCommand);
-	cli.register(RestoreCommand);
-	cli.register(ArchiveCommand);
-	cli.register(DeleteCommand);
-	cli.register(MoveCommand);
-	cli.register(LinkCommand);
-	cli.register(UnlinkCommand);
-	cli.register(StatusCommand);
-	cli.register(NextWorkCommand);
-	cli.register(ExportCommand);
-	cli.register(SqlCommand);
-	cli.register(RelationsCommand);
-	cli.register(OrphansCommand);
-	cli.register(ShowCommand);
-	cli.register(ListCommand);
-	cli.register(AuthListCommand);
-	cli.register(AuthLoginCommand);
-	cli.register(AuthLogoutCommand);
-	cli.register(AuthStatusCommand);
-	cli.register(AuthSwitchCommand);
-	cli.register(SynchronizeCommand);
-	cli.register(FallbackCommand);
-
 	return cli;
 }
 
@@ -116,21 +23,25 @@ export async function runCli(argv: string[], context: Partial<AgentIssuesContext
 		return 0;
 	}
 
+	const normalizedArgv = normalizeArgv(argv);
 	const cli = buildCli();
-	const command = cli.process(normalizeArgv(argv), { cwd: process.cwd(), ...context });
+	await registerCommandFamily(cli, normalizedArgv);
+	const command = cli.process(normalizedArgv, { cwd: process.cwd(), ...context });
 	return await command.validateAndExecute();
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<number> {
+export async function main(argv = process.argv.slice(2), context: Partial<AgentIssuesContext> = {}): Promise<number> {
 	if (isVersionRequest(argv)) {
 		process.stdout.write(`${packageJson.version}\n`);
 		return 0;
 	}
 
+	const normalizedArgv = normalizeArgv(argv);
 	const cli = buildCli();
 
 	try {
-		const command = cli.process(normalizeArgv(argv), { cwd: process.cwd() });
+		await registerCommandFamily(cli, normalizedArgv);
+		const command = cli.process(normalizedArgv, { cwd: process.cwd(), ...context });
 		return await command.validateAndExecute();
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

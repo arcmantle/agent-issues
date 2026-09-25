@@ -30,13 +30,20 @@ describe("PlanPreviewApp", () => {
 		document.body.replaceChildren();
 	});
 
-	it("renders a Proposed Plan as a grouped review document", async () => {
+	it("shows a Proposed Plan only after the review is expanded", async () => {
 		const element = document.createElement("plan-preview-app") as HTMLElement & { plan: ProposedPlan & { status: string }; updateComplete: Promise<unknown> };
 		element.plan = proposedPlan();
 		document.body.append(element);
 		await element.updateComplete;
 
 		expect(element.shadowRoot?.querySelector("h1")?.textContent).toContain("Plan Preview Design");
+		const toggle = element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]");
+		expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+		expect(element.shadowRoot?.querySelector("[data-section=goal]")).toBeNull();
+		toggle?.click();
+		await element.updateComplete;
+
+		expect(toggle?.getAttribute("aria-expanded")).toBe("true");
 		expect(element.shadowRoot?.querySelector("[data-section=goal]")?.textContent).toContain("Review the Plan before it becomes ready.");
 		expect(element.shadowRoot?.querySelector("[data-section=context]")?.textContent).toContain("Use the MCP Apps contract.");
 		expect(element.shadowRoot?.querySelector("[data-group=decisions]")?.textContent).toContain("Use a small Lit app.");
@@ -44,43 +51,27 @@ describe("PlanPreviewApp", () => {
 		expect(element.shadowRoot?.querySelector("[data-revision]")?.textContent).toContain("Revision 3");
 	});
 
-	it("shows a read-only ready state without review actions", async () => {
+	it("shows the ready state without confirmation or return actions", async () => {
 		const element = document.createElement("plan-preview-app") as HTMLElement & { plan: ProposedPlan & { status: string }; updateComplete: Promise<unknown> };
 		element.plan = { ...proposedPlan(), status: "ready" };
 		document.body.append(element);
 		await element.updateComplete;
+		(element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]"))?.click();
+		await element.updateComplete;
 
 		expect(element.shadowRoot?.querySelector("[data-state=ready]")?.textContent).toContain("Plan ready");
-		expect(element.shadowRoot?.querySelector("button")).toBeNull();
+		expect(element.shadowRoot?.querySelector("button[data-action=confirm]")).toBeNull();
+		expect(element.shadowRoot?.querySelector("button[data-action=return]")).toBeNull();
 	});
 
-	it("calls supplied confirm and return actions without changing the Proposed Plan", async () => {
-		let confirmations = 0;
-		let returns = 0;
-		const element = document.createElement("plan-preview-app") as HTMLElement & {
-			plan: ProposedPlan & { status: string };
-			confirmPlan: () => Promise<void>;
-			returnToPlanning: () => Promise<void>;
-			updateComplete: Promise<unknown>;
-		};
-		const plan = proposedPlan();
-		element.plan = plan;
-		element.confirmPlan = async () => {
-			confirmations += 1;
-		};
-		element.returnToPlanning = async () => {
-			returns += 1;
-		};
+	it("does not render confirmation or return actions", async () => {
+		const element = document.createElement("plan-preview-app") as HTMLElement & { plan: ProposedPlan & { status: string }; updateComplete: Promise<unknown> };
+		element.plan = proposedPlan();
 		document.body.append(element);
 		await element.updateComplete;
 
-		(element.shadowRoot?.querySelector("button[data-action=confirm]") as HTMLButtonElement).click();
-		(element.shadowRoot?.querySelector("button[data-action=return]") as HTMLButtonElement).click();
-		await Promise.resolve();
-
-		expect(confirmations).toBe(1);
-		expect(returns).toBe(1);
-		expect(element.plan).toEqual(plan);
+		expect(element.shadowRoot?.querySelector("button[data-action=confirm]")).toBeNull();
+		expect(element.shadowRoot?.querySelector("button[data-action=return]")).toBeNull();
 	});
 
 	it("keeps reviewed content visible with an accessible loading, error, and Plan-changed state", async () => {
@@ -103,10 +94,12 @@ describe("PlanPreviewApp", () => {
 		};
 		document.body.append(element);
 		await element.updateComplete;
+		(element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]"))?.click();
+		await element.updateComplete;
 
 		expect(element.shadowRoot?.querySelector("[data-section=goal]")?.textContent).toContain("Review the Plan before it becomes ready.");
 		expect(element.shadowRoot?.querySelector("[role=alert]")?.textContent).toContain("Plan changed");
-		expect(element.shadowRoot?.querySelector("button[data-action=confirm]")).not.toBeNull();
+		expect(element.shadowRoot?.querySelector("button[data-action=confirm]")).toBeNull();
 		(element.shadowRoot?.querySelector("button[data-action=retry]") as HTMLButtonElement).click();
 		await Promise.resolve();
 		expect(retries).toBe(1);
@@ -128,6 +121,8 @@ describe("PlanPreviewApp", () => {
 		};
 		document.body.append(element);
 		await element.updateComplete;
+		(element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]"))?.click();
+		await element.updateComplete;
 
 		const goal = element.shadowRoot?.querySelector("[data-section=goal]");
 		const link = goal?.querySelector("a");
@@ -140,7 +135,7 @@ describe("PlanPreviewApp", () => {
 		expect(opened).toEqual(["https://example.test/contract"]);
 	});
 
-	it("keeps Confirm and Return to planning keyboard-focusable", async () => {
+	it("keeps the review toggle keyboard-focusable", async () => {
 		const element = document.createElement("plan-preview-app") as HTMLElement & {
 			plan: ProposedPlan & { status: string };
 			updateComplete: Promise<unknown>;
@@ -149,18 +144,11 @@ describe("PlanPreviewApp", () => {
 		document.body.append(element);
 		await element.updateComplete;
 
-		const returnButton = element.shadowRoot?.querySelector("button[data-action=return]") as HTMLButtonElement;
-		const confirmButton = element.shadowRoot?.querySelector("button[data-action=confirm]") as HTMLButtonElement;
-		expect(returnButton.disabled).toBe(false);
-		expect(confirmButton.disabled).toBe(false);
-		expect(returnButton.tabIndex).toBeGreaterThanOrEqual(0);
-		expect(confirmButton.tabIndex).toBeGreaterThanOrEqual(0);
-		expect(returnButton.compareDocumentPosition(confirmButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-		confirmButton.focus();
-		expect(element.shadowRoot?.activeElement).toBe(confirmButton);
-		returnButton.focus();
-		expect(element.shadowRoot?.activeElement).toBe(returnButton);
+		const toggle = element.shadowRoot?.querySelector("button[data-action=toggle]") as HTMLButtonElement;
+		expect(toggle.disabled).toBe(false);
+		expect(toggle.tabIndex).toBeGreaterThanOrEqual(0);
+		toggle.focus();
+		expect(element.shadowRoot?.activeElement).toBe(toggle);
 		expect(PlanPreviewApp.styles.toString()).toContain("button:focus-visible");
 	});
 });

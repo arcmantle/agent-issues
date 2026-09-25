@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { openLocalDaemonStore, readBuildContentHash, type LocalDaemonStoreOptions } from "@agent-issues/api-local";
+import { openLocalDaemonStore, readBuildContentHash, resolveWorkspaceObservation, type LocalDaemonStoreOptions } from "@agent-issues/api-local";
 import {
 	BACKFILLABLE_BODY_KINDS,
 	backfillBodies,
@@ -98,6 +98,7 @@ export type McpServerOptions = {
 			| "confirmPlan"
 			| "moveEntity"
 			| "updateEntityStatus"
+			| "getProspectorSettings"
 			| "linkEntities"
 			| "unlinkEntities"
 			| "listOrphans"
@@ -268,7 +269,15 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			description: "Update a tracker entity status.",
 			inputSchema: { entityId: z.string().min(1), status: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await openStore()).updateEntityStatus(input))
+		async (input) => {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const { entity } = await store.getEntityDetails(input.entityId);
+			const workspaceObservation = entity.kind === "issue" && entity.status !== "done" && input.status === "done" && scope.workspaceRoot
+				? await resolveWorkspaceObservation(scope.workspaceRoot, await store.getProspectorSettings())
+				: undefined;
+			return toolResult(await store.updateEntityStatus({ ...input, workspaceObservation }));
+		}
 	);
 
 	server.registerTool(
@@ -911,12 +920,14 @@ function formatPlanPreview(plan: {
 	title: string;
 	goal: string;
 	context: string;
+	snapshotDigest: string;
 	revision?: number;
 	current: Array<{ title: string; entries: Array<{ body?: string }> }>;
 }): string {
 	const sections = [
 		`# ${plan.title}`,
 		plan.revision === undefined ? "" : `Revision ${plan.revision}`,
+		`Snapshot digest: ${plan.snapshotDigest}`,
 		`## Goal\n\n${plan.goal || "No Goal recorded."}`,
 		`## Context\n\n${plan.context || "No Context recorded."}`,
 		...plan.current.map((group) => `## ${group.title}\n\n${group.entries.map((entry) => entry.body || "").join("\n\n")}`)

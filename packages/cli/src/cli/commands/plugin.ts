@@ -1,42 +1,64 @@
 import { spawn } from "node:child_process";
 
 import { Option } from "clipanion";
+import ora from "ora";
 
-import { renderPluginInstall } from "../renderers.js";
-import { BaseCommand, type PluginInstallRunner } from "../shared.js";
+import { renderAgentInit } from "../renderers.js";
+import { BaseCommand, type AgentInitRunner } from "../shared.js";
 
 const MARKETPLACE = "arcmantle/agent-issues-plugin";
+const MARKETPLACE_NAME = "agent-issues";
 const PLUGIN = "agent-issues@agent-issues";
 
-export const PLUGIN_HOSTS = ["claude", "copilot"] as const;
+export const AGENT_HOSTS = ["claude", "copilot"] as const;
 
-type PluginHost = typeof PLUGIN_HOSTS[number];
+type AgentHost = typeof AGENT_HOSTS[number];
 
-export class PluginInstallCommand extends BaseCommand {
-	public static paths = [["plugin", "install"]];
+export class AgentInitCommand extends BaseCommand {
+	public static paths = [["agent", "init"]];
 
-	public host = Option.String({ name: "host" });
+	public host = Option.String("--host", "copilot");
 
 	public async execute(): Promise<number> {
-		const host = parsePluginHost(this.host);
-		const runner = this.context.pluginInstallDependencies?.run ?? runPluginInstallCommand;
+		const host = parseAgentHost(this.host);
+		const runner = this.context.agentInitDependencies?.run ?? runAgentInitCommand;
+		const errorOutput = this.context.stderr ?? process.stderr;
+		const hasActiveProgress = this.context.agentInitProgressActive === true;
+		const shouldShowSpinner = !hasActiveProgress && !this.asJson && isInteractiveTerminal(errorOutput);
+		const spinner = ora({
+			isEnabled: shouldShowSpinner,
+			isSilent: !shouldShowSpinner,
+			stream: errorOutput,
+			text: `Installing the Agent Issues plugin for ${host}...`
+		}).start();
 
-		for (const args of getPluginInstallCommands(host)) {
-			await runner(host, args, { quiet: this.asJson });
+		try {
+			const marketplaceOutput = await runner(host, ["plugin", "marketplace", "list", "--json"], { quiet: true });
+			const commands = getAgentInitCommands(host);
+
+			if (isMarketplaceRegistered(marketplaceOutput)) {
+				commands.shift();
+			}
+
+			for (const args of commands) {
+				await runner(host, args, { quiet: this.asJson || hasActiveProgress || shouldShowSpinner });
+			}
+		} finally {
+			spinner.stop();
 		}
 
 		const result = {
-			command: "plugin-install" as const,
+			command: "agent-init" as const,
 			host,
 			marketplace: MARKETPLACE,
 			plugin: PLUGIN
 		};
-		this.print(result, renderPluginInstall(result));
+		this.print(result, renderAgentInit(result));
 		return 0;
 	}
 }
 
-export function getPluginInstallCommands(host: PluginHost): string[][] {
+export function getAgentInitCommands(host: AgentHost): string[][] {
 	const commands = [
 		["plugin", "marketplace", "add", MARKETPLACE],
 		["plugin", "install", PLUGIN]
@@ -49,26 +71,51 @@ export function getPluginInstallCommands(host: PluginHost): string[][] {
 	return commands;
 }
 
-function parsePluginHost(value: string): PluginHost {
-	if (isPluginHost(value)) {
+function parseAgentHost(value: string): AgentHost {
+	if (isAgentHost(value)) {
 		return value;
 	}
 
 	throw new Error(`Unsupported plugin host: ${value}. Use copilot or claude.`);
 }
 
-function isPluginHost(value: string): value is PluginHost {
-	return PLUGIN_HOSTS.some((host) => host === value);
+function isAgentHost(value: string): value is AgentHost {
+	return AGENT_HOSTS.some((host) => host === value);
 }
 
-const runPluginInstallCommand: PluginInstallRunner = async (command, args, options) => {
-	await new Promise<void>((resolve, reject) => {
+function isMarketplaceRegistered(value: string): boolean {
+	let marketplaces: unknown;
+
+	try {
+		marketplaces = JSON.parse(value);
+	} catch {
+		throw new Error("Could not parse plugin marketplace list output.");
+	}
+
+	return Array.isArray(marketplaces) && marketplaces.some((marketplace) => (
+		isMarketplace(marketplace) && marketplace.name === MARKETPLACE_NAME
+	));
+}
+
+function isMarketplace(value: unknown): value is { name: unknown } {
+	return typeof value === "object" && value !== null && "name" in value;
+}
+
+function isInteractiveTerminal(stream: object): boolean {
+	return "isTTY" in stream && stream.isTTY === true;
+}
+
+const runAgentInitCommand: AgentInitRunner = async (command, args, options) => {
+	return new Promise<string>((resolve, reject) => {
 		const child = spawn(command, args, {
 			stdio: options.quiet ? ["inherit", "pipe", "pipe"] : "inherit"
 		});
 		let errorOutput = "";
 
-		child.stdout?.resume();
+		let standardOutput = "";
+		child.stdout?.on("data", (chunk: Buffer) => {
+			standardOutput += chunk.toString();
+		});
 		child.stderr?.on("data", (chunk: Buffer) => {
 			errorOutput += chunk.toString();
 		});
@@ -77,7 +124,7 @@ const runPluginInstallCommand: PluginInstallRunner = async (command, args, optio
 		});
 		child.once("close", (exitCode) => {
 			if (exitCode === 0) {
-				resolve();
+				resolve(standardOutput);
 				return;
 			}
 

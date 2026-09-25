@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import { writeBuildInfoFile } from "@agent-issues/api-local";
 
 import { buildPlugin } from "./build-plugin.mjs";
+import { validateCliBuild } from "./validate-cli-build.mjs";
 
 rmSync("dist", { force: true, recursive: true });
 rmSync("site/dist", { force: true, recursive: true });
@@ -43,11 +44,14 @@ await build({
 	entryPoints: ["src/cli.ts"],
 	external: ["better-sqlite3"],
 	format: "esm",
-	outfile: "dist/cli.js",
+	outdir: "dist",
+	entryNames: "cli",
 	platform: "node",
+	splitting: true,
 	target: "node24"
 });
 
 buildPlugin({ sourceDir: ".", targetDir: "dist/plugin" });
 writeBuildInfoFile("dist");
 chmodSync("dist/cli.js", 0o755);
+validateCliBuild("dist");

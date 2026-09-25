@@ -12,7 +12,7 @@ import {
 	type EntityKind
 } from "@agent-issues/core";
 import { DEFAULT_CONTEXT_KEY } from "@agent-issues/api-local";
-import { PLUGIN_HOSTS } from "./commands/plugin.js";
+import { AGENT_HOSTS } from "./commands/plugin.js";
 
 type OptionSpec = {
 	name: string;
@@ -407,20 +407,19 @@ const COMMAND_SPECS: CommandSpec[] = [
 		}
 	},
 	{
-		name: "plugin install",
+		name: "agent init",
 		summary: "Install the Agent Issues plugin for Copilot CLI or Claude Code.",
-		usage: ["agent-issues plugin install <copilot|claude>"],
-		positionals: [
+		usage: ["agent-issues agent init [--host <copilot|claude>]"],
+		options: [
 			{
-				name: "host",
-				description: "Host CLI that installs the plugin.",
-				required: true,
-				allowedValues: PLUGIN_HOSTS
+				name: "--host",
+				description: "Host CLI that installs the plugin. Default: copilot.",
+				allowedValues: AGENT_HOSTS
 			}
 		],
 		examples: [
-			"agent-issues plugin install copilot",
-			"agent-issues plugin install claude"
+			"agent-issues agent init",
+			"agent-issues agent init --host claude"
 		],
 		notes: [
 			"Install agent-issues and agent-issues-mcp globally before you run this command.",

@@ -9,7 +9,10 @@ import { openLocalDaemonStore, saveDaemonState, saveDaemonToken } from "@agent-i
 import { spawnLocalDaemon, LOCAL_DAEMON_SPAWN_FLAG } from "./local-daemon-store.js";
 
 const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("node:child_process", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:child_process")>()),
+	spawn: spawnMock
+}));
 
 /** Fake in-memory OS credential store, mirroring `daemon-token.test.ts`'s helper, so this suite never shells out to a real native tool. */
 function fakeCredentialStore(): { platform: "darwin"; runCommand: RunCredentialCommand } {
@@ -182,7 +185,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 				if (method === "daemonHealth") {
 					send();
 				} else {
-					setTimeout(send, 50);
+					setTimeout(send, 150);
 				}
 			});
 		});
@@ -198,7 +201,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 		const store = await openLocalDaemonStore({
 			homeDirectory,
 			credentialStoreOptions,
-			requestTimeoutMs: 20,
+			requestTimeoutMs: 100,
 			spawn: vi.fn()
 		});
 

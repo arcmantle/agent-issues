@@ -11,10 +11,10 @@ export default defineConfig({
 		maxWorkers: 1
 	},
 	resolve: {
-		alias: {
-			"@agent-issues/core": fileURLToPath(new URL("../core/src/index.ts", import.meta.url)),
-			"@agent-issues/api-local": fileURLToPath(new URL("../api-local/src/index.ts", import.meta.url)),
-			"@agent-issues/api-pg": fileURLToPath(new URL("../api-pg/src/index.ts", import.meta.url))
-		}
+		alias: [
+			{ find: "@agent-issues/core", replacement: fileURLToPath(new URL("../core/src/index.ts", import.meta.url)) },
+			{ find: "@agent-issues/api-local", replacement: fileURLToPath(new URL("../api-local/src/index.ts", import.meta.url)) },
+			{ find: "@agent-issues/api-pg", replacement: fileURLToPath(new URL("../api-pg/src/index.ts", import.meta.url)) }
+		]
 	}
 });

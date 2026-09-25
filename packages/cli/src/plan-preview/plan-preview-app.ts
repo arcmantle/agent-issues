@@ -12,26 +12,25 @@ export type PlanPreview = ProposedPlan & { status: string; revision: number };
 export class PlanPreviewApp extends LitElement {
 	static properties = {
 		plan: { attribute: false },
-		confirmPlan: { attribute: false },
-		returnToPlanning: { attribute: false },
+		expanded: { type: Boolean },
 		openLink: { attribute: false },
 		errorMessage: { attribute: false },
 		retryAction: { attribute: false }
 	};
 
+	constructor() {
+		super();
+		this.expanded = false;
+	}
+
 	declare public plan: PlanPreview | null;
-	declare public confirmPlan: (() => Promise<void>) | undefined;
-	declare public returnToPlanning: (() => Promise<void>) | undefined;
+	declare public expanded: boolean;
 	declare public openLink: ((url: string) => Promise<void>) | undefined;
 	declare public errorMessage: string | null;
 	declare public retryAction: (() => Promise<void>) | undefined;
 
-	protected async onConfirm(): Promise<void> {
-		await this.confirmPlan?.();
-	}
-
-	protected async onReturnToPlanning(): Promise<void> {
-		await this.returnToPlanning?.();
+	protected handleToggle(): void {
+		this.expanded = !this.expanded;
 	}
 
 	protected async onRetry(): Promise<void> {
@@ -67,6 +66,16 @@ export class PlanPreviewApp extends LitElement {
 						<p data-revision="plan">Revision ${currentPlan.revision}</p>
 						<h1>${currentPlan.title}</h1>
 					</header>
+					<button
+						data-action="toggle"
+						aria-expanded=${String(this.expanded)}
+						@click=${this.handleToggle}
+					>
+					${when(this.expanded, () => "Hide plan details", () => "Show plan details")}
+					</button>
+					${when(
+						this.expanded,
+						() => html`
 					<section class="summary-card goal-card" data-section="goal">
 						<p class="section-label">Goal</p>
 						${this.renderMarkdown(currentPlan.goal, "No Goal has been recorded.")}
@@ -120,24 +129,10 @@ export class PlanPreviewApp extends LitElement {
 					${when(
 						currentPlan.status === "ready",
 						() => html`<p data-state="ready" role="status"><span aria-hidden="true">&#10003;</span> Plan ready</p>`,
-						() => html`
-							<footer>
-								<button
-									class="return"
-									data-action="return"
-									@click=${this.onReturnToPlanning}
-								>
-								Return to planning
-								</button>
-								<button
-									class="confirm"
-									data-action="confirm"
-									@click=${this.onConfirm}
-								>
-								Confirm
-								</button>
-							</footer>
-						`
+						() => nothing
+					)}
+						`,
+						() => nothing
 					)}
 				`,
 				() => html`<p class="loading" role="status">Loading Plan Preview.</p>`
@@ -325,18 +320,6 @@ export class PlanPreviewApp extends LitElement {
 	.loading {
 		color: #63736d;
 	}
-	footer {
-		align-items: center;
-		background: #f6f2e9;
-		border-top: 1px solid #bdcbc3;
-		bottom: 0;
-		display: flex;
-		gap: 12px;
-		justify-content: flex-end;
-		margin-top: 28px;
-		padding: 20px 0 4px;
-		position: sticky;
-	}
 	button {
 		border: 1px solid #476b65;
 		border-radius: 4px;
@@ -349,21 +332,6 @@ export class PlanPreviewApp extends LitElement {
 	button:focus-visible {
 		outline: 3px solid #efaa51;
 		outline-offset: 2px;
-	}
-	.confirm {
-		background: #1f6b63;
-		box-shadow: 3px 3px 0 #103b36;
-		color: #ffffff;
-	}
-	.confirm:hover {
-		background: #15554e;
-	}
-	.return {
-		background: #fffdf8;
-		color: #173d3a;
-	}
-	.return:hover {
-		background: #e9eee8;
 	}
 	aside {
 		background: #fde7e0;
@@ -394,10 +362,6 @@ export class PlanPreviewApp extends LitElement {
 		}
 		h1 {
 			font-size: 26px;
-		}
-		footer {
-			align-items: stretch;
-			flex-direction: column-reverse;
 		}
 		button {
 			width: 100%;

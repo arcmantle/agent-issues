@@ -333,7 +333,7 @@ export function renderAuthSwitch(login: SavedLoginView): string {
 	return `Switched to saved login ${login.name}.`;
 }
 
-export function renderPluginInstall(result: { host: "claude" | "copilot" }): string {
+export function renderAgentInit(result: { host: "claude" | "copilot" }): string {
 	return `Installed the Agent Issues plugin for ${result.host}.`;
 }
 

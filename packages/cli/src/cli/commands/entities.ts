@@ -1,6 +1,6 @@
 import { Option } from "clipanion";
 
-import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type EntityRecord, type EntitySummary, type RelationDirection, type RelationType } from "@agent-issues/core";
+import { ALLOWED_RELATIONS, computeContextContentHash, computeContextTermContentHash, computeEntityContentHash, isEntityKind, isValidStatus, projectPlanEntries, type EntityRecord, type EntitySummary, type RelationDirection, type RelationType, type StorageDriver } from "@agent-issues/core";
 
 import {
 	toCompactCreateAcknowledgement,
@@ -334,12 +334,21 @@ export class StatusCommand extends PositionalsTenantCommand {
 		return withStore(this.dbPath, this.withStoreOptions(), async (store) => {
 			const entityId = requirePositional(this.positionals, 0, "status <id> <status>");
 			const status = requirePositional(this.positionals, 1, "status <id> <status>");
-			const result = await store.updateEntityStatus({ entityId, status });
+			const { entity } = await store.getEntityDetails(entityId);
+			const workspaceObservation = entity.kind === "issue" && entity.status !== "done" && status === "done"
+				? await resolveWorkspaceCompletionObservation(this.context.cwd, await store.getProspectorSettings())
+				: undefined;
+			const result = await store.updateEntityStatus({ entityId, status, workspaceObservation });
 
 			this.print(this.asJson ? toCompactStatusAcknowledgement("status", result) : result, `Updated ${result.entity.id} from ${result.previousStatus} to ${result.entity.status}`);
 			return 0;
 		});
 	}
+}
+
+async function resolveWorkspaceCompletionObservation(workspaceRoot: string, settings: Parameters<StorageDriver["setProspectorSettings"]>[0]) {
+	const { resolveWorkspaceObservation } = await import("@agent-issues/api-local");
+	return resolveWorkspaceObservation(workspaceRoot, settings);
 }
 
 type NextWorkItem = {

@@ -9,9 +9,10 @@ import type { SavedLoginStoreOptions } from "../auth/auth-session.js";
 import { openStorageDriver } from "../runtime/open-storage-driver.js";
 
 export type AgentIssuesContext = BaseContext & {
+	agentInitProgressActive?: boolean;
 	cwd: string;
-	pluginInstallDependencies?: {
-		run: PluginInstallRunner;
+	agentInitDependencies?: {
+		run: AgentInitRunner;
 	};
 	authLoginDependencies?: {
 		deviceCodeLogin?: (options: {
@@ -39,11 +40,11 @@ export type AgentIssuesContext = BaseContext & {
 	credentialStoreOptions?: SavedLoginStoreOptions;
 };
 
-export type PluginInstallRunner = (
+export type AgentInitRunner = (
 	command: string,
 	args: string[],
 	options: { quiet: boolean }
-) => Promise<void>;
+) => Promise<string>;
 
 export type EntityView = "compact" | "full";
 
@@ -53,6 +54,7 @@ const BODY_FILE_READ_ATTEMPTS = 3;
 export abstract class BaseCommand extends Command<AgentIssuesContext> {
 	public asJson = Option.Boolean("--json", false);
 	public prettyJson = Option.Boolean("--pretty", false);
+	public projectIdentity = Option.String("--project-identity");
 
 	protected print(payload: object, text: string) {
 		printOutput(this.context.stdout, this.asJson, this.prettyJson, payload, text);
@@ -68,7 +70,12 @@ export abstract class BaseCommand extends Command<AgentIssuesContext> {
 	protected withStoreOptions(
 		extra?: DatabaseLocationOptions
 	): DatabaseLocationOptions & { credentialStoreOptions?: SavedLoginStoreOptions } {
-		return { credentialStoreOptions: this.context.credentialStoreOptions, currentWorkingDirectory: this.context.cwd, ...extra };
+		return {
+			credentialStoreOptions: this.context.credentialStoreOptions,
+			currentWorkingDirectory: this.context.cwd,
+			projectIdentity: this.projectIdentity,
+			...extra
+		};
 	}
 }
 

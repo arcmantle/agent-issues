@@ -11,7 +11,7 @@ import { isEntrypointInvocation, runCli, shouldRunLocalDaemon, shouldRunMcpServe
 import { main } from "./index.js";
 import { createEntity, ensureDatabase, getDatabaseSnapshot, getEntityDetails, getProjectDiscovery, listEntities, listTenants, materializeEntityRevision, openSqliteStore } from "@agent-issues/api-local";
 import { LOCAL_DAEMON_SPAWN_FLAG } from "../daemon/local-daemon-store.js";
-import { MCP_SERVER_FLAG } from "../mcp-server/runner.js";
+import { MCP_SERVER_FLAG, parseMcpProjectIdentity, PROJECT_IDENTITY_FLAG } from "../mcp-server/runner.js";
 import { startLiveSite } from "../site/index.js";
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -163,6 +163,37 @@ describe("cli", () => {
 		expect(stdout.read()).toBe("Project identity: default-project\nSource: folder-name\n");
 	});
 
+	it("uses --project-identity to select another project's data", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "project-override.db");
+		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
+		process.env.AGENT_ISSUES_NO_DAEMON = "1";
+
+		try {
+			const createOutput = createCapture();
+			expect(await runCli(["create", "initiative", "--title", "Remote project", "--project-identity", "PROJ_REMOTE", "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: createOutput.stream
+			})).toBe(0);
+
+			const listOutput = createCapture();
+			expect(await runCli(["list", "initiative", "--project-identity", "PROJ_REMOTE", "--db", dbPath, "--json"], {
+				cwd: root,
+				stderr: createCapture().stream,
+				stdout: listOutput.stream
+			})).toBe(0);
+
+			expect(JSON.parse(listOutput.read())).toMatchObject({ items: [{ title: "Remote project" }] });
+		} finally {
+			if (previousNoDaemon === undefined) {
+				delete process.env.AGENT_ISSUES_NO_DAEMON;
+			} else {
+				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
+			}
+		}
+	});
+
 	it("stops live sites through site --stop", async () => {
 		const root = createTempDir();
 		const previousNoDaemon = process.env.AGENT_ISSUES_NO_DAEMON;
@@ -201,6 +232,12 @@ describe("cli", () => {
 		await expect(runCli(["status", option])).rejects.toThrow(/Unsupported option name/);
 	});
 
+	it("parses an MCP project identity override", () => {
+		expect(parseMcpProjectIdentity([PROJECT_IDENTITY_FLAG, "PROJ_REMOTE"])).toBe("PROJ_REMOTE");
+		expect(parseMcpProjectIdentity([])).toBeUndefined();
+		expect(() => parseMcpProjectIdentity([PROJECT_IDENTITY_FLAG])).toThrow(/Usage/);
+	});
+
 	it("prints help when invoked without a command", async () => {
 		const stdout = createCapture();
 		const stderr = createCapture();
@@ -214,58 +251,208 @@ describe("cli", () => {
 
 	it.each([
 		{
+			args: ["agent", "init"],
 			host: "copilot",
 			expected: [
+				["copilot", "plugin", "marketplace", "list", "--json"],
 				["copilot", "plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"],
 				["copilot", "plugin", "install", "agent-issues@agent-issues"]
 			]
 		},
 		{
+			args: ["agent", "init", "--host", "claude"],
 			host: "claude",
 			expected: [
+				["claude", "plugin", "marketplace", "list", "--json"],
 				["claude", "plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"],
 				["claude", "plugin", "install", "agent-issues@agent-issues", "--scope", "user"]
 			]
 		}
-	])("installs the plugin through $host", async ({ host, expected }) => {
+	])("initializes the plugin through $host", async ({ args, host, expected }) => {
 		const stdout = createCapture();
+		const stderr = createCapture();
+		Object.assign(stderr.stream, { isTTY: true });
 		const commands: string[][] = [];
 
-		expect(await runCli(["plugin", "install", host, "--json"], {
+		expect(await runCli([...args, "--json"], {
 			cwd: createTempDir(),
-			stderr: createCapture().stream,
+			stderr: stderr.stream,
 			stdout: stdout.stream,
-			pluginInstallDependencies: {
-				run: async (command, args) => {
-					commands.push([command, ...args]);
+			agentInitDependencies: {
+				run: async (command, commandArgs) => {
+					commands.push([command, ...commandArgs]);
+					return "[]";
 				}
 			}
 		})).toBe(0);
 
 		expect(commands).toEqual(expected);
 		expect(JSON.parse(stdout.read())).toEqual({
-			command: "plugin-install",
+			command: "agent-init",
 			host,
 			marketplace: "arcmantle/agent-issues-plugin",
 			plugin: "agent-issues@agent-issues"
 		});
+		expect(stderr.read()).toBe("");
 	});
 
-	it("rejects an unsupported plugin host", async () => {
-		await expect(runCli(["plugin", "install", "cursor"])).rejects.toThrow(
+	it("does not show a spinner for non-interactive text output", async () => {
+		const stderr = createCapture();
+		const commands: Array<{ args: string[]; quiet: boolean }> = [];
+
+		expect(await runCli(["agent", "init"], {
+			cwd: createTempDir(),
+			stderr: stderr.stream,
+			agentInitDependencies: {
+				run: async (_command, args, options) => {
+					commands.push({ args, quiet: options.quiet });
+					return "[]";
+				}
+			}
+		})).toBe(0);
+
+		expect(stderr.read()).toBe("");
+		expect(commands).toEqual([
+			{ args: ["plugin", "marketplace", "list", "--json"], quiet: true },
+			{ args: ["plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"], quiet: false },
+			{ args: ["plugin", "install", "agent-issues@agent-issues"], quiet: false }
+		]);
+	});
+
+	it("skips marketplace registration when the marketplace already exists", async () => {
+		const commands: string[][] = [];
+
+		expect(await runCli(["agent", "init"], {
+			cwd: createTempDir(),
+			agentInitDependencies: {
+				run: async (command, commandArgs) => {
+					commands.push([command, ...commandArgs]);
+					return JSON.stringify([{ name: "agent-issues" }]);
+				}
+			}
+		})).toBe(0);
+
+		expect(commands).toEqual([
+			["copilot", "plugin", "marketplace", "list", "--json"],
+			["copilot", "plugin", "install", "agent-issues@agent-issues"]
+		]);
+	});
+
+	it("shows an installation spinner in an interactive terminal", async () => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+		Object.assign(stderr.stream, {
+			clearLine: () => true,
+			cursorTo: () => true,
+			isTTY: true,
+			moveCursor: () => true
+		});
+		const commands: Array<{ args: string[]; quiet: boolean }> = [];
+
+		expect(await runCli(["agent", "init"], {
+			cwd: createTempDir(),
+			stderr: stderr.stream,
+			stdout: stdout.stream,
+			agentInitDependencies: {
+				run: async (_command, args, options) => {
+					if (args[2] === "list") {
+						expect(stderr.read()).toContain("Installing the Agent Issues plugin for copilot...");
+					}
+
+					commands.push({ args, quiet: options.quiet });
+					return "[]";
+				}
+			}
+		})).toBe(0);
+
+		expect(stderr.read()).toContain("Installing the Agent Issues plugin for copilot...");
+		expect(commands).toEqual([
+			{ args: ["plugin", "marketplace", "list", "--json"], quiet: true },
+			{ args: ["plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"], quiet: true },
+			{ args: ["plugin", "install", "agent-issues@agent-issues"], quiet: true }
+		]);
+	});
+
+	it("uses bootstrap progress without rendering a second spinner", async () => {
+		const stdout = createCapture();
+		const stderr = createCapture();
+		Object.assign(stderr.stream, {
+			clearLine: () => true,
+			cursorTo: () => true,
+			isTTY: true,
+			moveCursor: () => true
+		});
+		const commands: Array<{ args: string[]; quiet: boolean }> = [];
+
+		expect(await runCli(["agent", "init"], {
+			agentInitProgressActive: true,
+			cwd: createTempDir(),
+			stderr: stderr.stream,
+			stdout: stdout.stream,
+			agentInitDependencies: {
+				run: async (_command, args, options) => {
+					commands.push({ args, quiet: options.quiet });
+					return "[]";
+				}
+			}
+		})).toBe(0);
+
+		expect(stderr.read()).toBe("");
+		expect(commands).toEqual([
+			{ args: ["plugin", "marketplace", "list", "--json"], quiet: true },
+			{ args: ["plugin", "marketplace", "add", "arcmantle/agent-issues-plugin"], quiet: true },
+			{ args: ["plugin", "install", "agent-issues@agent-issues"], quiet: true }
+		]);
+	});
+
+	it("rejects an unsupported agent host", async () => {
+		await expect(runCli(["agent", "init", "--host", "cursor"])).rejects.toThrow(
 			"Unsupported plugin host: cursor. Use copilot or claude."
 		);
 	});
 
 	it("propagates a host command failure", async () => {
-		await expect(runCli(["plugin", "install", "copilot"], {
+		await expect(runCli(["agent", "init"], {
 			cwd: createTempDir(),
-			pluginInstallDependencies: {
+			agentInitDependencies: {
 				run: async () => {
 					throw new Error("Could not run copilot: command not found");
 				}
 			}
 		})).rejects.toThrow("Could not run copilot: command not found");
+	});
+
+	it("stops the spinner when an interactive installation command fails", async () => {
+		const stderr = createCapture();
+		let clearedLines = 0;
+		Object.assign(stderr.stream, {
+			clearLine: () => {
+				clearedLines += 1;
+				return true;
+			},
+			cursorTo: () => true,
+			isTTY: true,
+			moveCursor: () => true
+		});
+		let callCount = 0;
+
+		await expect(runCli(["agent", "init"], {
+			cwd: createTempDir(),
+			stderr: stderr.stream,
+			agentInitDependencies: {
+				run: async () => {
+					callCount += 1;
+					if (callCount === 1) {
+						return "[]";
+					}
+
+					throw new Error("Could not run copilot: command not found");
+				}
+			}
+		})).rejects.toThrow("Could not run copilot: command not found");
+
+		expect(stderr.read()).toContain("Installing the Agent Issues plugin for copilot...");
+		expect(clearedLines).toBeGreaterThan(0);
 	});
 
 	it("creates an initiative-owned Plan and marks it ready", async () => {
@@ -1063,13 +1250,13 @@ describe("cli", () => {
 
 		const exitCode = await runCli([
 			"create", "debt", "--title", "Replace deprecated API", "--parent", owner.id,
-			"--category", "technical", "--priority", "high", "--db", dbPath, "--json"
+			"--category", "technical", "--priority", "high", "--project-identity", owner.id, "--db", dbPath, "--json"
 		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
 
 		expect(exitCode).toBe(0);
 		const created = JSON.parse(stdout.read()) as { reference: string };
 		const detailsOutput = createCapture();
-		await runCli(["show", created.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: detailsOutput.stream });
+		await runCli(["show", created.reference, "--project-identity", owner.id, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: detailsOutput.stream });
 		expect(JSON.parse(detailsOutput.read())).toMatchObject({ entity: { reference: expect.stringMatching(/^DEBT_/), category: "technical", priority: "high" } });
 	});
 
@@ -1124,13 +1311,13 @@ describe("cli", () => {
 		const stdout = createCapture();
 
 		const exitCode = await runCli([
-			"edit", debt.reference, "--priority", "critical", "--db", dbPath, "--json"
+			"edit", debt.reference, "--priority", "critical", "--project-identity", owner.id, "--db", dbPath, "--json"
 		], { cwd: root, stderr: createCapture().stream, stdout: stdout.stream });
 
 		expect(exitCode).toBe(0);
 		expect(JSON.parse(stdout.read())).toEqual({ operation: "edit", reference: debt.reference, revision: 2 });
 		const detailsOutput = createCapture();
-		await runCli(["show", debt.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: detailsOutput.stream });
+		await runCli(["show", debt.reference, "--project-identity", owner.id, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: detailsOutput.stream });
 		expect(JSON.parse(detailsOutput.read())).toMatchObject({ entity: { category: "technical", priority: "critical" } });
 	});
 
@@ -1286,6 +1473,37 @@ describe("cli", () => {
 		const deleteStdout = createCapture();
 		await runCli(["delete", issue.reference, "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: deleteStdout.stream });
 		expect(JSON.parse(deleteStdout.read())).toEqual({ operation: "delete", reference: issue.reference, removed: true });
+	});
+
+	it("records a workspace observation when the status command completes an issue", async () => {
+		const root = createTempDir();
+		const dbPath = path.join(root, "agent-issues.db");
+		const createStdout = createCapture();
+		await runCli(["create", "issue", "--title", "Observed completion", "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: createStdout.stream
+		});
+		const issue = JSON.parse(createStdout.read()) as { id: string };
+
+		await runCli(["status", issue.id, "done", "--db", dbPath], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: createCapture().stream
+		});
+
+		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
+		try {
+			expect((await store.getEntityDetails(issue.id)).completionObservations).toEqual([
+				expect.objectContaining({
+					completionOrdinal: 1,
+					calculatedVersionState: "unknown",
+					diagnostics: [{ code: "workspace-observation-failed", message: expect.any(String) }]
+				})
+			]);
+		} finally {
+			await store.close();
+		}
 	});
 
 	it("returns compact relation acknowledgements for successful and no-op writes", async () => {
@@ -1991,7 +2209,7 @@ describe("cli", () => {
 		expect(exitCode).toBe(0);
 		expect(Object.keys(payload)).toEqual([
 			"initiative", "entities", "prds", "userStories", "adrs", "issues",
-			"fixLinks", "subIssueLinks", "blockerLinks", "constrainsLinks"
+			"fixLinks", "subIssueLinks", "blockerLinks", "constrainsLinks", "versionCoverage"
 		]);
 		expect(payload.initiative).toMatchObject({
 			id: initiative.id,
@@ -1999,6 +2217,7 @@ describe("cli", () => {
 			body: "Hidden initiative body",
 			bodySource: "authored"
 		});
+		expect(payload.versionCoverage).toEqual([]);
 		expect(payload.entities.every((record: object) => Object.hasOwn(record, "body"))).toBe(true);
 	});
 

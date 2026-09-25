@@ -661,7 +661,19 @@ async function readTenantScoped<T>(
 		}
 	}
 
-	return withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant }, read);
+	try {
+		return await withStore(dbPath, { credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant }, read);
+	} catch (error) {
+		if (isUnavailableProjectEntityError(error)) {
+			return { kind: "unavailable" };
+		}
+
+		throw error;
+	}
+}
+
+function isUnavailableProjectEntityError(error: unknown): boolean {
+	return error instanceof Error && error.message.startsWith("Entity not found");
 }
 
 async function readEntityRelations(
@@ -843,16 +855,24 @@ async function readEntityDetails(
 		}
 	}
 
-	return withStore(
-		dbPath,
-		{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
-		async (store) => {
-			const details = await store.getEntityDetails(entityId);
-			return await hasSelectedProjectEntity(store, details.entity.kind, details.entity.id)
-				? details
-				: { kind: "unavailable" as const };
+	try {
+		return await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
+			async (store) => {
+				const details = await store.getEntityDetails(entityId);
+				return await hasSelectedProjectEntity(store, details.entity.kind, details.entity.id)
+					? details
+					: { kind: "unavailable" as const };
+			}
+		);
+	} catch (error) {
+		if (isUnavailableProjectEntityError(error)) {
+			return { kind: "unavailable" };
 		}
-	);
+
+		throw error;
+	}
 }
 
 async function readInitiativeTab(
@@ -876,13 +896,21 @@ async function readInitiativeTab(
 		}
 	}
 
-	return withStore(
-		dbPath,
-		{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
-		async (store) => await hasSelectedProjectEntity(store, "initiative", initiativeId)
-			? store.getInitiativeTab({ initiativeId, tab })
-			: { kind: "unavailable" as const }
-	);
+	try {
+		return await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
+			async (store) => await hasSelectedProjectEntity(store, "initiative", initiativeId)
+				? store.getInitiativeTab({ initiativeId, tab })
+				: { kind: "unavailable" as const }
+		);
+	} catch (error) {
+		if (isUnavailableProjectEntityError(error)) {
+			return { kind: "unavailable" };
+		}
+
+		throw error;
+	}
 }
 
 async function readInitiativeDetail(
@@ -905,13 +933,21 @@ async function readInitiativeDetail(
 		}
 	}
 
-	return withStore(
-		dbPath,
-		{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
-		async (store) => await hasSelectedProjectEntity(store, "initiative", initiativeId)
-			? store.getInitiativeDetail({ initiativeId })
-			: { kind: "unavailable" as const }
-	);
+	try {
+		return await withStore(
+			dbPath,
+			{ credentialStoreOptions, currentWorkingDirectory, projectIdentity, tenant },
+			async (store) => await hasSelectedProjectEntity(store, "initiative", initiativeId)
+				? store.getInitiativeDetail({ initiativeId })
+				: { kind: "unavailable" as const }
+		);
+	} catch (error) {
+		if (isUnavailableProjectEntityError(error)) {
+			return { kind: "unavailable" };
+		}
+
+		throw error;
+	}
 }
 
 async function hasSelectedProjectEntity(store: StorageDriver, kind: string, entityIdentity: string): Promise<boolean> {

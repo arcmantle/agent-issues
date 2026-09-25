@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { IssueBreakdownDraft } from "@agent-issues/core";
+import { IssuePreviewApp } from "./issue-preview-app.js";
 import "./issue-preview-app.js";
 
 function issueBreakdownDraft(): IssueBreakdownDraft {
@@ -42,13 +43,29 @@ describe("IssuePreviewApp", () => {
 		document.body.replaceChildren();
 	});
 
-	it("renders the complete proposed issue graph for review", async () => {
+	it("shows a loading state until a draft arrives", async () => {
+		const element = document.createElement("issue-preview-app") as HTMLElement & { updateComplete: Promise<unknown> };
+		document.body.append(element);
+		await element.updateComplete;
+
+		expect(element.shadowRoot?.querySelector("[role=status]")?.textContent).toContain("Loading Issue Preview.");
+		expect(element.shadowRoot?.querySelector("button[data-action=toggle]")).toBeNull();
+	});
+
+	it("shows the proposed issue graph only after the review is expanded", async () => {
 		const element = document.createElement("issue-preview-app") as HTMLElement & { draft: IssueBreakdownDraft; updateComplete: Promise<unknown> };
 		element.draft = issueBreakdownDraft();
 		document.body.append(element);
 		await element.updateComplete;
 
 		expect(element.shadowRoot?.querySelector("h1")?.textContent).toContain("Issue breakdown");
+		const toggle = element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]");
+		expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+		expect(element.shadowRoot?.textContent).not.toContain("Store the draft");
+		toggle?.click();
+		await element.updateComplete;
+
+		expect(toggle?.getAttribute("aria-expanded")).toBe("true");
 		expect(element.shadowRoot?.textContent).toContain("Store the draft");
 		expect(element.shadowRoot?.textContent).toContain("The proposed graph persists.");
 		expect(element.shadowRoot?.textContent).toContain("Add draft storage.");
@@ -59,32 +76,28 @@ describe("IssuePreviewApp", () => {
 		expect(element.shadowRoot?.textContent).toContain("fixes: US_123");
 	});
 
-	it("calls supplied approval and return actions without editing the draft", async () => {
-		let approvals = 0;
-		let returns = 0;
-		const element = document.createElement("issue-preview-app") as HTMLElement & {
-			draft: IssueBreakdownDraft;
-			approve: () => Promise<void>;
-			returnToIssueDesign: () => Promise<void>;
-			updateComplete: Promise<unknown>;
-		};
+	it("does not render approval or return actions", async () => {
+		const element = document.createElement("issue-preview-app") as HTMLElement & { draft: IssueBreakdownDraft; updateComplete: Promise<unknown> };
 		element.draft = issueBreakdownDraft();
-		element.approve = async () => {
-			approvals += 1;
-		};
-		element.returnToIssueDesign = async () => {
-			returns += 1;
-		};
 		document.body.append(element);
 		await element.updateComplete;
 
-		(element.shadowRoot?.querySelector("button[data-action=approve]") as HTMLButtonElement).click();
-		(element.shadowRoot?.querySelector("button[data-action=return]") as HTMLButtonElement).click();
-		await Promise.resolve();
+		expect(element.shadowRoot?.querySelector("button[data-action=approve]")).toBeNull();
+		expect(element.shadowRoot?.querySelector("button[data-action=return]")).toBeNull();
+	});
 
-		expect(approvals).toBe(1);
-		expect(returns).toBe(1);
-		expect(element.draft).toEqual(issueBreakdownDraft());
+	it("keeps the review toggle keyboard-focusable", async () => {
+		const element = document.createElement("issue-preview-app") as HTMLElement & { draft: IssueBreakdownDraft; updateComplete: Promise<unknown> };
+		element.draft = issueBreakdownDraft();
+		document.body.append(element);
+		await element.updateComplete;
+
+		const toggle = element.shadowRoot?.querySelector("button[data-action=toggle]") as HTMLButtonElement;
+		expect(toggle.disabled).toBe(false);
+		expect(toggle.tabIndex).toBeGreaterThanOrEqual(0);
+		toggle.focus();
+		expect(element.shadowRoot?.activeElement).toBe(toggle);
+		expect(IssuePreviewApp.styles.toString()).toContain("button:focus-visible");
 	});
 
 	it("shows a changed-draft message and reload action", async () => {
@@ -102,6 +115,8 @@ describe("IssuePreviewApp", () => {
 		};
 		document.body.append(element);
 		await element.updateComplete;
+		(element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]"))?.click();
+		await element.updateComplete;
 
 		expect(element.shadowRoot?.querySelector("[role=alert]")?.textContent).toContain("Issue breakdown changed");
 		(element.shadowRoot?.querySelector("button[data-action=reload]") as HTMLButtonElement).click();
@@ -109,14 +124,16 @@ describe("IssuePreviewApp", () => {
 		expect(reloads).toBe(1);
 	});
 
-	it("hides unused relations and approval actions for an approved draft", async () => {
+	it("hides unused relations and displays the approved state", async () => {
 		const element = document.createElement("issue-preview-app") as HTMLElement & { draft: IssueBreakdownDraft; updateComplete: Promise<unknown> };
 		element.draft = { ...issueBreakdownDraft(), status: "approved", approvedAt: "2026-09-06T00:00:00.000Z", createdIssueReferences: ["ISS_123"] };
 		document.body.append(element);
 		await element.updateComplete;
+		(element.shadowRoot?.querySelector<HTMLButtonElement>("button[data-action=toggle]"))?.click();
+		await element.updateComplete;
 
 		expect(element.shadowRoot?.querySelector("[data-issue=storage]")?.textContent).not.toContain("Relations");
 		expect(element.shadowRoot?.querySelector("[data-state=approved]")?.textContent).toContain("Issue breakdown approved");
-		expect(element.shadowRoot?.querySelector("button")).toBeNull();
+		expect(element.shadowRoot?.querySelector("button[data-action=approve]")).toBeNull();
 	});
 });

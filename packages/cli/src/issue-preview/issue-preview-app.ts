@@ -7,24 +7,23 @@ import type { IssueBreakdownDraft, IssueBreakdownRelationReference, ProposedIssu
 export class IssuePreviewApp extends LitElement {
 	static properties = {
 		draft: { attribute: false },
-		approve: { attribute: false },
-		returnToIssueDesign: { attribute: false },
+		expanded: { type: Boolean },
 		errorMessage: { attribute: false },
 		retryAction: { attribute: false }
 	};
 
+	constructor() {
+		super();
+		this.expanded = false;
+	}
+
 	declare public draft: IssueBreakdownDraft | null;
-	declare public approve: (() => Promise<void>) | undefined;
-	declare public returnToIssueDesign: (() => Promise<void>) | undefined;
+	declare public expanded: boolean;
 	declare public errorMessage: string | null;
 	declare public retryAction: (() => Promise<void>) | undefined;
 
-	protected async onApprove(): Promise<void> {
-		await this.approve?.();
-	}
-
-	protected async onReturnToIssueDesign(): Promise<void> {
-		await this.returnToIssueDesign?.();
+	protected handleToggle(): void {
+		this.expanded = !this.expanded;
 	}
 
 	protected async onReload(): Promise<void> {
@@ -42,6 +41,16 @@ export class IssuePreviewApp extends LitElement {
 			${when(
 				draft,
 				(currentDraft) => html`
+					<button
+						data-action="toggle"
+						aria-expanded=${String(this.expanded)}
+						@click=${this.handleToggle}
+					>
+					${when(this.expanded, () => "Hide issue breakdown", () => "Show issue breakdown")}
+					</button>
+					${when(
+						this.expanded,
+						() => html`
 					<p class="reference">${currentDraft.targetReference}</p>
 					<ol>
 						${repeat(currentDraft.issues, (issue) => issue.key, (issue) => this.renderIssue(issue))}
@@ -57,14 +66,12 @@ export class IssuePreviewApp extends LitElement {
 						() => nothing
 					)}
 					${when(
-						currentDraft.status === "active",
-						() => html`
-							<footer>
-								<button data-action="return" @click=${this.onReturnToIssueDesign}>Return to issue design</button>
-								<button data-action="approve" @click=${this.onApprove}>Approve</button>
-							</footer>
-						`,
-						() => html`<p data-state="approved" role="status">Issue breakdown approved</p>`
+						currentDraft.status === "approved",
+						() => html`<p data-state="approved" role="status">Issue breakdown approved</p>`,
+						() => nothing
+					)}
+					`,
+					() => nothing
 					)}
 				`
 				,
@@ -148,12 +155,6 @@ export class IssuePreviewApp extends LitElement {
 		margin: 4px 0 0;
 		padding-left: 20px;
 	}
-	footer {
-		display: flex;
-		gap: 12px;
-		justify-content: flex-end;
-		margin-top: 28px;
-	}
 	button {
 		border: 1px solid #476b65;
 		border-radius: 4px;
@@ -163,11 +164,11 @@ export class IssuePreviewApp extends LitElement {
 		font-weight: 700;
 		padding: 10px 16px;
 	}
-	[data-action="approve"] {
-		background: #1f6b63;
-		color: #ffffff;
+	button:focus-visible {
+		outline: 3px solid #efaa51;
+		outline-offset: 2px;
 	}
-	[data-action="return"],
+	[data-action="toggle"],
 	[data-action="reload"] {
 		background: #fffdf8;
 		color: #173d3a;
