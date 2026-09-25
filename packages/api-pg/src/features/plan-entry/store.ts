@@ -143,28 +143,28 @@ export class PgPlanEntryStore {
 		return getPlanEntryOrThrow(this.executor, existing.id);
 	}
 
-	public async linkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): Promise<LinkResult> {
+	public async linkPlanEntryEntity(input: { entryId: string; targetId: string }, actorId: string): Promise<LinkResult> {
 		const entry = await getPlanEntryOrThrow(this.executor, input.entryId);
 		assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
-		const issueId = await getProjectIssueIdOrThrow(this.executor, input.issueId);
-		if (entry.referencedEntityIds.includes(issueId)) {
-			return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, created: false };
+		const targetId = await getProjectEntityIdOrThrow(this.executor, input.targetId);
+		if (entry.referencedEntityIds.includes(targetId)) {
+			return { relation: { fromId: entry.id, toId: targetId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, created: false };
 		}
 
-		const updated = await revisePlanEntryReferences(this.executor, entry, [...entry.referencedEntityIds, issueId], actorId);
-		return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, created: true };
+		const updated = await revisePlanEntryReferences(this.executor, entry, [...entry.referencedEntityIds, targetId], actorId);
+		return { relation: { fromId: updated.id, toId: targetId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, created: true };
 	}
 
-	public async unlinkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): Promise<UnlinkResult> {
+	public async unlinkPlanEntryEntity(input: { entryId: string; targetId: string }, actorId: string): Promise<UnlinkResult> {
 		const entry = await getPlanEntryOrThrow(this.executor, input.entryId);
 		assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
-		const issueId = await getProjectIssueIdOrThrow(this.executor, input.issueId);
-		if (!entry.referencedEntityIds.includes(issueId)) {
-			return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, removed: false };
+		const targetId = await getProjectEntityIdOrThrow(this.executor, input.targetId);
+		if (!entry.referencedEntityIds.includes(targetId)) {
+			return { relation: { fromId: entry.id, toId: targetId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, removed: false };
 		}
 
-		const updated = await revisePlanEntryReferences(this.executor, entry, entry.referencedEntityIds.filter((referencedEntityId) => referencedEntityId !== issueId), actorId);
-		return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, removed: true };
+		const updated = await revisePlanEntryReferences(this.executor, entry, entry.referencedEntityIds.filter((referencedEntityId) => referencedEntityId !== targetId), actorId);
+		return { relation: { fromId: updated.id, toId: targetId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, removed: true };
 	}
 
 	public async listPlanEntries(input: { planId: string }): Promise<PlanEntryRecord[]> {
@@ -295,14 +295,14 @@ async function validateReferencedEntityIds(executor: TenantExecutor, referencedE
 	return resolved;
 }
 
-async function getProjectIssueIdOrThrow(executor: TenantExecutor, issueId: string): Promise<string> {
-	const result = await executor.execute(sql`SELECT id FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId}::uuid AND kind = 'issue' AND tombstone = FALSE
-		AND (id::text = ${issueId} OR reference = ${issueId} OR short_reference = ${issueId})`);
-	const issue = result.rows[0] as { id: string } | undefined;
-	if (!issue) {
-		throw new Error(`Issue not found: ${issueId}`);
+async function getProjectEntityIdOrThrow(executor: TenantExecutor, entityId: string): Promise<string> {
+	const result = await executor.execute(sql`SELECT id FROM entities WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId}::uuid AND tombstone = FALSE
+		AND (id::text = ${entityId} OR reference = ${entityId} OR short_reference = ${entityId})`);
+	const entity = result.rows[0] as { id: string } | undefined;
+	if (!entity) {
+		throw new Error(`Entity not found: ${entityId}`);
 	}
-	return issue.id;
+	return entity.id;
 }
 
 async function validateSupersededEntryIds(executor: TenantExecutor, planId: string, role: PlanEntryRecord["role"], supersededEntryIds: string[]): Promise<string[]> {

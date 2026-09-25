@@ -253,10 +253,10 @@ export class LinkCommand extends PositionalsTenantCommand {
 			const planEntry = await findPlanEntry(store, fromId);
 			if (planEntry) {
 				if (relationType !== "informs") {
-					throw new Error("Plan entries can link to issues only as informs. Valid relation types: informs.");
+					throw new Error("Plan entries can link to entities only as informs. Valid relation types: informs.");
 				}
 
-				const result = await store.linkPlanEntryIssue({ entryId: planEntry.id, issueId: toId });
+				const result = await store.linkPlanEntryEntity({ entryId: planEntry.id, targetId: toId });
 				this.print(
 					this.asJson ? toCompactLinkAcknowledgement("link", result) : result,
 					result.created
@@ -290,10 +290,10 @@ export class UnlinkCommand extends PositionalsTenantCommand {
 			const planEntry = await findPlanEntry(store, fromId);
 			if (planEntry) {
 				if (relationType !== "informs") {
-					throw new Error("Plan entries can link to issues only as informs. Valid relation types: informs.");
+					throw new Error("Plan entries can link to entities only as informs. Valid relation types: informs.");
 				}
 
-				const result = await store.unlinkPlanEntryIssue({ entryId: planEntry.id, issueId: toId });
+				const result = await store.unlinkPlanEntryEntity({ entryId: planEntry.id, targetId: toId });
 				this.print(
 					this.asJson ? toCompactLinkAcknowledgement("unlink", result) : result,
 					result.removed

@@ -105,7 +105,7 @@ export type SchemaPayload = {
 		parentKind: "plan";
 		recordPrefix: "PLAN_ENTRY";
 		linkRelationType: "informs";
-		linkTargetKind: "issue";
+		linkTargetKind: "entity";
 		addCommand: string;
 		linkCommand: string;
 		unlinkCommand: string;
@@ -387,7 +387,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		notes: [
 			"Plans are initiative-owned entities created with `agent-issues create plan --parent <initiativeId>`.",
-			"Link an existing Plan entry to an issue with `agent-issues link <planEntryId> informs <issueId>`.",
+				"Link an existing Plan entry to an entity with `agent-issues link <planEntryId> informs <targetId>`.",
 			"A decision can supersede question or decision entries.",
 			"Delete retains the entry in revision history."
 		],
@@ -1005,7 +1005,7 @@ const COMMAND_SPECS: CommandSpec[] = [
 		],
 		notes: [
 			"Allowed relation pairs are exposed by `agent-issues schema --json`.",
-			"A Plan entry can link only to an issue and only as `informs`.",
+				"A Plan entry can link only to an entity in the current project and only as `informs`.",
 			"For structural parent-child work, prefer `create --parent` or `move` over `link` so the intent stays explicit.",
 			"Only epics, initiatives, and issues can resolve debt. A resolves link does not change debt lifecycle state.",
 			"The CLI rejects self-links and cycle-forming `blocks` or `supersedes` links."
@@ -1314,10 +1314,10 @@ export function getSchemaPayload(): SchemaPayload {
 			parentKind: "plan",
 			recordPrefix: "PLAN_ENTRY",
 			linkRelationType: "informs",
-			linkTargetKind: "issue",
+			linkTargetKind: "entity",
 			addCommand: "agent-issues plan-entry add <planId> --role <role> --body-file <path|-> [--reference <entityId>] --json",
-			linkCommand: "agent-issues link <planEntryId> informs <issueId> --json",
-			unlinkCommand: "agent-issues unlink <planEntryId> informs <issueId> --json",
+			linkCommand: "agent-issues link <planEntryId> informs <targetId> --json",
+			unlinkCommand: "agent-issues unlink <planEntryId> informs <targetId> --json",
 			fields: ["id", "reference", "planId", "role", "body", "referencedEntityIds", "supersededEntryIds", "revision", "contentHash", "tombstone", "createdAt", "updatedAt"]
 		}
 	};

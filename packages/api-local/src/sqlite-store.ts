@@ -340,12 +340,12 @@ export class SqliteStore implements StorageDriver {
 		);
 	}
 
-	public async linkPlanEntryIssue(input: Parameters<StorageDriver["linkPlanEntryIssue"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.linkPlanEntryIssue(input, actorId), { synchronizeSearch: false });
+	public async linkPlanEntryEntity(input: Parameters<StorageDriver["linkPlanEntryEntity"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.linkPlanEntryEntity(input, actorId), { synchronizeSearch: false });
 	}
 
-	public async unlinkPlanEntryIssue(input: Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]) {
-		return this.mutate((actorId) => this.planEntryStore.unlinkPlanEntryIssue(input, actorId), { synchronizeSearch: false });
+	public async unlinkPlanEntryEntity(input: Parameters<StorageDriver["unlinkPlanEntryEntity"]>[0]) {
+		return this.mutate((actorId) => this.planEntryStore.unlinkPlanEntryEntity(input, actorId), { synchronizeSearch: false });
 	}
 
 	public async listPlanEntryHistory(input: Parameters<StorageDriver["listPlanEntryHistory"]>[0]) {

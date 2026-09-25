@@ -283,7 +283,7 @@ describe("JSON-RPC gate: change/event stream (ADR13)", () => {
 		const entry = await rpcWrite(4, "createPlanEntry", { planId: plan.result.id, role: "decision", body: "Use scoped updates." });
 		await waitForCount(5);
 
-		await rpcWrite(5, "linkPlanEntryIssue", { entryId: entry.result.id, issueId: issue.result.id }, "write-link-1");
+			await rpcWrite(5, "linkPlanEntryEntity", { entryId: entry.result.id, targetId: issue.result.id }, "write-link-1");
 
 		const events = await waitForCount(6);
 		expect(events[5]).toMatchObject({

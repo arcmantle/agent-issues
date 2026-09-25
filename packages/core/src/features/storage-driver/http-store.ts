@@ -463,12 +463,12 @@ export class HttpStore implements StorageDriver {
 		return this.call("deletePlanEntry", input);
 	}
 
-	public linkPlanEntryIssue(input: Parameters<StorageDriver["linkPlanEntryIssue"]>[0]): ReturnType<StorageDriver["linkPlanEntryIssue"]> {
-		return this.call("linkPlanEntryIssue", input);
+	public linkPlanEntryEntity(input: Parameters<StorageDriver["linkPlanEntryEntity"]>[0]): ReturnType<StorageDriver["linkPlanEntryEntity"]> {
+		return this.call("linkPlanEntryEntity", input);
 	}
 
-	public unlinkPlanEntryIssue(input: Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]): ReturnType<StorageDriver["unlinkPlanEntryIssue"]> {
-		return this.call("unlinkPlanEntryIssue", input);
+	public unlinkPlanEntryEntity(input: Parameters<StorageDriver["unlinkPlanEntryEntity"]>[0]): ReturnType<StorageDriver["unlinkPlanEntryEntity"]> {
+		return this.call("unlinkPlanEntryEntity", input);
 	}
 
 	public listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]): ReturnType<StorageDriver["listPlanEntries"]> {

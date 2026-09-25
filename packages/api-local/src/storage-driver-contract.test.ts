@@ -570,8 +570,8 @@ describe("storage-driver seam: search capability (SqliteStore)", () => {
 			const inspection = new Database(dbPath, { readonly: true, fileMustExist: true });
 			const rowIdBefore = (inspection.prepare("SELECT rowid FROM search_documents WHERE tenant_id = ? AND source_type = 'entity' AND source_id = ?").get("test", issue.id) as { rowid: number }).rowid;
 
-			await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
-			await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+					await store.linkPlanEntryEntity({ entryId: entry.id, targetId: issue.id });
+					await store.unlinkPlanEntryEntity({ entryId: entry.id, targetId: issue.id });
 
 			const rowIdAfter = (inspection.prepare("SELECT rowid FROM search_documents WHERE tenant_id = ? AND source_type = 'entity' AND source_id = ?").get("test", issue.id) as { rowid: number }).rowid;
 			inspection.close();

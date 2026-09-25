@@ -476,12 +476,12 @@ export class PgStore implements StorageDriver {
 		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).deletePlanEntry(input, actorId));
 	}
 
-	public async linkPlanEntryIssue(input: Parameters<StorageDriver["linkPlanEntryIssue"]>[0]) {
-		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).linkPlanEntryIssue(input, actorId));
+	public async linkPlanEntryEntity(input: Parameters<StorageDriver["linkPlanEntryEntity"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).linkPlanEntryEntity(input, actorId));
 	}
 
-	public async unlinkPlanEntryIssue(input: Parameters<StorageDriver["unlinkPlanEntryIssue"]>[0]) {
-		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).unlinkPlanEntryIssue(input, actorId));
+	public async unlinkPlanEntryEntity(input: Parameters<StorageDriver["unlinkPlanEntryEntity"]>[0]) {
+		return this.mutation((executor, actorId) => new PgPlanEntryStore(executor).unlinkPlanEntryEntity(input, actorId));
 	}
 
 	public async listPlanEntries(input: Parameters<StorageDriver["listPlanEntries"]>[0]) {

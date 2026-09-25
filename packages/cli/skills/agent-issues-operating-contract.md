@@ -112,9 +112,9 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Write.
 
-- MCP: `plan_entry_issue_link({ entryId, issueId })` or `plan_entry_issue_unlink({ entryId, issueId })`.
-- CLI fallback: `agent-issues link <planEntryId> informs <issueId> --json` or `agent-issues unlink <planEntryId> informs <issueId> --json`.
-- The MCP operation accepts an issue target only. For existing Plan-entry-to-PRD provenance, MCP is unavailable; use `agent-issues link <planEntryId> informs <prdId> --json` or its unlink fallback.
+- MCP: `plan_entry_entity_link({ entryId, targetId })` or `plan_entry_entity_unlink({ entryId, targetId })`.
+- CLI fallback: `agent-issues link <planEntryId> informs <targetId> --json` or `agent-issues unlink <planEntryId> informs <targetId> --json`.
+- The target must be an active entity in the current project.
 
 ### Issue Breakdown
 

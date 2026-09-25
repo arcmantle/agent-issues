@@ -91,8 +91,8 @@ export type McpServerOptions = {
 			| "getPlanEntry"
 			| "updatePlanEntry"
 			| "deletePlanEntry"
-			| "linkPlanEntryIssue"
-			| "unlinkPlanEntryIssue"
+			| "linkPlanEntryEntity"
+			| "unlinkPlanEntryEntity"
 			| "listPlanEntries"
 			| "listPlanEntryHistory"
 			| "confirmPlan"
@@ -674,21 +674,21 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	);
 
 	server.registerTool(
-		"plan_entry_issue_link",
+		"plan_entry_entity_link",
 		{
-			description: "Link a Plan entry to an issue.",
-			inputSchema: { entryId: z.string().min(1), issueId: z.string().min(1) }
+			description: "Link a Plan entry to an entity.",
+			inputSchema: { entryId: z.string().min(1), targetId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await openStore()).linkPlanEntryIssue(input))
+		async (input) => toolResult(await (await openStore()).linkPlanEntryEntity(input))
 	);
 
 	server.registerTool(
-		"plan_entry_issue_unlink",
+		"plan_entry_entity_unlink",
 		{
-			description: "Remove a Plan entry issue link.",
-			inputSchema: { entryId: z.string().min(1), issueId: z.string().min(1) }
+			description: "Remove a Plan entry entity link.",
+			inputSchema: { entryId: z.string().min(1), targetId: z.string().min(1) }
 		},
-		async (input) => toolResult(await (await openStore()).unlinkPlanEntryIssue(input))
+		async (input) => toolResult(await (await openStore()).unlinkPlanEntryEntity(input))
 	);
 
 	server.registerTool(

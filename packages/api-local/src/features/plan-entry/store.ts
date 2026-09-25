@@ -202,28 +202,28 @@ export function updatePlanEntry(
 	return getPlanEntry(executor, existing.id);
 }
 
-export function linkPlanEntryIssue(executor: SqliteExecutor, input: { entryId: string; issueId: string }, actorId: string): LinkResult {
+export function linkPlanEntryEntity(executor: SqliteExecutor, input: { entryId: string; targetId: string }, actorId: string): LinkResult {
 	const entry = getPlanEntry(executor, input.entryId);
 	assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
-	const issueId = getProjectIssueIdOrThrow(executor, input.issueId);
-	if (entry.referencedEntityIds.includes(issueId)) {
-		return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, created: false };
+	const targetId = getProjectEntityIdOrThrow(executor, input.targetId);
+	if (entry.referencedEntityIds.includes(targetId)) {
+		return { relation: { fromId: entry.id, toId: targetId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, created: false };
 	}
 
-	const updated = revisePlanEntryReferences(executor, entry, [...entry.referencedEntityIds, issueId], actorId);
-	return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, created: true };
+	const updated = revisePlanEntryReferences(executor, entry, [...entry.referencedEntityIds, targetId], actorId);
+	return { relation: { fromId: updated.id, toId: targetId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, created: true };
 }
 
-export function unlinkPlanEntryIssue(executor: SqliteExecutor, input: { entryId: string; issueId: string }, actorId: string): UnlinkResult {
+export function unlinkPlanEntryEntity(executor: SqliteExecutor, input: { entryId: string; targetId: string }, actorId: string): UnlinkResult {
 	const entry = getPlanEntry(executor, input.entryId);
 	assertPlanEntryHead(entry, { entryId: input.entryId, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
-	const issueId = getProjectIssueIdOrThrow(executor, input.issueId);
-	if (!entry.referencedEntityIds.includes(issueId)) {
-		return { relation: { fromId: entry.id, toId: issueId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, removed: false };
+	const targetId = getProjectEntityIdOrThrow(executor, input.targetId);
+	if (!entry.referencedEntityIds.includes(targetId)) {
+		return { relation: { fromId: entry.id, toId: targetId, type: "informs", createdBy: entry.updatedBy, createdAt: entry.updatedAt }, removed: false };
 	}
 
-	const updated = revisePlanEntryReferences(executor, entry, entry.referencedEntityIds.filter((referencedEntityId) => referencedEntityId !== issueId), actorId);
-	return { relation: { fromId: updated.id, toId: issueId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, removed: true };
+	const updated = revisePlanEntryReferences(executor, entry, entry.referencedEntityIds.filter((referencedEntityId) => referencedEntityId !== targetId), actorId);
+	return { relation: { fromId: updated.id, toId: targetId, type: "informs", createdBy: actorId, createdAt: updated.updatedAt }, removed: true };
 }
 
 export function deletePlanEntry(
@@ -311,12 +311,12 @@ export class LocalPlanEntryStore {
 		return deletePlanEntry(this.executor, input, actorId);
 	}
 
-	public linkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): LinkResult {
-		return linkPlanEntryIssue(this.executor, input, actorId);
+	public linkPlanEntryEntity(input: { entryId: string; targetId: string }, actorId: string): LinkResult {
+		return linkPlanEntryEntity(this.executor, input, actorId);
 	}
 
-	public unlinkPlanEntryIssue(input: { entryId: string; issueId: string }, actorId: string): UnlinkResult {
-		return unlinkPlanEntryIssue(this.executor, input, actorId);
+	public unlinkPlanEntryEntity(input: { entryId: string; targetId: string }, actorId: string): UnlinkResult {
+		return unlinkPlanEntryEntity(this.executor, input, actorId);
 	}
 
 	public listPlanEntryHistory(input: { entryId: string }): PlanEntryHistoryEntry[] {
@@ -445,12 +445,12 @@ function validateReferencedEntityIds(executor: SqliteExecutor, referencedEntityI
 	return resolvedEntityIds;
 }
 
-function getProjectIssueIdOrThrow(executor: SqliteExecutor, issueId: string): string {
-	const issue = getSqliteEntityOrThrow(executor, issueId);
-	if (issue.kind !== "issue" || issue.projectId !== executor.currentProjectId) {
-		throw new Error(`Issue not found: ${issueId}`);
+function getProjectEntityIdOrThrow(executor: SqliteExecutor, entityId: string): string {
+	const entity = getSqliteEntityOrThrow(executor, entityId);
+	if (entity.projectId !== executor.currentProjectId) {
+		throw new Error(`Entity not found: ${entityId}`);
 	}
-	return issue.id;
+	return entity.id;
 }
 
 function validateSupersededEntryIds(executor: SqliteExecutor, planId: string, role: PlanEntryRecord["role"], supersededEntryIds: string[]): string[] {

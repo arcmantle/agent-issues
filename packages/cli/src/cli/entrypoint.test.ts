@@ -825,7 +825,7 @@ describe("cli", () => {
 		expect(planEntryExitCode).toBe(0);
 		expect(planEntryHelp.usage).toContain("agent-issues plan-entry add <planId> --role <question|decision|scope|constraint|preference|consideration> --body-file <path|-> [--scope-direction <included|excluded>] [--reference <entityId>] [--supersedes <entryId>]");
 		expect(planEntryHelp.examples).toContain("agent-issues link PLAN_ENTRY1 informs ISS1");
-		expect(planEntryHelp.notes).toContain("Link an existing Plan entry to an issue with `agent-issues link <planEntryId> informs <issueId>`." );
+		expect(planEntryHelp.notes).toContain("Link an existing Plan entry to an entity with `agent-issues link <planEntryId> informs <targetId>`." );
 		expect(planEntryHelp.notes).toContain("A decision can supersede question or decision entries.");
 
 		const linkStdout = createCapture();
@@ -837,7 +837,7 @@ describe("cli", () => {
 
 		expect(linkExitCode).toBe(0);
 		expect(linkHelp.examples).toContain("agent-issues link PLAN_ENTRY1 informs ISS1");
-		expect(linkHelp.notes).toContain("A Plan entry can link only to an issue and only as `informs`.");
+		expect(linkHelp.notes).toContain("A Plan entry can link only to an entity in the current project and only as `informs`.");
 
 		const schemaStdout = createCapture();
 		const schemaExitCode = await runCli(["schema", "--json"], {
@@ -847,9 +847,9 @@ describe("cli", () => {
 
 		expect(schemaExitCode).toBe(0);
 		expect(JSON.parse(schemaStdout.read()).planEntries).toEqual(expect.objectContaining({
-			linkCommand: "agent-issues link <planEntryId> informs <issueId> --json",
+			linkCommand: "agent-issues link <planEntryId> informs <targetId> --json",
 			linkRelationType: "informs",
-			linkTargetKind: "issue"
+			linkTargetKind: "entity"
 		}));
 	});
 
@@ -2161,32 +2161,52 @@ describe("cli", () => {
 		expect(text.read()).toContain(`references ${referencedIssue.id}`);
 	});
 
-	it("links a Plan entry to an issue as informs", async () => {
+	it("links and unlinks a Plan entry to a PRD as informs", async () => {
 		const root = createTempDir();
 		const dbPath = path.join(root, "agent-issues.db");
 		const { store } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
 		const initiative = await store.createEntity({ kind: "initiative", title: "Plan entry link owner" });
 		const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Linked Plan" });
-		const entry = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which issue implements this decision?" });
-		const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Implement the decision" });
+		const entry = await store.createPlanEntry({ planId: plan.id, role: "question", body: "Which PRD captures this decision?" });
+		const prd = await store.createEntity({ kind: "prd", parentId: initiative.id, title: "Decision product requirement" });
 		await store.close();
 		const stdout = createCapture();
 
-		expect(await runCli(["link", entry.reference, "informs", issue.reference, "--db", dbPath, "--json"], {
+		expect(await runCli(["link", entry.reference, "informs", prd.reference, "--db", dbPath, "--json"], {
 			cwd: root,
 			stderr: createCapture().stream,
 			stdout: stdout.stream
 		})).toBe(0);
 		expect(JSON.parse(stdout.read())).toMatchObject({ created: true });
+		const duplicate = createCapture();
+		expect(await runCli(["link", entry.reference, "informs", prd.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: duplicate.stream
+		})).toBe(0);
+		expect(JSON.parse(duplicate.read())).toMatchObject({ created: false });
 
 		const { store: linkedStore } = await openSqliteStore(dbPath, { currentWorkingDirectory: root });
 		try {
 			expect((await linkedStore.listPlanEntries({ planId: plan.id })).find((candidate) => candidate.id === entry.id)).toMatchObject({
-				referencedEntityIds: [issue.id]
+				referencedEntityIds: [prd.id]
 			});
 		} finally {
 			await linkedStore.close();
 		}
+
+		const unlink = createCapture();
+		expect(await runCli(["unlink", entry.reference, "informs", prd.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: unlink.stream
+		})).toBe(0);
+		expect(JSON.parse(unlink.read())).toMatchObject({ removed: true });
+		await expect(runCli(["link", entry.reference, "blocks", prd.reference, "--db", dbPath, "--json"], {
+			cwd: root,
+			stderr: createCapture().stream,
+			stdout: createCapture().stream
+		})).rejects.toThrow("Plan entries can link to entities only as informs.");
 	});
 
 	it("returns a complete initiative-wide read from show", async () => {

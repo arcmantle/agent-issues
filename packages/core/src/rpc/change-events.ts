@@ -32,8 +32,8 @@ const ISSUE_COMMENT_METHODS = new Set(["createIssueComment", "deleteIssueComment
 const PLAN_ENTRY_METHODS = new Set([
 	"createPlanEntry",
 	"deletePlanEntry",
-	"linkPlanEntryIssue",
-	"unlinkPlanEntryIssue",
+	"linkPlanEntryEntity",
+	"unlinkPlanEntryEntity",
 	"updatePlanEntry"
 ]);
 const CONTEXT_METHODS = new Set([
@@ -78,7 +78,7 @@ export async function projectChangeEventForWrite(
 				// A deleted Plan entry can only use scope captured before the write.
 			}
 		}
-		affectedEntityIds = stringValues(planId, input.issueId);
+		affectedEntityIds = stringValues(planId, input.targetId);
 	} else if (method === "linkEntities" || method === "unlinkEntities") {
 		category = "relation";
 		affectedEntityIds = stringValues(input.fromId, input.toId);

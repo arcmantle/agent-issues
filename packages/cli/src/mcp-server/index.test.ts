@@ -816,7 +816,7 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
 		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
 		const plan = await store.createEntity({ kind: "plan", title: "MCP Plan", parentId: initiative.id });
-		const issue = await store.createEntity({ kind: "issue", title: "Plan issue" });
+		const prd = await store.createEntity({ kind: "prd", title: "Plan product requirement" });
 		const relatedIssue = await store.createEntity({ kind: "issue", title: "Related Plan issue" });
 		const server = createMcpServer({ openStore: async () => store });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -838,9 +838,9 @@ describe("agent-issues MCP server", () => {
 		});
 		const updatedEntry = (edited.structuredContent as { entry: { reference: string; revision: number; contentHash: string } }).entry;
 		const history = await client.callTool({ name: "plan_entry_history", arguments: { entryId: updatedEntry.reference } });
-		const linked = await client.callTool({ name: "plan_entry_issue_link", arguments: { entryId: updatedEntry.reference, issueId: issue.reference } });
+		const linked = await client.callTool({ name: "plan_entry_entity_link", arguments: { entryId: updatedEntry.reference, targetId: prd.reference } });
 		const linkedEntry = await store.getPlanEntry({ entryId: updatedEntry.reference });
-		const unlinked = await client.callTool({ name: "plan_entry_issue_unlink", arguments: { entryId: updatedEntry.reference, issueId: issue.reference } });
+		const unlinked = await client.callTool({ name: "plan_entry_entity_unlink", arguments: { entryId: updatedEntry.reference, targetId: prd.reference } });
 		const unlinkedEntry = await store.getPlanEntry({ entryId: updatedEntry.reference });
 		const deleted = await client.callTool({
 			name: "plan_entry_delete",
@@ -851,7 +851,7 @@ describe("agent-issues MCP server", () => {
 		expect(edited).toMatchObject({ structuredContent: { entry: { reference: entry.reference, body: "The tool returns structured data.", revision: 2 } } });
 		expect(history).toMatchObject({ structuredContent: { history: expect.arrayContaining([expect.objectContaining({ entryId: expect.any(String), targetRevision: 1, body: "What must the tool return?" })]) } });
 		expect(linked).toMatchObject({ structuredContent: { created: true } });
-		expect(linkedEntry.referencedEntityIds).toContain(issue.id);
+		expect(linkedEntry.referencedEntityIds).toContain(prd.id);
 		expect(unlinked).toMatchObject({ structuredContent: { removed: true } });
 		expect(deleted).toMatchObject({ structuredContent: { entry: { reference: entry.reference, tombstone: true } } });
 

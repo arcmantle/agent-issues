@@ -456,9 +456,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const proposedPlan = projectProposedPlan((await store.getEntityDetails(plan.id)).entity, [await store.getPlanEntry({ entryId: entry.id })]);
 				await store.confirmPlan({ planId: plan.id, snapshotDigest: proposedPlan.snapshotDigest });
 
-				await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+				await store.linkPlanEntryEntity({ entryId: entry.id, targetId: issue.id });
 				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("ready");
-				await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id });
+				await store.unlinkPlanEntryEntity({ entryId: entry.id, targetId: issue.id });
 				expect((await store.getEntityDetails(plan.id)).entity.status).toBe("ready");
 			} finally {
 				await store.close();
@@ -573,7 +573,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
-		it("links a Plan entry to an issue as an idempotent informs relation", async () => {
+		it("links a Plan entry to same-project entities as idempotent informs relations", async () => {
 			const store = await openStore();
 
 			try {
@@ -581,21 +581,26 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Plan entry relation Plan" });
 				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Use the issue relation." });
 				const issue = await store.createEntity({ kind: "issue", parentId: initiative.id, title: "Implement the decision" });
+				const prd = await store.createEntity({ kind: "prd", parentId: initiative.id, title: "Decision product requirement" });
 
-				expect(await store.linkPlanEntryIssue({ entryId: entry.reference, issueId: issue.reference })).toMatchObject({
-					created: true,
-					relation: { fromId: entry.id, toId: issue.id, type: "informs" }
-				});
-				expect(await store.linkPlanEntryIssue({ entryId: entry.id, issueId: issue.id })).toMatchObject({ created: false });
+				for (const target of [issue, prd]) {
+					expect(await store.linkPlanEntryEntity({ entryId: entry.reference, targetId: target.reference })).toMatchObject({
+						created: true,
+						relation: { fromId: entry.id, toId: target.id, type: "informs" }
+					});
+					expect(await store.linkPlanEntryEntity({ entryId: entry.id, targetId: target.id })).toMatchObject({ created: false });
+				}
 				expect(await store.getPlanEntry({ entryId: entry.id })).toMatchObject({
-					referencedEntityIds: [issue.id],
-					revision: entry.revision + 1
+					referencedEntityIds: [issue.id, prd.id],
+					revision: entry.revision + 2
 				});
-				expect(await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id })).toMatchObject({ removed: true });
-				expect(await store.unlinkPlanEntryIssue({ entryId: entry.id, issueId: issue.id })).toMatchObject({ removed: false });
+				for (const target of [issue, prd]) {
+					expect(await store.unlinkPlanEntryEntity({ entryId: entry.id, targetId: target.id })).toMatchObject({ removed: true });
+					expect(await store.unlinkPlanEntryEntity({ entryId: entry.id, targetId: target.id })).toMatchObject({ removed: false });
+				}
 				expect(await store.getPlanEntry({ entryId: entry.id })).toMatchObject({
 					referencedEntityIds: [],
-					revision: entry.revision + 2
+					revision: entry.revision + 4
 				});
 			} finally {
 				await store.close();

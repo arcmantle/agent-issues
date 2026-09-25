@@ -21,8 +21,8 @@ export interface PlanEntryStore {
 	getPlanEntry(input: { entryId: string }): Promise<PlanEntryRecord>;
 	updatePlanEntry(input: { entryId: string; body: string; expectedRevision: number; expectedContentHash: string }): Promise<PlanEntryRecord>;
 	deletePlanEntry(input: { entryId: string; expectedRevision: number; expectedContentHash: string }): Promise<PlanEntryRecord>;
-	linkPlanEntryIssue(input: { entryId: string; issueId: string }): Promise<LinkResult>;
-	unlinkPlanEntryIssue(input: { entryId: string; issueId: string }): Promise<UnlinkResult>;
+	linkPlanEntryEntity(input: { entryId: string; targetId: string }): Promise<LinkResult>;
+	unlinkPlanEntryEntity(input: { entryId: string; targetId: string }): Promise<UnlinkResult>;
 	listPlanEntries(input: { planId: string }): Promise<PlanEntryRecord[]>;
 	listPlanEntryPage(input: { planId: string; before?: string; all?: boolean }): Promise<PlanEntryPage>;
 	listPlanEntryHistory(input: { entryId: string }): Promise<PlanEntryHistoryEntry[]>;
