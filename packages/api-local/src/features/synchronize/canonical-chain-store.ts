@@ -225,7 +225,7 @@ function writePlanEntry(query: SqliteQuerySurface, executor: SqliteExecutor, cha
 }
 
 function writeCompletionObservation(query: SqliteQuerySurface, executor: SqliteExecutor, observation: CompletionObservation): void {
-	query.run(sql`INSERT INTO completion_observations (tenant_id, id, issue_id, completion_ordinal, repository_identity, commit_sha, branch, dirty, captured_at, calculated_version_state, calculated_version, diagnostics) VALUES (${executor.tenantId}, ${observation.id}, ${observation.issueId}, ${observation.completionOrdinal}, ${observation.repositoryIdentity}, ${observation.commitSha}, ${observation.branch}, ${observation.dirty === null ? null : Number(observation.dirty)}, ${observation.capturedAt}, ${observation.calculatedVersionState}, ${observation.calculatedVersion}, ${JSON.stringify(observation.diagnostics)})`);
+	query.run(sql`INSERT OR IGNORE INTO completion_observations (tenant_id, id, issue_id, completion_ordinal, repository_identity, commit_sha, branch, dirty, captured_at, calculated_version_state, calculated_version, diagnostics) VALUES (${executor.tenantId}, ${observation.id}, ${observation.issueId}, ${observation.completionOrdinal}, ${observation.repositoryIdentity}, ${observation.commitSha}, ${observation.branch}, ${observation.dirty === null ? null : Number(observation.dirty)}, ${observation.capturedAt}, ${observation.calculatedVersionState}, ${observation.calculatedVersion}, ${JSON.stringify(observation.diagnostics)})`);
 }
 
 function rebuildPlanEntryLinks(query: SqliteQuerySurface, executor: SqliteExecutor, chains: CanonicalPlanEntryChain[]): void {
