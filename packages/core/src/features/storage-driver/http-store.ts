@@ -20,11 +20,13 @@ import { IssueCommentConflictError } from "./issue-comment-store.js";
 import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "./storage-driver.js";
 import type { SearchCapability, SearchDiagnostic, SearchRequest, SearchResponse } from "./search-store.js";
+import type { ProspectorProjectSettings } from "../project-settings/prospector-settings.js";
 import type { AuthIdentity } from "../../auth/auth-provider.js";
 import type { HistoryDiagnostics } from "./history-diagnostics.js";
 import {
 	decodeCanonicalChainBundle,
 	encodeCanonicalChainBundle,
+	CompletionObservationConflictError,
 	SynchronizeConflictError,
 	type CanonicalChainBundle,
 	type CanonicalChainImportResult,
@@ -110,6 +112,7 @@ type JsonRpcContextTermConflictData = JsonRpcContextConflictData & { term: strin
 type JsonRpcRevisionErrorData = { entityId: string; reason: EntityRevisionErrorReason; headRevision?: number };
 type JsonRpcContextRevisionErrorData = { contextKey: string; term?: string; reason: ContextRevisionErrorReason; headRevision?: number };
 type JsonRpcSynchronizeConflictData = { recordKind: SynchronizeRecordKind; recordId: string; currentRevision: number; currentContentHash: string };
+type JsonRpcCompletionObservationConflictData = { observationId: string };
 type JsonRpcErrorResponse = { jsonrpc: "2.0"; id: string; error: { code: number; message: string; data?: unknown } };
 type VersionMismatchResponseBody = { code: "daemon-version-mismatch"; expectedBuildHash: string; receivedBuildHash?: string };
 type DbPathMismatchResponseBody = { code: "daemon-db-mismatch"; expectedDbPath: string; receivedDbPath?: string };
@@ -187,6 +190,10 @@ function isSynchronizeConflictData(data: unknown): data is JsonRpcSynchronizeCon
 		typeof (data as JsonRpcSynchronizeConflictData).currentRevision === "number" &&
 		typeof (data as JsonRpcSynchronizeConflictData).currentContentHash === "string"
 	);
+}
+
+function isCompletionObservationConflictData(data: unknown): data is JsonRpcCompletionObservationConflictData {
+	return typeof data === "object" && data !== null && typeof (data as JsonRpcCompletionObservationConflictData).observationId === "string";
 }
 
 function isIssueCommentConflictData(data: unknown): data is JsonRpcIssueCommentConflictData {
@@ -296,6 +303,14 @@ export class HttpStore implements StorageDriver {
 		return this.call("getHistoryDiagnostics");
 	}
 
+	public getProspectorSettings(): Promise<ProspectorProjectSettings> {
+		return this.call("getProspectorSettings");
+	}
+
+	public setProspectorSettings(settings: ProspectorProjectSettings): Promise<ProspectorProjectSettings> {
+		return this.call("setProspectorSettings", settings);
+	}
+
 	public getSearchCapability(): Promise<SearchCapability> {
 		return this.call("getSearchCapability");
 	}
@@ -354,6 +369,9 @@ export class HttpStore implements StorageDriver {
 		const body = (await response.json()) as JsonRpcSuccessResponse | JsonRpcErrorResponse;
 		if ("error" in body) {
 			const { message, data } = body.error;
+			if (isCompletionObservationConflictData(data)) {
+				throw new CompletionObservationConflictError(data.observationId);
+			}
 			if (isSynchronizeConflictData(data)) {
 				throw new SynchronizeConflictError(data.recordKind, data.recordId, data.currentRevision, data.currentContentHash);
 			}
@@ -501,7 +519,7 @@ export class HttpStore implements StorageDriver {
 		return this.call("listProjectAdrs");
 	}
 
-	public updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
+	public updateEntityStatus(input: Parameters<StorageDriver["updateEntityStatus"]>[0]): Promise<StatusUpdateResult> {
 		return this.call("updateEntityStatus", input);
 	}
 

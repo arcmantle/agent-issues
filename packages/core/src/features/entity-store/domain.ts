@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ReverseFieldPatchTransition } from "../reverse-field-patch/reverse-field-patch.js";
+import type { CodeCompatibility } from "../workspace-observation/workspace-observation.js";
 
 export const ENTITY_KINDS = ["project", "epic", "version", "initiative", "prd", "userStory", "adr", "issue", "debt", "handoff", "plan"] as const;
 
@@ -148,7 +149,9 @@ export type EntityRecord = {
 	updatedAt: string;
 };
 
-export type EntitySummary = Omit<EntityRecord, "body" | "bodySource">;
+export type EntitySummary = Omit<EntityRecord, "body" | "bodySource"> & {
+	codeCompatibility?: CodeCompatibility;
+};
 
 export function toEntitySummary(entity: EntityRecord): EntitySummary {
 	return {

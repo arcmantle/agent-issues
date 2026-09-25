@@ -1,12 +1,13 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 
-import { SynchronizeConflictError } from "../synchronize/canonical-chain.js";
+import { CompletionObservationConflictError, SynchronizeConflictError } from "../synchronize/canonical-chain.js";
 import { IssueCommentConflictError } from "./issue-comment-store.js";
 import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import { DaemonDbPathMismatchError, DaemonHandshakeMismatchError, DaemonVersionMismatchError, HttpStore } from "./http-store.js";
 import type { SearchCapability, SearchResponse } from "./search-store.js";
 import type { StorageDriver } from "./storage-driver.js";
+import type { WorkspaceRetrievalContext } from "../workspace-observation/workspace-observation.js";
 
 describe("HttpStore Plan entry transport", () => {
 	it("calls the Plan-entry creation RPC method", async () => {
@@ -55,6 +56,7 @@ describe("HttpStore search transport", () => {
 				? { state: "available" }
 				: {
 					state: "available",
+					retrievalDiagnostics: [],
 					results: [{
 						id: "result-1",
 						identity: {
@@ -68,7 +70,8 @@ describe("HttpStore search transport", () => {
 						projectLabel: "Test project",
 						updatedAt: "2026-08-28T00:00:00.000Z",
 						navigationTarget: { type: "entity", entityId: "entity-1" },
-						match: { field: "title" }
+						match: { field: "title" },
+						codeCompatibility: "exact-commit"
 					}]
 				};
 			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result }), { status: 200, headers: { "content-type": "application/json" } });
@@ -78,6 +81,7 @@ describe("HttpStore search transport", () => {
 		await expect(client.getSearchCapability()).resolves.toEqual({ state: "available" });
 		await expect(client.search({ query: "first", scope: { type: "current-project", projectId: "project-1" } })).resolves.toEqual({
 			state: "available",
+			retrievalDiagnostics: [],
 			results: [{
 				id: "result-1",
 				identity: {
@@ -91,12 +95,51 @@ describe("HttpStore search transport", () => {
 				projectLabel: "Test project",
 				updatedAt: "2026-08-28T00:00:00.000Z",
 				navigationTarget: { type: "entity", entityId: "entity-1" },
-				match: { field: "title" }
+				match: { field: "title" },
+				codeCompatibility: "exact-commit"
 			}]
 		});
 		expect(requests).toEqual([
 			{ method: "getSearchCapability", params: undefined },
 			{ method: "search", params: { query: "first", scope: { type: "current-project", projectId: "project-1" } } }
+		]);
+	});
+
+	it("round-trips privacy-safe workspace retrieval context for search and entity queries", async () => {
+		const requests: Array<{ method: string; params: unknown }> = [];
+		const retrievalContext: WorkspaceRetrievalContext = {
+			repositoryIdentity: "repository-digest",
+			commitSha: "commit-sha",
+			calculatedVersion: "1.2.3",
+			diagnostics: [{ code: "prospector-calculation-failed", message: "Calculation is unavailable." }]
+		};
+		const fetchImpl: typeof fetch = async (_input, init) => {
+			const { method, params } = JSON.parse(String(init?.body)) as { method: string; params: unknown };
+			requests.push({ method, params });
+			const result = method === "queryEntities" ? { entities: [], total: 0 } : { state: "available", results: [] };
+			return new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result }), { status: 200, headers: { "content-type": "application/json" } });
+		};
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await client.search({ query: "workspace", scope: { type: "all-projects" }, retrievalContext });
+		await client.queryEntities({ kind: "issue", retrievalContext });
+		await client.search({
+			query: "workspace",
+			scope: { type: "all-projects" },
+			retrievalContext: { diagnostics: [{ code: "workspace-observation-failed", message: "Workspace observation is unavailable." }] }
+		});
+
+		expect(requests).toEqual([
+			{ method: "search", params: { query: "workspace", scope: { type: "all-projects" }, retrievalContext } },
+			{ method: "queryEntities", params: { kind: "issue", retrievalContext } },
+			{
+				method: "search",
+				params: {
+					query: "workspace",
+					scope: { type: "all-projects" },
+					retrievalContext: { diagnostics: [{ code: "workspace-observation-failed", message: "Workspace observation is unavailable." }] }
+				}
+			}
 		]);
 	});
 });
@@ -124,6 +167,28 @@ describe("HttpStore entity-type transport", () => {
 });
 
 describe("HttpStore synchronize conflict transport (ISS267/ADR55)", () => {
+	it("recreates a typed completion-observation conflict", async () => {
+		const fetchImpl: typeof fetch = async () =>
+			new Response(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: "1",
+					error: {
+						code: -32603,
+						message: "Cannot synchronize completion observation observation-id: immutable facts differ.",
+						data: { observationId: "observation-id" }
+					}
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } }
+			);
+		const client = new HttpStore({ baseUrl: "https://example.test", bearerToken: "token", tenantId: "t1", fetchImpl });
+
+		await expect(client.importCanonicalChains({ entities: [], contexts: [], contextTerms: [], issueComments: [], planEntries: [], users: [] })).rejects.toMatchObject({
+			name: "CompletionObservationConflictError",
+			observationId: "observation-id"
+		} satisfies Partial<CompletionObservationConflictError>);
+	});
+
 	it("recreates a typed conflict with current record metadata", async () => {
 		const fetchImpl: typeof fetch = async () =>
 			new Response(

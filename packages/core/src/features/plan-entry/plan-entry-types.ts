@@ -126,6 +126,10 @@ export function projectPlanEntries(entries: readonly PlanEntryRecord[]): PlanEnt
 	};
 }
 
+export function getActivePlanReferencedEntityIds(entries: readonly PlanEntryRecord[]): string[] {
+	return [...new Set(projectPlanEntries(entries).current.flatMap((group) => group.entries.flatMap((entry) => entry.referencedEntityIds)))];
+}
+
 export function computePlanEntryContentHash(input: {
 	role: PlanEntryRole;
 	body: string;

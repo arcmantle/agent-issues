@@ -2,6 +2,7 @@ import type { ContextRevisionPatch, ContextTermRevisionPatch } from "../context/
 import { computeContextContentHash, computeContextTermContentHash } from "../context/context-types.js";
 import type { BodySource, EntityCategory, EntityKind, EntityPriority, EntityRevisionPatch, EntityType } from "../entity-store/domain.js";
 import { computeEntityContentHash, isEntityType } from "../entity-store/domain.js";
+import type { CompletionObservation } from "../entity-store/store-types.js";
 import { materializeContextFromPatches, materializeContextTermFromPatches } from "../context/materialize-context-revision.js";
 import { decodeCanonicalReference, shortEntityReference } from "../entity-store/canonical-reference.js";
 import { materializeFromPatches } from "../entity-store/materialize-revision.js";
@@ -126,6 +127,8 @@ export type CanonicalChainBundle = {
 	contextTerms: CanonicalContextTermChain[];
 	issueComments: CanonicalIssueCommentChain[];
 	planEntries: CanonicalPlanEntryChain[];
+	/** Optional so bundles created before completion observations remain importable. */
+	completionObservations?: CompletionObservation[];
 	users: UserDirectoryRecord[];
 };
 
@@ -161,6 +164,7 @@ function mapCanonicalChainBundle<Input extends CanonicalChainBundle | CanonicalC
 		contextTerms: bundle.contextTerms.map((chain) => mapChain(chain as never)),
 		issueComments: bundle.issueComments.map((chain) => mapChain(chain as never)),
 		planEntries: bundle.planEntries.map((chain) => mapChain(chain as never)),
+		completionObservations: bundle.completionObservations,
 		users: bundle.users
 	};
 }
@@ -176,6 +180,7 @@ export type CanonicalChainImportResult = {
 	issueCommentsAdvanced: string[];
 	planEntriesCreated: string[];
 	planEntriesAdvanced: string[];
+	completionObservationsCreated: string[];
 	usersCreated: string[];
 	usersUpdated: string[];
 };
@@ -198,6 +203,16 @@ export class SynchronizeConflictError extends Error {
 	public readonly currentContentHash: string;
 }
 
+export class CompletionObservationConflictError extends Error {
+	public constructor(observationId: string) {
+		super(`Cannot synchronize completion observation ${observationId}: immutable facts differ.`);
+		this.name = "CompletionObservationConflictError";
+		this.observationId = observationId;
+	}
+
+	public readonly observationId: string;
+}
+
 export function mergeCanonicalChainBundles(left: CanonicalChainBundle, right: CanonicalChainBundle): CanonicalChainBundle {
 	assertBundleReferenceCollisions(left, right);
 	assertCanonicalBundle(left);
@@ -208,6 +223,9 @@ export function mergeCanonicalChainBundles(left: CanonicalChainBundle, right: Ca
 		contextTerms: mergeChains(left.contextTerms, right.contextTerms, (chain) => chain.head.id, contextTermHeadsMatch, assertContextTermExtension),
 		issueComments: mergeChains(left.issueComments, right.issueComments, (chain) => chain.head.id, issueCommentHeadsMatch, assertIssueCommentExtension),
 		planEntries: mergeChains(left.planEntries, right.planEntries, (chain) => chain.head.id, planEntryHeadsMatch, assertPlanEntryExtension),
+			...(left.completionObservations === undefined && right.completionObservations === undefined
+				? {}
+				: { completionObservations: mergeCompletionObservations(left.completionObservations ?? [], right.completionObservations ?? []) }),
 		users: mergeUserDirectories(left.users, right.users)
 	};
 }
@@ -303,6 +321,41 @@ function assertCanonicalBundle(bundle: CanonicalChainBundle): void {
 			}
 		}
 	}
+	for (const observation of bundle.completionObservations ?? []) {
+		if (entitiesById.get(observation.issueId)?.kind !== "issue") {
+			throw new Error(`Missing canonical issue ${observation.issueId} for completion observation ${observation.id}.`);
+		}
+		if (observation.completionOrdinal < 1 || !Number.isInteger(observation.completionOrdinal)) {
+			throw new Error(`Invalid completion ordinal for completion observation ${observation.id}.`);
+		}
+	}
+}
+
+function mergeCompletionObservations(left: CompletionObservation[], right: CompletionObservation[]): CompletionObservation[] {
+	const merged = new Map<string, CompletionObservation>();
+	for (const observation of [...left, ...right]) {
+		const current = merged.get(observation.id);
+		if (current !== undefined && !completionObservationsMatch(current, observation)) {
+			throw new CompletionObservationConflictError(observation.id);
+		}
+		merged.set(observation.id, observation);
+	}
+	return [...merged.values()].sort((leftObservation, rightObservation) =>
+		leftObservation.issueId.localeCompare(rightObservation.issueId) || leftObservation.completionOrdinal - rightObservation.completionOrdinal || leftObservation.id.localeCompare(rightObservation.id)
+	);
+}
+
+function completionObservationsMatch(left: CompletionObservation, right: CompletionObservation): boolean {
+	return left.issueId === right.issueId &&
+		left.completionOrdinal === right.completionOrdinal &&
+		left.repositoryIdentity === right.repositoryIdentity &&
+		left.commitSha === right.commitSha &&
+		left.branch === right.branch &&
+		left.dirty === right.dirty &&
+		left.capturedAt === right.capturedAt &&
+		left.calculatedVersionState === right.calculatedVersionState &&
+		left.calculatedVersion === right.calculatedVersion &&
+		JSON.stringify(left.diagnostics) === JSON.stringify(right.diagnostics);
 }
 
 function assertCanonicalHead(reference: string, id: string, expectedKind: EntityKind | "context" | "contextTerm" | "issueComment" | "planEntry"): void {

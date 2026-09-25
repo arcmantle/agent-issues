@@ -19,6 +19,7 @@ import type {
 	StatusUpdateResult,
 	UnlinkResult
 } from "../entity-store/store-types.js";
+import type { WorkspaceObservation } from "../workspace-observation/workspace-observation.js";
 
 /**
  * The entity/relation half of the storage-driver seam (ADR "Backends mirror
@@ -51,7 +52,7 @@ export interface EntityStore {
 	applyRelations(relations: RelationRecord[]): Promise<{ inserted: number }>;
 	listOrphans(kind?: string): Promise<EntityRecord[]>;
 	listProjectAdrs(): Promise<EntityRecord[]>;
-	updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult>;
+	updateEntityStatus(input: { entityId: string; status: string; author?: string; workspaceObservation?: WorkspaceObservation }): Promise<StatusUpdateResult>;
 	updateEntity(input: { entityId: string; title?: string; body?: string; bodySource?: BodySource; category?: string; priority?: string; type?: string | null; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
 	setEntityBody(input: { entityId: string; body: string; bodySource?: BodySource; author?: string; expectedRevision: number; expectedContentHash: string }): Promise<EntityRecord>;
 	/** Materializes entity facts at a specific historical revision by walking the reverse-delta chain (ADR55/ISS261). */

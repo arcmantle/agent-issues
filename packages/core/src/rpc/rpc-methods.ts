@@ -19,6 +19,8 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 	upsertUser: async (store, params) => store.upsertUser(params as Parameters<StorageDriver["upsertUser"]>[0]),
 	listUsers: async (store) => store.listUsers(),
 	getHistoryDiagnostics: async (store) => store.getHistoryDiagnostics(),
+	getProspectorSettings: async (store) => store.getProspectorSettings(),
+	setProspectorSettings: async (store, params) => store.setProspectorSettings(params as Parameters<StorageDriver["setProspectorSettings"]>[0]),
 	getSearchCapability: async (store) => store.getSearchCapability(),
 	getSearchDiagnostics: async (store) => store.getSearchDiagnostics(),
 	search: async (store, params) => store.search(params as Parameters<StorageDriver["search"]>[0]),
@@ -106,6 +108,7 @@ export const rpcMethods: Record<string, RpcMethodHandler> = {
 export const writeMethods = new Set<string>([
 	"importCanonicalChains",
 	"upsertUser",
+	"setProspectorSettings",
 	"createEntity",
 	"createIssueComment",
 	"updateIssueComment",

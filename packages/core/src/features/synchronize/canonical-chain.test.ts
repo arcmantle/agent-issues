@@ -305,6 +305,53 @@ describe("mergeCanonicalChainBundles", () => {
 		expect(mergeCanonicalChainBundles(left, right)).toEqual(left);
 	});
 
+	it("rejects a completion observation ID with different immutable facts", () => {
+		const issue = entityChain("Observed issue", 1);
+		const observation = {
+			id: "00000000-0000-4000-8000-000000000006",
+			issueId: issue.head.id,
+			completionOrdinal: 1,
+			repositoryIdentity: "a".repeat(64),
+			commitSha: "b".repeat(40),
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersionState: "available" as const,
+			calculatedVersion: "1.2.3",
+			diagnostics: []
+		};
+
+		expect(() => mergeCanonicalChainBundles(
+			{ ...emptyBundle(), entities: [issue], completionObservations: [observation] },
+			{ ...emptyBundle(), entities: [issue], completionObservations: [{ ...observation, branch: "release" }] }
+		)).toThrow(expect.objectContaining({ name: "CompletionObservationConflictError", observationId: observation.id }));
+	});
+
+	it("deduplicates identical observations and retains later completion ordinals", () => {
+		const issue = entityChain("Re-completed issue", 1);
+		const firstObservation = {
+			id: "00000000-0000-4000-8000-000000000006",
+			issueId: issue.head.id,
+			completionOrdinal: 1,
+			repositoryIdentity: null,
+			commitSha: null,
+			branch: null,
+			dirty: null,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersionState: "unknown" as const,
+			calculatedVersion: null,
+			diagnostics: [{ code: "workspace-observation-failed", message: "No repository is available." }]
+		};
+		const secondObservation = { ...firstObservation, id: "00000000-0000-4000-8000-000000000007", completionOrdinal: 2 };
+
+		const merged = mergeCanonicalChainBundles(
+			{ ...emptyBundle(), entities: [issue], completionObservations: [firstObservation] },
+			{ ...emptyBundle(), entities: [issue], completionObservations: [secondObservation, firstObservation] }
+		);
+
+		expect(merged.completionObservations).toEqual([firstObservation, secondObservation]);
+	});
+
 	it("classifies duplicate canonical references before mutation", () => {
 		const left = entityChain("Local", 1);
 		const right = entityChain("Cloud", 1);

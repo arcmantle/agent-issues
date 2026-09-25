@@ -6,7 +6,7 @@ import { ContextConflictError, ContextRevisionError, ContextTermConflictError } 
 import { IssueCommentConflictError } from "../features/storage-driver/issue-comment-store.js";
 import { PlanEntryConflictError } from "../features/plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
-import { SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
+import { CompletionObservationConflictError, SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
 import { ChangeEventBroadcaster, mergeProjectChangeEventDetails, projectChangeEventForWrite } from "./change-events.js";
 import { isJsonRpcRequest, JSON_RPC_ERROR_CODES, type JsonRpcErrorResponse, type JsonRpcSuccessResponse } from "./json-rpc.js";
 import { rpcMethods, writeMethods } from "./rpc-methods.js";
@@ -244,7 +244,9 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 				);
 			}
 		} catch (error) {
-			const data = error instanceof SynchronizeConflictError
+			const data = error instanceof CompletionObservationConflictError
+				? { observationId: error.observationId }
+				: error instanceof SynchronizeConflictError
 				? { recordKind: error.recordKind, recordId: error.recordId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }
 				: error instanceof EntityConflictError
 				? { entityId: error.entityId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }

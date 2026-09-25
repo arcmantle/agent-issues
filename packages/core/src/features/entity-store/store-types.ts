@@ -3,6 +3,28 @@ import type { ContextDetails } from "../context/context-types.js";
 import type { IssueCommentPage } from "../storage-driver/issue-comment-store.js";
 import type { PlanEntryRecord } from "../plan-entry/plan-entry-types.js";
 import type { UserDirectoryRecord } from "../user-directory/user-directory.js";
+import type { WorkspaceRetrievalContext, WorkspaceObservationDiagnostic } from "../workspace-observation/workspace-observation.js";
+
+export type CompletionObservation = {
+	id: string;
+	issueId: string;
+	completionOrdinal: number;
+	repositoryIdentity: string | null;
+	commitSha: string | null;
+	branch: string | null;
+	dirty: boolean | null;
+	capturedAt: string;
+	calculatedVersionState: "available" | "unknown";
+	calculatedVersion: string | null;
+	diagnostics: Array<{ code: string; message: string }>;
+};
+
+export type VersionCoverage = {
+	calculatedVersionState: CompletionObservation["calculatedVersionState"];
+	calculatedVersion: string | null;
+	issueCount: number;
+	latestCapturedAt: string;
+};
 
 /**
  * The entity/handoff-store result contract (ADR13's dialect-agnostic
@@ -22,6 +44,9 @@ export type EntityDetails = {
 	incoming: Array<{ relationType: RelationType; entity: EntitySummary }>;
 	outgoing: Array<{ relationType: RelationType; entity: EntitySummary }>;
 	planEntries: PlanEntryRecord[];
+	completionObservations: CompletionObservation[];
+	currentCompletionObservation: CompletionObservation | null;
+	versionCoverage: VersionCoverage[];
 	comments?: IssueCommentPage;
 };
 
@@ -37,6 +62,7 @@ export type QueryEntitiesInput = {
 	statuses?: string[];
 	parentId?: string;
 	limit?: number;
+	retrievalContext?: WorkspaceRetrievalContext;
 };
 
 export type QueryEntityParentGroup = {
@@ -47,6 +73,7 @@ export type QueryEntityParentGroup = {
 export type QueryEntitiesResult = {
 	entities: EntitySummary[];
 	total: number;
+	retrievalDiagnostics?: WorkspaceObservationDiagnostic[];
 	/** Present when a short `parentId` resolves to multiple structural parents. */
 	parentGroups?: QueryEntityParentGroup[];
 	/**
@@ -80,6 +107,7 @@ export type InitiativeBundle = {
 	subIssueLinks: Array<{ parent: EntityRecord; issue: EntityRecord }>;
 	blockerLinks: Array<{ source: EntityRecord; target: EntityRecord }>;
 	constrainsLinks: Array<{ adr: EntityRecord; issue: EntityRecord }>;
+	versionCoverage: VersionCoverage[];
 };
 
 export type InitiativeDetail = {

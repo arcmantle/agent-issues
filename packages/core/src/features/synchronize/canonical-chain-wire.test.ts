@@ -186,6 +186,26 @@ describe("canonical chain wire encoding", () => {
 		expect(decodedPatch).toEqual(sourcePatch);
 	});
 
+	it("round-trips completion observations", () => {
+		const completionObservations = [{
+			id: "00000000-0000-4000-8000-000000000006",
+			issueId: ISSUE_ID,
+			completionOrdinal: 1,
+			repositoryIdentity: "a".repeat(64),
+			commitSha: "b".repeat(40),
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-01-02T00:00:00.000Z",
+			calculatedVersionState: "available" as const,
+			calculatedVersion: "1.2.3",
+			diagnostics: []
+		}];
+
+		const decoded = decodeCanonicalChainBundle(encodeCanonicalChainBundle({ ...bundleWithIssue(), completionObservations }));
+
+		expect(decoded.completionObservations).toEqual(completionObservations);
+	});
+
 	it("decodes a wire bundle with a parentless legacy Plan", () => {
 		const plan = planChain();
 		plan.head.parentId = null;

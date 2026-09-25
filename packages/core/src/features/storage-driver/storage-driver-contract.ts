@@ -41,6 +41,101 @@ export type StorageDriverContractOptions = {
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore, openStoreForProject } = options;
 
+	describe(`storage-driver seam: Search (${label})`, () => {
+		it("reports availability and returns an exact entity identity match", async () => {
+			const store = await openStore();
+
+			try {
+				const entity = await store.createEntity({ kind: "initiative", title: "Searchable initiative" });
+
+				await expect(store.getSearchCapability()).resolves.toEqual({ state: "available" });
+				await expect(store.search({ query: entity.reference, scope: { type: "all-projects" } })).resolves.toEqual({
+					state: "available",
+					results: [expect.objectContaining({
+						identity: expect.objectContaining({ sourceId: entity.id, sourceType: "entity" }),
+						match: { field: "identity" },
+						navigationTarget: { type: "entity", entityId: entity.id },
+						title: entity.title
+					})]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns a typed parse error for invalid search grammar", async () => {
+			const store = await openStore();
+
+			try {
+				await expect(store.search({ query: "search OR", scope: { type: "all-projects" } })).resolves.toEqual({
+					state: "parse-error",
+					error: { message: "Expected a search term.", start: 9, end: 9 }
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("uses the requested project for current-project searches", async () => {
+			const firstProjectStore = await openStoreForProject("first-project");
+			const secondProjectStore = await openStoreForProject("second-project");
+
+			try {
+				const entity = await firstProjectStore.createEntity({
+					kind: "initiative",
+					title: "First project search result",
+					body: "Isolated search result."
+				});
+				await secondProjectStore.createEntity({ kind: "initiative", title: "Second project record" });
+				const firstProject = (await firstProjectStore.getDatabaseSnapshot()).entities.find(({ kind }) => kind === "project")!;
+				const secondProject = (await secondProjectStore.getDatabaseSnapshot()).entities.find(({ kind }) => kind === "project")!;
+
+				await expect(secondProjectStore.search({
+					query: "isolated result",
+					scope: { type: "current-project", projectId: firstProject.id }
+				})).resolves.toEqual(expect.objectContaining({
+					state: "available",
+					results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }) })]
+				}));
+				await expect(secondProjectStore.search({
+					query: "isolated result",
+					scope: { type: "current-project", projectId: secondProject.id }
+				})).resolves.toEqual({ state: "available", results: [] });
+			} finally {
+				await firstProjectStore.close();
+				await secondProjectStore.close();
+			}
+		});
+	});
+
+	describe(`storage-driver seam: Prospector settings (${label})`, () => {
+		it("preserves all settings in the selected project without changing another project", async () => {
+			const firstProject = await openStoreForProject("prospector-settings-first");
+			const secondProject = await openStoreForProject("prospector-settings-second");
+			const settings = {
+				trunkBranches: ["main", "trunk"],
+				tagPrefix: "release-",
+				enableCommitBumps: false,
+				commitBumpPatterns: {
+					major: "BREAKING CHANGE|!:",
+					minor: "^feat:",
+					patch: "^fix:"
+				},
+				maxCommitScan: 1_000
+			};
+
+			try {
+				await expect(firstProject.getProspectorSettings()).resolves.toEqual({});
+				await expect(firstProject.setProspectorSettings(settings)).resolves.toEqual(settings);
+				await expect(firstProject.getProspectorSettings()).resolves.toEqual(settings);
+				await expect(secondProject.getProspectorSettings()).resolves.toEqual({});
+			} finally {
+				await firstProject.close();
+				await secondProject.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: Issue-breakdown drafts (${label})`, () => {
 		it("stores and retrieves a complete ordered issue graph with a stable digest", async () => {
 			const store = await openStore();
@@ -859,6 +954,192 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				for (const entry of discovery.projects) {
 					expect(entry).toMatchObject({ epicCount: 1, initiativeCount: 1 });
 				}
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("returns only the selected project's entities from an unfiltered query", async () => {
+			const repoA = await openStoreForProject("entity-query-repo-a");
+			const repoB = await openStoreForProject("entity-query-repo-b");
+
+			try {
+				const issueA = await repoA.createEntity({ kind: "issue", title: "Issue in project A" });
+				await repoB.createEntity({ kind: "issue", title: "Issue in project B" });
+
+				await expect(repoA.queryEntities({ kind: "issue" })).resolves.toMatchObject({
+					entities: [expect.objectContaining({ id: issueA.id })],
+					total: 1
+				});
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("keeps parent-filtered, status-filtered, and limited queries in the selected project", async () => {
+			const repoA = await openStoreForProject("filtered-entity-query-repo-a");
+			const repoB = await openStoreForProject("filtered-entity-query-repo-b");
+
+			try {
+				const initiativeA = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+				const todoIssueA = await repoA.createEntity({ kind: "issue", title: "Todo issue in project A", parentId: initiativeA.id });
+				const activeIssueA = await repoA.createEntity({ kind: "issue", title: "Active issue in project A", parentId: initiativeA.id, status: "in-progress" });
+				const initiativeB = await repoB.createEntity({ kind: "initiative", title: "Initiative in project B" });
+				await repoB.createEntity({ kind: "issue", title: "Active issue in project B", parentId: initiativeB.id, status: "in-progress" });
+
+				await expect(repoA.queryEntities({ kind: "issue", parentId: initiativeA.id })).resolves.toMatchObject({
+					entities: expect.arrayContaining([
+						expect.objectContaining({ id: todoIssueA.id }),
+						expect.objectContaining({ id: activeIssueA.id })
+					]),
+					total: 2
+				});
+				await expect(repoA.queryEntities({ kind: "issue", statuses: ["in-progress"] })).resolves.toMatchObject({
+					entities: [expect.objectContaining({ id: activeIssueA.id })],
+					total: 1
+				});
+				await expect(repoA.queryEntities({ kind: "issue", limit: 1 })).resolves.toMatchObject({
+					entities: [expect.objectContaining({ id: expect.any(String) })],
+					total: 2
+				});
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not include cross-project blockers in query results", async () => {
+			const repoA = await openStoreForProject("blocker-query-repo-a");
+			const repoB = await openStoreForProject("blocker-query-repo-b");
+
+			try {
+				const issue = await repoA.createEntity({ kind: "issue", title: "Issue in project A" });
+				const blocker = await repoB.createEntity({ kind: "issue", title: "Blocker in project B" });
+				await repoA.applyRelations([{ fromId: blocker.id, toId: issue.id, type: "blocks", createdBy: "system", createdAt: new Date().toISOString() }]);
+
+				await expect(repoA.queryEntities({ kind: "issue" })).resolves.toMatchObject({
+					entities: [expect.objectContaining({ id: issue.id })],
+					openBlockers: { [issue.reference]: [] }
+				});
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not derive a selected-project status from a foreign relation", async () => {
+			const repoA = await openStoreForProject("status-query-repo-a");
+			const repoB = await openStoreForProject("status-query-repo-b");
+
+			try {
+				const initiative = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+				const issue = await repoB.createEntity({ kind: "issue", title: "Issue in project B", status: "in-progress" });
+				await repoA.applyRelations([{ fromId: initiative.id, toId: issue.id, type: "tracks", createdBy: "system", createdAt: new Date().toISOString() }]);
+
+				await expect(repoA.queryEntities({ kind: "initiative", statuses: ["in-progress"] })).resolves.toMatchObject({
+					entities: [],
+					total: 0
+				});
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not use a foreign parent to filter selected-project entities", async () => {
+			const repoA = await openStoreForProject("foreign-parent-query-repo-a");
+			const repoB = await openStoreForProject("foreign-parent-query-repo-b");
+
+			try {
+				const issue = await repoA.createEntity({ kind: "issue", title: "Issue in project A" });
+				const initiative = await repoB.createEntity({ kind: "initiative", title: "Initiative in project B" });
+				await repoA.applyRelations([{ fromId: initiative.id, toId: issue.id, type: "tracks", createdBy: "system", createdAt: new Date().toISOString() }]);
+
+				await expect(repoA.queryEntities({ kind: "issue", parentId: initiative.id })).resolves.toMatchObject({
+					entities: [],
+					total: 0
+				});
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not query relations for an entity outside the selected project", async () => {
+			const repoA = await openStoreForProject("relation-query-repo-a");
+			const repoB = await openStoreForProject("relation-query-repo-b");
+
+			try {
+				const initiative = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+				const issue = await repoA.createEntity({ kind: "issue", title: "Issue in project A", parentId: initiative.id });
+
+				await expect(repoB.queryEntityRelations({ entityId: issue.id })).rejects.toThrow(`Entity not found: ${issue.id}`);
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not get details for a non-issue outside the selected project", async () => {
+			const repoA = await openStoreForProject("entity-detail-repo-a");
+			const repoB = await openStoreForProject("entity-detail-repo-b");
+
+			try {
+				const initiative = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+
+				await expect(repoB.getEntityDetails(initiative.id)).rejects.toThrow(/not found/i);
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not return revision history outside the selected project", async () => {
+			const repoA = await openStoreForProject("history-repo-a");
+			const repoB = await openStoreForProject("history-repo-b");
+
+			try {
+				const initiative = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+
+				await expect(repoB.listEntityHistory(initiative.id)).rejects.toThrow(/not found/i);
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("does not return a foreign relation neighbor", async () => {
+			const repoA = await openStoreForProject("relation-neighbor-repo-a");
+			const repoB = await openStoreForProject("relation-neighbor-repo-b");
+
+			try {
+				const initiative = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+				const issue = await repoB.createEntity({ kind: "issue", title: "Issue in project B" });
+				await repoA.applyRelations([{ fromId: initiative.id, toId: issue.id, type: "tracks", createdBy: "system", createdAt: new Date().toISOString() }]);
+
+				await expect(repoA.queryEntityRelations({ entityId: initiative.id })).resolves.toMatchObject({ outgoing: [] });
+				await expect(repoA.getEntityDetails(initiative.id)).resolves.toMatchObject({ outgoing: [] });
+			} finally {
+				await repoA.close();
+				await repoB.close();
+			}
+		});
+
+		it("lists relations only from the selected project", async () => {
+			const repoA = await openStoreForProject("relation-list-repo-a");
+			const repoB = await openStoreForProject("relation-list-repo-b");
+
+			try {
+				const initiativeA = await repoA.createEntity({ kind: "initiative", title: "Initiative in project A" });
+				const issueA = await repoA.createEntity({ kind: "issue", title: "Issue in project A", parentId: initiativeA.id });
+				const initiativeB = await repoB.createEntity({ kind: "initiative", title: "Initiative in project B" });
+				const issueB = await repoB.createEntity({ kind: "issue", title: "Issue in project B", parentId: initiativeB.id });
+
+				const relations = await repoA.listAllRelations();
+				expect(relations).toContainEqual(expect.objectContaining({ fromId: initiativeA.id, toId: issueA.id, type: "tracks" }));
+				expect(relations).not.toContainEqual(expect.objectContaining({ fromId: initiativeB.id, toId: issueB.id, type: "tracks" }));
 			} finally {
 				await repoA.close();
 				await repoB.close();
@@ -1783,6 +2064,214 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
+		it("derives version coverage from completed tracked issues", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Version coverage initiative" });
+				const issue = await store.createEntity({ kind: "issue", title: "Completed issue", parentId: initiative.id });
+				await store.updateEntityStatus({
+					entityId: issue.id,
+					status: "done",
+					workspaceObservation: {
+						state: "available",
+						repositoryIdentity: "a".repeat(64),
+						commitSha: "b".repeat(40),
+						branch: "main",
+						dirty: false,
+						capturedAt: "2026-09-23T10:00:00.000Z",
+						calculatedVersion: {
+							state: "available",
+							version: "1.2.3",
+							branch: "main",
+							currentCommit: "b".repeat(40),
+							isTrunkBranch: true,
+							commitsSinceTag: 0,
+							commitBumps: { major: 0, minor: 0, patch: 0 }
+						},
+						fingerprint: {
+							repositoryIdentity: "a".repeat(64),
+							commitSha: "b".repeat(40),
+							branch: "main",
+							refsHash: "c".repeat(64)
+						}
+					}
+				});
+
+				await expect(store.getInitiativeBundle(initiative.id)).resolves.toMatchObject({
+					versionCoverage: [{ calculatedVersion: "1.2.3", issueCount: 1, latestCapturedAt: "2026-09-23T10:00:00.000Z" }]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("derives Plan coverage from issues referenced by active entries", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan coverage initiative" });
+				const plan = await store.createEntity({ kind: "plan", title: "Covered Plan", parentId: initiative.id });
+				const includedIssue = await store.createEntity({ kind: "issue", title: "Included issue", parentId: initiative.id });
+				const supersededIssue = await store.createEntity({ kind: "issue", title: "Superseded issue", parentId: initiative.id });
+				const unlinkedIssue = await store.createEntity({ kind: "issue", title: "Unlinked issue", parentId: initiative.id });
+				const observation = {
+					state: "available" as const,
+					repositoryIdentity: "d".repeat(64),
+					commitSha: "e".repeat(40),
+					branch: "main",
+					dirty: false,
+					capturedAt: "2026-09-23T11:00:00.000Z",
+					calculatedVersion: {
+						state: "available" as const,
+						version: "2.0.0",
+						branch: "main",
+						currentCommit: "e".repeat(40),
+						isTrunkBranch: true,
+						commitsSinceTag: 0,
+						commitBumps: { major: 0, minor: 0, patch: 0 }
+					},
+					fingerprint: {
+						repositoryIdentity: "d".repeat(64),
+						commitSha: "e".repeat(40),
+						branch: "main",
+						refsHash: "f".repeat(64)
+					}
+				};
+				await Promise.all([
+					store.updateEntityStatus({ entityId: includedIssue.id, status: "done", workspaceObservation: observation }),
+					store.updateEntityStatus({ entityId: supersededIssue.id, status: "done", workspaceObservation: { ...observation, calculatedVersion: { ...observation.calculatedVersion, version: "3.0.0" } } }),
+					store.updateEntityStatus({ entityId: unlinkedIssue.id, status: "done", workspaceObservation: { ...observation, calculatedVersion: { ...observation.calculatedVersion, version: "4.0.0" } } })
+				]);
+				const supersededEntry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Superseded scope.", referencedEntityIds: [supersededIssue.id] });
+				await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Current scope.", referencedEntityIds: [includedIssue.id], supersededEntryIds: [supersededEntry.id] });
+
+				await expect(store.getEntityDetails(plan.id)).resolves.toMatchObject({
+					versionCoverage: [{ calculatedVersion: "2.0.0", issueCount: 1, latestCapturedAt: "2026-09-23T11:00:00.000Z" }]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("groups unknown versions and counts a repeatedly completed issue once per version", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Repeated version coverage" });
+				const repeatedIssue = await store.createEntity({ kind: "issue", title: "Repeated completion", parentId: initiative.id });
+				const unknownIssue = await store.createEntity({ kind: "issue", title: "Unknown version", parentId: initiative.id });
+				const observation = {
+					state: "available" as const,
+					repositoryIdentity: "g".repeat(64),
+					commitSha: "h".repeat(40),
+					branch: "main",
+					dirty: false,
+					capturedAt: "2026-09-23T12:00:00.000Z",
+					calculatedVersion: {
+						state: "available" as const,
+						version: "5.0.0",
+						branch: "main",
+						currentCommit: "h".repeat(40),
+						isTrunkBranch: true,
+						commitsSinceTag: 0,
+						commitBumps: { major: 0, minor: 0, patch: 0 }
+					},
+					fingerprint: {
+						repositoryIdentity: "g".repeat(64),
+						commitSha: "h".repeat(40),
+						branch: "main",
+						refsHash: "i".repeat(64)
+					}
+				};
+				await store.updateEntityStatus({ entityId: repeatedIssue.id, status: "done", workspaceObservation: observation });
+				await store.updateEntityStatus({ entityId: repeatedIssue.id, status: "in-progress" });
+				await store.updateEntityStatus({ entityId: repeatedIssue.id, status: "done", workspaceObservation: { ...observation, capturedAt: "2026-09-23T14:00:00.000Z" } });
+				await store.updateEntityStatus({
+					entityId: unknownIssue.id,
+					status: "done",
+					workspaceObservation: {
+						state: "unknown",
+						capturedAt: "2026-09-23T13:00:00.000Z",
+						diagnostics: [{ code: "prospector-calculation-failed", message: "Unable to calculate version." }]
+					}
+				});
+
+				await expect(store.getInitiativeBundle(initiative.id)).resolves.toMatchObject({
+					versionCoverage: [
+						{ calculatedVersionState: "available", calculatedVersion: "5.0.0", issueCount: 1, latestCapturedAt: "2026-09-23T14:00:00.000Z" },
+						{ calculatedVersionState: "unknown", calculatedVersion: null, issueCount: 1, latestCapturedAt: "2026-09-23T13:00:00.000Z" }
+					]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("returns empty coverage for an initiative and Plan without completion observations", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Empty version coverage" });
+				const plan = await store.createEntity({ kind: "plan", title: "Empty coverage Plan", parentId: initiative.id });
+
+				await expect(store.getInitiativeBundle(initiative.id)).resolves.toMatchObject({ versionCoverage: [] });
+				await expect(store.getEntityDetails(plan.id)).resolves.toMatchObject({ versionCoverage: [] });
+			} finally {
+				await store.close();
+			}
+		});
+
+		it("keeps coverage separate for Plans in the same initiative", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Separate Plan coverage" });
+				const firstPlan = await store.createEntity({ kind: "plan", title: "First Plan", parentId: initiative.id });
+				const secondPlan = await store.createEntity({ kind: "plan", title: "Second Plan", parentId: initiative.id });
+				const firstIssue = await store.createEntity({ kind: "issue", title: "First Plan issue", parentId: initiative.id });
+				const secondIssue = await store.createEntity({ kind: "issue", title: "Second Plan issue", parentId: initiative.id });
+				const observation = {
+					state: "available" as const,
+					repositoryIdentity: "j".repeat(64),
+					commitSha: "k".repeat(40),
+					branch: "main",
+					dirty: false,
+					capturedAt: "2026-09-23T15:00:00.000Z",
+					calculatedVersion: {
+						state: "available" as const,
+						version: "6.0.0",
+						branch: "main",
+						currentCommit: "k".repeat(40),
+						isTrunkBranch: true,
+						commitsSinceTag: 0,
+						commitBumps: { major: 0, minor: 0, patch: 0 }
+					},
+					fingerprint: {
+						repositoryIdentity: "j".repeat(64),
+						commitSha: "k".repeat(40),
+						branch: "main",
+						refsHash: "l".repeat(64)
+					}
+				};
+				await Promise.all([
+					store.updateEntityStatus({ entityId: firstIssue.id, status: "done", workspaceObservation: observation }),
+					store.updateEntityStatus({ entityId: secondIssue.id, status: "done", workspaceObservation: { ...observation, calculatedVersion: { ...observation.calculatedVersion, version: "7.0.0" } } })
+				]);
+				await store.createPlanEntry({ planId: firstPlan.id, role: "decision", body: "First Plan scope.", referencedEntityIds: [firstIssue.id] });
+				await store.createPlanEntry({ planId: secondPlan.id, role: "decision", body: "Second Plan scope.", referencedEntityIds: [secondIssue.id] });
+
+				await expect(store.getEntityDetails(firstPlan.id)).resolves.toMatchObject({
+					versionCoverage: [{ calculatedVersion: "6.0.0", issueCount: 1 }]
+				});
+				await expect(store.getEntityDetails(secondPlan.id)).resolves.toMatchObject({
+					versionCoverage: [{ calculatedVersion: "7.0.0", issueCount: 1 }]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("returns only issue records and their local relations for an initiative Issues tab", async () => {
 			const store = await openStore();
 
@@ -1992,7 +2481,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 1 })).resolves.toMatchObject({ title: "First", body: "First body", headRevision: 3 });
 				await expect(target.materializeEntityRevision({ entityId: created.id, revision: 2 })).resolves.toMatchObject({ title: "Second", body: "Second body", headRevision: 3 });
 				await expect(target.materializeContextTermRevision({ term: "Order", revision: 1 })).resolves.toMatchObject({ definition: "Initial.", headRevision: 2 });
-				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], usersCreated: [], usersUpdated: [] });
+				expect(await target.importCanonicalChains(bundle)).toEqual({ entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], completionObservationsCreated: [], usersCreated: [], usersUpdated: [] });
 				const afterImport = await target.createEntity({ kind: "issue", title: "After import" });
 				expect(afterImport.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 				expect(afterImport.reference).toMatch(/^ISS_[0-9A-HJKMNP-TV-Z]{26}$/);
@@ -2710,6 +3199,559 @@ describe(`storage-driver seam: entity revision and reverse-delta chain (${label}
 					headRevision: 2,
 					status: "todo"
 				})
+			);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("records an available workspace observation when an issue enters done", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Observed completion" });
+			const workspaceObservation = {
+				state: "available" as const,
+				repositoryIdentity: "a".repeat(64),
+				commitSha: "b".repeat(40),
+				branch: "main",
+				dirty: true,
+				capturedAt: "2026-09-22T13:00:00.000Z",
+				calculatedVersion: {
+					state: "available" as const,
+					version: "1.2.3",
+					branch: "main",
+					currentCommit: "b".repeat(40),
+					isTrunkBranch: true,
+					commitsSinceTag: 0,
+					commitBumps: { major: 0, minor: 0, patch: 0 }
+				},
+				fingerprint: {
+					repositoryIdentity: "a".repeat(64),
+					commitSha: "b".repeat(40),
+					branch: "main",
+					refsHash: "c".repeat(64)
+				}
+			};
+
+			await store.updateEntityStatus({ entityId: issue.id, status: "done", workspaceObservation });
+
+			const details = await store.getEntityDetails(issue.id);
+			expect(details.completionObservations).toEqual([
+				expect.objectContaining({
+					id: expect.any(String),
+					issueId: issue.id,
+					completionOrdinal: 1,
+					repositoryIdentity: workspaceObservation.repositoryIdentity,
+					commitSha: workspaceObservation.commitSha,
+					branch: "main",
+					dirty: true,
+					capturedAt: "2026-09-22T13:00:00.000Z",
+					calculatedVersionState: "available",
+					calculatedVersion: "1.2.3",
+					diagnostics: []
+				})
+			]);
+			expect(details.currentCompletionObservation).toMatchObject({
+				issueId: issue.id,
+				completionOrdinal: 1
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("imports completion observations after their issue", async () => {
+		const source = await openStore();
+		const target = await openStore();
+
+		try {
+			const issue = await source.createEntity({ kind: "issue", title: "Synchronized completion" });
+			await source.updateEntityStatus({
+				entityId: issue.id,
+				status: "done",
+				workspaceObservation: {
+					state: "unknown",
+					capturedAt: "2026-09-23T13:00:00.000Z",
+					diagnostics: [{ code: "workspace-observation-failed", message: "No repository is available." }]
+				}
+			});
+
+			await target.importCanonicalChains(await source.exportCanonicalChains());
+
+			expect((await target.getEntityDetails(issue.id)).completionObservations).toEqual(
+				(await source.getEntityDetails(issue.id)).completionObservations
+			);
+		} finally {
+			await source.close();
+			await target.close();
+		}
+	});
+
+	it("imports a legacy canonical bundle without completion observations", async () => {
+		const source = await openStore();
+		const target = await openStore();
+
+		try {
+			const issue = await source.createEntity({ kind: "issue", title: "Legacy completion synchronization" });
+			await target.importCanonicalChains(await source.exportCanonicalChains());
+			await target.updateEntityStatus({
+				entityId: issue.id,
+				status: "done",
+				workspaceObservation: {
+					state: "unknown",
+					capturedAt: "2026-09-23T13:00:00.000Z",
+					diagnostics: [{ code: "workspace-observation-failed", message: "No repository is available." }]
+				}
+			});
+			const expected = (await target.getEntityDetails(issue.id)).completionObservations;
+			const { completionObservations: _completionObservations, ...legacyBundle } = await source.exportCanonicalChains();
+
+			await target.importCanonicalChains(legacyBundle);
+
+			expect((await target.getEntityDetails(issue.id)).completionObservations).toEqual(expected);
+		} finally {
+			await source.close();
+			await target.close();
+		}
+	});
+
+	it("keeps earlier observations and makes the latest re-completion current", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Re-completed observation" });
+			const initialObservation = {
+				state: "available" as const,
+				repositoryIdentity: "d".repeat(64),
+				commitSha: "e".repeat(40),
+				branch: "main",
+				dirty: false,
+				capturedAt: "2026-09-22T13:00:00.000Z",
+				calculatedVersion: {
+					state: "available" as const,
+					version: "1.2.3",
+					branch: "main",
+					currentCommit: "e".repeat(40),
+					isTrunkBranch: true,
+					commitsSinceTag: 0,
+					commitBumps: { major: 0, minor: 0, patch: 0 }
+				},
+				fingerprint: { repositoryIdentity: "d".repeat(64), commitSha: "e".repeat(40), branch: "main", refsHash: "f".repeat(64) }
+			};
+			await store.updateEntityStatus({ entityId: issue.id, status: "done", workspaceObservation: initialObservation });
+			await store.updateEntityStatus({ entityId: issue.id, status: "done", workspaceObservation: initialObservation });
+			await store.updateEntityStatus({ entityId: issue.id, status: "in-progress" });
+			await store.updateEntityStatus({
+				entityId: issue.id,
+				status: "done",
+				workspaceObservation: {
+					...initialObservation,
+					capturedAt: "2026-09-23T13:00:00.000Z",
+					calculatedVersion: {
+						state: "unknown",
+						diagnostics: [{ code: "prospector-calculation-failed", message: "Unable to calculate version." }]
+					}
+				}
+			});
+
+			const details = await store.getEntityDetails(issue.id);
+			expect(details.completionObservations).toEqual([
+				expect.objectContaining({ completionOrdinal: 1, calculatedVersion: "1.2.3", diagnostics: [] }),
+				expect.objectContaining({
+					completionOrdinal: 2,
+					calculatedVersionState: "unknown",
+					calculatedVersion: null,
+					diagnostics: [{ code: "prospector-calculation-failed", message: "Unable to calculate version." }]
+				})
+			]);
+			expect(details.currentCompletionObservation).toMatchObject({ completionOrdinal: 2, calculatedVersion: null });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("does not create an observation without a workspace observation or for a non-issue", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Unobserved completion" });
+			await store.updateEntityStatus({ entityId: issue.id, status: "done" });
+			expect((await store.getEntityDetails(issue.id)).completionObservations).toEqual([]);
+
+			const project = await store.createEntity({ kind: "project", title: "Completed project" });
+			await store.updateEntityStatus({
+				entityId: project.id,
+				status: "done",
+				workspaceObservation: {
+					state: "unknown",
+					capturedAt: "2026-09-24T13:00:00.000Z",
+					diagnostics: [{ code: "workspace-observation-failed", message: "No repository is available." }]
+				}
+			});
+			const details = await store.getEntityDetails(project.id);
+			expect(details.completionObservations).toEqual([]);
+			expect(details.currentCompletionObservation).toBeNull();
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("ranks a completed issue with the exact commit before the caller limit", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const otherCommit = "c".repeat(40);
+		const workspaceObservation = (commitSha: string, calculatedVersion: string) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: {
+				state: "available" as const,
+				version: calculatedVersion,
+				branch: "main",
+				currentCommit: commitSha,
+				isTrunkBranch: true,
+				commitsSinceTag: 0,
+				commitBumps: { major: 0, minor: 0, patch: 0 }
+			},
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "d".repeat(64) }
+		});
+
+		try {
+			await store.createEntity({ kind: "issue", title: "Other completed issue" });
+			await store.createEntity({ kind: "issue", title: "Exact completed issue" });
+			const normalOrder = await store.queryEntities({ kind: "issue" });
+			const [otherIssue, exactIssue] = normalOrder.entities;
+			expect(otherIssue).toBeDefined();
+			expect(exactIssue).toBeDefined();
+
+			await store.updateEntityStatus({ entityId: otherIssue!.id, status: "done", workspaceObservation: workspaceObservation(otherCommit, "1.1.0") });
+			await store.updateEntityStatus({ entityId: exactIssue!.id, status: "done", workspaceObservation: workspaceObservation(exactCommit, "1.2.3") });
+
+			const ranked = await store.queryEntities({
+				kind: "issue",
+				statuses: ["done"],
+				limit: 1,
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, calculatedVersion: "1.2.3", diagnostics: [] }
+			});
+
+			expect(ranked).toMatchObject({
+				total: 2,
+				retrievalDiagnostics: [],
+				entities: [expect.objectContaining({ id: exactIssue!.id, codeCompatibility: "exact-commit" })]
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("orders completed issues by calculated-version compatibility", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const workspaceObservation = (commitSha: string, calculatedVersion: string | null) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: calculatedVersion === null
+				? { state: "unknown" as const, diagnostics: [{ code: "prospector-calculation-failed" as const, message: "Version is unavailable." }] }
+				: {
+					state: "available" as const,
+					version: calculatedVersion,
+					branch: "main",
+					currentCommit: commitSha,
+					isTrunkBranch: true,
+					commitsSinceTag: 0,
+					commitBumps: { major: 0, minor: 0, patch: 0 }
+				},
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "d".repeat(64) }
+		});
+
+		try {
+			for (const title of ["Different major", "Same major", "Same minor", "Exact version", "Exact commit", "Unknown version"]) {
+				await store.createEntity({ kind: "issue", title });
+			}
+			const normalOrder = await store.queryEntities({ kind: "issue" });
+			const [differentMajor, sameMajor, sameMinor, exactVersion, exactCommitIssue, unknownVersion] = normalOrder.entities;
+			expect(normalOrder.entities).toHaveLength(6);
+
+			await store.updateEntityStatus({ entityId: differentMajor!.id, status: "done", workspaceObservation: workspaceObservation("c".repeat(40), "2.0.0") });
+			await store.updateEntityStatus({ entityId: sameMajor!.id, status: "done", workspaceObservation: workspaceObservation("d".repeat(40), "1.3.0") });
+			await store.updateEntityStatus({ entityId: sameMinor!.id, status: "done", workspaceObservation: workspaceObservation("e".repeat(40), "1.2.0") });
+			await store.updateEntityStatus({ entityId: exactVersion!.id, status: "done", workspaceObservation: workspaceObservation("f".repeat(40), "1.2.3") });
+			await store.updateEntityStatus({ entityId: exactCommitIssue!.id, status: "done", workspaceObservation: workspaceObservation(exactCommit, "1.2.3") });
+			await store.updateEntityStatus({ entityId: unknownVersion!.id, status: "done", workspaceObservation: workspaceObservation("g".repeat(40), null) });
+
+			const ranked = await store.queryEntities({
+				kind: "issue",
+				statuses: ["done"],
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, calculatedVersion: "1.2.3", diagnostics: [] }
+			});
+
+			expect(ranked.entities.map((entity) => [entity.id, entity.codeCompatibility])).toEqual([
+				[exactCommitIssue!.id, "exact-commit"],
+				[exactVersion!.id, "exact-version"],
+				[sameMinor!.id, "same-minor-version"],
+				[sameMajor!.id, "same-major-version"],
+				[differentMajor!.id, "different-major-version"],
+				[unknownVersion!.id, "unknown"]
+			]);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps normal issue order when workspace version calculation fails", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const workspaceObservation = (commitSha: string) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: {
+				state: "available" as const,
+				version: "1.2.3",
+				branch: "main",
+				currentCommit: commitSha,
+				isTrunkBranch: true,
+				commitsSinceTag: 0,
+				commitBumps: { major: 0, minor: 0, patch: 0 }
+			},
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "c".repeat(64) }
+		});
+
+		try {
+			await store.createEntity({ kind: "issue", title: "Normal first issue" });
+			await store.createEntity({ kind: "issue", title: "Matching second issue" });
+			const normalOrder = await store.queryEntities({ kind: "issue" });
+			const [firstIssue, secondIssue] = normalOrder.entities;
+
+			await store.updateEntityStatus({ entityId: firstIssue!.id, status: "done", workspaceObservation: workspaceObservation("d".repeat(40)) });
+			await store.updateEntityStatus({ entityId: secondIssue!.id, status: "done", workspaceObservation: workspaceObservation(exactCommit) });
+
+			const diagnostic = { code: "prospector-calculation-failed" as const, message: "Version is unavailable." };
+			const queried = await store.queryEntities({
+				kind: "issue",
+				statuses: ["done"],
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, diagnostics: [diagnostic] }
+			});
+
+			expect(queried.entities.map((entity) => [entity.id, entity.codeCompatibility])).toEqual([
+				[firstIssue!.id, "unknown"],
+				[secondIssue!.id, "unknown"]
+			]);
+			expect(queried.retrievalDiagnostics).toEqual([diagnostic]);
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("ranks an exact completion commit in global search before the caller limit", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const workspaceObservation = (commitSha: string) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: {
+				state: "available" as const,
+				version: "1.2.3",
+				branch: "main",
+				currentCommit: commitSha,
+				isTrunkBranch: true,
+				commitsSinceTag: 0,
+				commitBumps: { major: 0, minor: 0, patch: 0 }
+			},
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "c".repeat(64) }
+		});
+
+		try {
+			const otherIssue = await store.createEntity({ kind: "issue", title: "Completed search result" });
+			const exactIssue = await store.createEntity({ kind: "issue", title: "Completed search result" });
+			await store.updateEntityStatus({ entityId: exactIssue.id, status: "done", workspaceObservation: workspaceObservation(exactCommit) });
+			await store.updateEntityStatus({ entityId: otherIssue.id, status: "done", workspaceObservation: workspaceObservation("d".repeat(40)) });
+
+			const searched = await store.search({
+				query: "Completed search result",
+				scope: { type: "all-projects" },
+				limit: 1,
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, calculatedVersion: "1.2.3", diagnostics: [] }
+			});
+
+			expect(searched).toMatchObject({
+				state: "available",
+				retrievalDiagnostics: [],
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: exactIssue.id }), codeCompatibility: "exact-commit" })]
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("returns unknown compatibility for a completed search result without an observation", async () => {
+		const store = await openStore();
+
+		try {
+			const issue = await store.createEntity({ kind: "issue", title: "Unobserved completed search result" });
+			await store.updateEntityStatus({ entityId: issue.id, status: "done" });
+
+			const searched = await store.search({
+				query: "Unobserved completed search result",
+				scope: { type: "all-projects" },
+				retrievalContext: {
+					repositoryIdentity: "a".repeat(64),
+					commitSha: "b".repeat(40),
+					calculatedVersion: "1.2.3",
+					diagnostics: []
+				}
+			});
+
+			expect(searched).toMatchObject({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: issue.id }), codeCompatibility: "unknown" })]
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("orders equal global-search matches by calculated-version compatibility", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const workspaceObservation = (commitSha: string, calculatedVersion: string | null) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: calculatedVersion === null
+				? { state: "unknown" as const, diagnostics: [{ code: "prospector-calculation-failed" as const, message: "Version is unavailable." }] }
+				: {
+					state: "available" as const,
+					version: calculatedVersion,
+					branch: "main",
+					currentCommit: commitSha,
+					isTrunkBranch: true,
+					commitsSinceTag: 0,
+					commitBumps: { major: 0, minor: 0, patch: 0 }
+				},
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "c".repeat(64) }
+		});
+
+		try {
+			const issues = await Promise.all(Array.from({ length: 6 }, () => store.createEntity({ kind: "issue", title: "Versioned search result" })));
+			await store.updateEntityStatus({ entityId: issues[0]!.id, status: "done", workspaceObservation: workspaceObservation("c".repeat(40), "2.0.0") });
+			await store.updateEntityStatus({ entityId: issues[1]!.id, status: "done", workspaceObservation: workspaceObservation("d".repeat(40), "1.3.0") });
+			await store.updateEntityStatus({ entityId: issues[2]!.id, status: "done", workspaceObservation: workspaceObservation("e".repeat(40), "1.2.0") });
+			await store.updateEntityStatus({ entityId: issues[3]!.id, status: "done", workspaceObservation: workspaceObservation("f".repeat(40), "1.2.3") });
+			await store.updateEntityStatus({ entityId: issues[4]!.id, status: "done", workspaceObservation: workspaceObservation(exactCommit, "1.2.3") });
+			await store.updateEntityStatus({ entityId: issues[5]!.id, status: "done", workspaceObservation: workspaceObservation("g".repeat(40), null) });
+
+			const searched = await store.search({
+				query: "Versioned search result",
+				scope: { type: "all-projects" },
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, calculatedVersion: "1.2.3", diagnostics: [] }
+			});
+
+			expect(searched).toMatchObject({
+				state: "available",
+				results: [
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: issues[4]!.id }), codeCompatibility: "exact-commit" }),
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: issues[3]!.id }), codeCompatibility: "exact-version" }),
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: issues[2]!.id }), codeCompatibility: "same-minor-version" }),
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: issues[1]!.id }), codeCompatibility: "same-major-version" }),
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: issues[0]!.id }), codeCompatibility: "different-major-version" }),
+					expect.objectContaining({ identity: expect.objectContaining({ sourceId: issues[5]!.id }), codeCompatibility: "unknown" })
+				]
+			});
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps global-search text relevance ahead of code compatibility", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const workspaceObservation = (commitSha: string) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: { state: "available" as const, version: "1.2.3", branch: "main", currentCommit: commitSha, isTrunkBranch: true, commitsSinceTag: 0, commitBumps: { major: 0, minor: 0, patch: 0 } },
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "c".repeat(64) }
+		});
+
+		try {
+			const titleMatch = await store.createEntity({ kind: "issue", title: "Text priority result" });
+			const exactCommitMatch = await store.createEntity({ kind: "issue", title: "Other result", body: "Text priority result" });
+			await store.updateEntityStatus({ entityId: titleMatch.id, status: "done", workspaceObservation: workspaceObservation("d".repeat(40)) });
+			await store.updateEntityStatus({ entityId: exactCommitMatch.id, status: "done", workspaceObservation: workspaceObservation(exactCommit) });
+
+			const searched = await store.search({
+				query: "Text priority result",
+				scope: { type: "all-projects" },
+				limit: 1,
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, calculatedVersion: "1.2.3", diagnostics: [] }
+			});
+
+			expect(searched).toMatchObject({ state: "available", results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: titleMatch.id }) })] });
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("keeps normal global-search order when workspace calculation fails", async () => {
+		const store = await openStore();
+		const repositoryIdentity = "a".repeat(64);
+		const exactCommit = "b".repeat(40);
+		const workspaceObservation = (commitSha: string) => ({
+			state: "available" as const,
+			repositoryIdentity,
+			commitSha,
+			branch: "main",
+			dirty: false,
+			capturedAt: "2026-09-23T13:00:00.000Z",
+			calculatedVersion: { state: "available" as const, version: "1.2.3", branch: "main", currentCommit: commitSha, isTrunkBranch: true, commitsSinceTag: 0, commitBumps: { major: 0, minor: 0, patch: 0 } },
+			fingerprint: { repositoryIdentity, commitSha, branch: "main", refsHash: "c".repeat(64) }
+		});
+
+		try {
+			const firstIssue = await store.createEntity({ kind: "issue", title: "Diagnostic search result" });
+			const exactIssue = await store.createEntity({ kind: "issue", title: "Diagnostic search result" });
+			await store.updateEntityStatus({ entityId: exactIssue.id, status: "done", workspaceObservation: workspaceObservation(exactCommit) });
+			await store.updateEntityStatus({ entityId: firstIssue.id, status: "done", workspaceObservation: workspaceObservation("d".repeat(40)) });
+			const normal = await store.search({ query: "Diagnostic search result", scope: { type: "all-projects" } });
+			const diagnostic = { code: "prospector-calculation-failed" as const, message: "Version is unavailable." };
+			const searched = await store.search({
+				query: "Diagnostic search result",
+				scope: { type: "all-projects" },
+				retrievalContext: { repositoryIdentity, commitSha: exactCommit, diagnostics: [diagnostic] }
+			});
+
+			expect(searched).toMatchObject({ state: "available", retrievalDiagnostics: [diagnostic] });
+			if (normal.state !== "available" || searched.state !== "available") throw new Error("Search must be available.");
+			expect(searched.results.map((result) => [result.identity.sourceId, result.codeCompatibility])).toEqual(
+				normal.results.map((result) => [result.identity.sourceId, "unknown"])
 			);
 		} finally {
 			await store.close();

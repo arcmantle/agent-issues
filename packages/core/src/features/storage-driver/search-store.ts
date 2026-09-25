@@ -1,4 +1,5 @@
 import type { SearchQueryParseError } from "./search-query.js";
+import type { CodeCompatibility, WorkspaceObservationDiagnostic, WorkspaceRetrievalContext } from "../workspace-observation/workspace-observation.js";
 
 export type SearchSourceType = "entity" | "context" | "context-term" | "issue-comment" | "plan-entry";
 
@@ -15,6 +16,7 @@ export type SearchRequest = {
 	scope: SearchScope;
 	filters?: SearchFilters;
 	limit?: number;
+	retrievalContext?: WorkspaceRetrievalContext;
 };
 
 export type SearchResultIdentity = {
@@ -51,6 +53,7 @@ export type SearchResult = {
 	updatedAt: string;
 	navigationTarget: SearchNavigationTarget;
 	match: SearchMatch;
+	codeCompatibility?: CodeCompatibility;
 	snippet?: SearchSnippet;
 };
 
@@ -74,7 +77,7 @@ export type SearchDiagnostic = {
 };
 
 export type SearchResponse =
-	| { state: "available"; results: SearchResult[] }
+	| { state: "available"; results: SearchResult[]; retrievalDiagnostics?: WorkspaceObservationDiagnostic[] }
 	| { state: "rebuilding" }
 	| { state: "unsupported" }
 	| { state: "parse-error"; error: SearchQueryParseError }
