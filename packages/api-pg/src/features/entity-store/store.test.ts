@@ -74,6 +74,29 @@ describe("PgStore entity lifecycle", () => {
 		});
 	});
 
+	it("shows a selected project's structural parents without exposing another project's entities", async () => {
+		const tenantId = createTestTenantId();
+		const store = new PgStore(appPool, tenantId);
+		const project = await store.createEntity({ kind: "project", title: "Selected project" });
+		const epic = await store.createEntity({ kind: "epic", parentId: project.id, title: "Selected epic" });
+		const otherProject = await store.createEntity({ kind: "project", title: "Other project" });
+		const otherEpic = await store.createEntity({ kind: "epic", parentId: otherProject.id, title: "Other epic" });
+		const selectedStore = new PgStore(appPool, tenantId, project.id);
+
+		const details = await selectedStore.getEntityDetails(epic.id);
+		const relations = await selectedStore.queryEntityRelations({ entityId: epic.id, direction: "incoming" });
+
+		expect(details.incoming).toContainEqual(expect.objectContaining({
+			relationType: "contains",
+			entity: expect.objectContaining({ id: project.id })
+		}));
+		expect(relations.incoming).toContainEqual(expect.objectContaining({
+			relationType: "contains",
+			entity: expect.objectContaining({ id: project.id })
+		}));
+		await expect(selectedStore.getEntityDetails(otherEpic.id)).rejects.toThrow(/not found/i);
+	});
+
 	it("includes an issue's newest comment page in the database snapshot", async () => {
 		const store = new PgStore(appPool, createTestTenantId());
 		const issue = await store.createEntity({ kind: "issue", title: "Discuss snapshot data" });

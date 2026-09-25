@@ -37,6 +37,7 @@
 		"drizzle-orm": "catalog:",
 		"express": "catalog:",
 		"jose": "catalog:",
+		"marked": "catalog:",
 		"pg": "catalog:"
 	}
 }

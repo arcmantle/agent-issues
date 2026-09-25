@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, type StorageDriver } from "@agent-issues/core";
+import { CompletionObservationConflictError, createReverseFieldPatch, encodeCanonicalReference, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, type CompletionObservation, type StorageDriver } from "@agent-issues/core";
 import { runStorageDriverContractSuite } from "@agent-issues/core/storage-driver-contract";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -79,12 +79,90 @@ runStorageDriverContractSuite({
 	openStoreForProject: openPgTestStoreForProject
 });
 
-it("reports unsupported search without implementing PostgreSQL search", async () => {
+it("searches every supported source type and applies source filters", async () => {
 	const store = await openPgTestStore();
 
 	try {
-		await expect(store.getSearchCapability()).resolves.toEqual({ state: "unsupported" });
-		await expect(store.search({ query: "project", scope: { type: "all-projects" } })).resolves.toEqual({ state: "unsupported" });
+		const initiative = await store.createEntity({ kind: "initiative", title: "Search initiative" });
+		const plan = await store.createEntity({ kind: "plan", title: "Search plan", parentId: initiative.id });
+		const issue = await store.createEntity({ kind: "issue", title: "Search issue", parentId: initiative.id });
+		const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Search Plan entry." });
+		const comment = await store.createIssueComment({ issueId: issue.id, body: "Search issue comment." });
+		const { context } = await store.upsertContext({ scopeRef: initiative.id, title: "Search context", summary: "Search context summary." });
+		const { term } = await store.defineContextTerm({ scopeRef: initiative.id, term: "Search term", definition: "Search context term." });
+		expect(entry.reference).not.toBeNull();
+		expect(comment.reference).not.toBeNull();
+		expect(context.reference).not.toBeNull();
+		expect(term.reference).not.toBeNull();
+
+		for (const [reference, sourceType] of [
+			[entry.reference!, "plan-entry"],
+			[comment.reference!, "issue-comment"],
+			[context.reference!, "context"],
+			[term.reference!, "context-term"]
+		] as const) {
+			await expect(store.search({ query: reference, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceType }) })]
+			}));
+		}
+		for (const [query, sourceId, sourceType] of [
+			['"search plan entry"', entry.id, "plan-entry"],
+			['"search issue comment"', comment.id, "issue-comment"]
+		] as const) {
+			await expect(store.search({ query, scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+				state: "available",
+				results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId, sourceType }), match: { field: "body" } })]
+			}));
+		}
+
+		await expect(store.search({
+			query: entry.reference,
+			scope: { type: "all-projects" },
+			filters: { sourceTypes: ["entity"] }
+		})).resolves.toEqual({ state: "available", results: [] });
+	} finally {
+		await store.close();
+	}
+});
+
+it("searches visible Markdown body text", async () => {
+	const store = await openPgTestStore();
+
+	try {
+		const entity = await store.createEntity({
+			kind: "initiative",
+			title: "Markdown search",
+			body: "# Visible heading\n\n[Visible label](https://example.com) and `visibleCode`."
+		});
+
+		await expect(store.search({ query: "visible label", scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+			state: "available",
+			results: [expect.objectContaining({
+				identity: expect.objectContaining({ sourceId: entity.id }),
+				match: { field: "body" },
+				snippet: expect.objectContaining({ text: expect.stringContaining("Visible heading Visible label and visibleCode") })
+			})]
+		}));
+	} finally {
+		await store.close();
+	}
+});
+
+it("searches a strict phrase through the indexed PostgreSQL query path", async () => {
+	const store = await openPgTestStore();
+
+	try {
+		const entity = await store.createEntity({
+			kind: "initiative",
+			title: "Indexed search",
+			body: "A distinct indexed phrase is present."
+		});
+
+		await expect(store.search({ query: '"indexed phrase"', scope: { type: "all-projects" } })).resolves.toEqual(expect.objectContaining({
+			state: "available",
+			results: [expect.objectContaining({ identity: expect.objectContaining({ sourceId: entity.id }), match: { field: "body" } })]
+		}));
 	} finally {
 		await store.close();
 	}
@@ -210,6 +288,65 @@ it("preserves Plan-entry supersession creation order after an update", async () 
 		await store.close();
 	}
 });
+
+it("makes concurrent completion-observation imports idempotent", async () => {
+	const tenantId = createTestTenantId();
+	const firstStore = new PgStore(new Pool({ connectionString: APP_CONNECTION_STRING, options: schemaOptions }), tenantId);
+	const secondStore = new PgStore(new Pool({ connectionString: APP_CONNECTION_STRING, options: schemaOptions }), tenantId);
+	try {
+		const issue = await firstStore.createEntity({ kind: "issue", title: "Concurrent observation" });
+		const observation = createCompletionObservation(issue.id);
+		const bundle = { ...(await firstStore.exportCanonicalChains()), completionObservations: [observation] };
+
+		const results = await Promise.all([
+			firstStore.importCanonicalChains(bundle),
+			secondStore.importCanonicalChains(bundle)
+		]);
+
+		expect(results.map((result) => result.completionObservationsCreated)).toEqual(expect.arrayContaining([[observation.id], []]));
+		expect((await firstStore.getEntityDetails(issue.id)).completionObservations).toEqual([observation]);
+	} finally {
+		await Promise.all([firstStore.close(), secondStore.close()]);
+	}
+});
+
+it("reports an immutable-fact conflict for concurrent completion-observation imports", async () => {
+	const tenantId = createTestTenantId();
+	const firstStore = new PgStore(new Pool({ connectionString: APP_CONNECTION_STRING, options: schemaOptions }), tenantId);
+	const secondStore = new PgStore(new Pool({ connectionString: APP_CONNECTION_STRING, options: schemaOptions }), tenantId);
+	try {
+		const issue = await firstStore.createEntity({ kind: "issue", title: "Conflicting concurrent observation" });
+		const observation = createCompletionObservation(issue.id);
+		const conflictingObservation = { ...observation, calculatedVersion: "2.0.0" };
+		const bundle = await firstStore.exportCanonicalChains();
+
+		const outcomes = await Promise.allSettled([
+			firstStore.importCanonicalChains({ ...bundle, completionObservations: [observation] }),
+			secondStore.importCanonicalChains({ ...bundle, completionObservations: [conflictingObservation] })
+		]);
+
+		expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+		expect(outcomes.find((outcome) => outcome.status === "rejected")?.reason).toBeInstanceOf(CompletionObservationConflictError);
+	} finally {
+		await Promise.all([firstStore.close(), secondStore.close()]);
+	}
+});
+
+function createCompletionObservation(issueId: string): CompletionObservation {
+	return {
+		id: randomUUID(),
+		issueId,
+		completionOrdinal: 1,
+		repositoryIdentity: "a".repeat(64),
+		commitSha: "b".repeat(40),
+		branch: "main",
+		dirty: false,
+		capturedAt: "2026-09-23T14:00:00.000Z",
+		calculatedVersionState: "available",
+		calculatedVersion: "1.0.0",
+		diagnostics: []
+	};
+}
 
 it("reads an issue conversation without canonical-export tables", async () => {
 	const store = await openPgTestStore();

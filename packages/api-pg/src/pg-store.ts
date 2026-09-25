@@ -34,6 +34,7 @@ import type {
 	ProjectDiscovery,
 	ProjectSummary,
 	ProjectSnapshot,
+	ProspectorProjectSettings,
 	QueryContextDirectoryInput,
 	QueryContextDirectoryResult,
 	QueryEntitiesInput,
@@ -46,7 +47,7 @@ import type {
 	TenantSummary,
 	UnlinkResult
 } from "@agent-issues/core";
-import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, isDirectEntitySelector, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, projectProposedIssueBreakdown, projectProposedPlan, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, toEntitySummary, type SearchCapability, type SearchRequest, type SearchResponse } from "@agent-issues/core";
+import { computeIssueCommentContentHash, createReverseFieldPatch, encodeCanonicalReference, isDirectEntitySelector, ISSUE_COMMENT_REVERSE_PATCH_REGISTRY, IssueCommentConflictError, materializeIssueCommentFromPatches, measureHistory, projectProposedIssueBreakdown, projectProposedPlan, shortEntityReference, SYSTEM_AUTHENTICATION_SUBJECT, toEntitySummary, type SearchCapability, type SearchDiagnostic, type SearchRequest, type SearchResponse } from "@agent-issues/core";
 import type { Pool } from "pg";
 
 import { withTenantTransaction, type TenantExecutor } from "./db/connection.js";
@@ -58,6 +59,8 @@ import { createEntity, linkEntities, PgEntityStore, resolveCurrentProjectId } fr
 import { PgHistoryDiagnosticsStore } from "./features/history-diagnostics.js";
 import { PgIssueCommentStore } from "./features/issue-comment/store.js";
 import { PgPlanEntryStore } from "./features/plan-entry/store.js";
+import * as pgProjectSettingsStore from "./features/project-settings/store.js";
+import { PgSearchStore } from "./features/search/search-store.js";
 
 /**
  * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
@@ -105,6 +108,7 @@ export class PgStore implements StorageDriver {
 	protected currentProjectId?: string;
 	protected readonly actorIdentity: AuthIdentity | undefined;
 	protected readonly strictProjectScope: boolean;
+	protected readonly searchDiagnostics: SearchDiagnostic[] = [];
 
 	private get historyDiagnosticsStore(): PgHistoryDiagnosticsStore {
 		return new PgHistoryDiagnosticsStore(this.pool, this.tenantId);
@@ -227,17 +231,24 @@ export class PgStore implements StorageDriver {
 		return measureHistory(await this.exportCanonicalChains(), await this.historyDiagnosticsStore.getMaterializationDepths());
 	}
 
-	public async getSearchCapability(): Promise<SearchCapability> {
-		return { state: "unsupported" };
+	public async getProspectorSettings(): Promise<ProspectorProjectSettings> {
+		return this.transaction((executor) => pgProjectSettingsStore.getProspectorSettings(executor));
 	}
 
-	public async getSearchDiagnostics() {
-		return [];
+	public async setProspectorSettings(settings: ProspectorProjectSettings): Promise<ProspectorProjectSettings> {
+		return this.mutation((executor) => pgProjectSettingsStore.setProspectorSettings(executor, settings));
+	}
+
+	public async getSearchCapability(): Promise<SearchCapability> {
+		return this.transaction(async (executor) => new PgSearchStore(executor, this.searchDiagnostics).getSearchCapability());
+	}
+
+	public async getSearchDiagnostics(): Promise<SearchDiagnostic[]> {
+		return this.transaction(async (executor) => new PgSearchStore(executor, this.searchDiagnostics).getSearchDiagnostics());
 	}
 
 	public async search(input: SearchRequest): Promise<SearchResponse> {
-		void input;
-		return { state: "unsupported" };
+		return this.transaction((executor) => new PgSearchStore(executor, this.searchDiagnostics).search(input));
 	}
 
 	public async createEntity(input: {
@@ -266,6 +277,9 @@ export class PgStore implements StorageDriver {
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
 		const details = await this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).getEntityDetails(entityId));
 		if (details.entity.kind !== "issue") {
+			if (this.projectIdentity !== undefined) {
+				await this.transaction((executor) => this.assertCurrentProjectEntity(executor, entityId));
+			}
 			return details;
 		}
 
@@ -298,7 +312,12 @@ export class PgStore implements StorageDriver {
 	}
 
 	public async listEntityHistory(entityId: string): Promise<HistoryEntryRecord[]> {
-		return this.transaction((executor) => new PgEntityStore(executor, this.projectIdentity).listEntityHistory(entityId));
+		return this.transaction(async (executor) => {
+			if (this.projectIdentity !== undefined) {
+				await this.assertCurrentProjectEntity(executor, entityId, true);
+			}
+			return new PgEntityStore(executor, this.projectIdentity).listEntityHistory(entityId);
+		});
 	}
 
 	public async createIssueComment(input: { issueId: string; body: string; referencedIssueIds?: string[] }): Promise<IssueCommentRecord> {
@@ -507,7 +526,7 @@ export class PgStore implements StorageDriver {
 		});
 	}
 
-	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }): Promise<StatusUpdateResult> {
+	public async updateEntityStatus(input: Parameters<StorageDriver["updateEntityStatus"]>[0]): Promise<StatusUpdateResult> {
 		return this.mutation(async (executor, actorId) => {
 			await this.assertSelectedProjectEntity(executor, input.entityId);
 			return new PgEntityStore(executor, this.projectIdentity).updateEntityStatus(input, actorId);
@@ -688,6 +707,12 @@ export class PgStore implements StorageDriver {
 			return;
 		}
 
+		if (!await findProjectEntity(executor, entityId, includeTombstone)) {
+			throw new Error(`Entity not found: ${entityId}`);
+		}
+	}
+
+	protected async assertCurrentProjectEntity(executor: TenantExecutor, entityId: string, includeTombstone = false): Promise<void> {
 		if (!await findProjectEntity(executor, entityId, includeTombstone)) {
 			throw new Error(`Entity not found: ${entityId}`);
 		}

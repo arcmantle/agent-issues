@@ -23,6 +23,7 @@ type IssueCommentReferenceRow = { comment_id: string; issue_id: string; position
 type PlanEntryRow = { id: string; reference: string; short_reference: string; plan_id: string; created_by: string; updated_by: string; role: string; body: string; scope_direction: string | null; revision: number; content_hash: string; tombstone: boolean; created_at: string; updated_at: string };
 type PlanEntryReferenceRow = { plan_entry_id: string; entity_id: string; position: number };
 type PlanEntrySupersessionRow = { plan_entry_id: string; superseded_entry_id: string };
+type ProjectSettingsRow = { project_id: string; prospector_settings: string };
 
 async function getTenantRecordCounts(client: PoolClient, tenantId: string): Promise<TenantRecordCounts> {
 	const result = await client.execute(sql`
@@ -179,6 +180,7 @@ export async function renameTenant(
 	const planEntryRows = await client.query<PlanEntryRow>(`SELECT * FROM plan_entries WHERE tenant_id = $1`, [previousTenantId]);
 	const planEntryReferenceRows = await client.query<PlanEntryReferenceRow>(`SELECT * FROM plan_entry_references WHERE tenant_id = $1`, [previousTenantId]);
 	const planEntrySupersessionRows = await client.query<PlanEntrySupersessionRow>(`SELECT * FROM plan_entry_supersessions WHERE tenant_id = $1`, [previousTenantId]);
+	const projectSettingsRows = await client.query<ProjectSettingsRow>(`SELECT project_id, prospector_settings FROM project_settings WHERE tenant_id = $1`, [previousTenantId]);
 	const revisionEntryRows = await client.query<RevisionPatchRow>(`SELECT * FROM revision_entries WHERE tenant_id = $1`, [previousTenantId]);
 	const counterRows = await client.query<CounterRow>(`SELECT * FROM counters WHERE tenant_id = $1`, [previousTenantId]);
 
@@ -253,6 +255,10 @@ export async function renameTenant(
 
 	for (const row of planEntrySupersessionRows.rows) {
 		await client.query(`INSERT INTO plan_entry_supersessions (tenant_id, plan_entry_id, superseded_entry_id) VALUES ($1, $2::uuid, $3::uuid)`, [newTenantId, row.plan_entry_id, row.superseded_entry_id]);
+	}
+
+	for (const row of projectSettingsRows.rows) {
+		await client.query(`INSERT INTO project_settings (tenant_id, project_id, prospector_settings) VALUES ($1, $2::uuid, $3)`, [newTenantId, row.project_id, row.prospector_settings]);
 	}
 
 	for (const row of revisionEntryRows.rows) {

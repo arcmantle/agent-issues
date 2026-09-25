@@ -5,6 +5,7 @@ import {
 	applyReversePatch,
 	type CanonicalIssueCommentChain,
 	collectReachableIds,
+	compareCodeCompatibility,
 	computeEntityContentHash,
 	createReverseFieldPatch,
 	encodeEntityRecordKey,
@@ -22,8 +23,11 @@ import {
 	generateCanonicalIdentity,
 	getAllowedRelationType,
 	getAllowedRelationTypes,
+	getActivePlanReferencedEntityIds,
 	getArchiveStatus,
+	getCodeCompatibility,
 	deriveMigratedEntityIdentity,
+	deriveVersionCoverage,
 	getInitialStatus,
 	isAllowedRelation,
 	isBodySource,
@@ -36,6 +40,7 @@ import {
 	isStructuralRelationType,
 	isValidStatus,
 	materializeFromPatches,
+	projectPlanEntries,
 	RESERVED_SYSTEM_AUTHOR,
 	shortEntityReference,
 	SYSTEM_AUTHENTICATION_SUBJECT,
@@ -44,6 +49,7 @@ import {
 	toEntitySummary,
 	wouldOrphanSubtree as wouldOrphanSubtreeInGraph,
 	type BodySource,
+	type CompletionObservation,
 	type ContextDetails,
 	type DatabaseSnapshot,
 	type DeleteResult,
@@ -67,11 +73,13 @@ import {
 	type ProjectDiscovery,
 	type ProjectSummary,
 	type ProjectSnapshot,
+	type QueryEntitiesInput,
 	type QueryEntitiesResult,
 	type RelationRecord,
 	type RelationType,
 	type StatusUpdateResult,
 	type UnlinkResult
+	,type WorkspaceObservation
 } from "@agent-issues/core";
 import type { TenantExecutor } from "../../db/connection.js";
 import { counters, entities, relations, revisionEntries } from "../../schema.js";
@@ -366,27 +374,47 @@ export async function getEntityOrThrow(executor: TenantExecutor, entityId: strin
 	return mapDrizzleEntityRow(row);
 }
 
-async function resolveEntity(executor: TenantExecutor, entityId: string, includeTombstone: boolean = false): Promise<typeof entities.$inferSelect | undefined> {
-	const rows = await resolveEntities(executor, entityId, includeTombstone);
+async function getProjectEntityOrThrow(executor: TenantExecutor, entityId: string): Promise<EntityRecord> {
+	const row = await resolveEntity(executor, entityId, false, executor.currentProjectId);
+	if (!row) {
+		throw new Error(`Entity not found: ${entityId}`);
+	}
+
+	return mapDrizzleEntityRow(row);
+}
+
+async function resolveEntity(
+	executor: TenantExecutor,
+	entityId: string,
+	includeTombstone: boolean = false,
+	projectId?: string
+): Promise<typeof entities.$inferSelect | undefined> {
+	const rows = await resolveEntities(executor, entityId, includeTombstone, projectId);
 	if (rows.length > 1) {
 		throw new Error(`Ambiguous short entity reference: ${entityId}. Use one of: ${rows.map((row) => row.reference).join(", ")}`);
 	}
 	return rows[0];
 }
 
-async function resolveEntities(executor: TenantExecutor, entityId: string, includeTombstone: boolean = false): Promise<Array<typeof entities.$inferSelect>> {
+async function resolveEntities(
+	executor: TenantExecutor,
+	entityId: string,
+	includeTombstone: boolean = false,
+	projectId?: string
+): Promise<Array<typeof entities.$inferSelect>> {
 	const livePredicate = includeTombstone ? undefined : eq(entities.tombstone, false);
+	const projectPredicate = projectId ? eq(entities.projectId, projectId) : undefined;
 	let row: typeof entities.$inferSelect | undefined;
 	if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entityId)) {
 		[row] = await executor
 			.select()
 			.from(entities)
-			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entityId), livePredicate));
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.id, entityId), projectPredicate, livePredicate));
 	} else {
 		[row] = await executor
 			.select()
 			.from(entities)
-			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.reference, entityId), livePredicate));
+			.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.reference, entityId), projectPredicate, livePredicate));
 	}
 
 	if (row) {
@@ -396,7 +424,7 @@ async function resolveEntities(executor: TenantExecutor, entityId: string, inclu
 	return executor
 		.select()
 		.from(entities)
-		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.shortReference, entityId), livePredicate));
+		.where(and(eq(entities.tenantId, executor.tenantId), eq(entities.shortReference, entityId), projectPredicate, livePredicate));
 }
 
 async function allocateShortReference(executor: TenantExecutor, kind: string, id: string): Promise<string> {
@@ -610,6 +638,7 @@ async function getAllRelations(executor: TenantExecutor): Promise<RelationRecord
 		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId}
 			AND source.project_id = ${projectId}
+			AND target.project_id = ${projectId}
 			AND source.tombstone = false
 			AND target.tombstone = false
 		ORDER BY relations.from_id, relations.to_id, relations.type
@@ -651,12 +680,16 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 			WITH RECURSIVE status_entities AS (
 				SELECT id, kind, status
 				FROM entities
-				WHERE tenant_id = ${executor.tenantId} AND tombstone = false AND id IN ${rootIds}
+				WHERE tenant_id = ${executor.tenantId}
+					AND project_id = ${executor.currentProjectId}
+					AND tombstone = false
+					AND id IN ${rootIds}
 				UNION
 				SELECT dependency.id, dependency.kind, dependency.status
 				FROM status_entities AS current
 				JOIN relations AS dependency_relation ON dependency_relation.tenant_id = ${executor.tenantId}
 				JOIN entities AS dependency ON dependency.tenant_id = dependency_relation.tenant_id
+					AND dependency.project_id = ${executor.currentProjectId}
 					AND dependency.tombstone = false
 					AND (
 						(current.kind = 'issue' AND dependency_relation.type = 'decomposes' AND dependency_relation.from_id = current.id AND dependency.id = dependency_relation.to_id)
@@ -671,7 +704,9 @@ async function getDerivedStatusMap(executor: TenantExecutor, rootIds?: string[])
 		`)
 		: await executor.execute(sql`
 			SELECT id, kind, status FROM entities
-			WHERE tenant_id = ${executor.tenantId} AND tombstone = false
+			WHERE tenant_id = ${executor.tenantId}
+				AND project_id = ${executor.currentProjectId}
+				AND tombstone = false
 		`);
 	const statusEntities = (result.rows as Array<{ id: string; kind: string; status: string }>).map((row) => ({
 		id: row.id,
@@ -1073,14 +1108,19 @@ export async function createEntity(
 	return getEntityOrThrow(executor, id);
 }
 
-export async function getEntityDetails(executor: TenantExecutor, entityId: string): Promise<EntityDetails> {
+export async function getEntityDetails(executor: TenantExecutor, entityId: string, projectScoped: boolean = false): Promise<EntityDetails> {
 	const entity = await getEntityOrThrow(executor, entityId);
+	const incomingProjectFilter = projectScoped
+		? sql`AND (entities.project_id = ${executor.currentProjectId} OR (entities.id = ${executor.currentProjectId} AND relations.type IN ${STRUCTURAL_RELATION_TYPES}))`
+		: sql``;
+	const outgoingProjectFilter = projectScoped ? sql`AND entities.project_id = ${executor.currentProjectId}` : sql``;
 
 	const incomingResult = await executor.execute(sql`
 		SELECT relations.type AS relation_type, ${ENTITY_SUMMARY_COLUMNS}
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
+			${incomingProjectFilter}
 			AND entities.tombstone = false
 		ORDER BY entities.id
 	`);
@@ -1089,11 +1129,23 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 		FROM relations
 		JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 		WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
+			${outgoingProjectFilter}
 			AND entities.tombstone = false
 		ORDER BY entities.id
 	`);
 
 	const statusMap = await getDerivedStatusMap(executor);
+	const completionObservations = entity.kind === "issue" ? await listCompletionObservations(executor, entity.id) : [];
+	const activePlanIssueIds = entity.kind === "plan"
+		? (await Promise.all(
+			getActivePlanReferencedEntityIds(await new PgPlanEntryStore(executor).listPlanEntries({ planId: entity.id }))
+				.map(async (entityId) => {
+					const referencedEntity = await getEntityOrThrow(executor, entityId);
+					return referencedEntity.kind === "issue" ? referencedEntity.id : undefined;
+				})
+		)).filter((issueId): issueId is string => issueId !== undefined)
+		: [];
+	const versionCoverage = deriveVersionCoverage((await Promise.all(activePlanIssueIds.map((issueId) => listCompletionObservations(executor, issueId)))).flat());
 
 	return {
 		entity: applyDerivedStatus(entity, statusMap),
@@ -1105,15 +1157,23 @@ export async function getEntityDetails(executor: TenantExecutor, entityId: strin
 			relationType: row.relation_type as RelationType,
 			entity: applyDerivedStatus(mapEntitySummaryRow(row), statusMap)
 		})),
-		planEntries: entity.kind === "issue" ? await getRelatedPlanEntries(executor, entity.id) : []
+		planEntries: entity.kind === "issue" ? await getRelatedPlanEntries(executor, entity.id) : [],
+		completionObservations,
+		currentCompletionObservation: completionObservations.at(-1) ?? null,
+		versionCoverage
 	};
 }
 
 export async function queryEntityRelations(
 	executor: TenantExecutor,
-	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] }
+	input: { entityId: string; direction?: "incoming" | "outgoing" | "both"; types?: RelationType[] },
+	projectScoped: boolean = false
 ): Promise<EntityRelations> {
-	const entity = await getEntityOrThrow(executor, input.entityId);
+	const entity = await getProjectEntityOrThrow(executor, input.entityId);
+	const incomingProjectFilter = projectScoped
+		? sql`AND (entities.project_id = ${executor.currentProjectId} OR (entities.id = ${executor.currentProjectId} AND relations.type IN ${STRUCTURAL_RELATION_TYPES}))`
+		: sql``;
+	const outgoingProjectFilter = projectScoped ? sql`AND entities.project_id = ${executor.currentProjectId}` : sql``;
 	const typeFilter = input.types?.length ? sql`AND relations.type IN ${input.types}` : sql``;
 	const includeIncoming = input.direction === undefined || input.direction === "both" || input.direction === "incoming";
 	const includeOutgoing = input.direction === undefined || input.direction === "both" || input.direction === "outgoing";
@@ -1123,6 +1183,7 @@ export async function queryEntityRelations(
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.from_id
 			WHERE relations.tenant_id = ${executor.tenantId} AND relations.to_id = ${entity.id}
+				${incomingProjectFilter}
 				AND entities.tombstone = false ${typeFilter}
 			ORDER BY entities.id
 		`)
@@ -1133,6 +1194,7 @@ export async function queryEntityRelations(
 			FROM relations
 			JOIN entities ON entities.tenant_id = relations.tenant_id AND entities.id = relations.to_id
 			WHERE relations.tenant_id = ${executor.tenantId} AND relations.from_id = ${entity.id}
+				${outgoingProjectFilter}
 				AND entities.tombstone = false ${typeFilter}
 			ORDER BY entities.id
 		`)
@@ -1169,7 +1231,7 @@ export async function listEntities(executor: TenantExecutor, kind: string): Prom
 
 export async function queryEntities(
 	executor: TenantExecutor,
-	input: { kind: string; statuses?: string[]; parentId?: string; limit?: number }
+	input: QueryEntitiesInput
 ): Promise<QueryEntitiesResult> {
 	if (!isEntityKind(input.kind)) {
 		throw new Error(`Unknown entity kind: ${input.kind}`);
@@ -1178,7 +1240,7 @@ export async function queryEntities(
 	let parentIds: string[] | undefined;
 	let parents: Array<typeof entities.$inferSelect> | undefined;
 	if (input.parentId) {
-		const parentRows = await resolveEntities(executor, input.parentId);
+		const parentRows = await resolveEntities(executor, input.parentId, false, executor.currentProjectId);
 		if (parentRows.length === 0) {
 			return { entities: [], total: 0, openBlockers: input.kind === "issue" ? {} : undefined };
 		}
@@ -1192,6 +1254,7 @@ export async function queryEntities(
 			JOIN relations AS parent_relation
 				ON parent_relation.tenant_id = entity.tenant_id AND parent_relation.to_id = entity.id
 			WHERE entity.tenant_id = ${executor.tenantId}
+				AND entity.project_id = ${executor.currentProjectId}
 				AND entity.tombstone = false
 				AND entity.kind = ${input.kind}
 				AND parent_relation.from_id IN ${parentIds}
@@ -1200,7 +1263,7 @@ export async function queryEntities(
 		`)
 		: await executor.execute(sql`
 			SELECT id FROM entities
-			WHERE tenant_id = ${executor.tenantId} AND tombstone = false AND kind = ${input.kind}
+			WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND tombstone = false AND kind = ${input.kind}
 			ORDER BY id
 		`);
 	let selectedIds = (candidateResult.rows as Array<{ id: string }>).map((row) => row.id);
@@ -1210,19 +1273,54 @@ export async function queryEntities(
 		const statuses = new Set(input.statuses);
 		selectedIds = selectedIds.filter((entityId) => statuses.has(statusMap.get(entityId) ?? ""));
 	} else {
-		const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
-		statusMap = await getDerivedStatusMap(executor, limitedIds);
+		statusMap = await getDerivedStatusMap(executor, selectedIds);
 	}
 	const total = selectedIds.length;
+	const compatibilityByEntityId = new Map<string, EntitySummary["codeCompatibility"]>();
+	if (input.kind === "issue" && input.retrievalContext !== undefined && selectedIds.length > 0) {
+		const retrievalContext = input.retrievalContext;
+		const selectedResult = await executor.execute(sql`
+			SELECT ${ENTITY_SUMMARY_COLUMNS} FROM entities
+			WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND id IN ${selectedIds}
+		`);
+		const selectedById = new Map((selectedResult.rows as EntitySummaryRow[]).map((row) => [row.id, applyDerivedStatus(mapEntitySummaryRow(row), statusMap)]));
+		const completedIssues = await Promise.all(selectedIds
+			.map((entityId) => selectedById.get(entityId)!)
+			.filter((entity) => entity.status === "done")
+			.map(async (entity) => ({
+				entity,
+				codeCompatibility: getCodeCompatibility((await listCompletionObservations(executor, entity.id)).at(-1) ?? {
+					repositoryIdentity: null,
+					commitSha: null,
+					calculatedVersionState: "unknown" as const,
+					calculatedVersion: null
+				}, retrievalContext)
+			})));
+		for (const { entity, codeCompatibility } of completedIssues) {
+			compatibilityByEntityId.set(entity.id, codeCompatibility);
+		}
+		if (retrievalContext.diagnostics.length === 0) {
+			completedIssues.sort((left, right) => compareCodeCompatibility(left.codeCompatibility, right.codeCompatibility));
+		}
+		let completedIssueIndex = 0;
+		selectedIds = selectedIds.map((entityId) => {
+			const entity = selectedById.get(entityId)!;
+			return entity.status === "done" ? completedIssues[completedIssueIndex++]!.entity.id : entityId;
+		});
+	}
 	const limitedIds = input.limit === undefined ? selectedIds : selectedIds.slice(0, input.limit);
 	if (limitedIds.length === 0) {
 		return { entities: [], total, openBlockers: input.kind === "issue" ? {} : undefined };
 	}
 	const selectedResult = await executor.execute(sql`
 		SELECT ${ENTITY_SUMMARY_COLUMNS} FROM entities
-		WHERE tenant_id = ${executor.tenantId} AND id IN ${limitedIds}
+		WHERE tenant_id = ${executor.tenantId} AND project_id = ${executor.currentProjectId} AND id IN ${limitedIds}
 	`);
-	const selectedById = new Map((selectedResult.rows as EntitySummaryRow[]).map((row) => [row.id, applyDerivedStatus(mapEntitySummaryRow(row), statusMap)]));
+	const selectedById = new Map((selectedResult.rows as EntitySummaryRow[]).map((row) => {
+		const entity = applyDerivedStatus(mapEntitySummaryRow(row), statusMap);
+		const codeCompatibility = compatibilityByEntityId.get(entity.id);
+		return [entity.id, codeCompatibility === undefined ? entity : { ...entity, codeCompatibility }];
+	}));
 	const resultEntities = limitedIds.map((entityId) => selectedById.get(entityId)!);
 	const parentGroups = parents
 		&& parents.length > 1
@@ -1241,6 +1339,7 @@ export async function queryEntities(
 	return {
 		entities: resultEntities,
 		total,
+		...(input.retrievalContext ? { retrievalDiagnostics: input.retrievalContext.diagnostics } : {}),
 		...(parentGroups ? { parentGroups } : {}),
 		openBlockers: input.kind === "issue" ? await getOpenBlockers(executor, resultEntities) : undefined
 	};
@@ -1265,8 +1364,14 @@ async function getOpenBlockers(executor: TenantExecutor, issues: EntitySummary[]
 
 	const issueIds = issues.map((entity) => entity.id);
 	const blockRows = (await executor.execute(sql`
-		SELECT from_id, to_id FROM relations
-		WHERE tenant_id = ${executor.tenantId} AND type = 'blocks' AND to_id IN ${issueIds}
+		SELECT relations.from_id, relations.to_id
+		FROM relations
+		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND relations.type = 'blocks'
+			AND relations.to_id IN ${issueIds}
+			AND source.project_id = ${executor.currentProjectId}
+			AND source.tombstone = false
 	`)).rows as Array<{ from_id: string; to_id: string }>;
 	if (blockRows.length === 0) {
 		return openBlockers;
@@ -1278,7 +1383,9 @@ async function getOpenBlockers(executor: TenantExecutor, issues: EntitySummary[]
 	if (missingReferenceIds.length > 0) {
 		const sourceReferenceRows = (await executor.execute(sql`
 			SELECT id, reference FROM entities
-			WHERE tenant_id = ${executor.tenantId} AND id IN ${missingReferenceIds}
+			WHERE tenant_id = ${executor.tenantId}
+				AND project_id = ${executor.currentProjectId}
+				AND id IN ${missingReferenceIds}
 		`)).rows as Array<{ id: string; reference: string }>;
 		for (const row of sourceReferenceRows) {
 			referenceById.set(row.id, row.reference);
@@ -1423,7 +1530,11 @@ export async function listAllRelations(executor: TenantExecutor): Promise<Relati
 		SELECT relations.* FROM relations
 		JOIN entities AS source ON source.tenant_id = relations.tenant_id AND source.id = relations.from_id
 		JOIN entities AS target ON target.tenant_id = relations.tenant_id AND target.id = relations.to_id
-		WHERE relations.tenant_id = ${executor.tenantId} AND source.tombstone = false AND target.tombstone = false
+		WHERE relations.tenant_id = ${executor.tenantId}
+			AND source.project_id = ${executor.currentProjectId}
+			AND target.project_id = ${executor.currentProjectId}
+			AND source.tombstone = false
+			AND target.tombstone = false
 		ORDER BY relations.from_id, relations.to_id, relations.type
 	`);
 	return (result.rows as RelationRow[]).map((row) => ({
@@ -1528,7 +1639,7 @@ export async function unlinkEntities(
 
 export async function updateEntityStatus(
 	executor: TenantExecutor,
-	input: { entityId: string; status: string; author?: string },
+	input: { entityId: string; status: string; author?: string; workspaceObservation?: WorkspaceObservation },
 	actorId: string = SYSTEM_USER_ID
 ): Promise<StatusUpdateResult> {
 	const entity = await getEntityOrThrow(executor, input.entityId);
@@ -1607,11 +1718,61 @@ export async function updateEntityStatus(
 	await appendDeltaEntry(executor, entity.id, newRevision, entity.title, entity.body, entity.bodySource, actorId, updatedAt, {
 		priorStatus: entity.status
 	});
+	if (entity.kind === "issue" && entity.status !== "done" && input.status === "done" && input.workspaceObservation) {
+		await insertCompletionObservation(executor, entity.id, input.workspaceObservation);
+	}
 
 	return {
 		entity: toEntitySummary({ ...entity, status: input.status, revision: newRevision, updatedBy: actorId, updatedAt }),
 		previousStatus
 	};
+}
+
+async function insertCompletionObservation(executor: TenantExecutor, issueId: string, observation: WorkspaceObservation): Promise<void> {
+	const id = randomUUID();
+	const result = await executor.execute(sql`SELECT COALESCE(MAX(completion_ordinal), 0) + 1 AS completion_ordinal
+		FROM completion_observations WHERE tenant_id = ${executor.tenantId} AND issue_id = ${issueId}::uuid`);
+	const ordinal = Number((result.rows[0] as { completion_ordinal: number | string }).completion_ordinal);
+	const diagnostics = observation.state === "unknown" ? observation.diagnostics : observation.calculatedVersion.state === "unknown" ? observation.calculatedVersion.diagnostics : [];
+	const available = observation.state === "available" ? observation : undefined;
+	const calculatedVersionState = available?.calculatedVersion.state ?? "unknown";
+	const calculatedVersion = available?.calculatedVersion.state === "available" ? available.calculatedVersion.version : null;
+	await executor.execute(sql`INSERT INTO completion_observations (
+		tenant_id, id, issue_id, completion_ordinal, repository_identity, commit_sha, branch, dirty, captured_at, calculated_version_state, calculated_version, diagnostics
+	) VALUES (
+		${executor.tenantId}, ${id}::uuid, ${issueId}::uuid, ${ordinal}, ${available?.repositoryIdentity ?? null}, ${available?.commitSha ?? null}, ${available?.branch ?? null}, ${available?.dirty ?? null}, ${observation.capturedAt}, ${calculatedVersionState}, ${calculatedVersion}, ${JSON.stringify(diagnostics)}
+	)`);
+}
+
+async function listCompletionObservations(executor: TenantExecutor, issueId: string): Promise<CompletionObservation[]> {
+	const result = await executor.execute(sql`SELECT * FROM completion_observations
+		WHERE tenant_id = ${executor.tenantId} AND issue_id = ${issueId}::uuid
+		ORDER BY completion_ordinal`);
+	return (result.rows as Array<{
+		id: string;
+		issue_id: string;
+		completion_ordinal: number;
+		repository_identity: string | null;
+		commit_sha: string | null;
+		branch: string | null;
+		dirty: boolean | null;
+		captured_at: string;
+		calculated_version_state: "available" | "unknown";
+		calculated_version: string | null;
+		diagnostics: string;
+	}>).map((row) => ({
+		id: row.id,
+		issueId: row.issue_id,
+		completionOrdinal: row.completion_ordinal,
+		repositoryIdentity: row.repository_identity,
+		commitSha: row.commit_sha,
+		branch: row.branch,
+		dirty: row.dirty,
+		capturedAt: row.captured_at,
+		calculatedVersionState: row.calculated_version_state,
+		calculatedVersion: row.calculated_version,
+		diagnostics: JSON.parse(row.diagnostics) as Array<{ code: string; message: string }>
+	}));
 }
 
 export async function setEntityBody(
@@ -2120,6 +2281,7 @@ export async function getInitiativeBundle(
 	const derivedStatusMap = statusMap ?? (await getDerivedStatusMap(executor));
 	const derivedEntities = entities.map((entity) => applyDerivedStatus(entity, derivedStatusMap));
 	const entityById = new Map(derivedEntities.map((entity) => [entity.id, entity]));
+	const issues = derivedEntities.filter((entity) => entity.kind === "issue");
 
 	return {
 		initiative: applyDerivedStatus(initiative, derivedStatusMap),
@@ -2127,7 +2289,7 @@ export async function getInitiativeBundle(
 		prds: derivedEntities.filter((entity) => entity.kind === "prd"),
 		userStories: derivedEntities.filter((entity) => entity.kind === "userStory"),
 		adrs: derivedEntities.filter((entity) => entity.kind === "adr"),
-		issues: derivedEntities.filter((entity) => entity.kind === "issue"),
+		issues,
 		fixLinks: selectedRelations
 			.filter((relation) => relation.type === "fixes")
 			.map((relation) => ({ issue: entityById.get(relation.from_id)!, userStory: entityById.get(relation.to_id)! })),
@@ -2140,6 +2302,7 @@ export async function getInitiativeBundle(
 		constrainsLinks: selectedRelations
 			.filter((relation) => relation.type === "constrains")
 			.map((relation) => ({ adr: entityById.get(relation.from_id)!, issue: entityById.get(relation.to_id)! })),
+		versionCoverage: deriveVersionCoverage((await Promise.all(issues.map((issue) => listCompletionObservations(executor, issue.id)))).flat())
 	};
 }
 
@@ -2624,11 +2787,11 @@ export class PgEntityStore implements EntityStore {
 	}
 
 	public async getEntityDetails(entityId: string): Promise<EntityDetails> {
-		return getEntityDetails(this.executor, entityId);
+		return getEntityDetails(this.executor, entityId, this.projectIdentity !== undefined);
 	}
 
 	public async queryEntityRelations(input: Parameters<EntityStore["queryEntityRelations"]>[0]): ReturnType<EntityStore["queryEntityRelations"]> {
-		return queryEntityRelations(this.executor, input);
+		return queryEntityRelations(this.executor, input, this.projectIdentity !== undefined);
 	}
 
 	public async listEntities(kind: string): ReturnType<EntityStore["listEntities"]> {
@@ -2659,7 +2822,7 @@ export class PgEntityStore implements EntityStore {
 		return listProjectAdrs(this.executor);
 	}
 
-	public async updateEntityStatus(input: { entityId: string; status: string; author?: string }, actorId?: string): Promise<StatusUpdateResult> {
+	public async updateEntityStatus(input: Parameters<EntityStore["updateEntityStatus"]>[0], actorId?: string): Promise<StatusUpdateResult> {
 		return updateEntityStatus(this.executor, input, actorId ?? SYSTEM_USER_ID);
 	}
 

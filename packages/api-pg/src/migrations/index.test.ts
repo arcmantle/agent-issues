@@ -25,7 +25,7 @@ describe("api migrations chain", () => {
 	});
 
 	it("registers the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "pioneer-entity-types", "issue-breakdown-drafts"]);
+		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "pioneer-entity-types", "issue-breakdown-drafts", "project-settings", "completion-observations", "completion-observation-version-state", "search"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -271,6 +271,7 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(tables.rows).toEqual([
+				{ table_name: "completion_observations" },
 				{ table_name: "context_terms" },
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
@@ -281,6 +282,7 @@ describe("api migrations chain", () => {
 				{ table_name: "plan_entries" },
 				{ table_name: "plan_entry_references" },
 				{ table_name: "plan_entry_supersessions" },
+				{ table_name: "project_settings" },
 				{ table_name: "relations" },
 				{ table_name: "revision_entries" },
 				{ table_name: "schema_migrations" },
@@ -301,7 +303,11 @@ describe("api migrations chain", () => {
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
 				{ id: "pioneer-entity-types" },
-				{ id: "issue-breakdown-drafts" }
+				{ id: "issue-breakdown-drafts" },
+				{ id: "project-settings" },
+				{ id: "completion-observations" },
+				{ id: "completion-observation-version-state" },
+				{ id: "search" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -333,7 +339,11 @@ describe("api migrations chain", () => {
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
 				{ id: "pioneer-entity-types" },
-				{ id: "issue-breakdown-drafts" }
+				{ id: "issue-breakdown-drafts" },
+				{ id: "project-settings" },
+				{ id: "completion-observations" },
+				{ id: "completion-observation-version-state" },
+				{ id: "search" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -350,7 +360,7 @@ describe("api migrations chain", () => {
 			await runMigrations(schemaPool, productionMigrations.slice(0, -1));
 			await migratePgDatabase(schemaPool);
 
-			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "issue-breakdown-drafts" });
+			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "search" });
 		} finally {
 			await schemaPool.end();
 			await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
@@ -394,6 +404,7 @@ describe("api migrations chain", () => {
 				"SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name",
 				[schemaName]
 			)).rows).toEqual([
+				{ table_name: "completion_observations" },
 				{ table_name: "context_terms" },
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
@@ -404,6 +415,7 @@ describe("api migrations chain", () => {
 				{ table_name: "plan_entries" },
 				{ table_name: "plan_entry_references" },
 				{ table_name: "plan_entry_supersessions" },
+				{ table_name: "project_settings" },
 				{ table_name: "relations" },
 				{ table_name: "revision_entries" },
 				{ table_name: "schema_migrations" },
@@ -411,6 +423,8 @@ describe("api migrations chain", () => {
 			]);
 			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY id")).rows).toEqual([
 				{ id: "adr-status-to-current" },
+				{ id: "completion-observation-version-state" },
+				{ id: "completion-observations" },
 				{ id: "context-term-provenance" },
 				{ id: "debt-metadata" },
 				{ id: "entity-type" },
@@ -421,8 +435,10 @@ describe("api migrations chain", () => {
 				{ id: "pioneer-entity-types" },
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
+				{ id: "project-settings" },
 				{ id: "record-provenance" },
 				{ id: "relation-provenance" },
+				{ id: "search" },
 				{ id: "short-entity-reference" },
 				{ id: "short-record-reference" },
 				{ id: "user-directory" }
@@ -1172,6 +1188,7 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(tableRows.map((row) => row.table_name)).toEqual([
+				"completion_observations",
 				"context_terms",
 				"contexts",
 				"counters",
@@ -1182,6 +1199,7 @@ describe("api migrations chain", () => {
 				"plan_entries",
 				"plan_entry_references",
 				"plan_entry_supersessions",
+				"project_settings",
 				"relations",
 				"revision_entries",
 				"schema_migrations",
@@ -1193,21 +1211,28 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(indexRows.map((row) => row.indexname)).toEqual([
+				"completion_observations_tenant_id_id_key",
+				"completion_observations_tenant_issue_idx",
+				"context_terms_search_idx",
 				"context_terms_tenant_context_key_idx",
 				"context_terms_tenant_id_idx",
 				"context_terms_tenant_short_reference_idx",
+				"contexts_search_idx",
 				"contexts_tenant_id_idx",
 				"contexts_tenant_reference_idx",
 				"contexts_tenant_scope_entity_id_idx",
 				"contexts_tenant_short_reference_idx",
+				"entities_search_idx",
 				"entities_tenant_reference_idx",
 				"entities_tenant_short_reference_idx",
 				"issue_breakdown_drafts_active_target_idx",
 				"issue_breakdown_drafts_target_idx",
 				"issue_comment_references_tenant_issue_idx",
+				"issue_comments_search_idx",
 				"issue_comments_tenant_id_reference_key",
 				"issue_comments_tenant_issue_idx",
 				"issue_comments_tenant_short_reference_idx",
+				"plan_entries_search_idx",
 				"plan_entries_tenant_id_reference_key",
 				"plan_entries_tenant_id_short_reference_key",
 				"plan_entries_tenant_plan_idx",
@@ -1223,14 +1248,14 @@ describe("api migrations chain", () => {
 				[schemaName]
 			);
 			expect(policyRows.map((row) => row.tablename)).toEqual(
-				["context_terms", "contexts", "counters", "entities", "issue_breakdown_drafts", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"].sort()
+				["completion_observations", "context_terms", "contexts", "counters", "entities", "issue_breakdown_drafts", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "project_settings", "relations", "revision_entries", "users"].sort()
 			);
 			expect(policyRows.every((row) => row.qual === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			expect(policyRows.every((row) => row.with_check === "(tenant_id = current_setting('app.tenant_id'::text, true))")).toBe(true);
 			const { rows: securityRows } = await schemaPool.query(
 				`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
 				 WHERE relnamespace = $1::regnamespace AND relname = ANY($2) ORDER BY relname`,
-				[schemaName, ["context_terms", "contexts", "counters", "entities", "issue_breakdown_drafts", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "relations", "revision_entries", "users"]]
+				[schemaName, ["completion_observations", "context_terms", "contexts", "counters", "entities", "issue_breakdown_drafts", "issue_comment_references", "issue_comments", "plan_entries", "plan_entry_references", "plan_entry_supersessions", "project_settings", "relations", "revision_entries", "users"]]
 			);
 			expect(securityRows).toEqual(securityRows.map((row) => ({ ...row, relforcerowsecurity: true, relrowsecurity: true })));
 
@@ -1286,7 +1311,11 @@ describe("api migrations chain", () => {
 				{ id: "plan-entries" },
 				{ id: "plan-entry-supersession-position" },
 				{ id: "pioneer-entity-types" },
-				{ id: "issue-breakdown-drafts" }
+				{ id: "issue-breakdown-drafts" },
+				{ id: "project-settings" },
+				{ id: "completion-observations" },
+				{ id: "completion-observation-version-state" },
+				{ id: "search" }
 			]);
 
 			const { rows: identityColumns } = await schemaPool.query(

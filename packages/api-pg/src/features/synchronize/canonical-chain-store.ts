@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import {
 	DEFAULT_PROJECT_ID,
+	CompletionObservationConflictError,
 	deriveMigratedEntityIdentity,
 	encodeCanonicalReference,
 	encodeContextRecordKey,
@@ -27,6 +28,7 @@ import {
 	type CanonicalEntityChain,
 	type CanonicalIssueCommentChain,
 	type CanonicalPlanEntryChain,
+	type CompletionObservation,
 	type UserDirectoryRecord,
 	type SynchronizeStore
 } from "@agent-issues/core";
@@ -42,6 +44,7 @@ type IssueCommentReferenceRow = { comment_id: string; issue_id: string; position
 type PlanEntryHeadRow = { id: string; reference: string; short_reference: string; plan_id: string; created_by: string; updated_by: string; role: string; body: string; scope_direction: string | null; tombstone: boolean; revision: number; content_hash: string; created_at: string; updated_at: string };
 type PlanEntryReferenceRow = { plan_entry_id: string; entity_id: string; position: number };
 type PlanEntrySupersessionRow = { plan_entry_id: string; superseded_entry_id: string; position: number };
+type CompletionObservationRow = { id: string; issue_id: string; completion_ordinal: number; repository_identity: string | null; commit_sha: string | null; branch: string | null; dirty: boolean | null; captured_at: string; calculated_version_state: "available" | "unknown"; calculated_version: string | null; diagnostics: string };
 type UserRow = { id: string; authentication_subject: string; display_name: string | null; updated_at: string };
 type LedgerRow = { id: string; project_id: string; record_kind: string; record_key: string; revision: number; author: string; patch_format: number; reverse_patch: Buffer; source_hash: Buffer; target_hash: Buffer; restored_from_revision: number | null; created_at: string };
 
@@ -74,6 +77,7 @@ export async function exportCanonicalChains(executor: TenantExecutor): Promise<C
 	const commentReferenceRows = commentReferencesResult.rows as IssueCommentReferenceRow[];
 	const planEntryReferenceRows = planEntryReferencesResult.rows as PlanEntryReferenceRow[];
 	const planEntrySupersessionRows = planEntrySupersessionsResult.rows as PlanEntrySupersessionRow[];
+	const completionObservationsResult = await executor.execute(sql`SELECT * FROM completion_observations WHERE tenant_id=${executor.tenantId} ORDER BY issue_id, completion_ordinal`);
 	return {
 		entities: (entitiesResult.rows as EntityHeadRow[]).map((row): CanonicalEntityChain => {
 			if (!isEntityKind(row.kind) || !isBodySource(row.body_source)) throw new Error(`Cannot export invalid entity ${row.id}.`);
@@ -91,6 +95,7 @@ export async function exportCanonicalChains(executor: TenantExecutor): Promise<C
 				deltas: ledgerRows.filter((delta) => delta.record_kind === "plan-entry" && delta.record_key === encodePlanEntryRecordKey(row.id)).map(mapDelta)
 			};
 		}),
+		completionObservations: (completionObservationsResult.rows as CompletionObservationRow[]).map(toCompletionObservation),
 		users: (usersResult.rows as UserRow[]).map(toUserDirectoryRecord)
 	};
 }
@@ -98,7 +103,7 @@ export async function exportCanonicalChains(executor: TenantExecutor): Promise<C
 export async function importCanonicalChains(executor: TenantExecutor, incoming: CanonicalChainBundle): Promise<CanonicalChainImportResult> {
 	const current = await exportCanonicalChains(executor);
 	const merged = mergeCanonicalChainBundles(current, incoming);
-	const result: CanonicalChainImportResult = { entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], usersCreated: [], usersUpdated: [] };
+	const result: CanonicalChainImportResult = { entitiesCreated: [], entitiesAdvanced: [], contextsCreated: [], contextsAdvanced: [], contextTermsCreated: [], contextTermsAdvanced: [], issueCommentsCreated: [], issueCommentsAdvanced: [], planEntriesCreated: [], planEntriesAdvanced: [], completionObservationsCreated: [], usersCreated: [], usersUpdated: [] };
 	const currentEntities = new Map(current.entities.map((chain) => [chain.head.id, chain]));
 	for (const chain of merged.entities) {
 		const existing = currentEntities.get(chain.head.id);
@@ -136,6 +141,14 @@ export async function importCanonicalChains(executor: TenantExecutor, incoming: 
 		(existing ? result.planEntriesAdvanced : result.planEntriesCreated).push(chain.head.id);
 	}
 	await rebuildPlanEntryLinks(executor, merged.planEntries);
+	const currentObservations = new Set((current.completionObservations ?? []).map((observation) => observation.id));
+	const completionObservationsCreated: string[] = [];
+	for (const observation of merged.completionObservations ?? []) {
+		if (currentObservations.has(observation.id)) continue;
+		if (await writeCompletionObservation(executor, observation)) {
+			completionObservationsCreated.push(observation.id);
+		}
+	}
 	const currentUsers = new Map(current.users.map((user) => [user.id, user]));
 	for (const user of merged.users) {
 		const existing = currentUsers.get(user.id);
@@ -143,7 +156,7 @@ export async function importCanonicalChains(executor: TenantExecutor, incoming: 
 		await writeUser(executor, user, existing === undefined);
 		(existing ? result.usersUpdated : result.usersCreated).push(user.id);
 	}
-	return result;
+	return { ...result, completionObservationsCreated };
 }
 
 async function writeEntity(executor: TenantExecutor, chain: CanonicalEntityChain, created: boolean, projectId: string): Promise<void> {
@@ -223,6 +236,36 @@ async function writePlanEntry(executor: TenantExecutor, chain: CanonicalPlanEntr
 	for (const delta of chain.deltas) await executor.execute(sql`INSERT INTO revision_entries (id,tenant_id,project_id,record_kind,record_key,revision,author,patch_format,reverse_patch,source_hash,target_hash,restored_from_revision,created_at) VALUES (${delta.id},${executor.tenantId},${projectId},'plan-entry',${encodePlanEntryRecordKey(head.id)},${delta.revision},${delta.author},${delta.patchFormat},${Buffer.from(delta.reversePatch)},${encodeRevisionPatchHash(delta.sourceHash)},${encodeRevisionPatchHash(delta.targetHash)},${delta.restoredFromRevision ?? null},${delta.createdAt}) ON CONFLICT (tenant_id,project_id,record_kind,record_key,revision) DO NOTHING`);
 }
 
+async function writeCompletionObservation(executor: TenantExecutor, observation: CompletionObservation): Promise<boolean> {
+	const insert = await executor.execute(sql`INSERT INTO completion_observations (tenant_id, id, issue_id, completion_ordinal, repository_identity, commit_sha, branch, dirty, captured_at, calculated_version_state, calculated_version, diagnostics) VALUES (${executor.tenantId}, ${observation.id}::uuid, ${observation.issueId}::uuid, ${observation.completionOrdinal}, ${observation.repositoryIdentity}, ${observation.commitSha}, ${observation.branch}, ${observation.dirty}, ${observation.capturedAt}, ${observation.calculatedVersionState}, ${observation.calculatedVersion}, ${JSON.stringify(observation.diagnostics)}) ON CONFLICT (tenant_id, id) DO NOTHING RETURNING id`);
+	if ((insert.rowCount ?? 0) > 0) return true;
+
+	const existing = await readCompletionObservation(executor, observation.id);
+	if (existing === undefined || !completionObservationsMatch(existing, observation)) {
+		throw new CompletionObservationConflictError(observation.id);
+	}
+	return false;
+}
+
+async function readCompletionObservation(executor: TenantExecutor, observationId: string): Promise<CompletionObservation | undefined> {
+	const result = await executor.execute(sql`SELECT * FROM completion_observations WHERE tenant_id = ${executor.tenantId} AND id = ${observationId}::uuid`);
+	const row = result.rows[0] as CompletionObservationRow | undefined;
+	return row === undefined ? undefined : toCompletionObservation(row);
+}
+
+function completionObservationsMatch(left: CompletionObservation, right: CompletionObservation): boolean {
+	return left.issueId === right.issueId &&
+		left.completionOrdinal === right.completionOrdinal &&
+		left.repositoryIdentity === right.repositoryIdentity &&
+		left.commitSha === right.commitSha &&
+		left.branch === right.branch &&
+		left.dirty === right.dirty &&
+		left.capturedAt === right.capturedAt &&
+		left.calculatedVersionState === right.calculatedVersionState &&
+		left.calculatedVersion === right.calculatedVersion &&
+		JSON.stringify(left.diagnostics) === JSON.stringify(right.diagnostics);
+}
+
 async function rebuildPlanEntryLinks(executor: TenantExecutor, chains: CanonicalPlanEntryChain[]): Promise<void> {
 	for (const chain of chains) {
 		await executor.execute(sql`DELETE FROM plan_entry_references WHERE tenant_id=${executor.tenantId} AND plan_entry_id=${chain.head.id}::uuid`);
@@ -247,6 +290,22 @@ function toUserDirectoryRecord(row: UserRow): UserDirectoryRecord {
 		authenticationSubject: row.authentication_subject,
 		displayName: row.display_name,
 		updatedAt: row.updated_at
+	};
+}
+
+function toCompletionObservation(row: CompletionObservationRow): CompletionObservation {
+	return {
+		id: row.id,
+		issueId: row.issue_id,
+		completionOrdinal: row.completion_ordinal,
+		repositoryIdentity: row.repository_identity,
+		commitSha: row.commit_sha,
+		branch: row.branch,
+		dirty: row.dirty,
+		capturedAt: row.captured_at,
+		calculatedVersionState: row.calculated_version_state,
+		calculatedVersion: row.calculated_version,
+		diagnostics: JSON.parse(row.diagnostics) as Array<{ code: string; message: string }>
 	};
 }
 

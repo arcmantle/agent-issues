@@ -61,6 +61,10 @@ type LedgerRow = {
 
 type PlanEntryCursor = Pick<PlanEntryRecord, "createdAt" | "reference">;
 
+type PlanEntryReferenceRow = { plan_entry_id: string; entity_id: string };
+
+type PlanEntrySupersessionRow = { plan_entry_id: string; superseded_entry_id: string };
+
 const DEFAULT_PAGE_SIZE = 50;
 
 export class PgPlanEntryStore {
@@ -166,7 +170,7 @@ export class PgPlanEntryStore {
 	public async listPlanEntries(input: { planId: string }): Promise<PlanEntryRecord[]> {
 		const plan = await getProjectPlanOrThrow(this.executor, input.planId);
 		const result = await this.executor.execute(sql`SELECT * FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid ORDER BY created_at, reference`);
-		return Promise.all((result.rows as PlanEntryRow[]).map((row) => toPlanEntryRecordWithLinks(this.executor, row)));
+		return toPlanEntryRecordsWithLinks(this.executor, result.rows as PlanEntryRow[]);
 	}
 
 	protected async reopenReadyPlan(planId: string, actorId: string): Promise<void> {
@@ -190,7 +194,7 @@ export class PgPlanEntryStore {
 				SELECT * FROM plan_entries WHERE tenant_id = ${this.executor.tenantId} AND plan_id = ${plan.id}::uuid ${beforePredicate}
 				ORDER BY created_at DESC, reference DESC LIMIT ${DEFAULT_PAGE_SIZE}
 			) AS page ORDER BY created_at ASC, reference ASC`);
-		const entries = await Promise.all((result.rows as PlanEntryRow[]).map((row) => toPlanEntryRecordWithLinks(this.executor, row)));
+		const entries = await toPlanEntryRecordsWithLinks(this.executor, result.rows as PlanEntryRow[]);
 		const oldest = entries[0];
 
 		return {
@@ -349,9 +353,38 @@ async function replaceSupersessions(executor: TenantExecutor, entryId: string, s
 }
 
 async function toPlanEntryRecordWithLinks(executor: TenantExecutor, row: PlanEntryRow): Promise<PlanEntryRecord> {
-	const references = await executor.execute(sql`SELECT entity_id FROM plan_entry_references WHERE tenant_id = ${executor.tenantId} AND plan_entry_id = ${row.id}::uuid ORDER BY position`);
-	const supersessions = await executor.execute(sql`SELECT superseded_entry_id FROM plan_entry_supersessions WHERE tenant_id = ${executor.tenantId} AND plan_entry_id = ${row.id}::uuid ORDER BY position`);
-	return toPlanEntryRecord({ ...row, referencedEntityIds: references.rows.map((reference) => (reference as { entity_id: string }).entity_id), supersededEntryIds: supersessions.rows.map((supersession) => (supersession as { superseded_entry_id: string }).superseded_entry_id) });
+	return (await toPlanEntryRecordsWithLinks(executor, [row]))[0]!;
+}
+
+async function toPlanEntryRecordsWithLinks(executor: TenantExecutor, rows: PlanEntryRow[]): Promise<PlanEntryRecord[]> {
+	if (rows.length === 0) {
+		return [];
+	}
+
+	const entryIds = rows.map((row) => sql`${row.id}::uuid`);
+	const references = await executor.execute(sql`SELECT plan_entry_id, entity_id FROM plan_entry_references
+		WHERE tenant_id = ${executor.tenantId} AND plan_entry_id IN (${sql.join(entryIds, sql`, `)}) ORDER BY plan_entry_id, position`);
+	const supersessions = await executor.execute(sql`SELECT plan_entry_id, superseded_entry_id FROM plan_entry_supersessions
+		WHERE tenant_id = ${executor.tenantId} AND plan_entry_id IN (${sql.join(entryIds, sql`, `)}) ORDER BY plan_entry_id, position`);
+	const referencedEntityIds = new Map<string, string[]>();
+	const supersededEntryIds = new Map<string, string[]>();
+
+	for (const reference of references.rows as PlanEntryReferenceRow[]) {
+		const entryReferences = referencedEntityIds.get(reference.plan_entry_id) ?? [];
+		entryReferences.push(reference.entity_id);
+		referencedEntityIds.set(reference.plan_entry_id, entryReferences);
+	}
+	for (const supersession of supersessions.rows as PlanEntrySupersessionRow[]) {
+		const entrySupersessions = supersededEntryIds.get(supersession.plan_entry_id) ?? [];
+		entrySupersessions.push(supersession.superseded_entry_id);
+		supersededEntryIds.set(supersession.plan_entry_id, entrySupersessions);
+	}
+
+	return rows.map((row) => toPlanEntryRecord({
+		...row,
+		referencedEntityIds: referencedEntityIds.get(row.id) ?? [],
+		supersededEntryIds: supersededEntryIds.get(row.id) ?? []
+	}));
 }
 
 function toPlanEntryRecord(row: PlanEntryRow & { referencedEntityIds: string[]; supersededEntryIds: string[] }): PlanEntryRecord {
