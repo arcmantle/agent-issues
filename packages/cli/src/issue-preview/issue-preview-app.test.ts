@@ -18,6 +18,7 @@ function issueBreakdownDraft(): IssueBreakdownDraft {
 				scope: ["Add draft storage."],
 				workMode: "AFK",
 				acceptanceCriteria: ["The draft has a digest."],
+				planEntryIds: ["PLAN_ENTRY_123"],
 				relationReferences: []
 			},
 			{
@@ -71,6 +72,8 @@ describe("IssuePreviewApp", () => {
 		expect(element.shadowRoot?.textContent).toContain("Add draft storage.");
 		expect(element.shadowRoot?.textContent).toContain("AFK");
 		expect(element.shadowRoot?.textContent).toContain("The draft has a digest.");
+		expect(element.shadowRoot?.textContent).toContain("Plan entries");
+		expect(element.shadowRoot?.textContent).toContain("PLAN_ENTRY_123");
 		expect(element.shadowRoot?.textContent).toContain("Parent: storage");
 		expect(element.shadowRoot?.textContent).toContain("blocks: storage");
 		expect(element.shadowRoot?.textContent).toContain("fixes: US_123");

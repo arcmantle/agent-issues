@@ -216,6 +216,40 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 			}
 		});
 
+		it("approves a matching draft with Plan-entry provenance", async () => {
+			const store = await openStore();
+
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Plan-entry approval owner" });
+				const plan = await store.createEntity({ kind: "plan", parentId: initiative.id, title: "Plan-entry approval plan" });
+				const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Record issue provenance in approval." });
+				const draft = await store.createIssueBreakdownDraft({
+					targetId: initiative.id,
+					issues: [{
+						key: "provenance",
+						title: "Link Plan entry during approval",
+						outcome: "The approved issue has Plan-entry provenance.",
+						scope: [],
+						workMode: "AFK",
+						acceptanceCriteria: [],
+						planEntryIds: [entry.id],
+						relationReferences: []
+					}]
+				});
+
+				const result = await store.approveIssueBreakdownDraft({ draftId: draft.id, snapshotDigest: draft.snapshotDigest });
+
+				if (result.status !== "approved") {
+					throw new Error("Expected matching draft approval to succeed.");
+				}
+				await expect(store.getEntityDetails(result.createdIssueReferences[0]!)).resolves.toMatchObject({
+					planEntries: [expect.objectContaining({ id: entry.id })]
+				});
+			} finally {
+				await store.close();
+			}
+		});
+
 		it("returns the current draft without creating issues when its snapshot is stale", async () => {
 			const store = await openStore();
 

@@ -56,6 +56,7 @@ const issueBreakdownIssueSchema = z.object({
 	workMode: z.string().min(1),
 	acceptanceCriteria: z.array(z.string().min(1)),
 	parentKey: z.string().min(1).optional(),
+	planEntryIds: z.array(z.string().min(1)).optional(),
 	relationReferences: z.array(issueBreakdownRelationSchema)
 });
 
@@ -945,6 +946,7 @@ function formatIssueBreakdownPreview(draft: {
 		workMode: string;
 		acceptanceCriteria: string[];
 		parentKey?: string;
+		planEntryIds?: string[];
 		relationReferences: Array<{ relationType: string; targetKey?: string; targetReference?: string }>;
 	}>;
 }): string {
@@ -955,6 +957,7 @@ function formatIssueBreakdownPreview(draft: {
 		`Work mode: ${issue.workMode}`,
 		`Acceptance criteria:\n${issue.acceptanceCriteria.map((item) => `- ${item}`).join("\n") || "- None"}`,
 		`Parent: ${issue.parentKey ?? "None"}`,
+		`Plan entries:\n${issue.planEntryIds?.map((entryId) => `- ${entryId}`).join("\n") || "- None"}`,
 		`Relations:\n${issue.relationReferences.map((relation) => `- ${relation.relationType}: ${relation.targetKey ?? relation.targetReference ?? "None"}`).join("\n") || "- None"}`
 	].join("\n\n"));
 	return [`# Issue breakdown for ${draft.targetReference}`, `Snapshot digest: ${draft.snapshotDigest}`, ...issues].join("\n\n");

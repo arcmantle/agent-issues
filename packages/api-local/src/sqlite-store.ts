@@ -290,6 +290,14 @@ export class SqliteStore implements StorageDriver {
 				createdIssueReferences.push(created.reference);
 			}
 			for (const issue of draft.issues) {
+				for (const entryId of issue.planEntryIds ?? []) {
+					this.planEntryStore.linkPlanEntryEntity({
+						entryId,
+						targetId: issueIds.get(issue.key)!
+					}, actorId);
+				}
+			}
+			for (const issue of draft.issues) {
 				for (const relation of issue.relationReferences) {
 					const targetId = relation.targetKey ? issueIds.get(relation.targetKey) : relation.targetId ?? relation.targetReference;
 					if (!targetId) {

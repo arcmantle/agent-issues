@@ -15,6 +15,7 @@ describe("projectProposedIssueBreakdown", () => {
 					scope: ["Add storage."],
 					workMode: "AFK",
 					acceptanceCriteria: ["A draft is retrievable."],
+					planEntryIds: ["plan-entry-id"],
 					relationReferences: [{ relationType: "fixes", targetId: "story-id", targetReference: "STORY_ABC123" }]
 				},
 				{
@@ -37,7 +38,7 @@ describe("projectProposedIssueBreakdown", () => {
 			targetId: "initiative-id",
 			targetReference: "INIT_ABC123",
 			issues: [
-				{ key: "parent", relationReferences: [{ relationType: "fixes", targetId: "story-id" }] },
+					{ key: "parent", planEntryIds: ["plan-entry-id"], relationReferences: [{ relationType: "fixes", targetId: "story-id" }] },
 				{ key: "child", parentKey: "parent", relationReferences: [{ relationType: "blocks", targetKey: "parent" }] }
 			]
 		});

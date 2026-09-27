@@ -126,6 +126,7 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 - MCP approve: `issue_breakdown_approve({ draftId, snapshotDigest })`.
 - CLI fallback: `agent-issues issue-breakdown create <targetId> --input-file <path> --json`, `agent-issues issue-breakdown show <draftId> --json`, `agent-issues issue-breakdown latest <targetId> --json`, or `agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest> --json`.
 - Each proposed issue requires `key`, `title`, `outcome`, `workMode`, `scope`, `acceptanceCriteria`, and `relationReferences`. `parentKey` is optional.
+- Use optional `planEntryIds` to identify the active Plan entries that inform each proposed issue. Approval creates these `informs` links with the issue graph in one transaction.
 - For a proposed `blocks` relation, place the relation reference on the blocker and set its target to the blocked issue. Before draft creation, express every dependency as `blocker -> blocked` and verify that each dependent has the required incoming blockers.
 - Creating a draft does not create issue records. Approval creates the complete graph only when the digest matches the reviewed snapshot.
 

@@ -15,6 +15,7 @@ export type ProposedIssueSpecification = {
 	workMode: string;
 	acceptanceCriteria: string[];
 	parentKey?: string;
+	planEntryIds?: string[];
 	relationReferences: IssueBreakdownRelationReference[];
 };
 
@@ -30,6 +31,7 @@ export function projectProposedIssueBreakdown(input: Omit<ProposedIssueBreakdown
 		...issue,
 		scope: [...issue.scope],
 		acceptanceCriteria: [...issue.acceptanceCriteria],
+		...(issue.planEntryIds === undefined ? {} : { planEntryIds: [...issue.planEntryIds] }),
 		relationReferences: issue.relationReferences.map((relation) => ({ ...relation }))
 	}));
 

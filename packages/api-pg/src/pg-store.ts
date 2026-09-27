@@ -442,6 +442,12 @@ export class PgStore implements StorageDriver {
 				issueIds.set(issue.key, created.id);
 				createdIssueReferences.push(created.reference);
 			}
+			const planEntryStore = new PgPlanEntryStore(executor);
+			for (const issue of draft.issues) {
+				for (const entryId of issue.planEntryIds ?? []) {
+					await planEntryStore.linkPlanEntryEntity({ entryId, targetId: issueIds.get(issue.key)! }, actorId);
+				}
+			}
 			for (const issue of draft.issues) {
 				for (const relation of issue.relationReferences) {
 					const targetId = relation.targetKey ? issueIds.get(relation.targetKey) : relation.targetId ?? relation.targetReference;

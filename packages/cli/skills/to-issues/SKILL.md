@@ -67,7 +67,7 @@ Repeat until the user approves the breakdown.
 
 ### 5. Preview and approve the issue breakdown
 
-After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. For every dependency, verify that the `blocks` source is the prerequisite and the target is the dependent issue. Run the **Issue Breakdown** recipe to create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
+After the user approves the proposed breakdown, write each proposed issue body from the [Issue recipe](../recipes/issue.md). Validate every parent and relation reference. For every issue, add its active Plan-entry IDs as `planEntryIds`. For every dependency, verify that the `blocks` source is the prerequisite and the target is the dependent issue. Run the **Issue Breakdown** recipe to create the complete server-side issue-breakdown draft from the validated graph. Do not create issue records at this point.
 
 For an MCP host that can render apps:
 

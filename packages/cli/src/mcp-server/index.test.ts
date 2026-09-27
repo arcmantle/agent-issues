@@ -146,6 +146,7 @@ describe("agent-issues MCP server", () => {
 					workMode: "HITL",
 					acceptanceCriteria: ["Issue Preview shows the parent and blocking relation."],
 					parentKey: "parent",
+					planEntryIds: ["PLAN_ENTRY_123"],
 					relationReferences: [{ relationType: "blocks", targetKey: "parent" }]
 				}, {
 					key: "parent",
@@ -164,7 +165,7 @@ describe("agent-issues MCP server", () => {
 				targetReference: initiative.reference,
 				snapshotDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
 				issues: [
-					expect.objectContaining({ key: "child", parentKey: "parent" }),
+					expect.objectContaining({ key: "child", parentKey: "parent", planEntryIds: ["PLAN_ENTRY_123"] }),
 					expect.objectContaining({ key: "parent" })
 				]
 			})
@@ -190,6 +191,7 @@ describe("agent-issues MCP server", () => {
 				workMode: "AFK",
 				acceptanceCriteria: ["A draft is retrievable."],
 				parentKey: "issue-preview",
+				planEntryIds: ["PLAN_ENTRY_123"],
 				relationReferences: [{ relationType: "blocks", targetKey: "issue-preview" }]
 			}]
 		});
@@ -233,6 +235,8 @@ describe("agent-issues MCP server", () => {
 		expect(text).toContain("AFK");
 		expect(text).toContain("A draft is retrievable.");
 		expect(text).toContain("issue-preview");
+		expect(text).toContain("Plan entries");
+		expect(text).toContain("PLAN_ENTRY_123");
 		expect(text).toContain("blocks");
 
 		await client.close();

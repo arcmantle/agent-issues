@@ -211,6 +211,21 @@ export class IssuePreviewApp extends LitElement {
 					() => nothing
 				)}
 				${when(
+					issue.planEntryIds?.length,
+					() => html`
+						<dt>Plan entries</dt>
+						<dd>
+							<ul>
+								${repeat(
+									issue.planEntryIds ?? [],
+									(entryId) => entryId, (entryId) => html`<li>${entryId}</li>`
+								)}
+							</ul>
+						</dd>
+					`,
+					() => nothing
+				)}
+				${when(
 					issue.relationReferences.length > 0,
 					() => html`
 						<dt>Relations</dt>
