@@ -41,16 +41,17 @@ Summarize the approach in a few lines: the interface, the behaviors that matter,
 Begin the build under test-driven development. Use incremental implementation instead when the change does not fit a red-green-refactor loop, for example a broad refactor, a config or infrastructure change, or a multi-file migration.
 
 - Run the **Entity State And Structure** recipe to set the selected issue to `in-progress`.
-- Start `tdd` with the selected issue and approach, or `implement` when the change has no fast test seam. Wait for its completion result and its next-workable-issue result before you continue.
+- Start `tdd` with the selected issue and approach, or `implement` when the change has no fast test seam. Wait for its completion result before you continue.
 - Do not write production code outside that loop. This skill chooses the work. The build skill builds it.
 
 ### 5. Continue or stop
 
-When the build skill reports the finished issue and its next-workable-issue result:
+When the build skill reports the finished issue:
 
-- If it recommends an issue, show that issue and ask whether to continue with it.
+- Run `next-work` for the active initiative again. Use this fresh result as the authority. Do not rely on, repeat, or summarize an availability list from the build skill.
+- If `next-work` returns a recommendation, begin the reply with `Recommendation:` and name that issue's reference and title. State the short selection reason that `next-work` returned, then ask whether to continue with that recommended issue. Do not ask the user to choose from the available issues.
 - If the user agrees, treat the recommendation as the selected issue and return to step 3 to decide the approach. Do not repeat step 2.
-- If no issue is workable, report whether the initiative's issue work is complete, or show the remaining blocker chain that the build skill reported.
+- If no issue is workable, report whether the initiative's issue work is complete, or show the remaining blocker chain that `next-work` returned.
 - If the user declines, or when the work is complete, blocked, or out of scope, leave the tracker accurate. Offer `/agent-issues handoff` so the next session can start cleanly.
 
 Do not run more than one issue through one tdd run. One issue at a time keeps the tracker and the slices honest.
