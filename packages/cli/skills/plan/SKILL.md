@@ -20,7 +20,16 @@ Use the **Plan Entry Write** recipe to record planning state as it changes:
 - Replace a changed entry by superseding it. A decision targets a question or decision. Edit only corrections.
 - Add no entry for transient conversation that does not change planning state.
 
-Run the **Entity State And Structure** recipe to set the Plan to `ready` only after the planning frontier is empty and the user confirms shared understanding. A ready Plan can retain only explicit implementation-discovery questions.
+Before you ask the user to confirm shared understanding, the Plan skill must coordinate the **architecture-capture gate**. Review every active Plan decision, constraint, and durable fact. The Plan skill owns classification and keeps the final classification list. `domain-modeling` owns the context-summary, term, and ADR writes. Complete the gate in this order:
+
+- Classify each active Plan decision, constraint, and durable fact as context, ADR, or Plan-only.
+- Classify an item as Plan-only when it is reversible and limited to the current Plan or implementation slice. When a classification is uncertain, resolve it before readiness.
+- Direct `domain-modeling` to create or update the initiative context summary with the durable purpose, boundaries, and working agreements that planning established.
+- Define or update an initiative context term for stable domain language, non-obvious system facts, and shared integration contracts that will recur outside this Plan.
+- Create an initiative-owned ADR for each settled decision that is hard to reverse, surprising without context, and based on a real trade-off. Do not defer qualifying ADRs to `to-prd` or `to-issues`.
+- Keep pilot sequencing, temporary scope, and local implementation details as Plan entries only.
+
+The gate is complete only after `domain-modeling` reports the context and ADR records it wrote, and the Plan skill reports the classification list to the user as the shared-understanding summary. First confirm that the planning frontier is empty. Then complete and report the gate. Then ask the user to confirm shared understanding. Only after confirmation, run the **Entity State And Structure** recipe to set the Plan to `ready`. A ready Plan can retain only explicit implementation-discovery questions.
 
 Ask questions until you and the user have the same understanding. Make a **design tree**. Each decision has related decisions below it.
 
@@ -38,4 +47,4 @@ After each user response, update the tree. A settled decision can make more ques
 
 Find _facts_ yourself. Do not ask the user for facts that you can find in the environment, such as files or tool output. When a frontier question needs a fact, send a sub-agent to find it. Do not wait for the sub-agent. Treat the fact search as an unsettled prerequisite. Wait for its result before you ask questions that need that fact. Ask other frontier questions now. The user makes the _decisions_. Ask the user for each decision and wait for an answer.
 
-End the session when the frontier is empty. At this point, you have checked each branch of the design tree. Do not leave any assumption unstated. Do not act until the user confirms that you and the user have the same understanding.
+End the session when the frontier is empty and the architecture-capture gate is complete. At this point, you have checked each branch of the design tree. Do not leave any assumption unstated. Do not act until the user confirms that you and the user have the same understanding.
