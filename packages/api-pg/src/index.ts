@@ -10,6 +10,7 @@ export type { AuthIdentity, AuthProvider } from "@agent-issues/core";
 export { createJsonRpcApp, type CreateJsonRpcAppOptions } from "@agent-issues/core";
 export { EntraIdAuthProvider, type EntraIdAuthProviderOptions } from "./auth/entra-id-auth-provider.js";
 export { LocalAuthProvider, type LocalAuthProviderOptions } from "@agent-issues/core";
+export { createPgPool, migratePgDatabase, installInstructionBundle } from "./db/connection.js";
 
 export type ApiAuthMetadata = {
 	provider: "entra";

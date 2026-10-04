@@ -3,8 +3,8 @@ name: grill-with-docs
 description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 Run this interview with the `domain-modeling` skill.
 
 ## Persist Plan State

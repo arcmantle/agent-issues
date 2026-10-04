@@ -195,7 +195,9 @@ These operations have no MCP equivalent. Use the Copilot or Claude Code plugin m
 
 ## Record body recipes
 
-Before you create or replace authored body content, identify the record type and read its matching recipe in [`recipes`](./recipes/README.md).
+Before you create or replace authored body content, identify the record type and read its matching recipe from the catalog below.
+
+<!-- include:fragment/recipes/readme -->
 
 - When the catalog has a recipe for the record type, use that recipe for the body. This applies to context summaries, context terms, entities, handoffs, issue comments, and Pioneer records.
 - Do this before the **Entity Create And Edit** recipe, **Context Write** recipe, **Plan Entry Write** recipe, **Issue Comment Write** recipe, or **Handoff Write** recipe creates or replaces a body.
@@ -226,6 +228,14 @@ The canonical glossary lives in the `agent-issues` database. Do not treat a raw 
 - Run the **Context Write** recipe to create missing project or initiative context with authored title and body content.
 - Run the **Context Write** recipe to save resolved terms right away or remove obsolete terms when the current glossary replaces them.
 - Keep the shared context free of implementation detail. It is a glossary, not a specification and not a scratch pad.
+
+## Referenced instruction documents
+
+Local Markdown links are references, not includes. When a linked document is required, use `instruction_retrieve` to read it from the database. Do not assume that the installed plugin contains its source file.
+
+Instruction retrieval returns bounded parts, not a structured tracker result. The first text block contains JSON metadata. The second contains Markdown. If `nextOffset` is not null, call `instruction_retrieve` with the same `key` and `documentHash`, with `nextOffset` as `offset`. Copy the returned offset; do not calculate it. Continue until `nextOffset` is null. Read all parts in order before use. Check that all parts have the same `documentHash` and `version`. Required fragments are already included. Do not use shell commands or local files to retrieve instructions. If the document changes, discard all parts and restart with `key` only. On another failure, stop and report it. Do not use cached, bundled, or older-default instructions as a fallback.
+
+Use a fragment key for a supporting document. The key is its path relative to the canonical `skills` directory, without `.md`, in lowercase. For example, read the issue recipe with `instruction_retrieve({ "key": "fragment/recipes/issue" })` and TDD test guidance with `instruction_retrieve({ "key": "fragment/tdd/tests" })`. Use `skill/<name>` for another skill.
 
 ## Preserve continuity
 

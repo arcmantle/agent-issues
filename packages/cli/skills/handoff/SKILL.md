@@ -4,8 +4,8 @@ description: Compact the current conversation into a handoff document for anothe
 argument-hint: What will the next session be used for?
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 Write a handoff that lets a new agent continue the work without rebuilding the state from scratch. Do not create a file, including a temp file or a workspace artifact.
 Use the [Handoff recipe](../recipes/handoff.md) for the tracked handoff body.

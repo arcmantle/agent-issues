@@ -3,8 +3,8 @@ name: tdd
 description: Test-driven development with a red-green-refactor loop, anchored to the active agent-issues issue. After green, prune duplicate driving tests and keep one public-interface contract per behavior.
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # Test-Driven Development
 

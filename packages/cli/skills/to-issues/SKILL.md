@@ -3,8 +3,8 @@ name: to-issues
 description: Break a plan or PRD into independently grabbable issues, then create and link those issues in agent-issues.
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # To Issues
 

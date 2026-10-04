@@ -12,6 +12,7 @@ const COMMAND_FAMILIES = [
 	"export",
 	"fallback",
 	"issue-breakdowns",
+	"instructions",
 	"kanban",
 	"meta",
 	"plan-entries",

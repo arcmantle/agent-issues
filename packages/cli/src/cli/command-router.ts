@@ -8,6 +8,7 @@ export type CommandFamily =
 	| "export"
 	| "fallback"
 	| "issue-breakdowns"
+	| "instructions"
 	| "kanban"
 	| "meta"
 	| "plan-entries"
@@ -53,6 +54,8 @@ function resolveCommandFamily(argv: readonly string[]): CommandFamily {
 			return "export";
 		case "issue-breakdown":
 			return "issue-breakdowns";
+		case "instruction":
+			return "instructions";
 		case "kanban":
 			return "kanban";
 		case "help":

@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { openLocalDaemonStore, readBuildContentHash, resolveWorkspaceObservation, type LocalDaemonStoreOptions } from "@agent-issues/api-local";
 import {
 	BACKFILLABLE_BODY_KINDS,
+	InstructionFragmentError,
+	InstructionResetAllError,
+	InstructionWriteError,
 	backfillBodies,
 	computeEntityContentHash,
 	PLAN_ENTRY_ROLES,
@@ -22,7 +24,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { resolveProjectIdentity } from "../runtime/project-identity.js";
+import { ConfirmationTokenStore } from "../runtime/confirmation-tokens.js";
 import { resolveMcpWorkspaceScope, type McpWorkspaceScope } from "./client-workspace.js";
+import { formatInstructionResponse } from "./instruction-response.js";
 import packageJson from "../../package.json" with { type: "json" };
 
 const PLAN_PREVIEW_RESOURCE_URI = "ui://agent-issues/plan-preview.html";
@@ -100,6 +104,23 @@ export type McpServerOptions = {
 			| "moveEntity"
 			| "updateEntityStatus"
 			| "getProspectorSettings"
+			| "retrieveInstruction"
+			| "previewInstruction"
+			| "listInstructionSources"
+			| "readInstructionSource"
+			| "compareInstructionSource"
+			| "inspectInstructionDependencies"
+			| "saveInstructionSource"
+			| "listInstructionHistory"
+			| "readInstructionRevision"
+			| "restoreInstructionRevision"
+			| "inspectInstructionReset"
+			| "resetInstructionSource"
+			| "inspectInstructionResetAll"
+			| "resetInstructionAll"
+			| "commitInstructionChanges"
+			| "createInstructionFragment"
+			| "removeInstructionFragment"
 			| "linkEntities"
 			| "unlinkEntities"
 			| "listOrphans"
@@ -138,6 +159,200 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	async function openStore(): Promise<Awaited<ReturnType<McpServerOptions["openStore"]>>> {
 		return options.openStore(await resolveScope());
 	}
+
+	server.registerTool(
+		"instruction_retrieve",
+		{
+			description: "Read database instructions in bounded parts. The first text block is JSON metadata; the second is Markdown. Call again with the same key, documentHash, and nextOffset as offset until nextOffset is null. Copy the returned offset; do not calculate it. Read all parts before use. On failure, stop; on a changed document, discard all parts and restart with key only.",
+			inputSchema: {
+				key: z.string().min(1),
+				offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+				documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional()
+			}
+		},
+		async ({ key, offset, documentHash }) => formatInstructionResponse(await (await openStore()).retrieveInstruction({ key, version: packageJson.version }), offset, documentHash)
+	);
+
+	server.registerTool(
+		"instruction_list",
+		{ description: "List instruction sources for the current owner and running CLI release.", inputSchema: {} },
+		async () => toolResult(await (await openStore()).listInstructionSources({ version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_preview",
+		{
+			description: "Preview pending instruction Markdown with nested fragments. Use one owner snapshot without saving or activating changes. Saved source metadata identifies the base revisions; pendingKeys identifies unsaved bodies.",
+			inputSchema: { key: z.string().min(1), changes: z.array(z.object({ key: z.string().min(1), body: z.string() })).min(1) }
+		},
+		async ({ key, changes }) => toolResult(await (await openStore()).previewInstruction({ key, changes, version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_read",
+		{ description: "Read instruction source Markdown without expanding fragment includes.", inputSchema: { key: z.string().min(1) } },
+		async ({ key }) => toolResult(await (await openStore()).readInstructionSource({ key, version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_compare",
+		{ description: "Compare personal source with the running CLI release default. Return both Markdown bodies, source revision, original override version, and newer default versions. Do not change saved content. Personal fragments have no default.", inputSchema: { key: z.string().min(1) } },
+		async ({ key }) => toolResult(await (await openStore()).compareInstructionSource({ key, version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_dependencies",
+		{ description: "Inspect direct and nested fragment dependencies, unresolved targets, modified fragments, and affected instructions for the current owner and running CLI release. Do not change saved content.", inputSchema: { key: z.string().min(1) } },
+		async ({ key }) => toolResult(await (await openStore()).inspectInstructionDependencies({ key, version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_save",
+		{
+			description: "Save a personal Markdown override with the expected source revision. Validate dependencies before activation on the next retrieval.",
+			inputSchema: { key: z.string().min(1), body: z.string(), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }
+		},
+		async ({ key, body, expectedRevision }) => {
+			try {
+				return toolResult(await (await openStore()).saveInstructionSource({ key, body, expectedRevision, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionWriteError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource }), isError: true };
+			}
+		}
+	);
+
+	server.registerTool(
+		"instruction_commit",
+		{
+			description: "Commit related Markdown saves and personal fragment removals together. Check every revision and the final graph; commit all changes or none.",
+			inputSchema: { changes: z.array(z.discriminatedUnion("operation", [
+				z.object({ operation: z.literal("save"), key: z.string().min(1), body: z.string(), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
+				z.object({ operation: z.literal("remove"), key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
+			])).min(1) }
+		},
+		async ({ changes }) => {
+			try {
+				return toolResult(await (await openStore()).commitInstructionChanges({ changes, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionWriteError) && !(error instanceof InstructionFragmentError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource,
+					...(error instanceof InstructionFragmentError ? { affectedReferences: error.affectedReferences } : {}) }), isError: true };
+			}
+		}
+	);
+
+	server.registerTool(
+		"instruction_history",
+		{ description: "List saved instruction source revisions for the current owner and running CLI release.", inputSchema: { key: z.string().min(1) } },
+		async ({ key }) => toolResult(await (await openStore()).listInstructionHistory({ key, version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_revision",
+		{ description: "Read saved instruction Markdown and revision metadata without expanding fragments.", inputSchema: {
+			key: z.string().min(1), revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+		} },
+		async ({ key, revision }) => toolResult(await (await openStore()).readInstructionRevision({ key, revision, version: packageJson.version }))
+	);
+	server.registerTool(
+		"instruction_restore",
+		{
+			description: "Restore saved instruction Markdown as a new revision. Check the current revision and dependencies before activation on the next retrieval. Keep official defaults unchanged.",
+			inputSchema: { key: z.string().min(1), revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }
+		},
+		async ({ key, revision, expectedRevision }) => {
+			try {
+				return toolResult(await (await openStore()).restoreInstructionRevision({ key, revision, expectedRevision, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionWriteError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource }), isError: true };
+			}
+		}
+	);
+
+	server.registerTool(
+		"instruction_reset_inspect",
+		{ description: "Inspect a selected-item reset before confirmation. Show proposed Markdown, affected instructions, and remaining modified fragments. Do not save changes.", inputSchema: { key: z.string().min(1) } },
+		async ({ key }) => {
+			const store = await openStore();
+			const impact = await store.inspectInstructionReset({ key, version: packageJson.version });
+			const confirmation = confirmationTokens.issue("instruction_reset", { tenantId: store.tenantId, key, expectedRevision: impact.currentSource.source.revision, impact });
+			return toolResult({ ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+		}
+	);
+	server.registerTool(
+		"instruction_reset",
+		{
+			description: "Reset only the selected source to the running release default after inspection and confirmation. Check revisions and dependencies, retain fragment overrides, and record history.",
+			inputSchema: { key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), confirmationToken: z.string().uuid() }
+		},
+		async ({ key, expectedRevision, confirmationToken }) => {
+			try {
+				const store = await openStore();
+				const impact = await store.inspectInstructionReset({ key, version: packageJson.version });
+				if (impact.currentSource.source.revision !== expectedRevision) throw new InstructionWriteError("revision-conflict", impact.currentSource, `Instruction revision conflict: ${JSON.stringify(impact.currentSource)}`);
+				confirmationTokens.consume(confirmationToken, "instruction_reset", { tenantId: store.tenantId, key, expectedRevision, impact });
+				return toolResult(await store.resetInstructionSource({ key, expectedRevision, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionWriteError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource }), isError: true };
+			}
+		}
+	);
+
+	server.registerTool(
+		"instruction_reset_all_inspect",
+		{ description: "Inspect Reset All before confirmation. List every owner override, personal fragment, proposed default, and affected instruction. Do not save changes.", inputSchema: {} },
+		async () => {
+			const impact = await (await openStore()).inspectInstructionResetAll({ version: packageJson.version });
+			const confirmation = confirmationTokens.issue("instruction_reset_all", { impact });
+			return toolResult({ ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+		}
+	);
+	server.registerTool(
+		"instruction_reset_all",
+		{
+			description: "Reset the complete owner instruction set after inspection and confirmation. Clear overrides and personal fragments together. Check all revisions and final dependencies; retain official defaults and other owners.",
+			inputSchema: { expectedRevisions: z.array(z.object({ key: z.string().min(1), sourceType: z.enum(["override", "personal"]), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })), confirmationToken: z.string().uuid() }
+		},
+		async ({ expectedRevisions, confirmationToken }) => {
+			try {
+				const store = await openStore();
+				const impact = await store.inspectInstructionResetAll({ version: packageJson.version });
+				confirmationTokens.consume(confirmationToken, "instruction_reset_all", { impact });
+				return toolResult(await store.resetInstructionAll({ expectedRevisions, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionResetAllError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentInspection: error.currentInspection }), isError: true };
+			}
+		}
+	);
+
+	server.registerTool(
+		"instruction_fragment_create",
+		{
+			description: "Create a personal Markdown fragment with a stable key in the current owner scope. Validate includes before activation.",
+			inputSchema: { key: z.string().min(1), body: z.string() }
+		},
+		async ({ key, body }) => {
+			try {
+				return toolResult(await (await openStore()).createInstructionFragment({ key, body, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionFragmentError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource, affectedReferences: error.affectedReferences }), isError: true };
+			}
+		}
+	);
+	server.registerTool(
+		"instruction_fragment_remove",
+		{
+			description: "Remove an unreferenced personal fragment with the expected source revision. Retain its revision history.",
+			inputSchema: { key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }
+		},
+		async ({ key, expectedRevision }) => {
+			try {
+				return toolResult(await (await openStore()).removeInstructionFragment({ key, expectedRevision, version: packageJson.version }));
+			} catch (error) {
+				if (!(error instanceof InstructionFragmentError)) throw error;
+				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource, affectedReferences: error.affectedReferences }), isError: true };
+			}
+		}
+	);
 
 	registerAppResource(
 		server,
@@ -1035,45 +1250,6 @@ async function resolvePlanEntryIds(
 	return await Promise.all(references.map(async (reference) => (await store.getPlanEntry({ entryId: reference })).id));
 }
 
-type ConfirmationToken = {
-	expiresAt: number;
-	inputHash: string;
-	toolName: string;
-};
-
-class ConfirmationTokenStore {
-	public constructor(now: () => number) {
-		this.now = now;
-	}
-
-	protected readonly now: () => number;
-	protected readonly tokens = new Map<string, ConfirmationToken>();
-
-	public issue(toolName: string, input: Record<string, unknown>): { token: string; expiresAt: string } {
-		const token = randomUUID();
-		const expiresAt = this.now() + 5 * 60 * 1000;
-		this.tokens.set(token, { toolName, inputHash: hashConfirmationInput(input), expiresAt });
-		return { token, expiresAt: new Date(expiresAt).toISOString() };
-	}
-
-	public consume(token: string, toolName: string, input: Record<string, unknown>): void {
-		const confirmation = this.tokens.get(token);
-		this.tokens.delete(token);
-		if (!confirmation) {
-			throw new Error("Invalid confirmation token.");
-		}
-		if (confirmation.expiresAt <= this.now()) {
-			throw new Error("Confirmation token has expired.");
-		}
-		if (confirmation.toolName !== toolName || confirmation.inputHash !== hashConfirmationInput(input)) {
-			throw new Error("Confirmation token does not authorize this request.");
-		}
-	}
-}
-
-function hashConfirmationInput(input: Record<string, unknown>): string {
-	return createHash("sha256").update(JSON.stringify(input)).digest("hex");
-}
 
 export function createLocalMcpServer(options: LocalDaemonStoreOptions): McpServer {
 	return createMcpServer({

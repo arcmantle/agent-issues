@@ -31,6 +31,7 @@ const LEGACY_V7_SCHEMA_SIGNATURES = new Set([
 ]);
 
 const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
+	"c1e2b66ceb30869f739d605eeebc7247aac0ff8635124a962686ec6bbea9a81d",
 	"50d7513e53b59d56788432fd20496ec41eaf468627853792af78ee8feb5ba2c9",
 	"f8b576a20018130ef47a0df073d09a139683d3f47ae9becb5e1f45c61b43fbe0",
 	"ee001534d58d8506c0011534cb82ae3a2d0c5a25958ed5bae01ca1ff828c9b1b",
@@ -53,6 +54,10 @@ const CURRENT_FINAL_SCHEMA_SIGNATURES = new Set([
 	,"b6f00a4c2cdc47d8e396c119e104449d6c97f0a111c0fc30f14af6813b0ee4af"
 	,"49bfea4a6c0e95767f42dd3fd1ecbe1bfc0ac064984133cae2cac85f31bcdff8"
 	,"3c78b8616ce76f2fe5cc44aec3c3eb25ff86b294f725cdffea4bf68ce3c905ab"
+	,"2dec45af9afc36011c6a8514be59693775805b10a92d71f0ca15336f8c659668"
+	,"2f66142d5523eeef7c062c6b48e017fa5fbe4948236f31a4818972d765a17896"
+	,"2fd4340b768581ad6a73113ba0c14bbf9e09ce07c8cad8e24c170298ffe6e8d9"
+	,"4d9d556677f5c0597da05951ac09905ebfd2276423f7eebde1bab3fbc9712ff1"
 ]);
 const DIRECT_FINAL_SCHEMA_SIGNATURE = "892a43c929f85fd4f71f334c02aa664bc7e8a5f2203929654a10e11229d541ff";
 const DIRECT_USER_DIRECTORY_SCHEMA_SIGNATURE = "8b16a9b6f6ed70905c50813482a2301d7dc9859775abba2c2dfc2300f8b225fe";
@@ -65,6 +70,10 @@ const DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE = "b72cabb9c3106db9f0713ebeab15e28580
 const DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE = "56088fdda6180c9343496577f60e217fa53510c83b9b2fa3372b8d3d55e3e002";
 const DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE = "a5685140b1f0685a54f0caf479065b9682c361c06ebcab9558b59d35168ef27b";
 const DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE = "a713c980aa71dcceb950c10a6ccb818e1871a0e9a1203e95074d84aed2a84504";
+const DIRECT_INSTRUCTION_DEFAULTS_SCHEMA_SIGNATURE = "b765ed8566f18171ed12feb5990610e0e760c3d6612c8c64fe0425b7add92c13";
+const DIRECT_INSTRUCTION_OVERRIDES_SCHEMA_SIGNATURE = "aa37aabd5e74b3d6c6b2deff365b3b50dd19fecbd8ebb74e9989866372922da5";
+const DIRECT_PERSONAL_FRAGMENTS_SCHEMA_SIGNATURE = "32aef3a0eb7e04dd39bcf5d716bce63f85a1236a4b6da1062e976fb40890b811";
+const DIRECT_INSTRUCTION_HISTORY_SCHEMA_SIGNATURE = "60d95c66e8e4523ef968e8bc566e873ad7c435fa90209f98c1206d75208dcd97";
 
 export function inspectSqliteSourceProfile(database: SqliteInternalConnection, expectedLedgerIds: string[]): SourceProfileResult {
 	const schemaObjects = database.drizzle.all<SchemaObject>(
@@ -112,8 +121,9 @@ export function inspectSqliteSourceProfile(database: SqliteInternalConnection, e
 		&& ledgerIds[0] === "legacy-v7-direct") {
 		return { evidence, profile: "current-final", supported: true };
 	}
-	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE || schemaSignature === "902792184b29f07529230b5a5e49e09b7642ae65059a55a00e14280adcdf9b1e" || schemaSignature === "98a02c352e93cc53bc916a26402f9828065db6050dc038e83b96edbe8739d848" || schemaSignature === "cb1ce82c75f132e1e08795cbb31574e856339d76f3e8add625e7943c04aa032b")
-		&& ledgerIds.length === expectedLedgerIds.length + 1
+	if ((schemaSignature === DIRECT_ISSUE_COMMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_DEBT_METADATA_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_ENTITY_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SHORT_RECORD_REFERENCE_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRIES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PLAN_ENTRY_SUPERSESSION_POSITION_SCHEMA_SIGNATURE || schemaSignature === DIRECT_TOKEN_SEARCH_SCHEMA_SIGNATURE || schemaSignature === DIRECT_SEARCH_TYPO_VOCABULARY_SCHEMA_SIGNATURE || schemaSignature === "902792184b29f07529230b5a5e49e09b7642ae65059a55a00e14280adcdf9b1e" || schemaSignature === "98a02c352e93cc53bc916a26402f9828065db6050dc038e83b96edbe8739d848" || schemaSignature === "cb1ce82c75f132e1e08795cbb31574e856339d76f3e8add625e7943c04aa032b" || schemaSignature === DIRECT_INSTRUCTION_DEFAULTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_INSTRUCTION_OVERRIDES_SCHEMA_SIGNATURE || schemaSignature === DIRECT_PERSONAL_FRAGMENTS_SCHEMA_SIGNATURE || schemaSignature === DIRECT_INSTRUCTION_HISTORY_SCHEMA_SIGNATURE || schemaSignature === "bb2fd69bdb8a417f373ecf48b12a0f2f284fa10a61fe7fe941ec7458b50d3732")
+		&& ledgerIds.length > 1
+		&& ledgerIds.length <= expectedLedgerIds.length + 1
 		&& ledgerIds[0] === "legacy-v7-direct"
 		&& ledgerIds.slice(1).every((id, index) => id === expectedLedgerIds[index])) {
 		return { evidence, profile: "current-final", supported: true };

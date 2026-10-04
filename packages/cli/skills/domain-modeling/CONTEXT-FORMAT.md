@@ -3,7 +3,7 @@
 The canonical glossary lives in the `agent-issues` database. It does not live in a raw file.
 
 Project context contains project-wide terms. Initiative context is the database equivalent of a `CONTEXT.md` file inside an initiative folder.
-Use the [Context Summary recipe](../../recipes/context-summary.md) for a context body and the [Context Term recipe](../../recipes/context-term.md) for a term definition.
+Use the [Context Summary recipe](../recipes/context-summary.md) for a context body and the [Context Term recipe](../recipes/context-term.md) for a term definition.
 
 Run the **Context Read** recipe to read the relevant project or initiative glossary.
 

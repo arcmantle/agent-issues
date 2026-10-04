@@ -169,6 +169,11 @@ describe("tenant resolution", () => {
 				{ name: "contexts" },
 				{ name: "counters" },
 				{ name: "entities" },
+				{ name: "instruction_bundles" },
+				{ name: "instruction_defaults" },
+				{ name: "instruction_history" },
+				{ name: "instruction_overrides" },
+				{ name: "instruction_personal_fragments" },
 				{ name: "issue_breakdown_drafts" },
 				{ name: "issue_comment_references" },
 				{ name: "issue_comments" },
@@ -217,7 +222,12 @@ describe("tenant resolution", () => {
 				{ id: "issue-breakdown-drafts" },
 				{ id: "project-settings" },
 				{ id: "completion-observations" },
-				{ id: "completion-observation-version-state" }
+				{ id: "completion-observation-version-state" },
+				{ id: "instruction-defaults" },
+				{ id: "instruction-overrides" },
+				{ id: "instruction-personal-fragments" },
+				{ id: "instruction-history" },
+				{ id: "instruction-resets" }
 			]);
 			expect(rawDb(created.db).prepare(
 				"SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -334,7 +344,12 @@ describe("tenant resolution", () => {
 				{ id: "issue-breakdown-drafts" },
 				{ id: "project-settings" },
 				{ id: "completion-observations" },
-				{ id: "completion-observation-version-state" }
+				{ id: "completion-observation-version-state" },
+				{ id: "instruction-defaults" },
+				{ id: "instruction-overrides" },
+				{ id: "instruction-personal-fragments" },
+				{ id: "instruction-history" },
+				{ id: "instruction-resets" }
 			]);
 		} finally {
 			upgraded.db.close();

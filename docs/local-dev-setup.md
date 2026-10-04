@@ -59,7 +59,7 @@ container initializes its data volume:
 
 - `agent_issues` / `agent_issues_dev_only` - a Postgres **superuser**
   (created automatically by the official image's `POSTGRES_USER`). Used
-  only to run migrations (`migratePgDatabase`). **Never use this role for
+  only to run migrations (`migratePgDatabase`) and install official instruction bundles. **Never use this role for
   application queries** - Postgres superusers bypass row-level security
   unconditionally, even with `FORCE ROW LEVEL SECURITY` set, so RLS
   (ADR9) would silently do nothing.
@@ -81,6 +81,37 @@ postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issue
 If you already had a container from before this role was introduced, the
 init script won't retroactively run - reset the volume once:
 `docker compose down -v && docker compose up -d`.
+
+## Install official cloud instructions
+
+The service release process installs official bundles before it starts the API.
+Use the bundle from each supported CLI release. The CLI build writes it to
+`packages/cli/dist/plugin/instruction-defaults.json`.
+
+```ts
+import { readFile } from "node:fs/promises";
+import { createPgPool, installInstructionBundle, migratePgDatabase } from "@agent-issues/api-pg";
+
+const adminPool = createPgPool({ connectionString: process.env.AGENT_ISSUES_PG_ADMIN_URL! });
+try {
+  await migratePgDatabase(adminPool);
+  const bundle = JSON.parse(await readFile("packages/cli/dist/plugin/instruction-defaults.json", "utf8"));
+  await installInstructionBundle(adminPool, bundle);
+} finally {
+  await adminPool.end();
+}
+```
+
+Set `AGENT_ISSUES_PG_ADMIN_URL` in the service release environment. Do not give
+this connection to `createApiServer`. The API must use the application role.
+Repeat installation of an identical bundle is safe. Changed content for an
+installed release is rejected. Installation does not remove older bundles.
+
+The application role can read official defaults but cannot write them. There is
+no RPC operation for bundle installation. Retrieval uses the requesting CLI
+release, not the service release. Missing release defaults cause an error.
+Personal overrides use the authenticated tenant and user and apply across
+projects. Request parameters cannot select another instruction owner.
 
 ## Browsing the local Postgres data (pgAdmin)
 

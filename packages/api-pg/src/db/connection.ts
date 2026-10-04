@@ -7,6 +7,8 @@ import { inspectPgSourceProfile } from "./source-profile.js";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool, type PoolClient } from "pg";
 
+export { installInstructionBundle } from "../features/instructions/install-bundle.js";
+
 export type PgConnectionOptions = {
 	/**
 	 * Plain Postgres connection string (ADR21): `postgres://user:pass@host:port/db`.

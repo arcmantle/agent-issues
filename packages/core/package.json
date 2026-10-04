@@ -8,6 +8,10 @@
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
 		},
+		"./instruction-store": {
+			"types": "./dist/features/storage-driver/instruction-store.d.ts",
+			"default": "./dist/features/storage-driver/instruction-store.js"
+		},
 		"./storage-driver-contract": {
 			"types": "./dist/features/storage-driver/storage-driver-contract.d.ts",
 			"default": "./dist/features/storage-driver/storage-driver-contract.js"
@@ -28,6 +32,7 @@
 	"devDependencies": {
 		"@types/express": "catalog:",
 		"@types/node": "catalog:",
+		"@types/semver": "^7.8.0",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
 	},
@@ -35,6 +40,7 @@
 		"drizzle-orm": "catalog:",
 		"express": "catalog:",
 		"fuse.js": "catalog:",
-		"jose": "catalog:"
+		"jose": "catalog:",
+		"semver": "^7.8.5"
 	}
 }

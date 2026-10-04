@@ -3,8 +3,8 @@ name: to-prd
 description: Turn an explicit ready Plan into a PRD, create the tracked PRD in agent-issues, and create the user stories that the PRD commits to.
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 This skill turns an explicit ready Plan and relevant codebase knowledge into a PRD. Do not run an open-ended interview.
 

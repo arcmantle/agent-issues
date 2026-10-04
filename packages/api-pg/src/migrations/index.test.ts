@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createPgPool, migratePgDatabase } from "../db/connection.js";
+import { createPgPool, installInstructionBundle, migratePgDatabase } from "../db/connection.js";
 import { runMigrations } from "../db/migration-runner.js";
 import { PgStore } from "../pg-store.js";
 import { deriveMigratedContextIdentity, deriveMigratedContextTermId, deriveMigratedEntityIdentity, MIGRATION_BENCHMARK } from "@agent-issues/core";
@@ -22,10 +22,6 @@ describe("api migrations chain", () => {
 
 	afterAll(async () => {
 		await adminPool.end();
-	});
-
-	it("registers the Postgres production migration plan", () => {
-		expect(productionMigrations.map(({ id }) => id)).toEqual(["final-baseline", "adr-status-to-current", "user-directory", "record-provenance", "context-term-provenance", "relation-provenance", "issue-comments", "debt-metadata", "entity-type", "short-entity-reference", "short-record-reference", "plan-entries", "plan-entry-supersession-position", "pioneer-entity-types", "issue-breakdown-drafts", "project-settings", "completion-observations", "completion-observation-version-state", "search"]);
 	});
 
 	it("rejects an unsupported mixed schema before creating the migration ledger or changing schema", async () => {
@@ -276,6 +272,11 @@ describe("api migrations chain", () => {
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
 				{ table_name: "entities" },
+				{ table_name: "instruction_bundles" },
+				{ table_name: "instruction_defaults" },
+				{ table_name: "instruction_history" },
+				{ table_name: "instruction_overrides" },
+				{ table_name: "instruction_personal_fragments" },
 				{ table_name: "issue_breakdown_drafts" },
 				{ table_name: "issue_comment_references" },
 				{ table_name: "issue_comments" },
@@ -307,7 +308,12 @@ describe("api migrations chain", () => {
 				{ id: "project-settings" },
 				{ id: "completion-observations" },
 				{ id: "completion-observation-version-state" },
-				{ id: "search" }
+				{ id: "search" },
+				{ id: "instruction-defaults" },
+				{ id: "instruction-overrides" },
+				{ id: "instruction-personal-fragments" },
+				{ id: "instruction-history" },
+				{ id: "instruction-resets" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -343,7 +349,12 @@ describe("api migrations chain", () => {
 				{ id: "project-settings" },
 				{ id: "completion-observations" },
 				{ id: "completion-observation-version-state" },
-				{ id: "search" }
+				{ id: "search" },
+				{ id: "instruction-defaults" },
+				{ id: "instruction-overrides" },
+				{ id: "instruction-personal-fragments" },
+				{ id: "instruction-history" },
+				{ id: "instruction-resets" }
 			]);
 		} finally {
 			await schemaPool.end();
@@ -351,16 +362,25 @@ describe("api migrations chain", () => {
 		}
 	});
 
-	it("upgrades the current schema when only the latest data migration is pending", async () => {
+	it("upgrades instruction history and reset support without losing existing overrides", async () => {
 		const schemaName = `latest_data_migration_${randomUUID().replace(/-/g, "_")}`;
 		await adminPool.query(`CREATE SCHEMA ${schemaName}`);
 		const schemaPool = new Pool({ connectionString: ADMIN_CONNECTION_STRING, options: `-c search_path=${schemaName}` });
 
 		try {
-			await runMigrations(schemaPool, productionMigrations.slice(0, -1));
+			await runMigrations(schemaPool, productionMigrations.slice(0, productionMigrations.findIndex((migration) => migration.id === "instruction-history")));
+			await installInstructionBundle(schemaPool, { version: "history-upgrade", items: [{ key: "skill/history", kind: "skill", body: "Default" }] });
+			await schemaPool.query(`INSERT INTO instruction_overrides (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version)
+				VALUES ('history-owner', 'alice', 'skill/history', 'skill', 'Existing source', 4, 'existing-hash', 'history-upgrade')`);
 			await migratePgDatabase(schemaPool);
 
-			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "search" });
+			expect((await schemaPool.query("SELECT id FROM schema_migrations ORDER BY applied_at, id")).rows.at(-1)).toEqual({ id: "instruction-resets" });
+			const store = new PgStore(schemaPool, "history-owner", undefined, { tenantId: "history-owner", userId: "alice" });
+			expect(await store.readInstructionRevision({ version: "history-upgrade", key: "skill/history", revision: 4 })).toMatchObject({
+				body: "Existing source", source: { type: "override", revision: 4, contentHash: "existing-hash", defaultVersion: "history-upgrade" }
+			});
+			expect(await store.resetInstructionSource({ version: "history-upgrade", key: "skill/history", expectedRevision: 4 })).toMatchObject({ body: "Default", source: { type: "default", revision: 5 } });
+			await migratePgDatabase(schemaPool);
 		} finally {
 			await schemaPool.end();
 			await adminPool.query(`DROP SCHEMA ${schemaName} CASCADE`);
@@ -409,6 +429,11 @@ describe("api migrations chain", () => {
 				{ table_name: "contexts" },
 				{ table_name: "counters" },
 				{ table_name: "entities" },
+				{ table_name: "instruction_bundles" },
+				{ table_name: "instruction_defaults" },
+				{ table_name: "instruction_history" },
+				{ table_name: "instruction_overrides" },
+				{ table_name: "instruction_personal_fragments" },
 				{ table_name: "issue_breakdown_drafts" },
 				{ table_name: "issue_comment_references" },
 				{ table_name: "issue_comments" },
@@ -429,6 +454,11 @@ describe("api migrations chain", () => {
 				{ id: "debt-metadata" },
 				{ id: "entity-type" },
 				{ id: "final-baseline" },
+				{ id: "instruction-defaults" },
+				{ id: "instruction-history" },
+				{ id: "instruction-overrides" },
+				{ id: "instruction-personal-fragments" },
+				{ id: "instruction-resets" },
 				{ id: "issue-breakdown-drafts" },
 				{ id: "issue-comments" },
 				{ id: "legacy-v7-direct" },
@@ -1193,6 +1223,11 @@ describe("api migrations chain", () => {
 				"contexts",
 				"counters",
 				"entities",
+				"instruction_bundles",
+				"instruction_defaults",
+				"instruction_history",
+				"instruction_overrides",
+				"instruction_personal_fragments",
 				"issue_breakdown_drafts",
 				"issue_comment_references",
 				"issue_comments",
@@ -1315,7 +1350,12 @@ describe("api migrations chain", () => {
 				{ id: "project-settings" },
 				{ id: "completion-observations" },
 				{ id: "completion-observation-version-state" },
-				{ id: "search" }
+				{ id: "search" },
+				{ id: "instruction-defaults" },
+				{ id: "instruction-overrides" },
+				{ id: "instruction-personal-fragments" },
+				{ id: "instruction-history" },
+				{ id: "instruction-resets" }
 			]);
 
 			const { rows: identityColumns } = await schemaPool.query(

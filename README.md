@@ -108,6 +108,106 @@ For one command from a different folder, use `--project-identity <id>`. For exam
 
 Use `agent-issues project-identity --json` to inspect the CLI's resolved identity and its source. The MCP server exposes the same resolved value through `project_identity`.
 
+## Instruction Retrieval
+
+Use `agent-issues instruction retrieve skill/prepare --json` or the MCP `instruction_retrieve` tool to retrieve instructions for the running CLI release. Both use the database source and return complete assembled Markdown.
+
+To include a fragment, insert `<!-- include:fragment/rules -->` in the source Markdown. The marker is reserved instruction syntax wherever it occurs in the source. Include targets must be fragment keys, not skill or agent keys. Nested and repeated includes expand at the marker position in text order. No extra whitespace or newline is inserted around fragment content.
+
+The response contains the requesting release in `version`, the source revision and source-content hash in `source`, and each included fragment's key and source metadata in `fragments`. The fragment list contains each key once, in first-use order. Hashes describe stored source Markdown, not the assembled body.
+
+SQLite reads the release content in one transaction. PostgreSQL reads defaults, authenticated owner overrides, and personal fragments in one SQL statement. Both validate the complete dependency graph before returning a document. Missing defaults, unavailable storage, missing fragments, forbidden targets, and cycles return errors without partial instructions or fallback content. A returned document does not refresh after a later database change; retrieve it again to get the current content.
+
+### Manage Instruction Source
+
+Use `agent-issues instruction list --json` to list the current owner's agent, skill, and fragment sources. Use `agent-issues instruction read <key> --json` to read source Markdown without expanding includes. The matching MCP tools are `instruction_list` and `instruction_read`.
+
+CLI updates keep personal overrides by stable item key and retain their original `source.defaultVersion`. Unchanged items use the requesting release's defaults. Reads and catalog items include `releaseChanges` when an override's original release differs from the requesting release. This metadata identifies the applicable `defaultVersion`, whether its default body changed, and added, removed, or changed fragment dependencies. Dependency inspection includes nested references from official defaults and personal source. It does not merge or rewrite edits.
+
+`releaseChanges.newerDefaultAvailable` compares semantic release versions. It is `false` for an older requested release and `null` for bundle keys with no semantic version order. Missing or invalid dependencies still prevent runtime retrieval without fallback. Source reads remain available for repair.
+
+Save an existing source with `agent-issues instruction save <key> --body-file <path|-> --expected-revision <revision> --json`. Use the revision from the source read. MCP provides `instruction_save` with `key`, `body`, and `expectedRevision`. Both select defaults for the running CLI release and return the same saved source metadata.
+
+A save creates or updates a personal override, or updates an existing personal fragment. It cannot change immutable defaults, discovery metadata, or another cloud owner's content. Local mode uses one local profile. Cloud mode uses the authenticated tenant and user across projects. Validated changes apply to the next retrieval, not to documents already loaded.
+
+Stale revisions and invalid dependencies leave saved content unchanged. CLI JSON failures return exit code 1. MCP failures set `isError`. Both return `reason` and `currentSource` with current Markdown, revision, and content hash for comparison and retry. Cloud saves serialize changes within one owner's set before revision checks and final-graph validation.
+
+### Compare Instruction Defaults
+
+Use `agent-issues instruction compare <key> --json` or MCP `instruction_compare` with `key`. Both compare the owner's source with the running CLI release's default, not the service release. The result includes both unassembled Markdown bodies as `currentSource` and `defaultSource`, their revision metadata, and `different`. An override retains its original `currentSource.source.defaultVersion` and applicable `releaseChanges` metadata.
+
+`newerDefaultVersions` lists installed defaults for that item with semantic versions later than the requesting release, in ascending order. A personal fragment has no official default: `defaultSource` and `different` are `null`. Comparison does not save content, change revisions or history, or merge personal edits. Missing items, missing release bundles, and unavailable storage return errors without partial output or fallback.
+
+### Instruction Revision History
+
+Use `agent-issues instruction history <key> --json` to list saved source revisions, newest first. Use `agent-issues instruction revision <key> --revision <revision> --json` to read saved Markdown and its source metadata without expanding fragments. The matching MCP tools are `instruction_history` and `instruction_revision`.
+
+Restore with `agent-issues instruction restore <key> --revision <revision> --expected-revision <current-revision> --json`. MCP provides `instruction_restore` with `key`, `revision`, and `expectedRevision`. Restore creates a new saved revision and validates its dependencies against the requesting CLI release. It does not replace official defaults or change instructions already loaded into a task. Stale revisions and invalid dependencies leave saved source and history unchanged.
+
+History belongs to the instruction owner, not the selected project. The migration retains each existing override as a history entry. It cannot recover revisions that storage discarded before this feature was installed. Official defaults remain separate from saved personal history.
+
+### Reset One Instruction
+
+Use `agent-issues instruction reset-inspect <key> --json` before confirmation. The result shows `currentSource`, `proposedSource`, `affectedInstructions`, and `modifiedFragments`. Modified fragments remain active after the selected source returns to its default. Inspection does not save changes.
+
+Confirm with `agent-issues instruction reset <key> --expected-revision <current-revision> --yes --json`. MCP provides `instruction_reset_inspect` and `instruction_reset`. Inspection returns a single-use confirmation token that expires after five minutes. Supply its `confirmationToken`, the item `key`, and `expectedRevision` to reset. A changed inspection requires a new token.
+
+Reset removes only the selected override. The source uses the requesting CLI release's default and follows later release defaults. Its history records the reset as a new revision. Fragment overrides, unrelated items, other owners, and official bundles remain unchanged. Stale revisions and invalid dependency graphs leave source and history unchanged. Personal fragments have no official default and cannot be reset. Site reset controls are separate work.
+
+### Reset All Instructions
+
+Use `agent-issues instruction reset-all-inspect --json` before confirmation. The result identifies the owner and requesting release. It lists every `override`, including items absent from that release, every `personalFragment`, proposed defaults, affected instructions, and `expectedRevisions`. The response fields for the item lists are `overrides` and `personalFragments`. A removed release item has a `null` proposed source. Inspection does not save changes.
+
+Confirm with `agent-issues instruction reset-all --input-file <path|-> --yes --json`. The JSON input contains the inspected `expectedRevisions` array. Each entry has an item `key`, `sourceType` (`override` or `personal`), and its `expectedRevision`. The source type distinguishes a hidden override from a personal fragment with the same key. The complete inspection response can also be used as input.
+
+MCP provides `instruction_reset_all_inspect` and `instruction_reset_all`. Inspection returns a single-use `confirmationToken` that expires after five minutes. Commit requires that token and the inspected `expectedRevisions`. A changed owner or proposal requires a new token. The CLI-served site exposes `GET /api/instructions/reset-all/inspect` and `POST /api/instructions/reset-all` with the same confirmation fields.
+
+Reset All clears owner overrides and removes personal fragments in one transaction. It validates the final official-default graph rather than intermediate states. The active set returns to the running CLI release's defaults. Official bundles and other owners remain unchanged. History retains reset revisions and fragment removal records. Stale revisions, a changed affected-item set, missing bundles, and invalid final dependencies leave saved content unchanged. Revision failures include `reason` and `currentInspection` for comparison and retry.
+
+### Preview Pending Instructions
+
+Use `agent-issues instruction preview <key> --input-file <path|-> --json` to assemble unsaved source. The input contains a non-empty `changes` array of unique existing item keys and pending Markdown bodies. MCP provides `instruction_preview` with `key` and the same array. The CLI-served site provides `POST /api/instructions/preview` with the same request.
+
+```json
+{
+	"changes": [
+		{ "key": "skill/prepare", "body": "Prepare with <!-- include:fragment/rules -->" },
+		{ "key": "fragment/rules", "body": "Pending rules." }
+	]
+}
+```
+
+All interfaces select the running CLI release and the current owner. Pending bodies replace saved bodies only for this assembly. Unchanged items come from one consistent snapshot. Nested and repeated includes use the retrieval rules.
+
+Responses contain `pending: true`, sorted `pendingKeys`, assembled `body`, and release and source metadata. Source revisions and hashes identify the saved base content, not an invented pending revision. Human CLI output starts with `Pending`.
+
+Preview does not save content, change revisions or history, create drafts, or activate instructions. Missing content, invalid targets, cycles, duplicate changes, and unavailable storage return errors without partial output. The site preview view is separate work.
+
+### Atomic Instruction Changes
+
+Use `agent-issues instruction commit --input-file <path|-> --json` to save related sources and remove personal fragments in one transaction. The input is a JSON object with a `changes` array. MCP provides `instruction_commit` with the same array. Each item requires a unique `key`, an `operation` (`save` or `remove`), and `expectedRevision`. A save also requires a Markdown `body`.
+
+```json
+{
+	"changes": [
+		{ "operation": "remove", "key": "fragment/personal", "expectedRevision": 1 },
+		{ "operation": "save", "key": "skill/prepare", "body": "Prepare without the personal fragment.", "expectedRevision": 2 }
+	]
+}
+```
+
+Every revision is checked against the saved set. Validation uses the complete final dependency graph, not intermediate changes. Reference changes and fragment removal can therefore commit together, regardless of input order. Saved overrides outside the requested release also protect their fragment references. Only personal fragments can be removed.
+
+A stale revision or invalid final graph leaves every source and its history unchanged. Successful responses identify the requesting CLI release and each changed source revision. Concurrent retrieval returns the complete old or new set, not an intermediate set. The operation does not create drafts or change instructions already loaded into a task.
+
+### Personal Fragments
+
+Create a fragment with `agent-issues instruction fragment create fragment/my-rules --body-file <path|-> --json`. MCP provides `instruction_fragment_create` with `key` and `body`. Keys must use the `fragment/` prefix and the same lowercase key format as official items. Creation rejects duplicate keys, missing include targets, and cycles. It does not add a discoverable skill.
+
+Read and edit the fragment with `instruction read` and `instruction save`, or their matching MCP tools. Its source type is `personal`. The catalog and later retrievals include the saved fragment within the same owner scope across projects and releases.
+
+Remove it with `agent-issues instruction fragment remove fragment/my-rules --expected-revision <revision> --json`, or MCP `instruction_fragment_remove` with `key` and `expectedRevision`. Only personal fragments can be removed. Saved references block removal; errors include `affectedReferences` with the referring item keys. Stale revisions leave the fragment unchanged. Creation, edits, and removal retain revision records. Recreating a removed key continues its revision sequence, so an earlier revision cannot remove the new fragment.
+
 ## Context
 
 Context is a first-class database-backed concept.

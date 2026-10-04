@@ -2,12 +2,15 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, request as sendRequest, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { readBuildContentHash, resolveDatabasePath, resolveTenantSlug } from "@agent-issues/api-local";
-import { ENTITY_KINDS, mergeProjectChangeEventDetails, projectChangeEventForWrite, rpcMethods, writeMethods, type InitiativeTab, type ProjectChangeEvent, type SearchRequest, type SearchSourceType, type StorageDriver } from "@agent-issues/core";
+import { ENTITY_KINDS, InstructionFragmentError, InstructionResetAllError, mergeProjectChangeEventDetails, projectChangeEventForWrite, rpcMethods, splitInstructionMarkdown, writeMethods, type CreateInstructionFragmentInput, type RemoveInstructionFragmentInput, type InitiativeTab, type PreviewInstructionInput, type ProjectChangeEvent, type ResetInstructionAllInput, type SaveInstructionSourceInput, type SearchRequest, type SearchSourceType, type StorageDriver } from "@agent-issues/core";
 import { getBuiltSiteAssetPath, getContentType } from "./assets.js";
 import { subscribeToCloudEvents } from "./cloud-events-relay.js";
 import { withStore } from "../cli/shared.js";
 import type { SavedLoginStoreOptions } from "../auth/auth-session.js";
 import { openStorageDriver } from "../runtime/open-storage-driver.js";
+import { ConfirmationTokenStore } from "../runtime/confirmation-tokens.js";
+import packageJson from "../../package.json" with { type: "json" };
+import type { CommitInstructionChangesInput } from "@agent-issues/core";
 
 export type LiveSiteInfo = {
 	dbPath: string;
@@ -112,6 +115,7 @@ export async function startLiveSite(input: {
 		url: `http://${host}:${port}`
 	};
 	const clients = new Set<ServerResponse>();
+	const confirmationTokens = new ConfirmationTokenStore(Date.now);
 
 	// Resolved once at startup (ADR13, ADR18): decides whether live-refresh
 	// polls the local file or relays the cloud API's own SSE channel (ISS56).
@@ -143,6 +147,7 @@ export async function startLiveSite(input: {
 			currentWorkingDirectory,
 			defaultTenant,
 			credentialStoreOptions,
+			confirmationTokens,
 			stopServer,
 			onLocalMutation: (event, signature) => {
 				databaseSignature = signature;
@@ -291,6 +296,7 @@ async function handleRequest(input: {
 	currentWorkingDirectory: string | undefined;
 	defaultTenant: string;
 	credentialStoreOptions: SavedLoginStoreOptions | undefined;
+	confirmationTokens: ConfirmationTokenStore;
 	stopServer: () => void;
 	onLocalMutation: (event: ProjectChangeEvent, signature: string) => void;
 }) {
@@ -308,6 +314,247 @@ async function handleRequest(input: {
 		setImmediate(() => {
 			input.stopServer();
 		});
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/reset-all/inspect" || requestUrl.pathname === "/api/instructions/reset-all") {
+		const inspecting = requestUrl.pathname.endsWith("/inspect");
+		if (input.request.method !== (inspecting ? "GET" : "POST")) {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+		let reset: Pick<ResetInstructionAllInput, "expectedRevisions"> & { confirmationToken: string } | undefined;
+		if (!inspecting) {
+			try {
+				const chunks: Buffer[] = [];
+				for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+				const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+				if (!value || !Array.isArray(value.expectedRevisions) || typeof value.confirmationToken !== "string") throw new Error("Reset All requires inspected revisions and a confirmation token.");
+				reset = { expectedRevisions: value.expectedRevisions, confirmationToken: value.confirmationToken };
+			} catch (error) {
+				writeText(input.response, 400, error instanceof Error ? error.message : "Invalid Reset All request.");
+				return;
+			}
+		}
+		try {
+			const opened = await openStorageDriver({ dbPath: input.dbPath, databaseOptions: { currentWorkingDirectory: input.currentWorkingDirectory, tenant: requestedTenant },
+				authSessionOptions: input.credentialStoreOptions, localDaemon: { buildHash: readBuildContentHash() } });
+			try {
+				const impact = await opened.store.inspectInstructionResetAll({ version: packageJson.version });
+				if (inspecting) {
+					const confirmation = input.confirmationTokens.issue("instruction_reset_all", { owner: opened.owner, impact });
+					writeJson(input.response, { ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+				} else {
+					input.confirmationTokens.consume(reset!.confirmationToken, "instruction_reset_all", { owner: opened.owner, impact });
+					writeJson(input.response, await opened.store.resetInstructionAll({ version: packageJson.version, expectedRevisions: reset!.expectedRevisions }));
+				}
+			} finally {
+				await opened.store.close();
+			}
+		} catch (error) {
+			if (error instanceof InstructionResetAllError) writeJson(input.response, { error: error.message, reason: error.reason, currentInspection: error.currentInspection }, undefined, error.reason === "revision-conflict" ? 409 : 400);
+			else writeText(input.response, 400, error instanceof Error ? error.message : "Reset All failed.");
+		}
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/fragments/create" || requestUrl.pathname === "/api/instructions/fragments/remove") {
+		if (input.request.method !== "POST") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+		const creating = requestUrl.pathname.endsWith("/create");
+		let fragment: CreateInstructionFragmentInput | RemoveInstructionFragmentInput;
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Partial<CreateInstructionFragmentInput & RemoveInstructionFragmentInput> | null;
+			if (!value || typeof value.key !== "string" || !value.key.startsWith("fragment/")
+				|| (creating ? typeof value.body !== "string" : !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision! < 1)) {
+				throw new Error("Invalid fragment request.");
+			}
+			fragment = creating
+				? { key: value.key, body: value.body!, version: packageJson.version }
+				: { key: value.key, expectedRevision: value.expectedRevision!, version: packageJson.version };
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid fragment request.");
+			return;
+		}
+		try {
+			const result = await withStore(input.dbPath, {
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				tenant: requestedTenant
+			}, (store) => creating
+				? store.createInstructionFragment(fragment as CreateInstructionFragmentInput)
+				: store.removeInstructionFragment(fragment as RemoveInstructionFragmentInput));
+			writeJson(input.response, result);
+		} catch (error) {
+			if (error instanceof InstructionFragmentError) {
+				writeJson(input.response, { message: error.message, reason: error.reason, currentSource: error.currentSource, affectedReferences: error.affectedReferences }, undefined, 400);
+			} else writeText(input.response, 400, error instanceof Error ? error.message : "Fragment operation failed.");
+		}
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/source" && input.request.method === "POST") {
+		let save: SaveInstructionSourceInput;
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Partial<SaveInstructionSourceInput> | null;
+			if (!value || typeof value.key !== "string" || !value.key.trim() || typeof value.body !== "string"
+				|| !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision! < 1) throw new Error("Invalid instruction save request.");
+			save = { key: value.key, body: value.body, expectedRevision: value.expectedRevision!, version: packageJson.version };
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid instruction save request.");
+			return;
+		}
+		try {
+			const result = await withStore(input.dbPath, {
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				tenant: requestedTenant
+			}, async (store) => {
+				const current = await store.readInstructionSource(save);
+				if (splitInstructionMarkdown(current.body).frontmatter !== splitInstructionMarkdown(save.body).frontmatter) {
+					throw new Error("Plugin frontmatter is read-only.");
+				}
+				return store.saveInstructionSource(save);
+			});
+			writeJson(input.response, result);
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Instruction save failed.");
+		}
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/reset/inspect" || requestUrl.pathname === "/api/instructions/reset") {
+		const inspecting = requestUrl.pathname.endsWith("/inspect");
+		if (input.request.method !== (inspecting ? "GET" : "POST")) {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+		try {
+			let key = requestUrl.searchParams.get("key");
+			let expectedRevision: number | undefined;
+			if (!inspecting) {
+				const chunks: Buffer[] = [];
+				for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+				const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+				key = value?.key;
+				expectedRevision = value?.expectedRevision;
+				if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 1) throw new Error("Invalid instruction reset revision.");
+			}
+			if (typeof key !== "string" || !key.trim()) throw new Error("An instruction key is required.");
+			const resetKey = key;
+			const result = await withStore(input.dbPath, {
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				tenant: requestedTenant
+			}, async (store) => {
+				if (inspecting) return await store.inspectInstructionReset({ key: resetKey, version: packageJson.version });
+				return await store.resetInstructionSource({ key: resetKey, version: packageJson.version, expectedRevision: expectedRevision! });
+			});
+			writeJson(input.response, result);
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Instruction reset failed.");
+		}
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/restore") {
+		if (input.request.method !== "POST") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { key?: string; revision?: number; expectedRevision?: number } | null;
+			if (!value || typeof value.key !== "string" || !value.key.trim()
+				|| !Number.isSafeInteger(value.revision) || value.revision! < 1
+				|| !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision! < 1) {
+				throw new Error("Invalid instruction restore request.");
+			}
+			const result = await withStore(input.dbPath, {
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				tenant: requestedTenant
+			}, (store) => store.restoreInstructionRevision({ key: value.key!, revision: value.revision!, expectedRevision: value.expectedRevision!, version: packageJson.version }));
+			writeJson(input.response, result);
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Instruction restore failed.");
+		}
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/changes") {
+		if (input.request.method !== "POST") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Partial<CommitInstructionChangesInput> | null;
+			if (!value || !Array.isArray(value.changes) || !value.changes.length
+				|| value.changes.some((change) => !change || typeof change.key !== "string" || !change.key.trim()
+					|| !Number.isSafeInteger(change.expectedRevision) || change.expectedRevision < 1
+					|| (change.operation !== "save" && change.operation !== "remove")
+					|| (change.operation === "save" && typeof change.body !== "string"))) {
+				throw new Error("Invalid instruction changes request.");
+			}
+			const result = await withStore(input.dbPath, {
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				tenant: requestedTenant
+			}, async (store) => {
+				for (const change of value.changes!) {
+					if (change.operation !== "save") continue;
+					const current = await store.readInstructionSource({ version: packageJson.version, key: change.key });
+					if (splitInstructionMarkdown(current.body).frontmatter !== splitInstructionMarkdown(change.body).frontmatter) {
+						throw new Error("Plugin frontmatter is read-only.");
+					}
+				}
+				return store.commitInstructionChanges({ version: packageJson.version, changes: value.changes! });
+			});
+			writeJson(input.response, result);
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Instruction changes failed.");
+		}
+		return;
+	}
+
+	if (requestUrl.pathname === "/api/instructions/preview") {
+		if (input.request.method !== "POST") {
+			writeText(input.response, 405, "Method Not Allowed");
+			return;
+		}
+		let preview: PreviewInstructionInput;
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of input.request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+			const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Partial<PreviewInstructionInput> | null;
+			if (!value || typeof value.key !== "string" || !value.key.trim() || !Array.isArray(value.changes) || !value.changes.length
+				|| value.changes.some((change) => !change || typeof change.key !== "string" || typeof change.body !== "string")) {
+				throw new Error("Invalid instruction preview request.");
+			}
+			preview = { key: value.key, changes: value.changes, version: packageJson.version };
+		} catch (error) {
+			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid instruction preview request.");
+			return;
+		}
+		try {
+			const result = await withStore(input.dbPath, {
+				credentialStoreOptions: input.credentialStoreOptions,
+				currentWorkingDirectory: input.currentWorkingDirectory,
+				tenant: requestedTenant
+			}, (store) => store.previewInstruction(preview));
+			writeJson(input.response, result);
+		} catch (error) {
+			writeText(input.response, 500, error instanceof Error ? error.message : "Instruction preview failed.");
+		}
 		return;
 	}
 
@@ -343,6 +590,46 @@ async function handleRequest(input: {
 
 	if (input.request.method !== "GET") {
 		writeText(input.response, 405, "Method Not Allowed");
+		return;
+	}
+
+	if (["/api/instructions/catalog", "/api/instructions/source", "/api/instructions/compare", "/api/instructions/dependencies", "/api/instructions/history", "/api/instructions/revision"].includes(requestUrl.pathname)) {
+		const key = requestUrl.searchParams.get("key")?.trim();
+		const revision = Number(requestUrl.searchParams.get("revision"));
+		if (requestUrl.pathname !== "/api/instructions/catalog" && !key) {
+			writeText(input.response, 400, "Instruction key is required.");
+			return;
+		}
+		if (requestUrl.pathname === "/api/instructions/revision" && (!Number.isSafeInteger(revision) || revision < 1)) {
+			writeText(input.response, 400, "A positive instruction revision is required.");
+			return;
+		}
+		try {
+			const opened = await openStorageDriver({
+				dbPath: input.dbPath,
+				databaseOptions: { currentWorkingDirectory: input.currentWorkingDirectory, tenant: requestedTenant },
+				authSessionOptions: input.credentialStoreOptions,
+				localDaemon: { buildHash: readBuildContentHash() }
+			});
+			try {
+				const result = requestUrl.pathname === "/api/instructions/history"
+					? await opened.store.listInstructionHistory({ key: key!, version: packageJson.version })
+					: requestUrl.pathname === "/api/instructions/revision"
+					? await opened.store.readInstructionRevision({ key: key!, version: packageJson.version, revision })
+					: requestUrl.pathname === "/api/instructions/dependencies"
+					? await opened.store.inspectInstructionDependencies({ key: key!, version: packageJson.version })
+					: requestUrl.pathname === "/api/instructions/compare"
+					? await opened.store.compareInstructionSource({ key: key!, version: packageJson.version })
+					: key
+					? await opened.store.readInstructionSource({ key, version: packageJson.version })
+					: { ...await opened.store.listInstructionSources({ version: packageJson.version }), owner: opened.owner };
+				writeJson(input.response, result);
+			} finally {
+				await opened.store.close();
+			}
+		} catch (error) {
+			writeText(input.response, 500, error instanceof Error ? error.message : "Instruction read failed.");
+		}
 		return;
 	}
 
@@ -1124,11 +1411,12 @@ function broadcast(clients: Set<ServerResponse>, payload: string) {
 function writeJson(
 	response: ServerResponse,
 	payload: unknown,
-	diagnostics?: { durationMs: number; metricName: string }
+	diagnostics?: { durationMs: number; metricName: string },
+	statusCode = 200
 ) {
 	const body = `${JSON.stringify(payload)}\n`;
 	const payloadBytes = Buffer.byteLength(body);
-	response.writeHead(200, {
+	response.writeHead(statusCode, {
 		"Content-Type": "application/json; charset=utf-8",
 		"Cache-Control": "no-store",
 		...(diagnostics ? {

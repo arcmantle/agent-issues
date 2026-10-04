@@ -3,8 +3,8 @@ name: domain-modeling
 description: Builds and sharpens the tracked domain model. It resolves terms, tests boundaries with real scenarios, checks the model against the code, and records glossary terms and architecture decisions. Use it when the user wants to define domain language, refine a model, record an ADR, or when another skill needs active domain modeling.
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # Domain Modeling
 

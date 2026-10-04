@@ -1,5 +1,6 @@
 import { SignalWatcher } from "@lit-labs/signals";
 import { LitElement, css, html, nothing } from "lit";
+import { BookOpen, LayoutGrid, createElement } from "lucide";
 import { choose } from "lit/directives/choose.js";
 import { classMap } from "lit/directives/class-map.js";
 import { map } from "lit/directives/map.js";
@@ -9,6 +10,7 @@ import "./components/context-view.js";
 import "./components/global-search-overlay.js";
 import "./components/initiative-detail-view.js";
 import "./components/issue-detail-view.js";
+import "./components/instructions-view.js";
 import "./components/relationship-graph.js";
 import "./components/relationship-graph-filters.js";
 import type { GlobalSearchOpenTargetDetail } from "./components/global-search-overlay.js";
@@ -28,6 +30,8 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 	protected mobileMasterOpen = false;
 	protected theme: SiteTheme = "light";
 	protected globalSearchTrigger: HTMLElement | null = null;
+	protected instructionsIcon = createElement(BookOpen, { width: 18, height: 18, "aria-hidden": "true" });
+	protected projectsIcon = createElement(LayoutGrid, { width: 18, height: 18, "aria-hidden": "true" });
 
 	protected onSelectTenant = (event: Event) => {
 		const tenantId = (event.currentTarget as HTMLElement).dataset.tenant;
@@ -72,6 +76,26 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 	protected onOpenProjectChooser = () => {
 		void this.store.returnToProjectChooser();
 	};
+
+	protected onOpenInstructions = () => {
+		void this.store.openInstructions();
+	};
+
+	protected renderPersonalNavigation() {
+		return html`
+		<div class="nav-group-label">Personal</div>
+		<button
+			aria-pressed=${String(this.store.activePage.get() === "instructions")}
+			class=${classMap({ "nav-item": true, active: this.store.activePage.get() === "instructions" })}
+			data-open-instructions
+			title="Instructions"
+			@click=${this.onOpenInstructions}
+		>
+			<span class="nav-icon">${this.instructionsIcon}</span>
+			<span class="nav-label">Instructions</span>
+		</button>
+		`;
+	}
 
 	protected onSelectEntity = (event: Event) => {
 		const entityId = (event.currentTarget as HTMLElement).dataset.id;
@@ -470,6 +494,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 				`
 			)}
 			<nav class="rail-nav">
+				${this.renderPersonalNavigation()}
 				<div class="nav-group-label">Plan</div>
 				${map(
 					navItems,
@@ -552,6 +577,7 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 		return html`
 		<main class="project-chooser" data-view="project-chooser">
 			<div class="project-chooser-inner">
+				${this.renderPersonalNavigation()}
 				<div class="ai-crumbs">${tenantName}</div>
 				<h1>Projects</h1>
 				${when(
@@ -1203,6 +1229,26 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 
 	render() {
 		const store = this.store;
+		if (store.activePage.get() === "instructions") {
+			return html`
+			<div class="instructions-shell">
+				<aside class="rail">
+					<button
+						aria-label="Projects"
+						class="nav-item"
+						title="Projects"
+						@click=${this.onOpenProjectChooser}
+					>
+						<span class="nav-icon">${this.projectsIcon}</span>
+						<span class="nav-label">Projects</span>
+					</button>
+					<nav class="rail-nav">${this.renderPersonalNavigation()}</nav>
+					${this.renderThemeToggle("rail")}
+				</aside>
+				<agent-issues-instructions-view .store=${store}></agent-issues-instructions-view>
+			</div>
+			`;
+		}
 		if (store.selectedTenant.get() && !store.selectedProjectId.get()) {
 			return this.renderProjectChooser();
 		}
@@ -1258,6 +1304,53 @@ class AgentIssuesApp extends SignalWatcher(LitElement) {
 			grid-template-columns: 256px 380px 1fr;
 			height: stretch;
 			overflow: hidden;
+		}
+		.instructions-shell {
+			display: grid;
+			grid-template-columns: 256px minmax(0, 1fr);
+			grid-template-rows: minmax(0, 1fr);
+			height: 100%;
+			overflow: hidden;
+		}
+		@media (max-width: 900px) {
+			.instructions-shell {
+				grid-template-columns: minmax(0, 1fr);
+				grid-template-rows: 52px minmax(0, 1fr);
+			}
+			.instructions-shell .rail {
+				flex-direction: row;
+				align-items: center;
+				border-right: 0;
+				border-bottom: 1px solid var(--border);
+				z-index: 10;
+			}
+			.instructions-shell .rail-nav {
+				display: flex;
+				flex: 1;
+				flex-direction: row;
+				align-self: stretch;
+				padding: 4px;
+				overflow-x: auto;
+				overflow-y: hidden;
+			}
+			.instructions-shell .nav-item {
+				flex: 0 0 40px;
+				justify-content: center;
+				width: 40px;
+				padding: 0;
+			}
+			.instructions-shell .rail-theme-toggle {
+				flex: 0 0 40px;
+				align-self: stretch;
+				width: 40px;
+				height: auto;
+				margin: 0;
+				border: 0;
+				border-radius: 0;
+			}
+			.instructions-shell .nav-label, .instructions-shell .nav-group-label {
+				display: none;
+			}
 		}
 		.console.wide {
 			grid-template-columns: 256px 1fr;

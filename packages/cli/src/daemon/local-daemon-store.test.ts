@@ -168,10 +168,13 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 			credentialStoreOptions,
 			requestTimeoutMs: 20,
 			spawn: vi.fn()
-		})).rejects.toThrow("Local daemon request timed out after 20ms.");
+		})).rejects.toThrow("Local daemon request timed out after 20ms. Request: daemonHealth.");
 	});
 
-	it("does not apply the startup timeout to requests after the health check", async () => {
+	it.each([
+		{ name: "allows a slow initial health response within the daemon startup deadline", healthDelayMs: 1100, requestDelayMs: 0, requestTimeoutMs: undefined },
+		{ name: "does not apply the startup timeout to requests after the health check", healthDelayMs: 0, requestDelayMs: 150, requestTimeoutMs: 100 }
+	])("$name", async ({ healthDelayMs, requestDelayMs, requestTimeoutMs }) => {
 		await saveDaemonToken("real-token", credentialStoreOptions);
 		const server = createServer((request, response) => {
 			let body = "";
@@ -183,9 +186,13 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 					response.end(JSON.stringify({ jsonrpc: "2.0", id: "1", result: method === "daemonHealth" ? { ready: true } : [] }));
 				};
 				if (method === "daemonHealth") {
-					send();
+					if (healthDelayMs > 0) {
+						setTimeout(send, healthDelayMs);
+					} else {
+						send();
+					}
 				} else {
-					setTimeout(send, 150);
+					setTimeout(send, requestDelayMs);
 				}
 			});
 		});
@@ -201,7 +208,7 @@ describe("local-daemon-store (ISS190, ADR44/45/46)", () => {
 		const store = await openLocalDaemonStore({
 			homeDirectory,
 			credentialStoreOptions,
-			requestTimeoutMs: 100,
+			requestTimeoutMs,
 			spawn: vi.fn()
 		});
 

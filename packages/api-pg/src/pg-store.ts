@@ -61,6 +61,7 @@ import { PgIssueCommentStore } from "./features/issue-comment/store.js";
 import { PgPlanEntryStore } from "./features/plan-entry/store.js";
 import * as pgProjectSettingsStore from "./features/project-settings/store.js";
 import { PgSearchStore } from "./features/search/search-store.js";
+import { PgInstructionStore } from "./features/instructions/instruction-store.js";
 
 /**
  * Postgres implementation of the storage-driver seam (ADR11, ADR13, ISS39).
@@ -109,6 +110,85 @@ export class PgStore implements StorageDriver {
 	protected readonly actorIdentity: AuthIdentity | undefined;
 	protected readonly strictProjectScope: boolean;
 	protected readonly searchDiagnostics: SearchDiagnostic[] = [];
+
+	public async retrieveInstruction(input: Parameters<StorageDriver["retrieveInstruction"]>[0]): Promise<Awaited<ReturnType<StorageDriver["retrieveInstruction"]>>> {
+		return this.instructionTransaction((store) => store.retrieveInstruction(input));
+	}
+
+	public async previewInstruction(input: Parameters<StorageDriver["previewInstruction"]>[0]) {
+		return this.instructionTransaction((store) => store.previewInstruction(input));
+	}
+
+	public async listInstructionSources(input: Parameters<StorageDriver["listInstructionSources"]>[0]) {
+		return this.instructionTransaction((store) => store.listInstructionSources(input));
+	}
+
+	public async readInstructionSource(input: Parameters<StorageDriver["readInstructionSource"]>[0]) {
+		return this.instructionTransaction((store) => store.readInstructionSource(input));
+	}
+
+	public async compareInstructionSource(input: Parameters<StorageDriver["compareInstructionSource"]>[0]) {
+		return this.instructionTransaction((store) => store.compareInstructionSource(input));
+	}
+
+	public async inspectInstructionDependencies(input: Parameters<StorageDriver["inspectInstructionDependencies"]>[0]) {
+		return this.instructionTransaction((store) => store.inspectInstructionDependencies(input));
+	}
+
+	public async saveInstructionSource(input: Parameters<StorageDriver["saveInstructionSource"]>[0]) {
+		return this.instructionTransaction((store) => store.saveInstructionSource(input));
+	}
+
+	public async listInstructionHistory(input: Parameters<StorageDriver["listInstructionHistory"]>[0]) {
+		return this.instructionTransaction((store) => store.listInstructionHistory(input));
+	}
+
+	public async readInstructionRevision(input: Parameters<StorageDriver["readInstructionRevision"]>[0]) {
+		return this.instructionTransaction((store) => store.readInstructionRevision(input));
+	}
+
+	public async restoreInstructionRevision(input: Parameters<StorageDriver["restoreInstructionRevision"]>[0]) {
+		return this.instructionTransaction((store) => store.restoreInstructionRevision(input));
+	}
+
+	public async resetInstructionSource(input: Parameters<StorageDriver["resetInstructionSource"]>[0]) {
+		return this.instructionTransaction((store) => store.resetInstructionSource(input));
+	}
+
+	public async inspectInstructionReset(input: Parameters<StorageDriver["inspectInstructionReset"]>[0]) {
+		return this.instructionTransaction((store) => store.inspectInstructionReset(input));
+	}
+
+	public async inspectInstructionResetAll(input: Parameters<StorageDriver["inspectInstructionResetAll"]>[0]) {
+		return this.instructionTransaction((store) => store.inspectInstructionResetAll(input));
+	}
+
+	public async resetInstructionAll(input: Parameters<StorageDriver["resetInstructionAll"]>[0]) {
+		return this.instructionTransaction((store) => store.resetInstructionAll(input));
+	}
+
+	public async commitInstructionChanges(input: Parameters<StorageDriver["commitInstructionChanges"]>[0]) {
+		return this.instructionTransaction((store) => store.commitInstructionChanges(input));
+	}
+
+	public async createInstructionFragment(input: Parameters<StorageDriver["createInstructionFragment"]>[0]) {
+		return this.instructionTransaction((store) => store.createInstructionFragment(input));
+	}
+
+	public async removeInstructionFragment(input: Parameters<StorageDriver["removeInstructionFragment"]>[0]) {
+		return this.instructionTransaction((store) => store.removeInstructionFragment(input));
+	}
+
+	protected instructionTransaction<T>(operation: (store: PgInstructionStore) => Promise<T>): Promise<T> {
+		const identity = this.actorIdentity;
+		if (!identity || identity.tenantId !== this.tenantId || !identity.userId) {
+			throw new Error("Instruction retrieval requires an authenticated owner.");
+		}
+		return this.tenantWideTransaction(async (executor) => {
+			await executor.query("SELECT set_config('app.instruction_user_id', $1, true)", [identity.userId]);
+			return operation(new PgInstructionStore(executor, identity.userId));
+		});
+	}
 
 	private get historyDiagnosticsStore(): PgHistoryDiagnosticsStore {
 		return new PgHistoryDiagnosticsStore(this.pool, this.tenantId);

@@ -28,6 +28,7 @@ export * from "./features/storage-driver/search-query.js";
 export * from "./features/storage-driver/synchronize-store.js";
 export * from "./features/storage-driver/user-directory-store.js";
 export * from "./features/storage-driver/history-diagnostics-store.js";
+export * from "./features/storage-driver/instruction-store.js";
 export * from "./features/storage-driver/storage-driver.js";
 export * from "./features/storage-driver/history-diagnostics.js";
 export * from "./features/storage-driver/http-store.js";

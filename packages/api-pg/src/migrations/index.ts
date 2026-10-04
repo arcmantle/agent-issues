@@ -18,9 +18,14 @@ import { projectSettingsMigration } from "./project-settings.js";
 import { completionObservationsMigration } from "./completion-observations.js";
 import { completionObservationVersionStateMigration } from "./completion-observation-version-state.js";
 import { searchMigration } from "./search.js";
+import { instructionDefaultsMigration } from "./instruction-defaults.js";
+import { instructionOverridesMigration } from "./instruction-overrides.js";
+import { instructionPersonalFragmentsMigration } from "./instruction-personal-fragments.js";
+import { instructionHistoryMigration } from "./instruction-history.js";
+import { instructionResetsMigration } from "./instruction-resets.js";
 
 /**
  * Approved runner migrations for an empty Postgres source profile. Legacy v7
  * sources use the direct transformer and do not replay historical migrations.
  */
-export const migrations: Migration[] = [finalBaselineMigration, adrStatusMigration, userDirectoryMigration, recordProvenanceMigration, contextTermProvenanceMigration, relationProvenanceMigration, issueCommentsMigration, debtMetadataMigration, entityTypeMigration, shortEntityReferenceMigration, shortRecordReferenceMigration, planEntriesMigration, planEntrySupersessionPositionMigration, pioneerEntityTypesMigration, issueBreakdownDraftsMigration, projectSettingsMigration, completionObservationsMigration, completionObservationVersionStateMigration, searchMigration];
+export const migrations: Migration[] = [finalBaselineMigration, adrStatusMigration, userDirectoryMigration, recordProvenanceMigration, contextTermProvenanceMigration, relationProvenanceMigration, issueCommentsMigration, debtMetadataMigration, entityTypeMigration, shortEntityReferenceMigration, shortRecordReferenceMigration, planEntriesMigration, planEntrySupersessionPositionMigration, pioneerEntityTypesMigration, issueBreakdownDraftsMigration, projectSettingsMigration, completionObservationsMigration, completionObservationVersionStateMigration, searchMigration, instructionDefaultsMigration, instructionOverridesMigration, instructionPersonalFragmentsMigration, instructionHistoryMigration, instructionResetsMigration];

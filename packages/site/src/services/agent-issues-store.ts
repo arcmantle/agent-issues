@@ -1,4 +1,6 @@
 import { computed, signal } from "@lit-labs/signals";
+import type { InstructionCatalog, InstructionComparison, InstructionDependencyInspection, InstructionHistory, InstructionKind, InstructionPreview, InstructionResetAllInspection, InstructionResetInspection, InstructionSourceResult } from "@agent-issues/core";
+import { InstructionFragmentError } from "@agent-issues/core/instruction-store";
 import type { ProjectChangeEvent, SearchCapability, SearchNavigationTarget, SearchResponse, SearchResult, SearchSourceType } from "@agent-issues/core";
 import { PROJECT_GRAPH_KINDS, isConsoleSection, type AdrRailEntry, type ConsoleSection, type ContextDetails, type ContextPageTab, type DebtFilter, type Entity, type EntityDetails, type EntitySummary, type EpicInitiativeGroup, type FixLink, type GraphEdge, type GraphNode, type InitiativeBundle, type InitiativeDetail, type InitiativeRollup, type InitiativeSortCriterion, type InitiativeTab, type InitiativeTabData, type IssueCommentPage, type PageMode, type PlanEntry, type PlanEntryPage, type ProjectAdrSectionData, type ProjectContextSectionData, type ProjectContextTermEntry, type ProjectContextTermSource, type ProjectDiscovery, type ProjectGraphKind, type ProjectSummary, type ProjectSummaryEpicGroup, type Relation, type RelationshipGraph, type RootTab, type SiteConfig, type Snapshot, type ViewMode } from "../models.js";
 
@@ -19,6 +21,8 @@ const PLAN_CURRENT_GROUPS = [
 ] as const;
 
 type PlanCurrentGroupKey = (typeof PLAN_CURRENT_GROUPS)[number]["key"];
+export type SiteInstructionResetAllInspection = InstructionResetAllInspection & { confirmationToken: string; expiresAt: string };
+export class InstructionResetRefreshError extends Error {}
 
 const KIND_PREFIX: Record<string, string> = {
 	project: "PROJ",
@@ -120,6 +124,8 @@ type CachedInitiativeTab = {
 	stale?: boolean;
 };
 type ViewerRoute = {
+	instructionKey?: string | null;
+	instructionCategory?: InstructionKind;
 	tenantId: string | null;
 	projectId: string | null;
 	page: PageMode;
@@ -128,6 +134,10 @@ type ViewerRoute = {
 	initiativeId: string | null;
 	initiativeTab: InitiativeTab;
 	target: NestedRouteTarget | null;
+};
+
+type PersonalInstructionCatalog = InstructionCatalog & {
+	owner: { type: "local" } | { type: "cloud"; tenantId: string; userId: string };
 };
 
 const INITIATIVE_TABS: readonly InitiativeTab[] = ["overview", "issues", "plans", "prds", "adrs", "context", "userStories", "debt", "graph"];
@@ -223,6 +233,363 @@ function affectedInitiativeTabs(event: ProjectChangeEvent): Set<Exclude<Initiati
 }
 
 export class AgentIssuesStore {
+	public instructionCatalog = signal<PersonalInstructionCatalog | null>(null);
+	public instructionSource = signal<InstructionSourceResult | null>(null);
+	public instructionCategory = signal<InstructionKind>("agent");
+	public instructionSearch = signal("");
+	public selectedInstructionKey = signal<string | null>(null);
+	public instructionCatalogLoading = signal(false);
+	public instructionSourceLoading = signal(false);
+	public instructionSaving = signal(false);
+	public instructionError = signal<string | null>(null);
+	public instructionConflict = signal<InstructionSourceResult | null>(null);
+	public instructionNavigationGuard: ((navigate: () => void) => boolean) | null = null;
+	public instructionItemNavigator: ((key: string | null, category: InstructionKind) => Promise<void>) | null = null;
+	protected instructionCatalogGeneration = 0;
+	protected instructionSourceGeneration = 0;
+	protected browserNavigationGeneration = 0;
+	protected routeHistoryPosition = this.readHistoryPosition() ?? 0;
+	protected restoringHistoryPosition: number | null = null;
+	protected historyRestoration: Promise<void> | null = null;
+	protected finishHistoryRestoration: (() => void) | null = null;
+
+	protected allowInstructionNavigation(navigate: () => void) {
+		return this.activePage.get() !== "instructions" || !this.instructionNavigationGuard || this.instructionNavigationGuard(navigate);
+	}
+
+	public filteredInstructions = computed(() => {
+		const query = this.instructionSearch.get().trim().toLowerCase();
+		return (this.instructionCatalog.get()?.items ?? []).filter((item) =>
+			item.kind === this.instructionCategory.get() && item.key.toLowerCase().includes(query));
+	});
+
+	public async openInstructions() {
+		if (!this.allowInstructionNavigation(() => { void this.openInstructions(); })) return;
+		this.activePage.set("instructions");
+		this.selectedId.set(null);
+		this.selectedInitiativeId.set(null);
+		this.selectedNestedTarget.set(null);
+		this.stopLiveUpdates();
+		this.writeRoute(this.currentRoute());
+		await this.loadInstructionCatalog();
+	}
+
+	public selectInstructionCategory(category: InstructionKind, options: { writeRoute?: boolean } = {}) {
+		if (!this.allowInstructionNavigation(() => this.selectInstructionCategory(category))) return;
+		this.instructionConflict.set(null);
+		this.instructionCategory.set(category);
+		this.instructionSearch.set("");
+		this.selectedInstructionKey.set(null);
+		this.instructionSource.set(null);
+		this.instructionSourceGeneration += 1;
+		this.instructionSourceLoading.set(false);
+		this.instructionError.set(null);
+		if (options.writeRoute !== false) this.writeRoute(this.currentRoute());
+	}
+
+	public async selectInstruction(key: string | null, options: { writeRoute?: boolean } = {}) {
+		if (!this.allowInstructionNavigation(() => { void this.selectInstruction(key, options); })) return;
+		this.instructionConflict.set(null);
+		const generation = ++this.instructionSourceGeneration;
+		this.selectedInstructionKey.set(key);
+		this.instructionSource.set(null);
+		this.instructionSourceLoading.set(!!key);
+		this.instructionError.set(null);
+		if (options.writeRoute !== false) this.writeRoute(this.currentRoute());
+		if (!key) return;
+		try {
+			const source = await this.fetchJson<InstructionSourceResult>(this.buildInstructionPath(`/api/instructions/source?key=${encodeURIComponent(key)}`));
+			if (generation === this.instructionSourceGeneration) this.instructionSource.set(source);
+		} catch (error) {
+			if (generation === this.instructionSourceGeneration) this.instructionError.set(error instanceof Error ? error.message : String(error));
+		} finally {
+			if (generation === this.instructionSourceGeneration) this.instructionSourceLoading.set(false);
+		}
+	}
+
+	public async compareInstructionSource(key: string): Promise<InstructionComparison> {
+		const response = await fetch(this.buildInstructionPath(`/api/instructions/compare?key=${encodeURIComponent(key)}`));
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	}
+
+	public async createInstructionFragment(key: string): Promise<InstructionSourceResult> {
+		const created = await this.mutateInstructionFragment("create", { key, body: "" });
+		const catalog = this.instructionCatalog.get();
+		if (catalog) this.instructionCatalog.set({ ...catalog, items: [...catalog.items, created] });
+		return created;
+	}
+
+	public async removeInstructionFragment(source: InstructionSourceResult) {
+		await this.mutateInstructionFragment("remove", { key: source.key, expectedRevision: source.source.revision });
+		const catalog = this.instructionCatalog.get();
+		if (catalog) this.instructionCatalog.set({ ...catalog, items: catalog.items.filter((item) => item.key !== source.key) });
+		if (this.selectedInstructionKey.get() === source.key) {
+			this.instructionSourceGeneration += 1;
+			this.selectedInstructionKey.set(null);
+			this.instructionSource.set(null);
+			this.instructionConflict.set(null);
+			this.instructionError.set(null);
+			this.writeRoute(this.currentRoute());
+		}
+	}
+
+	protected async mutateInstructionFragment(operation: "create" | "remove", input: { key: string; body?: string; expectedRevision?: number }): Promise<InstructionSourceResult> {
+		if (this.instructionSaving.get()) throw new Error("An instruction operation is in progress.");
+		const generation = this.instructionCatalogGeneration;
+		const tenant = this.selectedTenant.get();
+		this.instructionSaving.set(true);
+		try {
+			const response = await fetch(this.buildInstructionPath(`/api/instructions/fragments/${operation}`), {
+				method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input)
+			});
+			if (!response.ok) {
+				if (response.headers.get("content-type")?.includes("application/json")) {
+					const error = await response.json() as { message: string; reason: InstructionFragmentError["reason"]; currentSource?: InstructionSourceResult; affectedReferences: string[] };
+					throw new InstructionFragmentError(error.reason, error.message, error.currentSource, error.affectedReferences);
+				}
+				throw new Error(await response.text());
+			}
+			const result = await response.json() as InstructionSourceResult;
+			if (generation !== this.instructionCatalogGeneration || tenant !== this.selectedTenant.get()) throw new Error("The instruction owner changed.");
+			return result;
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	public async inspectInstructionDependencies(key: string): Promise<InstructionDependencyInspection> {
+		const response = await fetch(this.buildInstructionPath(`/api/instructions/dependencies?key=${encodeURIComponent(key)}`));
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	}
+
+	public async listInstructionHistory(key: string): Promise<InstructionHistory> {
+		return this.fetchJson(this.buildInstructionPath(`/api/instructions/history?key=${encodeURIComponent(key)}`));
+	}
+
+	public async readInstructionRevision(key: string, revision: number): Promise<InstructionSourceResult> {
+		return this.fetchJson(this.buildInstructionPath(`/api/instructions/revision?key=${encodeURIComponent(key)}&revision=${revision}`));
+	}
+
+	public async restoreInstructionRevision(revision: number) {
+		const current = this.instructionSource.get();
+		if (!current || this.instructionSaving.get()) throw new Error("An instruction operation is in progress.");
+		const tenant = this.selectedTenant.get();
+		const generation = this.instructionSourceGeneration;
+		this.instructionSaving.set(true);
+		try {
+			const response = await fetch(this.buildInstructionPath("/api/instructions/restore"), {
+				method: "POST", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ key: current.key, revision, expectedRevision: current.source.revision })
+			});
+			if (!response.ok) throw new Error(await response.text());
+			const restored = await response.json() as InstructionSourceResult;
+			if (generation !== this.instructionSourceGeneration || tenant !== this.selectedTenant.get() || this.instructionSource.get() !== current) {
+				throw new Error("The instruction owner or source changed.");
+			}
+			this.instructionConflict.set(null);
+			this.instructionError.set(null);
+			this.instructionSource.set(restored);
+			const catalog = this.instructionCatalog.get();
+			if (catalog) this.instructionCatalog.set({ ...catalog, items: catalog.items.map((item) => item.key === restored.key ? restored : item) });
+			return restored;
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	public async inspectInstructionReset(key: string): Promise<InstructionResetInspection> {
+		return this.fetchJson(this.buildInstructionPath(`/api/instructions/reset/inspect?key=${encodeURIComponent(key)}`));
+	}
+
+	public async inspectInstructionResetAll(): Promise<SiteInstructionResetAllInspection> {
+		return this.fetchJson(this.buildInstructionPath("/api/instructions/reset-all/inspect"));
+	}
+
+	public async resetInstructionAll(inspection: SiteInstructionResetAllInspection) {
+		if (this.instructionSaving.get()) throw new Error("An instruction operation is in progress.");
+		const tenant = this.selectedTenant.get();
+		const generation = this.instructionCatalogGeneration;
+		const sourceGeneration = this.instructionSourceGeneration;
+		const key = this.selectedInstructionKey.get();
+		this.instructionSaving.set(true);
+		try {
+			const response = await fetch(this.buildInstructionPath("/api/instructions/reset-all"), {
+				method: "POST", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ expectedRevisions: inspection.expectedRevisions, confirmationToken: inspection.confirmationToken })
+			});
+			if (!response.ok) throw new Error(await response.text());
+			try {
+				await this.refreshResetInstructions(tenant, generation, sourceGeneration, key);
+			} catch (error) {
+				if (generation !== this.instructionCatalogGeneration || tenant !== this.selectedTenant.get()) throw error;
+				throw new InstructionResetRefreshError(`Reset All completed. Saved instructions could not be refreshed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	public async reloadResetInstructions() {
+		if (this.instructionSaving.get()) throw new Error("An instruction operation is in progress.");
+		this.instructionSaving.set(true);
+		try {
+			await this.refreshResetInstructions(this.selectedTenant.get(), this.instructionCatalogGeneration, this.instructionSourceGeneration, this.selectedInstructionKey.get());
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	protected async refreshResetInstructions(tenant: string | null, generation: number, sourceGeneration: number, key: string | null) {
+		const isCurrent = () => generation === this.instructionCatalogGeneration && sourceGeneration === this.instructionSourceGeneration && tenant === this.selectedTenant.get();
+		if (!isCurrent()) throw new Error("The instruction owner or source changed.");
+		const catalog = await this.fetchJson<PersonalInstructionCatalog>(this.buildInstructionPath("/api/instructions/catalog"));
+		if (!isCurrent()) throw new Error("The instruction owner or source changed.");
+		const source = key && catalog.items.some((item) => item.key === key)
+			? await this.fetchJson<InstructionSourceResult>(this.buildInstructionPath(`/api/instructions/source?key=${encodeURIComponent(key)}`)) : null;
+		if (!isCurrent()) throw new Error("The instruction owner or source changed.");
+		this.instructionCatalog.set(catalog);
+		this.instructionSource.set(source);
+		this.instructionConflict.set(null);
+		this.instructionError.set(null);
+		if (!source) {
+			this.selectedInstructionKey.set(null);
+			this.writeRoute(this.currentRoute());
+		}
+	}
+
+	public async resetInstructionSource(inspection: InstructionResetInspection) {
+		const current = this.instructionSource.get();
+		if (!current || this.instructionSaving.get()) throw new Error("An instruction operation is in progress.");
+		const tenant = this.selectedTenant.get();
+		const generation = this.instructionSourceGeneration;
+		this.instructionSaving.set(true);
+		try {
+			const response = await fetch(this.buildInstructionPath("/api/instructions/reset"), {
+				method: "POST", headers: { "content-type": "application/json" },
+				body: JSON.stringify({ key: inspection.key, expectedRevision: inspection.currentSource.source.revision })
+			});
+			if (!response.ok) throw new Error(await response.text());
+			const reset = await response.json() as InstructionSourceResult;
+			if (generation !== this.instructionSourceGeneration || tenant !== this.selectedTenant.get() || this.instructionSource.get() !== current) {
+				throw new Error("The instruction owner or source changed.");
+			}
+			this.instructionConflict.set(null);
+			this.instructionError.set(null);
+			this.instructionSource.set(reset);
+			const catalog = this.instructionCatalog.get();
+			if (catalog) this.instructionCatalog.set({ ...catalog, items: catalog.items.map((item) => item.key === reset.key ? reset : item) });
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	public async commitInstructionChanges(changes: import("@agent-issues/core").InstructionChange[]) {
+		if (this.instructionSaving.get()) throw new Error("An instruction operation is in progress.");
+		const tenant = this.selectedTenant.get();
+		const generation = this.instructionCatalogGeneration;
+		const sourceGeneration = this.instructionSourceGeneration;
+		this.instructionSaving.set(true);
+		try {
+			const response = await fetch(this.buildInstructionPath("/api/instructions/changes"), {
+				method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ changes })
+			});
+			if (!response.ok) throw new Error(await response.text());
+			const result = await response.json() as import("@agent-issues/core").InstructionChangesResult;
+			if (tenant !== this.selectedTenant.get() || generation !== this.instructionCatalogGeneration || sourceGeneration !== this.instructionSourceGeneration) {
+				throw new Error("The instruction owner or source changed.");
+			}
+			const saved = new Map(result.changes.map((change) => [change.source.key, change.source]));
+			const catalog = this.instructionCatalog.get();
+			if (catalog) this.instructionCatalog.set({ ...catalog, items: catalog.items.map((item) => saved.get(item.key) ?? item) });
+			const current = this.instructionSource.get();
+			if (current && saved.has(current.key)) this.instructionSource.set(saved.get(current.key)!);
+			this.instructionConflict.set(null);
+			this.instructionError.set(null);
+			return result;
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	public async previewInstructionSource(key: string, body: string, changes = [{ key, body }]): Promise<InstructionPreview> {
+		const response = await fetch(this.buildInstructionPath("/api/instructions/preview"), {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ key, changes })
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	}
+
+	public async saveInstructionSource(body: string, expectedRevision?: number) {
+		const current = this.instructionSource.get();
+		if (!current || this.instructionSaving.get()) return false;
+		const generation = this.instructionSourceGeneration;
+		const path = this.buildInstructionPath("/api/instructions/source");
+		const readPath = this.buildInstructionPath(`/api/instructions/source?key=${encodeURIComponent(current.key)}`);
+		this.instructionSaving.set(true);
+		this.instructionError.set(null);
+		this.instructionConflict.set(null);
+		try {
+			const response = await fetch(path, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ key: current.key, body, expectedRevision: expectedRevision ?? current.source.revision })
+			});
+			if (!response.ok) throw new Error(await response.text());
+			const saved = await response.json() as InstructionSourceResult;
+			if (generation !== this.instructionSourceGeneration) return false;
+			this.instructionSource.set(saved);
+			const catalog = this.instructionCatalog.get();
+			if (catalog) this.instructionCatalog.set({ ...catalog, items: catalog.items.map((item) => item.key === saved.key ? saved : item) });
+			return true;
+		} catch (error) {
+			if (generation === this.instructionSourceGeneration) {
+				this.instructionError.set(error instanceof Error ? error.message : String(error));
+				try {
+					const latest = await this.fetchJson<InstructionSourceResult>(readPath);
+					if (generation === this.instructionSourceGeneration && latest.source.revision !== current.source.revision) {
+						this.instructionConflict.set(latest);
+					}
+				} catch {
+					if (generation === this.instructionSourceGeneration) this.instructionError.set(`${this.instructionError.get()} The saved revision could not be read.`);
+				}
+			}
+			return false;
+		} finally {
+			this.instructionSaving.set(false);
+		}
+	}
+
+	public async loadInstructionCatalog() {
+		if (!this.allowInstructionNavigation(() => { void this.loadInstructionCatalog(); })) return;
+		this.instructionConflict.set(null);
+		const generation = ++this.instructionCatalogGeneration;
+		this.instructionSourceGeneration += 1;
+		this.instructionCatalog.set(null);
+		this.instructionSource.set(null);
+		this.instructionSourceLoading.set(false);
+		this.instructionCatalogLoading.set(true);
+		this.instructionError.set(null);
+		try {
+			const catalog = await this.fetchJson<PersonalInstructionCatalog>(this.buildInstructionPath("/api/instructions/catalog"));
+			if (generation !== this.instructionCatalogGeneration) return;
+			this.instructionCatalog.set(catalog);
+			if (this.selectedInstructionKey.get()) await this.selectInstruction(this.selectedInstructionKey.get(), { writeRoute: false });
+		} catch (error) {
+			if (generation === this.instructionCatalogGeneration) this.instructionError.set(error instanceof Error ? error.message : String(error));
+		} finally {
+			if (generation === this.instructionCatalogGeneration) this.instructionCatalogLoading.set(false);
+		}
+	}
+
+	protected buildInstructionPath(path: string) {
+		const tenant = this.selectedTenant.get();
+		return tenant ? `${path}${path.includes("?") ? "&" : "?"}tenant=${encodeURIComponent(tenant)}` : path;
+	}
+
 	public config = signal<SiteConfig | null>(null);
 	public snapshot = signal<Snapshot | null>(null);
 	public projectSummary = signal<ProjectSummary | null>(null);
@@ -1241,12 +1608,30 @@ export class AgentIssuesStore {
 	}
 
 	public onHashChange = () => {
-		const route = this.applyRoute(this.readRoute());
+		const requested = this.readRoute();
+		if (this.isHistoryRestoration() || this.isCurrentInstructionRoute(requested)) return;
+		if (this.isStagedInstructionRoute(requested)) {
+			void this.navigateStagedInstructionRoute(requested);
+			return;
+		}
+		if (!this.allowBrowserNavigation(() => {
+			const route = this.applyRoute(requested);
+			this.writeRoute(route, true);
+		})) return;
+		const route = this.applyRoute(requested);
 		this.writeRoute(route, true);
 	};
 
 	public onPopState = async () => {
 		const route = this.readRoute();
+		if (this.isHistoryRestoration() || this.isCurrentInstructionRoute(route)) return;
+		if (this.isStagedInstructionRoute(route)) {
+			await this.navigateStagedInstructionRoute(route);
+			return;
+		}
+		if (!this.allowBrowserNavigation(() => {
+			void this.navigateToRoute(route);
+		})) return;
 		if (route.tenantId !== this.selectedTenant.get() || route.projectId !== this.selectedProjectId.get()) {
 			await this.navigateToRoute(route);
 			return;
@@ -1256,12 +1641,81 @@ export class AgentIssuesStore {
 	};
 
 	public onBrowserNavigation = async () => {
-		await this.navigateToRoute(this.readRoute());
+		const route = this.readRoute();
+		if (this.isHistoryRestoration() || this.isCurrentInstructionRoute(route)) return;
+		if (this.isStagedInstructionRoute(route)) {
+			await this.navigateStagedInstructionRoute(route);
+			return;
+		}
+		if (!this.allowBrowserNavigation(() => {
+			void this.navigateToRoute(route);
+		})) return;
+		await this.navigateToRoute(route);
 		const params = new URLSearchParams(new URL(window.location.href).hash.slice(1));
 		if (params.has("cascade")) {
 			this.writeRoute(this.currentRoute(), true);
 		}
 	};
+
+	protected isStagedInstructionRoute(route: ViewerRoute) {
+		return !!this.instructionItemNavigator && this.activePage.get() === "instructions" && route.page === "instructions"
+			&& route.tenantId === this.selectedTenant.get() && route.projectId === this.selectedProjectId.get();
+	}
+
+	protected async navigateStagedInstructionRoute(route: ViewerRoute) {
+		const generation = ++this.browserNavigationGeneration;
+		await this.instructionItemNavigator?.(route.instructionKey ?? null, route.instructionCategory ?? "agent");
+		if (generation !== this.browserNavigationGeneration || !this.isStagedInstructionRoute(route)) return;
+		this.routeHistoryPosition = this.readHistoryPosition() ?? this.routeHistoryPosition;
+		if (!this.isCurrentInstructionRoute(route)) this.writeRoute(this.currentRoute(), true);
+	}
+
+	protected allowBrowserNavigation(navigate: () => void) {
+		const targetPosition = this.readHistoryPosition();
+		const currentPosition = this.routeHistoryPosition;
+		const knownTraversal = targetPosition !== null && targetPosition !== currentPosition;
+		const allowed = this.allowInstructionNavigation(() => {
+			if (!knownTraversal) {
+				navigate();
+				return;
+			}
+			const resume = () => window.history.go(targetPosition - currentPosition);
+			if (this.historyRestoration) void this.historyRestoration.then(resume);
+			else resume();
+		});
+		if (!allowed) {
+			if (knownTraversal) {
+				if (this.restoringHistoryPosition === null) {
+					this.restoringHistoryPosition = currentPosition;
+					this.historyRestoration = new Promise((resolve) => { this.finishHistoryRestoration = resolve; });
+					window.history.go(currentPosition - targetPosition);
+				}
+			} else this.writeRoute(this.currentRoute(), true);
+		}
+		return allowed;
+	}
+
+	protected readHistoryPosition(): number | null {
+		const position = window.history.state?.agentIssuesRoutePosition;
+		return Number.isSafeInteger(position) ? position : null;
+	}
+
+	protected isHistoryRestoration() {
+		if (this.restoringHistoryPosition === null) return false;
+		if (this.readHistoryPosition() === this.restoringHistoryPosition) {
+			this.restoringHistoryPosition = null;
+			this.finishHistoryRestoration?.();
+			this.finishHistoryRestoration = null;
+			this.historyRestoration = null;
+		}
+		return true;
+	}
+
+	protected isCurrentInstructionRoute(route: ViewerRoute) {
+		return this.activePage.get() === "instructions" && route.page === "instructions"
+			&& route.tenantId === this.selectedTenant.get() && route.projectId === this.selectedProjectId.get()
+			&& route.instructionKey === this.selectedInstructionKey.get() && route.instructionCategory === this.instructionCategory.get();
+	}
 
 	public setSearchFromEvent = (event: Event) => {
 		this.search.set((event.target as HTMLInputElement).value);
@@ -1276,6 +1730,7 @@ export class AgentIssuesStore {
 	}
 
 	public selectSection(section: ConsoleSection) {
+		if (!this.allowInstructionNavigation(() => this.selectSection(section))) return;
 		this.activeSection.set(section);
 		this.selectedInitiativeId.set(null);
 		this.selectedId.set(null);
@@ -1373,6 +1828,7 @@ export class AgentIssuesStore {
 	};
 
 	public async openSearchTarget(target: SearchNavigationTarget, projectId: string | null = this.selectedProjectId.get()): Promise<boolean> {
+		if (!this.allowInstructionNavigation(() => { void this.openSearchTarget(target, projectId); })) return false;
 		if (projectId && projectId !== this.selectedProjectId.get()) {
 			await this.selectProject(projectId, { preserveGlobalSearch: true });
 			if (this.selectedProjectId.get() !== projectId) {
@@ -1453,6 +1909,7 @@ export class AgentIssuesStore {
 	}
 
 	public selectEntity(entityId: string, target: NestedRouteTarget | null = null) {
+		if (!this.allowInstructionNavigation(() => this.selectEntity(entityId, target))) return;
 		if (this.entityForId(entityId)?.kind === "initiative") {
 			this.selectInitiative(entityId);
 			return;
@@ -1611,6 +2068,7 @@ export class AgentIssuesStore {
 	}
 
 	public selectInitiative(initiativeId: string) {
+		if (!this.allowInstructionNavigation(() => this.selectInitiative(initiativeId))) return;
 		this.cancelInitiativeTabPrefetch();
 		this.selectedId.set(null);
 		this.entityBackStack.set([]);
@@ -1645,6 +2103,7 @@ export class AgentIssuesStore {
 		if (!tenantId || tenantId === this.selectedTenant.get()) {
 			return;
 		}
+		if (!this.allowInstructionNavigation(() => { void this.selectTenant(tenantId); })) return;
 
 		this.selectedTenant.set(tenantId);
 		this.selectedProjectId.set(null);
@@ -1656,9 +2115,10 @@ export class AgentIssuesStore {
 	}
 
 	public async returnToProjectChooser() {
-		if (!this.selectedTenant.get() || !this.selectedProjectId.get()) {
+		if (!this.selectedTenant.get()) {
 			return;
 		}
+		if (!this.allowInstructionNavigation(() => { void this.returnToProjectChooser(); })) return;
 
 		this.selectedProjectId.set(null);
 		this.snapshot.set(null);
@@ -1675,6 +2135,7 @@ export class AgentIssuesStore {
 		if (!tenantId || !projectId || projectId === this.selectedProjectId.get()) {
 			return;
 		}
+		if (!this.allowInstructionNavigation(() => { void this.selectProject(projectId, options); })) return;
 
 		const previousRoute = this.currentRoute();
 		const previousProjectId = previousRoute.projectId;
@@ -2961,18 +3422,28 @@ export class AgentIssuesStore {
 	}
 
 	protected async navigateToRoute(route: ViewerRoute) {
+		const generation = ++this.browserNavigationGeneration;
 		const scopeChanged = route.tenantId !== this.selectedTenant.get() || route.projectId !== this.selectedProjectId.get();
 		this.selectedTenant.set(route.tenantId);
 		this.selectedProjectId.set(route.projectId);
 		if (scopeChanged) {
 			this.resetScopeDetail();
 		}
+		if (route.page === "instructions") {
+			this.stopLiveUpdates();
+			this.applyRoute(route, false);
+			await this.loadInstructionCatalog();
+			if (generation === this.browserNavigationGeneration) this.writeRestoredBrowserRoute(route);
+			return;
+		}
 		if (!route.projectId) {
 			this.snapshot.set(null);
 			this.projectSummary.set(null);
 			this.syncLabel.set("choose a project");
 			await this.reloadProjectDiscovery();
+			if (!this.completeBrowserNavigation(route, generation)) return;
 			this.applyRoute(route);
+			this.writeRestoredBrowserRoute(route);
 			return;
 		}
 
@@ -2980,9 +3451,12 @@ export class AgentIssuesStore {
 		this.syncLabel.set("connecting");
 		try {
 			await this.reloadProjectSummary();
+			if (!this.completeBrowserNavigation(route, generation)) return;
 			this.connectEvents();
 			this.applyRoute(route);
+			this.writeRestoredBrowserRoute(route);
 		} catch (error) {
+			if (generation !== this.browserNavigationGeneration) return;
 			this.selectedProjectId.set(null);
 			this.snapshot.set(null);
 			this.projectSummary.set(null);
@@ -2992,7 +3466,28 @@ export class AgentIssuesStore {
 		}
 	}
 
+	protected completeBrowserNavigation(route: ViewerRoute, generation: number) {
+		if (generation !== this.browserNavigationGeneration) return false;
+		return this.allowBrowserNavigation(() => {
+			void this.navigateToRoute(route);
+		});
+	}
+
+	protected writeRestoredBrowserRoute(route: ViewerRoute) {
+		if (JSON.stringify(this.readRoute()) !== JSON.stringify(route)) this.writeRoute(this.currentRoute(), true);
+	}
+
 	protected resetScopeDetail(options: { preserveGlobalSearch?: boolean } = {}) {
+		this.instructionConflict.set(null);
+		this.instructionCatalogGeneration += 1;
+		this.instructionSourceGeneration += 1;
+		this.instructionCatalog.set(null);
+		this.instructionSource.set(null);
+		this.selectedInstructionKey.set(null);
+		this.instructionSearch.set("");
+		this.instructionError.set(null);
+		this.instructionCatalogLoading.set(false);
+		this.instructionSourceLoading.set(false);
 		this.cancelInitiativeTabPrefetch();
 		this.cancelGlobalSearchRequest();
 		if (!options.preserveGlobalSearch) {
@@ -3330,6 +3825,8 @@ export class AgentIssuesStore {
 
 	protected currentRoute(): ViewerRoute {
 		return {
+			instructionKey: this.selectedInstructionKey.get(),
+			instructionCategory: this.instructionCategory.get(),
 			tenantId: this.selectedTenant.get(),
 			projectId: this.selectedProjectId.get(),
 			page: this.activePage.get(),
@@ -3351,7 +3848,7 @@ export class AgentIssuesStore {
 		const entityId = params.get("entity");
 		const initiativeId = params.get("initiative");
 		const pageParam = params.get("page");
-		const page: PageMode = pageParam === "entity"
+		const page: PageMode = pageParam === "instructions" ? "instructions" : pageParam === "entity"
 			? "entity"
 			: pageParam === "initiative"
 				? "initiative"
@@ -3373,6 +3870,8 @@ export class AgentIssuesStore {
 				? { type: targetType, id: targetId }
 				: null;
 		return {
+			instructionKey: params.get("instruction"),
+			instructionCategory: params.get("category") === "skill" ? "skill" : params.get("category") === "fragment" ? "fragment" : "agent",
 			tenantId,
 			projectId,
 			page,
@@ -3385,6 +3884,7 @@ export class AgentIssuesStore {
 	}
 
 	protected normalizeRoute(route: ViewerRoute): ViewerRoute {
+		if (route.page === "instructions") return { ...route, entityId: null, initiativeId: null, target: null };
 		const entityById = this.entityById.get();
 		if (entityById.size === 0) {
 			return route;
@@ -3430,6 +3930,7 @@ export class AgentIssuesStore {
 
 	protected applyRoute(route: ViewerRoute, loadData = true): ViewerRoute {
 		const normalizedRoute = this.normalizeRoute(route);
+		this.routeHistoryPosition = this.readHistoryPosition() ?? this.routeHistoryPosition;
 		if (normalizedRoute.initiativeId !== this.selectedInitiativeId.get()) {
 			this.cancelInitiativeTabPrefetch();
 		}
@@ -3449,6 +3950,12 @@ export class AgentIssuesStore {
 		this.entityBackStack.set([]);
 		this.clearMasterOverrideIfShallow();
 		this.activePage.set(normalizedRoute.page);
+		if (normalizedRoute.page === "instructions") {
+			this.selectedInstructionKey.set(normalizedRoute.instructionKey ?? null);
+			this.instructionCategory.set(normalizedRoute.instructionCategory ?? "agent");
+			if (loadData) void this.loadInstructionCatalog();
+			return normalizedRoute;
+		}
 		this.activeView.set("overview");
 		if (!loadData) {
 			return normalizedRoute;
@@ -3470,6 +3977,12 @@ export class AgentIssuesStore {
 	}
 
 	protected writeRoute(route: ViewerRoute, replace = false) {
+		this.browserNavigationGeneration += 1;
+		const historyPosition = this.readHistoryPosition();
+		if (!replace && historyPosition === null) {
+			window.history.replaceState({ ...window.history.state, agentIssuesRoutePosition: this.routeHistoryPosition }, "");
+		}
+		this.routeHistoryPosition = replace ? historyPosition ?? this.routeHistoryPosition : (historyPosition ?? this.routeHistoryPosition) + 1;
 		const nextUrl = new URL(window.location.href);
 		const entries: string[] = [];
 		const add = (key: string, value: string | null) => {
@@ -3479,7 +3992,9 @@ export class AgentIssuesStore {
 		};
 		add("tenant", route.tenantId);
 		add("project", route.projectId);
-		add("page", route.projectId ? route.page === "list" ? "project" : route.page : null);
+		add("page", route.page === "instructions" ? "instructions" : route.projectId ? route.page === "list" ? "project" : route.page : null);
+		add("category", route.page === "instructions" ? route.instructionCategory ?? "agent" : null);
+		add("instruction", route.page === "instructions" ? route.instructionKey ?? null : null);
 		add("section", route.section === "initiatives" ? null : route.section);
 		add("entity", route.entityId);
 		add("initiative", route.initiativeId);
@@ -3490,7 +4005,7 @@ export class AgentIssuesStore {
 		nextUrl.searchParams.delete("tenant");
 		nextUrl.searchParams.delete("project");
 		nextUrl.hash = entries.join("&");
-		window.history[replace ? "replaceState" : "pushState"]({}, "", nextUrl);
+		window.history[replace ? "replaceState" : "pushState"]({ ...window.history.state, agentIssuesRoutePosition: this.routeHistoryPosition }, "", nextUrl);
 	}
 
 	protected buildTenantScopedPath(resourcePath: string) {

@@ -47,17 +47,13 @@ try {
 		["plugin", "marketplace", "update", "agent-issues"],
 		marketplaceEnvironment
 	);
-	const update = run("copilot", ["plugin", "update", "agent-issues"], marketplaceEnvironment);
-	assertIncludes(update, `→ v${updatedVersion}`, "Copilot marketplace update");
+	run("copilot", ["plugin", "update", "agent-issues"], marketplaceEnvironment);
 	const updatedList = run("copilot", ["plugin", "list"], marketplaceEnvironment);
 	assertIncludes(updatedList, `(v${updatedVersion})`, "Copilot updated plugin inventory");
-	const installedPluginDir = path.join(
-		marketplaceConfigRoot,
-		"installed-plugins",
-		"agent-issues",
-		"agent-issues"
-	);
-	rmSync(artifactRoot, { force: true, recursive: true });
+	const installedPluginDir = updatedList.includes(`from ${pluginDir}`)
+		? pluginDir
+		: path.join(marketplaceConfigRoot, "installed-plugins", "agent-issues", "agent-issues");
+	if (installedPluginDir !== pluginDir) rmSync(artifactRoot, { force: true, recursive: true });
 	const mcpServer = validateComponents(installedPluginDir, marketplaceEnvironment);
 
 	const mcpOutput = run(
@@ -81,6 +77,7 @@ try {
 	);
 	assertIncludes(mcpOutput, '"name":"agent-issues"', "MCP server identity");
 	assertIncludes(mcpOutput, '"name":"project_identity"', "MCP tool list");
+	assertIncludes(mcpOutput, '"name":"instruction_retrieve"', "MCP instruction retrieval");
 
 	console.log("Copilot plugin validation passed.");
 } finally {
@@ -105,11 +102,12 @@ function validateComponents(installedPluginDir, environment) {
 	if (!existsSync(agentPath)) {
 		throw new Error(`Copilot agent not found in installed plugin: ${agentPath}`);
 	}
-	assertIncludes(
-		readFileSync(agentPath, "utf8"),
-		"You are the issue-first implementation agent for this workspace.",
-		"Copilot agent"
-	);
+	const agentContent = readFileSync(agentPath, "utf8");
+	assertIncludes(agentContent, 'call the agent-issues MCP tool `instruction_retrieve`', "Copilot agent");
+	const argumentsBlock = agentContent.match(/```json\n([\s\S]*?)\n```/)?.[1];
+	if (!argumentsBlock || JSON.parse(argumentsBlock).key !== "agent/agent-issues") {
+		throw new Error("Copilot agent instruction retrieval has incorrect arguments");
+	}
 
 	const skills = readJsonOutput(run("copilot", ["skill", "list", "--json"], environment));
 	if (!Array.isArray(skills)) {

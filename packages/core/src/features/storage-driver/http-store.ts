@@ -19,6 +19,7 @@ import { ContextConflictError, ContextRevisionError, ContextTermConflictError } 
 import { IssueCommentConflictError } from "./issue-comment-store.js";
 import { PlanEntryConflictError } from "../plan-entry/plan-entry-types.js";
 import type { StorageDriver } from "./storage-driver.js";
+import { InstructionFragmentError, InstructionResetAllError, InstructionWriteError, type InstructionResetAllInspection, type InstructionSourceResult, type RetrieveInstructionInput, type RetrievedInstruction } from "./instruction-store.js";
 import type { SearchCapability, SearchDiagnostic, SearchRequest, SearchResponse } from "./search-store.js";
 import type { ProspectorProjectSettings } from "../project-settings/prospector-settings.js";
 import type { AuthIdentity } from "../../auth/auth-provider.js";
@@ -49,6 +50,30 @@ import type {
 	StatusUpdateResult,
 	UnlinkResult
 } from "../entity-store/store-types.js";
+
+function isInstructionWriteErrorData(data: unknown): data is { reason: InstructionWriteError["reason"]; currentSource: InstructionSourceResult } {
+	if (!data || typeof data !== "object" || !("instructionWriteError" in data) || data.instructionWriteError !== true
+		|| !("reason" in data) || !["revision-conflict", "invalid-source"].includes(String(data.reason))
+		|| !("currentSource" in data) || !data.currentSource || typeof data.currentSource !== "object") return false;
+	const current = data.currentSource;
+	return "key" in current && typeof current.key === "string"
+		&& "body" in current && typeof current.body === "string"
+		&& "version" in current && typeof current.version === "string"
+		&& "kind" in current && ["agent", "skill", "fragment"].includes(String(current.kind))
+		&& "source" in current && !!current.source && typeof current.source === "object"
+		&& "revision" in current.source && typeof current.source.revision === "number";
+}
+
+function isInstructionFragmentErrorData(data: unknown): data is { reason: InstructionFragmentError["reason"]; currentSource?: InstructionSourceResult; affectedReferences: string[] } {
+	return !!data && typeof data === "object" && "instructionFragmentError" in data && data.instructionFragmentError === true
+		&& "reason" in data && ["invalid-source", "revision-conflict", "referenced", "already-exists", "not-personal"].includes(String(data.reason))
+		&& "affectedReferences" in data && Array.isArray(data.affectedReferences) && data.affectedReferences.every((key) => typeof key === "string");
+}
+
+function isInstructionResetAllErrorData(data: unknown): data is { reason: InstructionResetAllError["reason"]; currentInspection?: InstructionResetAllInspection } {
+	return !!data && typeof data === "object" && "instructionResetAllError" in data && data.instructionResetAllError === true
+		&& "reason" in data && ["invalid-source", "revision-conflict"].includes(String(data.reason));
+}
 
 export type HttpStoreOptions = {
 	/** Cloud API base URL, no trailing slash required (e.g. `https://api.example.com`). */
@@ -311,6 +336,74 @@ export class HttpStore implements StorageDriver {
 		return this.call("setProspectorSettings", settings);
 	}
 
+	public retrieveInstruction(input: RetrieveInstructionInput): Promise<RetrievedInstruction> {
+		return this.call("retrieveInstruction", input);
+	}
+
+	public previewInstruction(input: Parameters<StorageDriver["previewInstruction"]>[0]): ReturnType<StorageDriver["previewInstruction"]> {
+		return this.call("previewInstruction", input);
+	}
+
+	public listInstructionSources(input: Parameters<StorageDriver["listInstructionSources"]>[0]): ReturnType<StorageDriver["listInstructionSources"]> {
+		return this.call("listInstructionSources", input);
+	}
+
+	public readInstructionSource(input: Parameters<StorageDriver["readInstructionSource"]>[0]): ReturnType<StorageDriver["readInstructionSource"]> {
+		return this.call("readInstructionSource", input);
+	}
+
+	public compareInstructionSource(input: Parameters<StorageDriver["compareInstructionSource"]>[0]): ReturnType<StorageDriver["compareInstructionSource"]> {
+		return this.call("compareInstructionSource", input);
+	}
+
+	public inspectInstructionDependencies(input: Parameters<StorageDriver["inspectInstructionDependencies"]>[0]): ReturnType<StorageDriver["inspectInstructionDependencies"]> {
+		return this.call("inspectInstructionDependencies", input);
+	}
+
+	public saveInstructionSource(input: Parameters<StorageDriver["saveInstructionSource"]>[0]): ReturnType<StorageDriver["saveInstructionSource"]> {
+		return this.call("saveInstructionSource", input);
+	}
+
+	public listInstructionHistory(input: Parameters<StorageDriver["listInstructionHistory"]>[0]): ReturnType<StorageDriver["listInstructionHistory"]> {
+		return this.call("listInstructionHistory", input);
+	}
+
+	public readInstructionRevision(input: Parameters<StorageDriver["readInstructionRevision"]>[0]): ReturnType<StorageDriver["readInstructionRevision"]> {
+		return this.call("readInstructionRevision", input);
+	}
+
+	public restoreInstructionRevision(input: Parameters<StorageDriver["restoreInstructionRevision"]>[0]): ReturnType<StorageDriver["restoreInstructionRevision"]> {
+		return this.call("restoreInstructionRevision", input);
+	}
+
+	public resetInstructionSource(input: Parameters<StorageDriver["resetInstructionSource"]>[0]): ReturnType<StorageDriver["resetInstructionSource"]> {
+		return this.call("resetInstructionSource", input);
+	}
+
+	public inspectInstructionReset(input: Parameters<StorageDriver["inspectInstructionReset"]>[0]): ReturnType<StorageDriver["inspectInstructionReset"]> {
+		return this.call("inspectInstructionReset", input);
+	}
+
+	public inspectInstructionResetAll(input: Parameters<StorageDriver["inspectInstructionResetAll"]>[0]): ReturnType<StorageDriver["inspectInstructionResetAll"]> {
+		return this.call("inspectInstructionResetAll", input);
+	}
+
+	public resetInstructionAll(input: Parameters<StorageDriver["resetInstructionAll"]>[0]): ReturnType<StorageDriver["resetInstructionAll"]> {
+		return this.call("resetInstructionAll", input);
+	}
+
+	public commitInstructionChanges(input: Parameters<StorageDriver["commitInstructionChanges"]>[0]): ReturnType<StorageDriver["commitInstructionChanges"]> {
+		return this.call("commitInstructionChanges", input);
+	}
+
+	public createInstructionFragment(input: Parameters<StorageDriver["createInstructionFragment"]>[0]): ReturnType<StorageDriver["createInstructionFragment"]> {
+		return this.call("createInstructionFragment", input);
+	}
+
+	public removeInstructionFragment(input: Parameters<StorageDriver["removeInstructionFragment"]>[0]): ReturnType<StorageDriver["removeInstructionFragment"]> {
+		return this.call("removeInstructionFragment", input);
+	}
+
 	public getSearchCapability(): Promise<SearchCapability> {
 		return this.call("getSearchCapability");
 	}
@@ -369,6 +462,15 @@ export class HttpStore implements StorageDriver {
 		const body = (await response.json()) as JsonRpcSuccessResponse | JsonRpcErrorResponse;
 		if ("error" in body) {
 			const { message, data } = body.error;
+			if (isInstructionResetAllErrorData(data)) {
+				throw new InstructionResetAllError(data.reason, message, data.currentInspection);
+			}
+			if (isInstructionFragmentErrorData(data)) {
+				throw new InstructionFragmentError(data.reason, message, data.currentSource, data.affectedReferences);
+			}
+			if (isInstructionWriteErrorData(data)) {
+				throw new InstructionWriteError(data.reason, data.currentSource, message);
+			}
 			if (isCompletionObservationConflictData(data)) {
 				throw new CompletionObservationConflictError(data.observationId);
 			}

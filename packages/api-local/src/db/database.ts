@@ -98,9 +98,8 @@ export async function ensureDatabase(inputPath?: string, options?: DatabaseLocat
 			prepareUpgradeBackup();
 			await transformLegacySqliteV7(db);
 			await runMigrations(db, migrations, { prepareBackup: prepareUpgradeBackup });
-		} else if (sourceProfile.profile === "current-final"
-			&& !sourceProfile.evidence.ledgerIds.includes("legacy-v7-direct")) {
-			await runMigrations(db, migrations);
+		} else if (sourceProfile.profile === "current-final") {
+			await runMigrations(db, migrations, { prepareBackup: prepareUpgradeBackup });
 		}
 		if (!inputPath) {
 			importLegacyTenantDataIfNeeded(db, options);

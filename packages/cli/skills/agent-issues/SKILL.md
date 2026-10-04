@@ -4,8 +4,8 @@ description: Internal orientation guide for agents working in repos that use age
 argument-hint: Which part of agent-issues do you need to review before you continue?
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # Agent-Issues Tooling Guide
 

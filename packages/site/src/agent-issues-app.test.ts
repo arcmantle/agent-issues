@@ -152,10 +152,105 @@ afterEach(() => {
 	document.body.replaceChildren();
 	document.documentElement.removeAttribute("data-theme");
 	window.localStorage.removeItem("agent-issues-theme");
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
 describe("three-pane console shell", () => {
+	it.each(["page", "owner", "browser Back", "section", "entity", "initiative", "search result"])("protects pending instructions when %s navigation is cancelled", async (navigation) => {
+		const source = { type: "default", revision: 1, contentHash: "default" };
+		const items = [
+			{ key: "agent/agent-issues", kind: "agent", body: "Agent instructions", source },
+			{ key: "fragment/rules", kind: "fragment", body: "Rules", source }
+		];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const url = new URL(String(input), window.location.origin);
+			if (url.pathname.endsWith("catalog")) return Response.json({ version: "0.2.0", items, owner: { type: "cloud", tenantId: "demo", userId: "author" } });
+			if (url.pathname === "/api/projects") return Response.json({ kind: "available", projects: [] });
+			return Response.json({ ...items.find((item) => item.key === url.searchParams.get("key")), version: "0.2.0" });
+		});
+		const store = makeStore(makeConfig({ availableTenants: [{ id: "demo", displayName: "Demo" }, { id: "other", displayName: "Other" }] }), makeSnapshot());
+		await store.openInstructions();
+		await store.selectInstruction("agent/agent-issues");
+		const app = await mountApp(store);
+		const view = app.shadowRoot!.querySelector("agent-issues-instructions-view")!;
+		await view.updateComplete;
+		const editor = view.shadowRoot!.querySelector("agent-issues-instruction-editor")!;
+		await vi.waitFor(() => expect(editor.shadowRoot?.querySelector('[contenteditable="true"]')).toBeTruthy());
+		editor.shadowRoot!.querySelector<HTMLButtonElement>("[data-insert-fragment]")!.click();
+		await editor.updateComplete;
+		editor.shadowRoot!.querySelector<HTMLButtonElement>("[data-fragment-key]")!.click();
+		await vi.waitFor(() => expect(view.shadowRoot!.querySelector<HTMLButtonElement>("[data-save-instruction]")!.disabled).toBe(false));
+		const pending = await editor.readMarkdown();
+		const route = window.location.hash;
+		fetchMock.mockClear();
+		if (navigation === "page") app.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Projects"]')!.click();
+		else if (navigation === "owner") await store.selectTenant("other");
+		else if (navigation === "section") store.selectSection("context");
+		else if (navigation === "entity") store.selectEntity("ISS-other");
+		else if (navigation === "initiative") store.selectInitiative("INIT-other");
+		else if (navigation === "search result") await store.openSearchTarget({ type: "context" });
+		else {
+			window.history.replaceState({}, "", "#tenant=other&page=instructions&category=fragment");
+			await store.onPopState();
+		}
+		await view.updateComplete;
+		expect(view.shadowRoot!.querySelector('[role="dialog"]')).toBeTruthy();
+		view.shadowRoot!.querySelector<HTMLButtonElement>("[data-cancel-navigation]")!.click();
+		await view.updateComplete;
+		expect(store.activePage.get()).toBe("instructions");
+		expect(store.selectedTenant.get()).toBe("demo");
+		expect(store.selectedInstructionKey.get()).toBe("agent/agent-issues");
+		expect(window.location.hash).toBe(route);
+		expect(await editor.readMarkdown()).toBe(pending);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("opens personal instructions without a project and browses searchable categories", async () => {
+		vi.stubGlobal("innerWidth", 1280);
+		const source = { type: "default", revision: 1, contentHash: "default-hash" };
+		const items = [
+			{ key: "agent/agent-issues", kind: "agent", body: "# Agent", source },
+			{ key: "skill/prepare", kind: "skill", body: "# Personal prepare", source: { ...source, type: "override", defaultVersion: "0.1.0" },
+				releaseChanges: { defaultVersion: "0.2.0", newerDefaultAvailable: true, defaultChanged: true, dependencies: { added: [], removed: [], changed: [] } } },
+			{ key: "skill/tdd", kind: "skill", body: "# TDD", source },
+			{ key: "fragment/rules", kind: "fragment", body: "Rules", source }
+		];
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const url = new URL(String(input), window.location.origin);
+			expect(url.searchParams.has("project")).toBe(false);
+			if (url.pathname === "/api/instructions/catalog") {
+				return new Response(JSON.stringify({ version: "0.2.0", items, owner: { type: "local" } }));
+			}
+			const item = items.find((candidate) => candidate.key === url.searchParams.get("key"));
+			return new Response(JSON.stringify({ ...item, version: "0.2.0" }));
+		});
+		const store = makeStore(makeConfig(), makeSnapshot());
+		store.selectedProjectId.set(null);
+		store.projectDiscovery.set({ kind: "available", projects: [] });
+		const app = await mountApp(store);
+		const open = app.shadowRoot?.querySelector<HTMLButtonElement>("[data-open-instructions]");
+		expect(open).not.toBeNull();
+		open?.click();
+		await vi.waitFor(() => expect(app.shadowRoot?.querySelector("agent-issues-instructions-view")).not.toBeNull());
+		const view = app.shadowRoot!.querySelector("agent-issues-instructions-view")!;
+		await vi.waitFor(() => expect(view.shadowRoot?.textContent).toContain("Local profile"));
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-category="skill"]')?.click();
+		await view.updateComplete;
+		const search = view.shadowRoot?.querySelector<HTMLInputElement>("input[type=search]")!;
+		search.value = "prepare";
+		search.dispatchEvent(new Event("input"));
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelectorAll("[data-instruction-key]")).toHaveLength(1);
+		expect(view.shadowRoot?.textContent).toContain("Personal edits");
+		expect(view.shadowRoot?.textContent).toContain("Newer default");
+		view.shadowRoot?.querySelector<HTMLButtonElement>("[data-instruction-key]")?.click();
+		await vi.waitFor(() => expect(view.shadowRoot?.querySelector("agent-issues-instruction-editor")?.shadowRoot?.querySelector("[data-instruction-source]")?.textContent).toContain("Personal prepare"));
+		expect(view.shadowRoot?.textContent).toContain("0.2.0");
+		expect(new URLSearchParams(window.location.hash.slice(1)).get("page")).toBe("instructions");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
 	it("opens the global search dialog from the app-shell trigger", async () => {
 		vi.stubGlobal("innerWidth", 1280);
 		const app = await mountApp(makeStore(makeConfig(), makeSnapshot()));

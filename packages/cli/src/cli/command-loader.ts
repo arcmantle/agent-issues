@@ -83,6 +83,27 @@ export async function registerCommandFamily(cli: Cli<AgentIssuesContext>, argv: 
 				cli.register(KanbanCommand);
 				return;
 			}
+			case "instructions": {
+				const { CompareInstructionSourceCommand, InspectInstructionDependenciesCommand, CommitInstructionChangesCommand, CreateInstructionFragmentCommand, RemoveInstructionFragmentCommand, ListInstructionSourcesCommand, PreviewInstructionCommand, ReadInstructionSourceCommand, RetrieveInstructionCommand, SaveInstructionSourceCommand, ListInstructionHistoryCommand, ReadInstructionRevisionCommand, RestoreInstructionRevisionCommand, InspectInstructionResetCommand, ResetInstructionSourceCommand, InspectInstructionResetAllCommand, ResetInstructionAllCommand } = await import("./commands/instructions.js");
+				cli.register(RetrieveInstructionCommand);
+				cli.register(PreviewInstructionCommand);
+				cli.register(ListInstructionSourcesCommand);
+				cli.register(ReadInstructionSourceCommand);
+				cli.register(CompareInstructionSourceCommand);
+				cli.register(InspectInstructionDependenciesCommand);
+				cli.register(SaveInstructionSourceCommand);
+				cli.register(ListInstructionHistoryCommand);
+				cli.register(ReadInstructionRevisionCommand);
+				cli.register(RestoreInstructionRevisionCommand);
+				cli.register(InspectInstructionResetCommand);
+				cli.register(ResetInstructionSourceCommand);
+				cli.register(InspectInstructionResetAllCommand);
+				cli.register(ResetInstructionAllCommand);
+				cli.register(CommitInstructionChangesCommand);
+				cli.register(CreateInstructionFragmentCommand);
+				cli.register(RemoveInstructionFragmentCommand);
+				return;
+			}
 			case "meta": {
 				const { CapabilitiesCommand, HelpCommand, SchemaCommand } = await import("./commands/meta.js");
 				cli.register(HelpCommand);

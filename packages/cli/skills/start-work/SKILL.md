@@ -4,8 +4,8 @@ description: Start work on an initiative. Find the next workable issue, decide h
 argument-hint: Initiative or issue ID to start working on (optional)
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # Start Work
 

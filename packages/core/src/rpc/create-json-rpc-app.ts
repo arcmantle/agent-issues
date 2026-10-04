@@ -5,6 +5,7 @@ import { EntityConflictError, EntityRevisionError } from "../features/entity-sto
 import { ContextConflictError, ContextRevisionError, ContextTermConflictError } from "../features/context/context-types.js";
 import { IssueCommentConflictError } from "../features/storage-driver/issue-comment-store.js";
 import { PlanEntryConflictError } from "../features/plan-entry/plan-entry-types.js";
+import { InstructionFragmentError, InstructionResetAllError, InstructionWriteError } from "../features/storage-driver/instruction-store.js";
 import type { StorageDriver } from "../features/storage-driver/storage-driver.js";
 import { CompletionObservationConflictError, SynchronizeConflictError } from "../features/synchronize/canonical-chain.js";
 import { ChangeEventBroadcaster, mergeProjectChangeEventDetails, projectChangeEventForWrite } from "./change-events.js";
@@ -244,7 +245,13 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 				);
 			}
 		} catch (error) {
-			const data = error instanceof CompletionObservationConflictError
+			const data = error instanceof InstructionFragmentError
+				? { instructionFragmentError: true, reason: error.reason, currentSource: error.currentSource, affectedReferences: error.affectedReferences }
+				: error instanceof InstructionResetAllError
+				? { instructionResetAllError: true, reason: error.reason, currentInspection: error.currentInspection }
+				: error instanceof InstructionWriteError
+				? { instructionWriteError: true, reason: error.reason, currentSource: error.currentSource }
+				: error instanceof CompletionObservationConflictError
 				? { observationId: error.observationId }
 				: error instanceof SynchronizeConflictError
 				? { recordKind: error.recordKind, recordId: error.recordId, currentRevision: error.currentRevision, currentContentHash: error.currentContentHash }

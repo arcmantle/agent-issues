@@ -59,6 +59,63 @@ describe("local daemon JSON-RPC tracer bullet (ISS186)", () => {
 		expect(listed.map((entity) => entity.title)).toContain("Ship the daemon");
 	});
 
+	it("retrieves the requested release through RPC and rejects missing content without fallback", async () => {
+		const dbPath = path.join(tempDir, "test.db");
+		const seeded = await openSqliteStore(dbPath);
+		for (const version of ["1.0.0", "2.0.0"]) {
+			await seeded.store.importInstructionBundle({ version, items: [{ key: "skill/prepare", kind: "skill", body: `# Prepare ${version}\n` }] });
+		}
+		await seeded.store.close();
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: "daemon-tenant" });
+		const address = handle.server.address() as AddressInfo;
+		const client = new HttpStore({ baseUrl: `http://127.0.0.1:${address.port}`, bearerToken, tenantId: "daemon-tenant", buildHash: readBuildContentHash(), dbPath });
+		for (const version of ["1.0.0", "2.0.0"]) {
+			expect(await client.retrieveInstruction({ version, key: "skill/prepare" })).toMatchObject({
+				body: `# Prepare ${version}\n`, version, source: { revision: 1, contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) }
+			});
+		}
+		await expect(client.retrieveInstruction({ version: "3.0.0", key: "skill/prepare" })).rejects.toThrow("defaults unavailable");
+		await expect(client.retrieveInstruction({ version: "1.0.0", key: "skill/missing" })).rejects.toThrow("Instruction not found");
+	});
+
+	it("imports the host release bundle before retrieval without exposing client installation", async () => {
+		await handle.close();
+		const dbPath = path.join(tempDir, "test.db");
+		handle = createLocalDaemonServer({
+			authProvider, dbPath, port: 0,
+			instructionBundle: { version: "4.0.0", items: [{ key: "agent/agent-issues", kind: "agent", body: "# Official agent\n" }] }
+		});
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: "daemon-tenant" });
+		const address = handle.server.address() as AddressInfo;
+		const baseUrl = `http://127.0.0.1:${address.port}`;
+		const client = new HttpStore({ baseUrl, bearerToken, tenantId: "daemon-tenant", buildHash: readBuildContentHash(), dbPath });
+		expect(await client.retrieveInstruction({ version: "4.0.0", key: "agent/agent-issues" })).toMatchObject({ body: "# Official agent\n" });
+		const response = await fetch(`${baseUrl}/rpc`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${bearerToken}`, "x-agent-issues-build-hash": readBuildContentHash(), "x-agent-issues-db-path": dbPath },
+			body: JSON.stringify({ jsonrpc: "2.0", id: "install", method: "importInstructionBundle", params: {} })
+		});
+		expect(await response.json()).toMatchObject({ error: { code: -32601 } });
+	});
+
+	it("returns only an error when instruction storage is unavailable", async () => {
+		await handle.close();
+		const dbPath = path.join(tempDir, "test.db");
+		handle = createLocalDaemonServer({ authProvider, dbPath, port: 0, openStore: async () => { throw new Error("Instruction storage unavailable."); } });
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: "daemon-tenant" });
+		const address = handle.server.address() as AddressInfo;
+		const response = await fetch(`http://127.0.0.1:${address.port}/rpc`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${bearerToken}`, "x-agent-issues-build-hash": readBuildContentHash(), "x-agent-issues-db-path": dbPath },
+			body: JSON.stringify({ jsonrpc: "2.0", id: "retrieve", method: "retrieveInstruction", params: { version: "1.0.0", key: "skill/prepare" } })
+		});
+		const result = await response.json();
+		expect(JSON.stringify(result)).toContain("Instruction storage unavailable");
+		expect(result).not.toHaveProperty("result");
+	});
+
 	it("routes project identities to distinct projects in one shared database", async () => {
 		const dbPath = path.join(tempDir, "test.db");
 		const tenantId = "daemon-tenant";

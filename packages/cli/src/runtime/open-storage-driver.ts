@@ -26,6 +26,7 @@ export type OpenStorageDriverOptions = {
 export type OpenStorageDriverResult = {
 	store: StorageDriver;
 	backend: "local" | "cloud";
+	owner: { type: "local" } | { type: "cloud"; tenantId: string; userId: string };
 	/** The SQLite file path in local mode, or the cloud API base URL in cloud mode - kept as one field so callers that already echo it keep the same output shape (ADR13). */
 	dbPath: string;
 	/**
@@ -73,7 +74,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 
 		if (env[NO_DAEMON_ENV_VAR] === "1") {
 			const { store } = await openSqliteStore(options.dbPath, { ...options.databaseOptions, projectIdentity });
-			return { store, backend: "local", dbPath };
+			return { store, backend: "local", dbPath, owner: { type: "local" } };
 		}
 
 		const store = await openLocalDaemonStore({
@@ -84,7 +85,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 			projectIdentity,
 			workspaceRoot: currentWorkingDirectory
 		});
-		return { store, backend: "local", dbPath };
+		return { store, backend: "local", dbPath, owner: { type: "local" } };
 	}
 
 	if (isSessionExpired(activeLogin.expiresAt)) {
@@ -103,6 +104,7 @@ export async function openStorageDriver(options: OpenStorageDriverOptions = {}):
 	return {
 		store,
 		backend: "cloud",
+		owner: { type: "cloud", tenantId: activeLogin.tenantId, userId: activeLogin.userId },
 		dbPath: activeLogin.serviceUrl,
 		cloudConnection: { baseUrl: activeLogin.serviceUrl, bearerToken: activeLogin.accessToken, tenantId: activeLogin.tenantId }
 	};

@@ -1,4 +1,9 @@
-import { createLocalDaemonServer } from "@agent-issues/api-local";
+import { createLocalDaemonServer, type LocalDaemonServerHandle, type LocalDaemonServerOptions } from "@agent-issues/api-local";
+import type { InstructionBundle } from "@agent-issues/core";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import packageJson from "../../package.json" with { type: "json" };
 
 /**
  * Parses an optional `--db <path>` out of argv (appended by `spawnLocalDaemon`
@@ -25,6 +30,12 @@ function parseDbPathArg(argv: string[]): string | undefined {
  * exits via the daemon's own idle-timeout or version/db-path-mismatch
  * drain-then-exit.
  */
-export function runDaemonProcess(): void {
-	createLocalDaemonServer({ dbPath: parseDbPathArg(process.argv) });
+export function runDaemonProcess(options: Pick<LocalDaemonServerOptions, "credentialStoreOptions" | "homeDirectory" | "idleTimeoutMs"> = {}): LocalDaemonServerHandle {
+	const directory = path.dirname(fileURLToPath(import.meta.url));
+	const distDirectory = path.basename(directory) === "dist" ? directory : path.resolve(directory, "../../dist");
+	const instructionBundle = JSON.parse(readFileSync(path.join(distDirectory, "plugin/instruction-defaults.json"), "utf8")) as InstructionBundle;
+	if (instructionBundle.version !== packageJson.version) {
+		throw new Error(`Official instruction bundle does not match CLI release: ${packageJson.version}`);
+	}
+	return createLocalDaemonServer({ ...options, dbPath: parseDbPathArg(process.argv), instructionBundle });
 }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, renameSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,12 @@ try {
 	assertIncludes(details, "Agents (1)  agent-issues", "Claude agent inventory");
 	assertIncludes(details, "MCP servers (1)  agent-issues", "Claude MCP inventory");
 	assertIncludes(details, "start-work", "Claude namespaced skill inventory");
+	const agentContent = readFileSync(path.join(installedPlugin.installPath, "agents", "agent-issues.md"), "utf8");
+	assertIncludes(agentContent, 'call the agent-issues MCP tool `instruction_retrieve`', "Claude agent instruction retrieval");
+	const argumentsBlock = agentContent.match(/```json\n([\s\S]*?)\n```/)?.[1];
+	if (!argumentsBlock || JSON.parse(argumentsBlock).key !== "agent/agent-issues-claude") {
+		throw new Error("Claude agent instruction retrieval has incorrect arguments");
+	}
 
 	const server = installedPlugin.mcpServers?.["agent-issues"];
 	if (typeof server?.command !== "string" || !Array.isArray(server.args)) {
@@ -78,6 +84,7 @@ try {
 	);
 	assertIncludes(mcpOutput, '"name":"agent-issues"', "MCP server identity");
 	assertIncludes(mcpOutput, '"name":"project_identity"', "MCP tool list");
+	assertIncludes(mcpOutput, '"name":"instruction_retrieve"', "MCP instruction retrieval");
 
 	console.log("Claude plugin validation passed.");
 } finally {

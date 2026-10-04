@@ -65,12 +65,11 @@ export function buildPlugin({ sourceDir, targetDir }) {
 	const outputSkillsDir = path.join(outputRoot, "skills");
 	mkdirSync(outputSkillsDir, { recursive: true });
 	for (const skillName of skillNames) {
-		cpSync(path.join(sourceSkillsDir, skillName), path.join(outputSkillsDir, skillName), { recursive: true });
+		const sourcePath = path.join(sourceSkillsDir, skillName, "SKILL.md");
+		const skillDir = path.join(outputSkillsDir, skillName);
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(path.join(skillDir, "SKILL.md"), instructionLoader(readFileSync(sourcePath, "utf8"), `skill/${skillName}`));
 	}
-	for (const sharedPath of SHARED_SKILL_FILES) {
-		cpSync(path.join(sourceSkillsDir, sharedPath), path.join(outputSkillsDir, sharedPath), { recursive: true });
-	}
-	cpSync(path.join(sourceSkillsDir, RECIPES_DIR), path.join(outputSkillsDir, RECIPES_DIR), { recursive: true });
 	const pluginManifest = {
 		$schema: PLUGIN_SCHEMA,
 		name: "agent-issues",
@@ -118,16 +117,10 @@ export function buildPlugin({ sourceDir, targetDir }) {
 	mkdirSync(path.join(outputRoot, "agents", "copilot"), { recursive: true });
 	mkdirSync(path.join(outputRoot, "com.github.copilot", "agents"), { recursive: true });
 	const sourceClaudeAgentContent = readFileSync(sourceClaudeAgent, "utf8");
-	const packagedClaudeAgentContent = sourceClaudeAgentContent.replace(
-		"(../../skills/agent-issues-language.md)",
-		"(../skills/agent-issues-language.md)"
-	);
-	if (packagedClaudeAgentContent === sourceClaudeAgentContent) {
-		throw new Error(`Claude agent language standard link not found: ${sourceClaudeAgent}`);
-	}
+	const packagedClaudeAgentContent = instructionLoader(sourceClaudeAgentContent, "agent/agent-issues-claude");
 	writeFileSync(path.join(outputRoot, "agents", "agent-issues.md"), packagedClaudeAgentContent);
 	const sourceCopilotAgentContent = readFileSync(sourceCopilotAgent, "utf8");
-	const packagedCopilotAgentContent = sourceCopilotAgentContent;
+	const packagedCopilotAgentContent = instructionLoader(sourceCopilotAgentContent, "agent/agent-issues");
 	writeFileSync(
 		path.join(outputRoot, "agents", "copilot", "agent-issues.agent.md"),
 		packagedCopilotAgentContent
@@ -136,6 +129,23 @@ export function buildPlugin({ sourceDir, targetDir }) {
 		path.join(outputRoot, "com.github.copilot", "agents", "agent-issues.agent.md"),
 		packagedCopilotAgentContent
 	);
+	const instructionSources = readdirSync(sourceSkillsDir, { recursive: true })
+		.filter((relativePath) => relativePath.endsWith(".md"))
+		.sort()
+		.map((relativePath) => {
+			const portablePath = relativePath.split(path.sep).join("/");
+			const isSkill = skillNames.some((name) => portablePath === `${name}/SKILL.md`);
+			return {
+				key: isSkill ? `skill/${portablePath.split("/")[0]}` : `fragment/${portablePath.slice(0, -3).toLowerCase()}`,
+				kind: isSkill ? "skill" : "fragment",
+				body: readFileSync(path.join(sourceSkillsDir, relativePath), "utf8")
+			};
+		});
+	instructionSources.push(
+		{ key: "agent/agent-issues", kind: "agent", body: sourceCopilotAgentContent },
+		{ key: "agent/agent-issues-claude", kind: "agent", body: sourceClaudeAgentContent }
+	);
+	writeJson(path.join(outputRoot, "instruction-defaults.json"), { version: packageJson.version, items: instructionSources });
 	validatePlugin(outputRoot);
 
 	return { outputRoot, skillNames, version: packageJson.version };
@@ -158,9 +168,6 @@ export function validatePlugin(pluginDir) {
 	const skillsDir = path.join(pluginRoot, "skills");
 	assertFile(path.join(pluginRoot, "README.md"));
 	assertFile(path.join(pluginRoot, "com.github.copilot", "agents", "agent-issues.agent.md"));
-	for (const relativePath of REQUIRED_SHARED_PATHS) {
-		assertFile(path.join(skillsDir, relativePath));
-	}
 	const skillNames = readdirSync(skillsDir, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory() && existsSync(path.join(skillsDir, entry.name, "SKILL.md")))
 		.map((entry) => entry.name);
@@ -184,6 +191,30 @@ export function validatePlugin(pluginDir) {
 	}
 
 	return { pluginRoot, skillNames: skillNames.sort(), version: manifest.version };
+}
+
+function instructionLoader(source, key) {
+	const frontmatter = source.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)?.[0];
+	if (!frontmatter) {
+		throw new Error(`Instruction discovery metadata not found: ${key}`);
+	}
+	const [kind, name] = key.split("/");
+	return `${frontmatter}
+This file is the loader for the \`${name}\` ${kind}.
+
+Before you use this ${kind}, call the agent-issues MCP tool \`instruction_retrieve\` with these arguments:
+
+\`\`\`json
+${JSON.stringify({ key }, null, 2)}
+\`\`\`
+
+The first text block contains JSON metadata. The second contains one Markdown part.
+If \`nextOffset\` is not null, call \`instruction_retrieve\` again with the same \`key\` and \`documentHash\`, with \`nextOffset\` as \`offset\`. Copy the returned offset; do not calculate it. Continue until \`nextOffset\` is null. Read all Markdown parts in order before you use this ${kind}. All parts must have the same \`documentHash\` and \`version\`.
+
+Follow the complete returned document as this ${kind}'s instructions. Required fragments are already included. Do not read separate fragment files. Do not use shell commands or local files to retrieve these instructions.
+
+If the document changes, discard all parts and restart with \`key\` only. If the tool is unavailable or another retrieval failure occurs, stop and report the failure. Do not continue the task. Do not use cached, bundled, or older-default instructions as a fallback.
+`;
 }
 
 function assertFile(filePath) {

@@ -152,6 +152,41 @@ const RELATION_TYPE_VALUES = Array.from(new Set(ALLOWED_RELATIONS.map((relation)
 const STATUS_VALUES = Array.from(new Set(Object.values(STATUS_FLOW).flat())).sort();
 const COMMAND_SPECS: CommandSpec[] = [
 	{
+		name: "instruction",
+		summary: "Read and save personal instruction Markdown for the running CLI release.",
+		usage: [
+			"agent-issues instruction retrieve <key> [--json]",
+			"agent-issues instruction preview <key> --input-file <path|-> [--json]",
+			"agent-issues instruction list [--json]",
+			"agent-issues instruction read <key> [--json]",
+			"agent-issues instruction compare <key> [--json]",
+			"agent-issues instruction dependencies <key> [--json]",
+			"agent-issues instruction save <key> --body-file <path|-> --expected-revision <revision> [--json]",
+			"agent-issues instruction history <key> [--json]",
+			"agent-issues instruction revision <key> --revision <revision> [--json]",
+			"agent-issues instruction restore <key> --revision <revision> --expected-revision <revision> [--json]",
+			"agent-issues instruction reset-inspect <key> [--json]",
+			"agent-issues instruction reset <key> --expected-revision <revision> --yes [--json]",
+			"agent-issues instruction reset-all-inspect [--json]",
+			"agent-issues instruction reset-all --input-file <path|-> --yes [--json]",
+			"agent-issues instruction commit --input-file <path|-> [--json]",
+			"agent-issues instruction fragment create <key> --body-file <path|-> [--json]",
+			"agent-issues instruction fragment remove <key> --expected-revision <revision> [--json]"
+		],
+		examples: ["agent-issues instruction retrieve skill/prepare --json", "agent-issues instruction retrieve agent/agent-issues"],
+		notes: [
+			"Local mode uses one local profile. Cloud mode uses the authenticated tenant and user across projects.",
+			"Retrieval fails if storage, the requested release, or the item is unavailable. There is no fallback.",
+			"Read returns source Markdown without fragment expansion. Retrieve returns assembled Markdown.",
+			"Preview reads a JSON object with a non-empty changes array of key and body pairs. It assembles pending Markdown without saving. Saved source metadata identifies base revisions; pendingKeys identifies unsaved bodies. Human output starts with Pending.",
+			"Save changes an existing item's personal override, not official defaults or discovery metadata. It activates the next retrieval.",
+			"Stale or invalid saves leave content unchanged. JSON write errors include current source and revision data for comparison and retry.",
+			"Commit reads a JSON object with a changes array. Each change has operation (save or remove), key, and expectedRevision. Save also requires body. The final graph is validated before all changes commit together.",
+			"Create adds only a personal fragment. Remove requires an unreferenced personal fragment and its current revision; revision history is retained."
+		],
+		output: { human: ["Complete stored Markdown."], json: ["Markdown, stable item key, kind, requesting release, source revision, and content hash."] }
+	},
+	{
 		name: "sql",
 		summary: "Run a read-only SQL query against the active local SQLite database.",
 		usage: [

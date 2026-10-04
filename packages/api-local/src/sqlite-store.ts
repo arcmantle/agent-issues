@@ -25,6 +25,8 @@ import { LocalIssueCommentStore } from "./features/issue-comment/store.js";
 import { LocalPlanEntryStore } from "./features/plan-entry/store.js";
 import * as localProjectSettingsStore from "./features/project-settings/store.js";
 import { LocalSearchStore } from "./features/search/search-store.js";
+import { LocalInstructionStore } from "./features/instructions/instruction-store.js";
+import type { InstructionBundle, RetrieveInstructionInput, SaveInstructionSourceInput } from "@agent-issues/core";
 
 export type OpenSqliteStoreResult = {
 	store: SqliteStore;
@@ -69,6 +71,78 @@ export class SqliteStore implements StorageDriver {
 
 	public get tenantId(): string {
 		return this.executor.tenantId;
+	}
+
+	public async importInstructionBundle(bundle: InstructionBundle): Promise<void> {
+		return new LocalInstructionStore(this.executor).importBundle(bundle);
+	}
+
+	public async retrieveInstruction(input: RetrieveInstructionInput) {
+		return new LocalInstructionStore(this.executor).retrieveInstruction(input);
+	}
+
+	public async previewInstruction(input: Parameters<StorageDriver["previewInstruction"]>[0]) {
+		return new LocalInstructionStore(this.executor).previewInstruction(input);
+	}
+
+	public async readInstructionSource(input: RetrieveInstructionInput) {
+		return new LocalInstructionStore(this.executor).readInstructionSource(input);
+	}
+
+	public async compareInstructionSource(input: RetrieveInstructionInput) {
+		return new LocalInstructionStore(this.executor).compareInstructionSource(input);
+	}
+
+	public async inspectInstructionDependencies(input: RetrieveInstructionInput) {
+		return new LocalInstructionStore(this.executor).inspectInstructionDependencies(input);
+	}
+
+	public async listInstructionSources(input: { version: string }) {
+		return new LocalInstructionStore(this.executor).listInstructionSources(input);
+	}
+
+	public async saveInstructionSource(input: SaveInstructionSourceInput) {
+		return new LocalInstructionStore(this.executor).saveInstructionSource(input);
+	}
+
+	public async listInstructionHistory(input: RetrieveInstructionInput) {
+		return new LocalInstructionStore(this.executor).listInstructionHistory(input);
+	}
+
+	public async readInstructionRevision(input: Parameters<StorageDriver["readInstructionRevision"]>[0]) {
+		return new LocalInstructionStore(this.executor).readInstructionRevision(input);
+	}
+
+	public async restoreInstructionRevision(input: Parameters<StorageDriver["restoreInstructionRevision"]>[0]) {
+		return new LocalInstructionStore(this.executor).restoreInstructionRevision(input);
+	}
+
+	public async resetInstructionSource(input: Parameters<StorageDriver["resetInstructionSource"]>[0]) {
+		return new LocalInstructionStore(this.executor).resetInstructionSource(input);
+	}
+
+	public async inspectInstructionReset(input: Parameters<StorageDriver["inspectInstructionReset"]>[0]) {
+		return new LocalInstructionStore(this.executor).inspectInstructionReset(input);
+	}
+
+	public async inspectInstructionResetAll(input: Parameters<StorageDriver["inspectInstructionResetAll"]>[0]) {
+		return new LocalInstructionStore(this.executor).inspectInstructionResetAll(input);
+	}
+
+	public async resetInstructionAll(input: Parameters<StorageDriver["resetInstructionAll"]>[0]) {
+		return new LocalInstructionStore(this.executor).resetInstructionAll(input);
+	}
+
+	public async commitInstructionChanges(input: Parameters<StorageDriver["commitInstructionChanges"]>[0]) {
+		return new LocalInstructionStore(this.executor).commitInstructionChanges(input);
+	}
+
+	public async createInstructionFragment(input: Parameters<StorageDriver["createInstructionFragment"]>[0]) {
+		return new LocalInstructionStore(this.executor).createInstructionFragment(input);
+	}
+
+	public async removeInstructionFragment(input: Parameters<StorageDriver["removeInstructionFragment"]>[0]) {
+		return new LocalInstructionStore(this.executor).removeInstructionFragment(input);
 	}
 
 	public withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver {

@@ -10,6 +10,7 @@ import type { ProjectSettingsStore } from "./project-settings-store.js";
 import type { SearchStore } from "./search-store.js";
 import type { SynchronizeStore } from "./synchronize-store.js";
 import type { UserDirectoryStore } from "./user-directory-store.js";
+import type { InstructionStore } from "./instruction-store.js";
 
 /**
  * The engine-agnostic boundary the domain layer talks to (ADR11, ADR13):
@@ -24,7 +25,7 @@ import type { UserDirectoryStore } from "./user-directory-store.js";
  * `SynchronizeStore` and the fourth feature, history diagnostics (which has
  * no public seam of its own - see `HistoryDiagnosticsStore`'s doc comment).
  */
-export interface StorageDriver extends EntityStore, ContextStore, IssueBreakdownStore, IssueCommentStore, PlanEntryStore, ProjectSettingsStore, SearchStore, SynchronizeStore, UserDirectoryStore {
+export interface StorageDriver extends EntityStore, ContextStore, IssueBreakdownStore, IssueCommentStore, PlanEntryStore, ProjectSettingsStore, SearchStore, SynchronizeStore, UserDirectoryStore, InstructionStore {
 	readonly tenantId: string;
 	withAuthenticatedIdentity(identity: AuthIdentity): StorageDriver;
 	getHistoryDiagnostics(): Promise<HistoryDiagnostics>;

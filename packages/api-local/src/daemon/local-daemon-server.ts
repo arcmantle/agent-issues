@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 
-import { createJsonRpcApp, resolveWellKnownLocalTenantId, type AuthProvider, type StorageDriver } from "@agent-issues/core";
+import { createJsonRpcApp, resolveWellKnownLocalTenantId, type AuthProvider, type InstructionBundle, type StorageDriver } from "@agent-issues/core";
 
 import { readBuildContentHash } from "./build-info.js";
 import { resolveDatabasePath, resolveTenantRootPath } from "../db/database.js";
@@ -53,6 +53,7 @@ export interface LocalDaemonServerOptions extends DaemonStateStoreOptions {
 	buildHash?: string;
 	/** Injectable store opener for daemon initialization recovery tests. */
 	openStore?: OpenDaemonStore;
+	instructionBundle?: InstructionBundle;
 }
 
 export interface LocalDaemonServerHandle {
@@ -104,7 +105,15 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 		let store = storesByWorkspace.get(storeKey);
 		if (!store) {
 			store = openStore(dbPath, { currentWorkingDirectory, projectIdentity, tenant: tenantId })
-				.then((opened) => opened.store)
+				.then(async (opened) => {
+					try {
+						if (options.instructionBundle) await opened.store.importInstructionBundle(options.instructionBundle);
+						return opened.store;
+					} catch (error) {
+						await opened.store.close();
+						throw error;
+					}
+				})
 				.catch((error: unknown) => {
 					if (storesByWorkspace.get(storeKey) === store) storesByWorkspace.delete(storeKey);
 					throw error;

@@ -4,6 +4,23 @@ type McpDataCommand = {
 };
 
 const INCLUDED_MCP_DATA_COMMANDS: readonly McpDataCommand[] = [
+	{ command: "instruction retrieve", toolNames: ["instruction_retrieve"] },
+	{ command: "instruction preview", toolNames: ["instruction_preview"] },
+	{ command: "instruction list", toolNames: ["instruction_list"] },
+	{ command: "instruction read", toolNames: ["instruction_read"] },
+	{ command: "instruction compare", toolNames: ["instruction_compare"] },
+	{ command: "instruction dependencies", toolNames: ["instruction_dependencies"] },
+	{ command: "instruction save", toolNames: ["instruction_save"] },
+	{ command: "instruction history", toolNames: ["instruction_history"] },
+	{ command: "instruction revision", toolNames: ["instruction_revision"] },
+	{ command: "instruction restore", toolNames: ["instruction_restore"] },
+	{ command: "instruction reset-inspect", toolNames: ["instruction_reset_inspect"] },
+	{ command: "instruction reset", toolNames: ["instruction_reset"] },
+	{ command: "instruction reset-all-inspect", toolNames: ["instruction_reset_all_inspect"] },
+	{ command: "instruction reset-all", toolNames: ["instruction_reset_all"] },
+	{ command: "instruction commit", toolNames: ["instruction_commit"] },
+	{ command: "instruction fragment create", toolNames: ["instruction_fragment_create"] },
+	{ command: "instruction fragment remove", toolNames: ["instruction_fragment_remove"] },
 	{ command: "project-identity", toolNames: ["project_identity"] },
 	{ command: "create", toolNames: ["entity_create"] },
 	{ command: "edit", toolNames: ["entity_edit"] },

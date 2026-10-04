@@ -4,8 +4,8 @@ description: Selects and recommends the next workable issue from a tracked scope
 argument-hint: Initiative or issue ID
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # Next Work
 

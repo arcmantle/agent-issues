@@ -1,62 +1,47 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { expect, it } from "vitest";
+import { readBuildContentHash, readDaemonToken } from "@agent-issues/api-local";
+import { HttpStore, resolveWellKnownLocalTenantId, type RunCredentialCommand } from "@agent-issues/core";
 import { runDaemonProcess } from "./daemon-main.js";
+import packageJson from "../../package.json" with { type: "json" };
 
-const createLocalDaemonServerMock = vi.hoisted(() => vi.fn());
-vi.mock("@agent-issues/api-local", () => ({ createLocalDaemonServer: createLocalDaemonServerMock }));
-
-/**
- * The self-respawned daemon process's real entrypoint (ISS190): what
- * `spawnLocalDaemon` (`local-daemon-store.ts`) actually launches. Kept
- * intentionally thin - just starts the real daemon server and lets the
- * event loop (the listening HTTP server) keep the process alive; the
- * daemon's own idle-timeout/drain-then-exit logic is what eventually calls
- * `process.exit`, already covered by `@agent-issues/api-local`'s own
- * `local-daemon-server.test.ts`.
- */
-describe("runDaemonProcess (ISS190)", () => {
-	beforeEach(() => {
-		createLocalDaemonServerMock.mockClear();
-	});
-
-	it("starts the real local daemon server with no auth-provider override, so it mints its own token", () => {
-		createLocalDaemonServerMock.mockReturnValue({ server: { address: () => ({ port: 0 }) as AddressInfo } });
-
-		runDaemonProcess();
-
-		expect(createLocalDaemonServerMock).toHaveBeenCalledOnce();
-		const [options] = createLocalDaemonServerMock.mock.calls[0] as [Record<string, unknown>];
-		expect(options.authProvider).toBeUndefined();
-	});
-
-	it("forwards a --db <path> argv flag as the server's dbPath (ISS190)", () => {
-		createLocalDaemonServerMock.mockReturnValue({ server: { address: () => ({ port: 0 }) as AddressInfo } });
-		const originalArgv = process.argv;
-		process.argv = [...originalArgv.slice(0, 2), "--spawn-daemon", "--db", "/tmp/other.db"];
-
-		try {
-			runDaemonProcess();
-		} finally {
-			process.argv = originalArgv;
+it("starts the CLI daemon with token auth and imports its official release into the selected database", async () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-daemon-entrypoint-"));
+	const dbPath = path.join(directory, "instructions.db");
+	const credentials = new Map<string, string>();
+	const runCommand: RunCredentialCommand = async (command) => {
+		const [action, , account, , service] = command.args;
+		const key = `${service}:${account}`;
+		if (action === "add-generic-password") {
+			credentials.set(key, command.args[6]);
+			return { stdout: "", exitCode: 0 };
 		}
-
-		const [options] = createLocalDaemonServerMock.mock.calls[0] as [Record<string, unknown>];
-		expect(options.dbPath).toBe("/tmp/other.db");
-	});
-
-	it("leaves dbPath undefined when no --db flag is present in argv", () => {
-		createLocalDaemonServerMock.mockReturnValue({ server: { address: () => ({ port: 0 }) as AddressInfo } });
-		const originalArgv = process.argv;
-		process.argv = [...originalArgv.slice(0, 2), "--spawn-daemon"];
-
-		try {
-			runDaemonProcess();
-		} finally {
-			process.argv = originalArgv;
+		if (action === "find-generic-password") {
+			const value = credentials.get(key);
+			return value === undefined ? { stdout: "", exitCode: 44 } : { stdout: value, exitCode: 0 };
 		}
-
-		const [options] = createLocalDaemonServerMock.mock.calls[0] as [Record<string, unknown>];
-		expect(options.dbPath).toBeUndefined();
-	});
+		credentials.delete(key);
+		return { stdout: "", exitCode: 0 };
+	};
+	const credentialStoreOptions = { platform: "darwin" as const, runCommand };
+	const originalArgv = process.argv;
+	process.argv = [...originalArgv.slice(0, 2), "--spawn-daemon", "--db", dbPath];
+	const handle = runDaemonProcess({ credentialStoreOptions, homeDirectory: directory, idleTimeoutMs: 0 });
+	try {
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const bearerToken = await readDaemonToken({ ...credentialStoreOptions, dbPath });
+		expect(bearerToken).toBeTruthy();
+		const address = handle.server.address() as AddressInfo;
+		const client = new HttpStore({ baseUrl: `http://127.0.0.1:${address.port}`, bearerToken: bearerToken!, tenantId: resolveWellKnownLocalTenantId(), buildHash: readBuildContentHash(), dbPath });
+		expect(await client.retrieveInstruction({ version: packageJson.version, key: "skill/prepare" })).toMatchObject({
+			version: packageJson.version, body: expect.stringContaining("# Prepare"), source: { type: "default", revision: 1 }
+		});
+	} finally {
+		process.argv = originalArgv;
+		await handle.close();
+		rmSync(directory, { recursive: true, force: true });
+	}
 });

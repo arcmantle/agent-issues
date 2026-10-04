@@ -84,6 +84,49 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+describe("personal instruction routing", () => {
+	it("discards an instruction source response after the owner scope changes", async () => {
+		let resolveSource!: (response: Response) => void;
+		const pendingSource = new Promise<Response>((resolve) => { resolveSource = resolve; });
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			if (String(input).startsWith("/api/instructions/source")) return pendingSource;
+			return new Response(JSON.stringify({ kind: "available", projects: [] }));
+		});
+		const store = new AgentIssuesStore();
+		store.selectedTenant.set("owner-a");
+		store.activePage.set("instructions");
+		const read = store.selectInstruction("skill/prepare");
+		await store.selectTenant("owner-b");
+		resolveSource(new Response(JSON.stringify({ key: "skill/prepare", body: "Owner A content", version: "0.2.0" })));
+		await read;
+		expect(store.instructionSource.get()).toBeNull();
+		expect(store.instructionCatalog.get()).toBeNull();
+		expect(store.selectedInstructionKey.get()).toBeNull();
+		expect(store.instructionSourceLoading.get()).toBe(false);
+	});
+
+	it("restores a direct personal instruction route without loading project data", async () => {
+		window.history.replaceState({}, "", "/#tenant=demo&page=instructions&category=skill&instruction=skill%2Fprepare");
+		const historyLength = window.history.length;
+		const item = { key: "skill/prepare", kind: "skill", body: "# Prepare", source: { type: "default", revision: 1, contentHash: "hash" } };
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const url = new URL(String(input), window.location.origin);
+			if (url.pathname === "/api/instructions/catalog") return new Response(JSON.stringify({ version: "0.2.0", items: [item], owner: { type: "local" } }));
+			expect(url.pathname).toBe("/api/instructions/source");
+			return new Response(JSON.stringify({ ...item, version: "0.2.0" }));
+		});
+		const store = new AgentIssuesStore();
+		await store.onBrowserNavigation();
+		expect(store.activePage.get()).toBe("instructions");
+		expect(store.selectedProjectId.get()).toBeNull();
+		expect(store.instructionCategory.get()).toBe("skill");
+		expect(store.instructionSource.get()?.body).toBe("# Prepare");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(window.history.length).toBe(historyLength);
+		window.history.replaceState({}, "", "/");
+	});
+});
+
 describe("global search request lifecycle", () => {
 	it("searches a one-character query after the debounce delay", async () => {
 		vi.useFakeTimers();

@@ -4,8 +4,8 @@ description: Given whatever the user provides — an ID, a topic, a description,
 argument-hint: An ID, a topic, or a description of what to look into
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 # Prepare
 

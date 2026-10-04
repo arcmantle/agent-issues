@@ -3,8 +3,8 @@ name: plan
 description: Ask the user detailed questions about a plan, decision, or idea. Use when the user wants to test a plan or uses a plan trigger phrase.
 ---
 
-Follow the shared [language standard](../agent-issues-language.md).
-Follow the shared [skill operating contract](../agent-issues-operating-contract.md).
+<!-- include:fragment/agent-issues-language -->
+<!-- include:fragment/agent-issues-operating-contract -->
 
 Use the `domain-modeling` skill for this interview.
 

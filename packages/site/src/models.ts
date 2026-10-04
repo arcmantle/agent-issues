@@ -272,7 +272,7 @@ export type ProjectSummary =
 
 export type ViewMode = "overview" | "graph" | "raw";
 
-export type PageMode = "list" | "initiative" | "entity";
+export type PageMode = "list" | "initiative" | "entity" | "instructions";
 
 export type RootTab = "initiatives" | "adrs";
 

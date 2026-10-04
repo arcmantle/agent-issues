@@ -6,7 +6,7 @@ import {
 	type CallDaemonWithVersionHandshakeRetryOptions
 } from "./daemon-lifecycle.js";
 
-const DEFAULT_DAEMON_REQUEST_TIMEOUT_MS = 1000;
+const DEFAULT_DAEMON_REQUEST_TIMEOUT_MS = 5000;
 
 export type LocalDaemonStoreOptions = Omit<CallDaemonWithVersionHandshakeRetryOptions, "spawn"> & {
 	spawn?: CallDaemonWithVersionHandshakeRetryOptions["spawn"];
@@ -61,7 +61,7 @@ export class LocalDaemonStore extends HttpStore {
 			});
 		} catch (error) {
 			if (error instanceof DOMException && error.name === "TimeoutError") {
-				throw new Error(`Local daemon request timed out after ${this.requestTimeoutMs}ms.`, { cause: error });
+				throw new Error(`Local daemon request timed out after ${this.requestTimeoutMs}ms. Request: ${method}.`, { cause: error });
 			}
 			throw error;
 		}
