@@ -14,7 +14,8 @@ const packages = [
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 for (const packageName of packages) {
-  execFileSync(pnpm, ['--filter', packageName, 'build'], {
+  const buildScript = packageName === 'agent-issues' && process.argv.includes('--development') ? 'build:dev' : 'build';
+  execFileSync(pnpm, ['--filter', packageName, buildScript], {
     stdio: 'inherit',
     shell: process.platform === 'win32',
     windowsHide: process.platform === 'win32',

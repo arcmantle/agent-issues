@@ -10,6 +10,7 @@ import { clearDaemonStateIfOwned, saveDaemonState, type DaemonStateStoreOptions 
 import { openSqliteStore } from "../sqlite-store.js";
 
 type OpenDaemonStore = typeof openSqliteStore;
+type DaemonStore = Awaited<ReturnType<OpenDaemonStore>>["store"];
 
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -98,29 +99,31 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 	const authProvider =
 		options.authProvider ?? new DaemonTokenAuthProvider({ token: mintedToken!, tenantId: resolveWellKnownLocalTenantId() });
 
-	const storesByWorkspace = new Map<string, Promise<StorageDriver>>();
-	function getOrOpenStore(tenantId: string, projectIdentity?: string, workspaceRoot?: string): Promise<StorageDriver> {
+	const storesByWorkspace = new Map<string, Promise<DaemonStore>>();
+	const instructionInitialization = new WeakMap<DaemonStore, Promise<void>>();
+	async function getOrOpenStore(tenantId: string, projectIdentity?: string, workspaceRoot?: string, method?: string): Promise<StorageDriver> {
 		const currentWorkingDirectory = workspaceRoot ? resolveTenantRootPath(workspaceRoot) : process.cwd();
 		const storeKey = `${tenantId}:${projectIdentity ?? currentWorkingDirectory}`;
 		let store = storesByWorkspace.get(storeKey);
 		if (!store) {
 			store = openStore(dbPath, { currentWorkingDirectory, projectIdentity, tenant: tenantId })
-				.then(async (opened) => {
-					try {
-						if (options.instructionBundle) await opened.store.importInstructionBundle(options.instructionBundle);
-						return opened.store;
-					} catch (error) {
-						await opened.store.close();
-						throw error;
-					}
-				})
+				.then((opened) => opened.store)
 				.catch((error: unknown) => {
 					if (storesByWorkspace.get(storeKey) === store) storesByWorkspace.delete(storeKey);
 					throw error;
 				});
 			storesByWorkspace.set(storeKey, store);
 		}
-		return store;
+		const opened = await store;
+		if (method?.includes("Instruction") && options.instructionBundle) {
+			let initialization = instructionInitialization.get(opened);
+			if (!initialization) {
+				initialization = opened.importInstructionBundle(options.instructionBundle);
+				instructionInitialization.set(opened, initialization);
+			}
+			await initialization;
+		}
+		return opened;
 	}
 
 	async function closeAllStores(): Promise<void> {
@@ -168,7 +171,7 @@ export function createLocalDaemonServer(options: LocalDaemonServerOptions): Loca
 
 	const app = createJsonRpcApp({
 		authProvider,
-		createStore: (identity, projectIdentity, workspaceRoot) => getOrOpenStore(identity.tenantId, projectIdentity, workspaceRoot),
+		createStore: (identity, projectIdentity, workspaceRoot, method) => getOrOpenStore(identity.tenantId, projectIdentity, workspaceRoot, method),
 		versionHandshake: {
 			buildHash,
 			dbPath,

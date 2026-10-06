@@ -54,7 +54,7 @@ export type CreateJsonRpcAppOptions = {
 	 * client workspace's resolved project identity) - the gate itself never branches on which backend it's
 	 * fronting.
 	 */
-	createStore: (identity: AuthIdentity, projectIdentity?: string, workspaceRoot?: string) => StorageDriver | Promise<StorageDriver>;
+	createStore: (identity: AuthIdentity, projectIdentity?: string, workspaceRoot?: string, method?: string) => StorageDriver | Promise<StorageDriver>;
 	/**
 	 * The local daemon's build-content-hash version handshake (ADR45,
 	 * ISS188). Omitted entirely by the cloud gate, which has no build-hash
@@ -213,7 +213,7 @@ export function createJsonRpcApp(options: CreateJsonRpcAppOptions): Express {
 			// failure, a locked db file). Left outside, the rejection escapes to
 			// express' default handler and the caller only ever sees an opaque
 			// HTTP 500 instead of the actual message.
-			const store = (await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER))).withAuthenticatedIdentity(identity);
+			const store = (await createStore(identity, request.header(PROJECT_IDENTITY_HEADER), request.header(WORKSPACE_ROOT_HEADER), rpcRequest.method)).withAuthenticatedIdentity(identity);
 			const isWrite = writeMethods.has(rpcRequest.method);
 			const changeBefore = isWrite
 				? await projectChangeEventForWrite(

@@ -9,7 +9,7 @@ import { withStore } from "../cli/shared.js";
 import type { SavedLoginStoreOptions } from "../auth/auth-session.js";
 import { openStorageDriver } from "../runtime/open-storage-driver.js";
 import { ConfirmationTokenStore } from "../runtime/confirmation-tokens.js";
-import packageJson from "../../package.json" with { type: "json" };
+import { getInstructionVersion } from "../runtime/instruction-version.js";
 import type { CommitInstructionChangesInput } from "@agent-issues/core";
 
 export type LiveSiteInfo = {
@@ -340,13 +340,13 @@ async function handleRequest(input: {
 			const opened = await openStorageDriver({ dbPath: input.dbPath, databaseOptions: { currentWorkingDirectory: input.currentWorkingDirectory, tenant: requestedTenant },
 				authSessionOptions: input.credentialStoreOptions, localDaemon: { buildHash: readBuildContentHash() } });
 			try {
-				const impact = await opened.store.inspectInstructionResetAll({ version: packageJson.version });
+				const impact = await opened.store.inspectInstructionResetAll({ version: getInstructionVersion() });
 				if (inspecting) {
 					const confirmation = input.confirmationTokens.issue("instruction_reset_all", { owner: opened.owner, impact });
 					writeJson(input.response, { ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
 				} else {
 					input.confirmationTokens.consume(reset!.confirmationToken, "instruction_reset_all", { owner: opened.owner, impact });
-					writeJson(input.response, await opened.store.resetInstructionAll({ version: packageJson.version, expectedRevisions: reset!.expectedRevisions }));
+					writeJson(input.response, await opened.store.resetInstructionAll({ version: getInstructionVersion(), expectedRevisions: reset!.expectedRevisions }));
 				}
 			} finally {
 				await opened.store.close();
@@ -374,8 +374,8 @@ async function handleRequest(input: {
 				throw new Error("Invalid fragment request.");
 			}
 			fragment = creating
-				? { key: value.key, body: value.body!, version: packageJson.version }
-				: { key: value.key, expectedRevision: value.expectedRevision!, version: packageJson.version };
+				? { key: value.key, body: value.body!, version: getInstructionVersion() }
+				: { key: value.key, expectedRevision: value.expectedRevision!, version: getInstructionVersion() };
 		} catch (error) {
 			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid fragment request.");
 			return;
@@ -405,7 +405,7 @@ async function handleRequest(input: {
 			const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Partial<SaveInstructionSourceInput> | null;
 			if (!value || typeof value.key !== "string" || !value.key.trim() || typeof value.body !== "string"
 				|| !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision! < 1) throw new Error("Invalid instruction save request.");
-			save = { key: value.key, body: value.body, expectedRevision: value.expectedRevision!, version: packageJson.version };
+			save = { key: value.key, body: value.body, expectedRevision: value.expectedRevision!, version: getInstructionVersion() };
 		} catch (error) {
 			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid instruction save request.");
 			return;
@@ -453,8 +453,8 @@ async function handleRequest(input: {
 				currentWorkingDirectory: input.currentWorkingDirectory,
 				tenant: requestedTenant
 			}, async (store) => {
-				if (inspecting) return await store.inspectInstructionReset({ key: resetKey, version: packageJson.version });
-				return await store.resetInstructionSource({ key: resetKey, version: packageJson.version, expectedRevision: expectedRevision! });
+				if (inspecting) return await store.inspectInstructionReset({ key: resetKey, version: getInstructionVersion() });
+				return await store.resetInstructionSource({ key: resetKey, version: getInstructionVersion(), expectedRevision: expectedRevision! });
 			});
 			writeJson(input.response, result);
 		} catch (error) {
@@ -481,7 +481,7 @@ async function handleRequest(input: {
 				credentialStoreOptions: input.credentialStoreOptions,
 				currentWorkingDirectory: input.currentWorkingDirectory,
 				tenant: requestedTenant
-			}, (store) => store.restoreInstructionRevision({ key: value.key!, revision: value.revision!, expectedRevision: value.expectedRevision!, version: packageJson.version }));
+			}, (store) => store.restoreInstructionRevision({ key: value.key!, revision: value.revision!, expectedRevision: value.expectedRevision!, version: getInstructionVersion() }));
 			writeJson(input.response, result);
 		} catch (error) {
 			writeText(input.response, 400, error instanceof Error ? error.message : "Instruction restore failed.");
@@ -512,12 +512,12 @@ async function handleRequest(input: {
 			}, async (store) => {
 				for (const change of value.changes!) {
 					if (change.operation !== "save") continue;
-					const current = await store.readInstructionSource({ version: packageJson.version, key: change.key });
+					const current = await store.readInstructionSource({ version: getInstructionVersion(), key: change.key });
 					if (splitInstructionMarkdown(current.body).frontmatter !== splitInstructionMarkdown(change.body).frontmatter) {
 						throw new Error("Plugin frontmatter is read-only.");
 					}
 				}
-				return store.commitInstructionChanges({ version: packageJson.version, changes: value.changes! });
+				return store.commitInstructionChanges({ version: getInstructionVersion(), changes: value.changes! });
 			});
 			writeJson(input.response, result);
 		} catch (error) {
@@ -540,7 +540,7 @@ async function handleRequest(input: {
 				|| value.changes.some((change) => !change || typeof change.key !== "string" || typeof change.body !== "string")) {
 				throw new Error("Invalid instruction preview request.");
 			}
-			preview = { key: value.key, changes: value.changes, version: packageJson.version };
+			preview = { key: value.key, changes: value.changes, version: getInstructionVersion() };
 		} catch (error) {
 			writeText(input.response, 400, error instanceof Error ? error.message : "Invalid instruction preview request.");
 			return;
@@ -613,16 +613,16 @@ async function handleRequest(input: {
 			});
 			try {
 				const result = requestUrl.pathname === "/api/instructions/history"
-					? await opened.store.listInstructionHistory({ key: key!, version: packageJson.version })
+					? await opened.store.listInstructionHistory({ key: key!, version: getInstructionVersion() })
 					: requestUrl.pathname === "/api/instructions/revision"
-					? await opened.store.readInstructionRevision({ key: key!, version: packageJson.version, revision })
+					? await opened.store.readInstructionRevision({ key: key!, version: getInstructionVersion(), revision })
 					: requestUrl.pathname === "/api/instructions/dependencies"
-					? await opened.store.inspectInstructionDependencies({ key: key!, version: packageJson.version })
+					? await opened.store.inspectInstructionDependencies({ key: key!, version: getInstructionVersion() })
 					: requestUrl.pathname === "/api/instructions/compare"
-					? await opened.store.compareInstructionSource({ key: key!, version: packageJson.version })
+					? await opened.store.compareInstructionSource({ key: key!, version: getInstructionVersion() })
 					: key
-					? await opened.store.readInstructionSource({ key, version: packageJson.version })
-					: { ...await opened.store.listInstructionSources({ version: packageJson.version }), owner: opened.owner };
+					? await opened.store.readInstructionSource({ key, version: getInstructionVersion() })
+					: { ...await opened.store.listInstructionSources({ version: getInstructionVersion() }), owner: opened.owner };
 				writeJson(input.response, result);
 			} finally {
 				await opened.store.close();

@@ -1,6 +1,6 @@
 {
 	"name": "agent-issues",
-	"version": "0.2.4",
+	"version": "0.2.5",
 	"description": "CLI for managing initiatives, PRDs, user stories, ADRs, and issues.",
 	"type": "module",
 	"bin": {
@@ -16,6 +16,7 @@
 	},
 	"scripts": {
 		"build": "node ./scripts/build.mjs",
+		"build:dev": "node ./scripts/build.mjs --development",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit -p tsconfig.json",

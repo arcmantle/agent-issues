@@ -84,10 +84,47 @@ describe("portable plugin package", () => {
 				if (item.kind === "skill") {
 					expect(retrieved.body).toContain("# Shared Skill Operating Contract");
 					expect(retrieved.body).toContain("# Record Body Recipe Catalog");
+					expect(retrieved.body).toContain('resource_show({ request: { resource: "entity"');
+					expect(retrieved.body).toContain('resource_body({ request: { resource: "entity"');
+					expect(retrieved.body).toContain('resource_history({ request: { resource: "planEntry", action: "list"');
+					expect(retrieved.body).toContain('resource_history({ request: { resource: "comment", action: "list"');
+					expect(retrieved.body).toContain("Selected revisions return metadata and `reads.body` references");
+					expect(retrieved.body).toContain("Runtime loaders must not use `resource_body`.");
 				}
 				expect(retrieved.body).not.toContain("<!-- include:");
 			}
 			await expect(store.retrieveInstruction({ version: "missing-release", key: "skill/prepare" })).rejects.toThrow();
+		} finally {
+			await store.close();
+		}
+	});
+
+	it("uses immutable content-based development bundles without losing personal edits", async () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-development-bundle-"));
+		const sourceDir = path.join(targetDir, "source");
+		const pluginDir = path.join(targetDir, "plugin");
+		copyPluginSource(sourceDir);
+		const releaseVersion = JSON.parse(readFileSync(path.join(sourceDir, "package.json"), "utf8")).version as string;
+		const readBundle = () => JSON.parse(readFileSync(path.join(pluginDir, "instruction-defaults.json"), "utf8")) as InstructionBundle;
+		buildPlugin(pluginDir, sourceDir, true);
+		const first = readBundle();
+		expect(first.version).toMatch(new RegExp(`^${releaseVersion.replaceAll(".", "\\.")}-dev\\.[a-f0-9]{64}$`));
+		buildPlugin(pluginDir, sourceDir, true);
+		expect(readBundle()).toEqual(first);
+		const { store } = await openSqliteStore(path.join(targetDir, "instructions.db"));
+		try {
+			await store.importInstructionBundle(first);
+			const saved = await store.saveInstructionSource({ version: first.version, key: "skill/prepare", body: "Personal instructions", expectedRevision: 1 });
+			const sourcePath = path.join(sourceDir, "skills", "prepare", "SKILL.md");
+			writeFileSync(sourcePath, `${readFileSync(sourcePath, "utf8")}\nChanged development instructions.\n`);
+			buildPlugin(pluginDir, sourceDir, true);
+			const changed = readBundle();
+			expect(changed.version).not.toBe(first.version);
+			await store.importInstructionBundle(changed);
+			expect(await store.readInstructionSource({ version: changed.version, key: "skill/prepare" })).toMatchObject({ body: "Personal instructions", source: saved.source });
+			await store.importInstructionBundle(first);
+			buildPlugin(pluginDir, sourceDir);
+			expect(readBundle().version).toBe(releaseVersion);
 		} finally {
 			await store.close();
 		}
@@ -308,7 +345,7 @@ function copyPluginSource(sourceDir: string): void {
 	}
 }
 
-function buildPlugin(pluginDir: string, sourceDir = process.cwd()): void {
+function buildPlugin(pluginDir: string, sourceDir = process.cwd(), development = false): void {
 	execFileSync(
 		process.execPath,
 		[
@@ -316,7 +353,8 @@ function buildPlugin(pluginDir: string, sourceDir = process.cwd()): void {
 			"--source-dir",
 			sourceDir,
 			"--target-dir",
-			pluginDir
+			pluginDir,
+			...(development ? ["--development"] : [])
 		],
 		{ stdio: "pipe" }
 	);

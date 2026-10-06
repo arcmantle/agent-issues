@@ -57,8 +57,12 @@ The repository is a pnpm monorepo under `packages/`: `@agent-issues/core` holds 
 git clone https://github.com/arcmantle/agent-issues.git
 cd agent-issues
 pnpm install
-pnpm run build
+pnpm run build:dev
 ```
+
+Use `pnpm build:dev` when you change instruction sources. An unchanged development bundle keeps its identity. Changed instruction content produces a new identity such as `0.2.5-dev.<content-hash>`, without a package-version change. CLI, MCP, and site instruction requests use that identity. Existing bundles and personal overrides remain intact.
+
+Use `pnpm build` for a production build. Production instruction defaults use the package version and remain immutable. Changed release defaults require a new package version. An instruction import conflict fails instruction operations without fallback, but does not block ordinary tracker commands.
 
 For frontend development, run `pnpm site:dev` from the repository root or `pnpm --filter @agent-issues/site dev`. The Vite dev server starts the live backend for `site-config.json`, `/api/snapshot`, and `/events`.
 
@@ -108,6 +112,80 @@ For one command from a different folder, use `--project-identity <id>`. For exam
 
 Use `agent-issues project-identity --json` to inspect the CLI's resolved identity and its source. The MCP server exposes the same resolved value through `project_identity`.
 
+## Resource Collection Reads
+
+Use the read-only MCP tool `resource_list` for collections. Its typed `request.resource` selects `entity` (required `kind`, optional `statuses`, `parentId`, and `limit`), `orphanEntity` (optional `kind`), `planEntry` (required `planId`), `context` (`view: "list"` or `view: "directory"`), `comment` (required `issueId`), `instructionSource`, or `tenant`. For example:
+
+```json
+{ "request": { "resource": "entity", "kind": "issue", "limit": 10 } }
+```
+
+Paged collections return `nextContinuation`; copy it into `request.continuation` with the same request until null. Comments return `nextBefore`; copy it into `request.before` and prepend older pages to keep chronological order. The optional comment `all` flag cannot disable paging. Instruction catalogs retain their existing result contract.
+
+Existing bounded summary pages remain within 8192 serialized UTF-8 JSON bytes. Follow returned read references for complete bodies and metadata. Continuation is bound to the resource, selected operation, tenant, workspace/project, filters, limits, order, and server process. Invalid or cross-resource tokens return errors without a page. Pages are live reads, not snapshots. Complete CLI collection commands are unchanged. The replaced collection tools have no public aliases.
+
+## Resource Text Reads
+
+Use the read-only MCP tool `resource_body` for complete current or historical text. Its typed `request.resource` selects `entity` (`entityId`), `planEntry` (`entryId`), `context` (optional `scopeRef`), `contextTerm` (`term` and optional `scopeRef`), `comment` (`commentId`), or `instructionSource` (`key`). For example:
+
+```json
+{ "request": { "resource": "entity", "entityId": "<entity-reference>", "revision": 1 } }
+```
+
+Omit `revision` for current text. The first text block contains resource identity, revision, scope, `documentHash`, `offset`, and `nextOffset`. The second contains Markdown. Copy `nextOffset` into `request.offset` with the same request and returned hash until it is null. Join all Markdown parts without separators. Each serialized response is at most 8192 UTF-8 JSON bytes and does not duplicate text in structured content.
+
+Invalid requests, unavailable revisions, and mismatched hashes return errors without partial text. A changed current body requires a restart without offset and hash. A selected historical revision stays fixed. Hashes are bound to resource kind, revision, tenant, workspace, and applicable instruction owner.
+
+Returned body-read references use `resource_body`. The separate entity, comment, and Plan-entry body tools are removed. Complete CLI reads are unchanged. Instruction-source reads do not expand fragments; runtime skill and agent loaders continue to use `instruction_retrieve`.
+
+## Resource Revision Reads
+
+Use the read-only MCP tool `resource_history` with a typed `request` object. Use `action: "list"` for `comment` (`commentId`), `planEntry` (`entryId`), or `instructionSource` (`key`). Use `action: "revision"` with a positive `revision` for `entity` (`entityId`), `context` (optional `scopeRef`), `contextTerm` (`term` and optional `scopeRef`), or `instructionSource` (`key`). Other resource/action combinations are not supported.
+
+```json
+{ "request": { "resource": "entity", "action": "revision", "entityId": "<entity-reference>", "revision": 1 } }
+```
+
+Selected revisions return historical metadata and revision-pinned `resource_body` references, not historical text. Keep target and head revision meanings distinct. Comment and Plan-entry histories retain ascending revision order, 8192-byte summary pages, and `nextContinuation`; copy it into `request.continuation` with the same request until null. Instruction histories retain their existing newest-first collection contract.
+
+Continuation is bound to resource kind, action, identity, scope, order, and server process. Invalid or cross-resource reuse returns an error without a page. Histories are live reads, not snapshots. The separate revision tools and the instruction-inspection `history` and `revision` actions are removed without aliases. CLI history commands, restores, confirmations, and writes remain unchanged.
+
+## Resource Creation
+
+Use the MCP tool `resource_create` with one typed `request` variant to create an entity, comment, or Plan entry, or to create or update context text. For example:
+
+```json
+{ "request": { "resource": "entity", "kind": "issue", "title": "Track the change" } }
+```
+
+Set `request.resource` to `entity`, `comment`, `planEntry`, or `context`, then provide the fields for that resource. The `context` variant preserves `context_set` upsert behavior and accepts optional revision and content-hash checks. The dedicated `entity_create`, `comment_create`, `plan_entry_create`, and `context_set` tools are removed without aliases. CLI commands are unchanged.
+
+## Resource Editing
+
+Use the MCP tool `resource_edit` with one typed `request` variant to edit an entity, comment, or Plan entry. All variants require `expectedRevision` and `expectedContentHash`. For example:
+
+```json
+{ "request": { "resource": "entity", "entityId": "<entity-reference>", "title": "Updated title", "expectedRevision": 1, "expectedContentHash": "<content-hash>" } }
+```
+
+Set `request.resource` to `entity`, `comment`, or `planEntry`, then provide that resource's fields. The dedicated `entity_edit`, `comment_edit`, and `plan_entry_edit` tools are removed without aliases. CLI edit commands are unchanged.
+
+## Resource Deletion
+
+Use the MCP tool `resource_delete` with a typed `request` to delete an entity, tenant, comment, Plan entry, or context term. Entity and tenant requests support `action: "inspect"` to return the deletion impact and a one-use confirmation token, then `action: "delete"` with that token. Request an inspection first:
+
+```json
+{ "request": { "resource": "entity", "action": "inspect", "entityId": "<entity-reference>" } }
+```
+
+Then submit the deletion request with the returned token:
+
+```json
+{ "request": { "resource": "entity", "action": "delete", "entityId": "<entity-reference>", "confirmationToken": "<token>" } }
+```
+
+Comment and Plan-entry deletes require `expectedRevision` and `expectedContentHash`. Context-term deletes accept those fields when available and retain the existing store checks. The dedicated entity, tenant, comment, Plan-entry, and context-term delete tools are removed without aliases. CLI delete commands are unchanged.
+
 ## Instruction Retrieval
 
 Use `agent-issues instruction retrieve skill/prepare --json` or the MCP `instruction_retrieve` tool to retrieve instructions for the running CLI release. Both use the database source and return complete assembled Markdown.
@@ -120,13 +198,33 @@ SQLite reads the release content in one transaction. PostgreSQL reads defaults, 
 
 ### Manage Instruction Source
 
-Use `agent-issues instruction list --json` to list the current owner's agent, skill, and fragment sources. Use `agent-issues instruction read <key> --json` to read source Markdown without expanding includes. The matching MCP tools are `instruction_list` and `instruction_read`.
+The MCP server exposes instruction tools and shared resource readers. Each management tool takes a typed `request` object. The required fields depend on the selected resource, action, or reset scope and phase.
+
+| Tool | Request Selection |
+| --- | --- |
+| `instruction_retrieve` | Keep the existing `key`, `offset`, and `documentHash` inputs for complete skill and agent instructions. |
+| `resource_list` | Set `request.resource` to `instructionSource` for the owner's catalog, or select another supported collection. |
+| `resource_show` | Read entity, Plan-entry, context, context-term, instruction-source, or issue-breakdown metadata. Follow returned body or complete detail references. |
+| `resource_history` | List supported resource revisions or read selected entity, context, context-term, or instruction-source revision metadata. |
+| `instruction_inspect` | Set `request.action` to `compare`, `dependencies`, or `preview`. No changes are saved. |
+| `instruction_update` | Set `request.action` to `save`, `commit`, `restore`, `create_fragment`, or `remove_fragment`. |
+| `instruction_reset` | Set `request.scope` to `one` or `all`, and `request.phase` to `inspect` or `apply`. Apply requires confirmation. |
+
+These tools replace the separate instruction management tools. CLI commands remain unchanged. Restart the MCP server and refresh its tool catalog after an update.
+
+Use `agent-issues instruction list --json` to list the current owner's agent, skill, and fragment sources. Use `agent-issues instruction read <key> --json` to read source Markdown without expanding includes. Use MCP `resource_list({ request: { resource: "instructionSource" } })` for the catalog. Use `resource_show({ request: { resource: "instructionSource", key: "skill/prepare" } })` for source metadata, then follow its `reads.body` reference to `resource_body` for complete unexpanded Markdown.
+
+Use `resource_show({ request: { resource: "entity", reference: "<reference>" } })` for entity metadata, `resource: "planEntry"` with `entryId` for current Plan-entry metadata, or `resource: "context"` with optional `scopeRef` for context metadata and term summaries. Select one term with `resource: "contextTerm"`, `term`, and optional `scopeRef`. Read bodies separately through the returned references. For draft lookup, use `resource: "issueBreakdown"` with `action: "show"` and `draftId`, or `action: "latest"` and `targetId`. Draft issue specifications remain available through the returned complete CLI detail reference. These reads do not load initiative graphs or change approval state.
+
+```json
+{ "request": { "resource": "instructionSource", "key": "skill/prepare" } }
+```
 
 CLI updates keep personal overrides by stable item key and retain their original `source.defaultVersion`. Unchanged items use the requesting release's defaults. Reads and catalog items include `releaseChanges` when an override's original release differs from the requesting release. This metadata identifies the applicable `defaultVersion`, whether its default body changed, and added, removed, or changed fragment dependencies. Dependency inspection includes nested references from official defaults and personal source. It does not merge or rewrite edits.
 
 `releaseChanges.newerDefaultAvailable` compares semantic release versions. It is `false` for an older requested release and `null` for bundle keys with no semantic version order. Missing or invalid dependencies still prevent runtime retrieval without fallback. Source reads remain available for repair.
 
-Save an existing source with `agent-issues instruction save <key> --body-file <path|-> --expected-revision <revision> --json`. Use the revision from the source read. MCP provides `instruction_save` with `key`, `body`, and `expectedRevision`. Both select defaults for the running CLI release and return the same saved source metadata.
+Save an existing source with `agent-issues instruction save <key> --body-file <path|-> --expected-revision <revision> --json`. Use the revision from the source read. Use MCP `instruction_update` with `request.action` set to `save`, plus `key`, `body`, and `expectedRevision` inside `request`. Both select defaults for the running CLI release and return the same saved source metadata.
 
 A save creates or updates a personal override, or updates an existing personal fragment. It cannot change immutable defaults, discovery metadata, or another cloud owner's content. Local mode uses one local profile. Cloud mode uses the authenticated tenant and user across projects. Validated changes apply to the next retrieval, not to documents already loaded.
 
@@ -134,15 +232,15 @@ Stale revisions and invalid dependencies leave saved content unchanged. CLI JSON
 
 ### Compare Instruction Defaults
 
-Use `agent-issues instruction compare <key> --json` or MCP `instruction_compare` with `key`. Both compare the owner's source with the running CLI release's default, not the service release. The result includes both unassembled Markdown bodies as `currentSource` and `defaultSource`, their revision metadata, and `different`. An override retains its original `currentSource.source.defaultVersion` and applicable `releaseChanges` metadata.
+Use `agent-issues instruction compare <key> --json` or MCP `instruction_inspect` with `request.action` set to `compare` and `request.key`. Both compare the owner's source with the running CLI release's default, not the service release. The result includes both unassembled Markdown bodies as `currentSource` and `defaultSource`, their revision metadata, and `different`. An override retains its original `currentSource.source.defaultVersion` and applicable `releaseChanges` metadata.
 
 `newerDefaultVersions` lists installed defaults for that item with semantic versions later than the requesting release, in ascending order. A personal fragment has no official default: `defaultSource` and `different` are `null`. Comparison does not save content, change revisions or history, or merge personal edits. Missing items, missing release bundles, and unavailable storage return errors without partial output or fallback.
 
 ### Instruction Revision History
 
-Use `agent-issues instruction history <key> --json` to list saved source revisions, newest first. Use `agent-issues instruction revision <key> --revision <revision> --json` to read saved Markdown and its source metadata without expanding fragments. The matching MCP tools are `instruction_history` and `instruction_revision`.
+Use `agent-issues instruction history <key> --json` to list saved source revisions, newest first. Use `agent-issues instruction revision <key> --revision <revision> --json` to read saved Markdown and its source metadata without expanding fragments. Use MCP `resource_history` with `request.resource` set to `instructionSource`, `request.action` set to `list` or `revision`, and `request.key`. The `revision` action also requires `request.revision` and returns metadata with a selected-revision body reference. Follow that reference for complete unexpanded Markdown.
 
-Restore with `agent-issues instruction restore <key> --revision <revision> --expected-revision <current-revision> --json`. MCP provides `instruction_restore` with `key`, `revision`, and `expectedRevision`. Restore creates a new saved revision and validates its dependencies against the requesting CLI release. It does not replace official defaults or change instructions already loaded into a task. Stale revisions and invalid dependencies leave saved source and history unchanged.
+Restore with `agent-issues instruction restore <key> --revision <revision> --expected-revision <current-revision> --json`. Use MCP `instruction_update` with `request.action` set to `restore`, plus `key`, `revision`, and `expectedRevision` inside `request`. Restore creates a new saved revision and validates its dependencies against the requesting CLI release. It does not replace official defaults or change instructions already loaded into a task. Stale revisions and invalid dependencies leave saved source and history unchanged.
 
 History belongs to the instruction owner, not the selected project. The migration retains each existing override as a history entry. It cannot recover revisions that storage discarded before this feature was installed. Official defaults remain separate from saved personal history.
 
@@ -150,7 +248,7 @@ History belongs to the instruction owner, not the selected project. The migratio
 
 Use `agent-issues instruction reset-inspect <key> --json` before confirmation. The result shows `currentSource`, `proposedSource`, `affectedInstructions`, and `modifiedFragments`. Modified fragments remain active after the selected source returns to its default. Inspection does not save changes.
 
-Confirm with `agent-issues instruction reset <key> --expected-revision <current-revision> --yes --json`. MCP provides `instruction_reset_inspect` and `instruction_reset`. Inspection returns a single-use confirmation token that expires after five minutes. Supply its `confirmationToken`, the item `key`, and `expectedRevision` to reset. A changed inspection requires a new token.
+Confirm with `agent-issues instruction reset <key> --expected-revision <current-revision> --yes --json`. Use MCP `instruction_reset` with `request.scope` set to `one`, `request.phase` set to `inspect`, and `request.key`. Inspection returns a single-use confirmation token that expires after five minutes. After review, set `request.phase` to `apply` and supply its `confirmationToken`, the item `key`, and `expectedRevision` inside `request`. A changed inspection requires a new token.
 
 Reset removes only the selected override. The source uses the requesting CLI release's default and follows later release defaults. Its history records the reset as a new revision. Fragment overrides, unrelated items, other owners, and official bundles remain unchanged. Stale revisions and invalid dependency graphs leave source and history unchanged. Personal fragments have no official default and cannot be reset. Site reset controls are separate work.
 
@@ -160,13 +258,13 @@ Use `agent-issues instruction reset-all-inspect --json` before confirmation. The
 
 Confirm with `agent-issues instruction reset-all --input-file <path|-> --yes --json`. The JSON input contains the inspected `expectedRevisions` array. Each entry has an item `key`, `sourceType` (`override` or `personal`), and its `expectedRevision`. The source type distinguishes a hidden override from a personal fragment with the same key. The complete inspection response can also be used as input.
 
-MCP provides `instruction_reset_all_inspect` and `instruction_reset_all`. Inspection returns a single-use `confirmationToken` that expires after five minutes. Commit requires that token and the inspected `expectedRevisions`. A changed owner or proposal requires a new token. The CLI-served site exposes `GET /api/instructions/reset-all/inspect` and `POST /api/instructions/reset-all` with the same confirmation fields.
+Use MCP `instruction_reset` with `request.scope` set to `all` and `request.phase` set to `inspect`. Inspection returns a single-use `confirmationToken` that expires after five minutes. After review, set `request.phase` to `apply` and supply that token and the inspected `expectedRevisions` inside `request`. A changed owner or proposal requires a new token. A token cannot authorize a different reset scope. The CLI-served site exposes `GET /api/instructions/reset-all/inspect` and `POST /api/instructions/reset-all` with the same confirmation fields.
 
 Reset All clears owner overrides and removes personal fragments in one transaction. It validates the final official-default graph rather than intermediate states. The active set returns to the running CLI release's defaults. Official bundles and other owners remain unchanged. History retains reset revisions and fragment removal records. Stale revisions, a changed affected-item set, missing bundles, and invalid final dependencies leave saved content unchanged. Revision failures include `reason` and `currentInspection` for comparison and retry.
 
 ### Preview Pending Instructions
 
-Use `agent-issues instruction preview <key> --input-file <path|-> --json` to assemble unsaved source. The input contains a non-empty `changes` array of unique existing item keys and pending Markdown bodies. MCP provides `instruction_preview` with `key` and the same array. The CLI-served site provides `POST /api/instructions/preview` with the same request.
+Use `agent-issues instruction preview <key> --input-file <path|-> --json` to assemble unsaved source. The input contains a non-empty `changes` array of unique existing item keys and pending Markdown bodies. Use MCP `instruction_inspect` with `request.action` set to `preview`, plus `key` and the same array inside `request`. The CLI-served site provides `POST /api/instructions/preview` with `key` and `changes` at the top level.
 
 ```json
 {
@@ -185,7 +283,7 @@ Preview does not save content, change revisions or history, create drafts, or ac
 
 ### Atomic Instruction Changes
 
-Use `agent-issues instruction commit --input-file <path|-> --json` to save related sources and remove personal fragments in one transaction. The input is a JSON object with a `changes` array. MCP provides `instruction_commit` with the same array. Each item requires a unique `key`, an `operation` (`save` or `remove`), and `expectedRevision`. A save also requires a Markdown `body`.
+Use `agent-issues instruction commit --input-file <path|-> --json` to save related sources and remove personal fragments in one transaction. The input is a JSON object with a `changes` array. Use MCP `instruction_update` with `request.action` set to `commit` and the same array in `request.changes`. Each item requires a unique `key`, an `operation` (`save` or `remove`), and `expectedRevision`. A save also requires a Markdown `body`.
 
 ```json
 {
@@ -202,11 +300,11 @@ A stale revision or invalid final graph leaves every source and its history unch
 
 ### Personal Fragments
 
-Create a fragment with `agent-issues instruction fragment create fragment/my-rules --body-file <path|-> --json`. MCP provides `instruction_fragment_create` with `key` and `body`. Keys must use the `fragment/` prefix and the same lowercase key format as official items. Creation rejects duplicate keys, missing include targets, and cycles. It does not add a discoverable skill.
+Create a fragment with `agent-issues instruction fragment create fragment/my-rules --body-file <path|-> --json`. Use MCP `instruction_update` with `request.action` set to `create_fragment`, plus `key` and `body` inside `request`. Keys must use the `fragment/` prefix and the same lowercase key format as official items. Creation rejects duplicate keys, missing include targets, and cycles. It does not add a discoverable skill.
 
 Read and edit the fragment with `instruction read` and `instruction save`, or their matching MCP tools. Its source type is `personal`. The catalog and later retrievals include the saved fragment within the same owner scope across projects and releases.
 
-Remove it with `agent-issues instruction fragment remove fragment/my-rules --expected-revision <revision> --json`, or MCP `instruction_fragment_remove` with `key` and `expectedRevision`. Only personal fragments can be removed. Saved references block removal; errors include `affectedReferences` with the referring item keys. Stale revisions leave the fragment unchanged. Creation, edits, and removal retain revision records. Recreating a removed key continues its revision sequence, so an earlier revision cannot remove the new fragment.
+Remove it with `agent-issues instruction fragment remove fragment/my-rules --expected-revision <revision> --json`, or MCP `instruction_update` with `request.action` set to `remove_fragment`, plus `key` and `expectedRevision` inside `request`. Only personal fragments can be removed. Saved references block removal; errors include `affectedReferences` with the referring item keys. Stale revisions leave the fragment unchanged. Creation, edits, and removal retain revision records. Recreating a removed key continues its revision sequence, so an earlier revision cannot remove the new fragment.
 
 ## Context
 

@@ -26,57 +26,145 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Read.
 
-- MCP: `entity_show({ reference })`.
+- MCP: `resource_show({ request: { resource: "entity", reference } })`.
 - CLI fallback: `agent-issues show <reference> --json`.
+- MCP returns `entity` metadata and `reads` references for every entity kind. It does not return the body, relations, comments, or an initiative graph. A successful serialized response is at most 8192 UTF-8 JSON bytes.
+- Use `reads.body.tool` and `reads.body.arguments` for the **Entity Body Read** recipe. Use `reads.relations` for the **Relation Query** recipe. `reads.details` gives the complete CLI detail command and arguments.
+- If metadata exceeds the response budget, the tool returns an error with the canonical reference and read references, not partial metadata. Use `reads.details` for complete details. Run a CLI fallback with the same project, tenant, and database selection as the MCP session.
+- For complete Markdown through MCP, use the **Entity Body Read** recipe. Use an explicit **Initiative Read** for initiative-wide scope.
+
+### Resource Metadata Read
+
+**Kind:** Read.
+
+- MCP: `resource_show({ request })`. Select one supported resource variant:
+	- `resource: "entity"` with `reference` for entity metadata.
+	- `resource: "planEntry"` with `entryId` and optional `view: "summary"` for current Plan-entry metadata. Use `view: "details"` with optional `revision`, `offset`, and `documentHash` for complete metadata in bounded JSON parts.
+	- `resource: "context"` with optional `scopeRef` for context metadata and term summaries. Omit scope for global context.
+	- `resource: "contextTerm"` with `term` and optional `scopeRef` for one term's metadata.
+	- `resource: "instructionSource"` with `key` for the current owner's source metadata at the running CLI release.
+	- `resource: "issueBreakdown"` with `action: "show"` and `draftId`, or `action: "latest"` and `targetId`, for stored draft metadata.
+- Follow returned `reads.body` references for complete text and `reads.details` for complete metadata or CLI details. Context term summaries provide their own read references. Draft metadata retains the stored draft and snapshot identities; its complete issue specifications remain available through the returned CLI detail read.
+- Metadata reads do not return authored bodies or implicitly load an initiative graph. Use **Resource Body Read**, **Relation Query**, and **Initiative Read** explicitly. Runtime loaders continue to use `instruction_retrieve`.
+- Requests reject unsupported resource combinations before storage access. Reads use the same authorization, tenant, workspace, and instruction-owner selection as other MCP operations. Keep that selection when using a complete CLI detail read.
+
+### Entity Body Read
+
+**Kind:** Read.
+
+- MCP: `resource_body({ request: { resource: "entity", entityId, revision?, offset?, documentHash? } })`.
+- CLI fallback: `agent-issues show <reference> --json`, or `agent-issues history <reference> --revision <revision> --json` for a historical body.
+- Omit `revision` for the current body. Set it for a historical body. The first call needs no offset or hash.
+- The first text block contains JSON metadata: `reference`, `revision`, `documentHash`, `offset`, and `nextOffset`. The second contains Markdown. Responses do not duplicate the body in `structuredContent`.
+- Each response is at most 8192 UTF-8 JSON bytes. If `nextOffset` is not null, call again with the same entity, selected revision, and hash, using the returned `nextOffset` as `offset`. Copy returned offsets; do not calculate them.
+- Read all parts in order before use. Join the Markdown parts without separators. A null `nextOffset` means complete, including an empty body.
+- A changed current revision or a different entity or selected revision invalidates the hash. Discard all parts and restart without offset and hash. Invalid offsets, missing continuation hashes, and unavailable bodies return errors without partial Markdown. Do not use local files or shell commands to complete an MCP body read.
+
+### Resource Body Read
+
+**Kind:** Read.
+
+- MCP: `resource_body({ request })`. This is the shared read-only tool for complete resource text. Use the resource variant and its identifiers:
+	- `resource: "entity"` with `entityId` for an entity body.
+	- `resource: "planEntry"` with `entryId` for a Plan-entry body.
+	- `resource: "context"` with optional `scopeRef` for a context summary.
+	- `resource: "contextTerm"` with `term` and optional `scopeRef` for a term definition.
+	- `resource: "comment"` with `commentId` for a comment body.
+	- `resource: "instructionSource"` with `key` for unexpanded instruction-source Markdown.
+- Put optional `revision`, `offset`, and `documentHash` inside `request`. Omit revision for current text. Retain a selected historical revision on every call.
+- The first text block contains metadata with resource kind, canonical reference, revision, tenant, scope, document hash, offset, and next offset. Instruction-source metadata also identifies the owner, requesting release, and source revision. The second block contains Markdown. Each serialized response is at most 8192 UTF-8 JSON bytes, with no duplicated body in `structuredContent`.
+- Copy `nextOffset` into `request.offset` with the same resource identifiers, revision, and returned `documentHash` until it is null. Read all parts in order and join them without separators. Do not calculate offsets. An empty body is complete in one part.
+- On a changed document, discard all parts and restart without offset and hash. Invalid resource combinations, offsets, hashes, or unavailable revisions return errors without partial text. Hashes cannot be exchanged across resource kinds, tenants, workspace scopes, or instruction owners.
+- Instruction source reads do not expand fragments. Continue to use `instruction_retrieve` for complete assembled skill and agent instructions. Runtime loaders must not use `resource_body`.
+- CLI fallback: use the owning resource's complete read command from the matching recipe. Keep the same project, tenant, and database selection. Storage and CLI semantics are unchanged.
+
+### Resource Collection Read
+
+**Kind:** Read.
+
+- MCP: `resource_list({ request })`. Put the resource kind and its required identifiers inside `request`.
+- Supported requests: `resource: "entity"` with required `kind` and optional `statuses`, `parentId`, and `limit`; `resource: "orphanEntity"` with optional `kind`; `resource: "planEntry"` with required `planId`; `resource: "context"` with `view: "list"` or `view: "directory"`; `resource: "comment"` with required `issueId`; `resource: "instructionSource"`; and `resource: "tenant"`.
+- Entity, orphan, Plan-entry, context, instruction-source, and tenant pages return `nextContinuation`. Copy it into `request.continuation` with the same request until it is null. Comment pages return `nextBefore`; copy it into `request.before` and prepend older pages.
+- Instruction catalogs return `version`, `items`, and `nextContinuation`. Items use ascending stable-key order and exclude source bodies. Follow each item's body or CLI detail read for complete source. Instruction continuation also binds the owner and requesting CLI release.
+- Each existing bounded summary response is at most 8192 serialized UTF-8 JSON bytes. Complete bodies and metadata remain available through returned read references. Pages are live reads, not snapshots.
+- Continuation is bound to the resource kind, selected operation or view, tenant, workspace/project, filters, limits, order, and server process. Cross-resource reuse, changed requests, and invalid tokens return errors without a page.
+- CLI fallback: use the matching collection command, including `agent-issues orphans [--kind <kind>] --json`, `agent-issues tenant list --json`, and `agent-issues instruction list --json`. Keep the same scope and database selection.
 
 ### Entity List
 
 **Kind:** Read.
 
-- MCP: `entity_list({ kind, statuses?, parentId?, limit? })`.
+- MCP: `resource_list({ request: { resource: "entity", kind, statuses?, parentId?, limit?, continuation? } })`.
 - CLI fallback: `agent-issues list <kind> [--status <status[,status]>] [--parent <parent>] [--limit <count>] --json`.
+- MCP returns `entities` summaries and `nextContinuation`. Each serialized response is at most 8192 UTF-8 JSON bytes. `limit` is a maximum item count per page, not a limit on the complete traversal.
+- Start without `continuation`. Copy each non-null `nextContinuation` into the next call with the same request. A null `nextContinuation` means complete, including an empty result. Do not calculate continuation values.
+- Summaries use ascending immutable entity ID order. Use each summary's `reads.body` for complete Markdown and `reads.details` for complete CLI details. Large bodies are not part of the list.
+- Continuation is bound to the resource kind, list operation, tenant, project, filters, item limit, fixed order, and MCP server process. Invalid continuation, a changed request, or a server restart requires a new traversal. Oversized single summaries return a bounded error with a complete CLI detail command, not a partial page or an empty-page loop.
+- Each page reads current data; the traversal is not a snapshot. Inserts and deletes before the last ID do not shift later pages. Records at or before that ID are not revisited. Later records appear only if they still match the filters, with their current metadata. Restart the traversal to include changes behind that ID.
+- Keep the same project, tenant, and database selection when you use the CLI fallback. Complete CLI reads retain their existing behavior.
 
 ### Relation Query
 
 **Kind:** Read.
 
-- MCP: `relation_query({ entityId, direction?, types? })`.
+- MCP: `relation_query({ entityId, direction?, types?, continuation? })`.
 - CLI fallback: `agent-issues relations <entityId> [--direction <incoming|outgoing|both>] [--type <type[,type]>] --json`.
+- MCP returns entity identity, `incoming` and `outgoing` relation summaries, linked `planEntries` summaries, and `nextContinuation`. Each serialized response is at most 8192 UTF-8 JSON bytes. Bodies are not part of these pages. Plan provenance retains the storage contract: it is included independently of entity-relation direction and type filters.
+- Start without `continuation`. Copy each non-null `nextContinuation` into the next call with the same request. A null `nextContinuation` means complete, including an empty result. Join each summary section across all pages before you use the complete result. Do not calculate continuation values.
+- Summary keys use ascending JSON-encoded tuples of section, relation type, and immutable related-item ID. Sections are `incoming`, `outgoing`, and `planEntries`; Plan provenance uses `informs` as its key type. The tool selects page size from the byte budget.
+- Continuation is bound to the resolved entity, tenant, workspace/project scope, direction, normalized type filters, fixed order, and MCP server process. Invalid continuation, changed scope or filters, or a server restart requires a new traversal.
+- Each page reads current data, not a snapshot. Inserts and deletes before the last key do not shift later pages. Keys at or before that key are not revisited. Later matching links use their current metadata. Restart to include changes behind the cursor.
+- Use **Resource Metadata Read** with `resource: "entity"` for related entity metadata and **Resource Body Read** for complete Markdown. Plan-entry summaries provide body and complete detail read references. An oversized single summary or link collection returns a bounded error with a detail reference, not silent omission or an empty-page loop.
+- Keep the same project, tenant, and database selection when you use the CLI fallback. Complete CLI relation reads retain their existing behavior.
 
 ### Initiative Read
 
 **Kind:** Read.
 
-- MCP: `initiative_bundle({ initiativeId })`.
+- MCP: `initiative_bundle({ initiativeId, continuation? })`.
 - CLI fallback: `agent-issues show <initiativeId> --json`.
+- Use this operation explicitly for the initiative graph. `resource_show` does not load or return the bundle. Complete CLI initiative reads remain unchanged.
+- Each response contains initiative metadata, bounded summary sections, and `nextContinuation`, within 8192 serialized UTF-8 JSON bytes. Start without continuation. Copy each non-null `nextContinuation` into the same request until it is null. Join every section across pages before you use the complete graph, including `entities`, `prds`, `userStories`, `adrs`, `issues`, `fixLinks`, `subIssueLinks`, `blockerLinks`, `constrainsLinks`, and `versionCoverage`.
+- Entity and relation endpoints are summaries, not authored bodies. Follow their `reads.body` references through **Resource Body Read** for complete Markdown. Oversized single metadata returns a bounded error with a complete CLI detail command, not a partial page.
+- Keys use section names and stable record identities. Continuation is bound to the initiative, tenant, workspace/project, operation, order, and MCP server process. Invalid continuation or a changed request requires a new traversal.
+- Pages read current data, not a snapshot. Keys at or before the cursor are not revisited. Later keys use current records; removed links disappear. Restart to include changes behind the cursor. Keep the same project, tenant, and database selection for CLI fallback.
 
 ### Next Work
 
 **Kind:** Read.
 
-- MCP: `entity_next_work({ scopeId })`.
+- MCP: `entity_next_work({ scopeId, continuation? })`.
 - CLI fallback: `agent-issues next-work <initiativeOrDescendantId> --json`.
+- Each response is within 8192 serialized UTF-8 JSON bytes and contains initiative metadata, recommendation metadata, `available`, `blocked`, `blockerLinks`, `unblockLinks`, and `nextContinuation`. Copy each non-null continuation into the same request until null. Join all sections before you compare candidates or report the complete blocker chain.
+- Work summaries retain blocker and unfinished-unblock counts. Small reference lists are also inline. Large lists are omitted from the item, not truncated; the complete references remain in `blockerLinks` and `unblockLinks`. Each link identifies its issue and blocker or unblocked issue. Follow entity body-read references for complete authored outcomes.
+- The recommendation prefers the largest unfinished-unblock count, with immutable issue ID as a deterministic tie-break. Its reason is repeated on every page. The calling skill can use authored outcomes to apply its tracer-bullet tie-break. Availability and parent-child blocker rules remain unchanged.
+- Keys use section names and stable issue or link identities. Continuation is bound to the requested scope, resolved initiative, tenant, workspace/project, operation, order, and server process. Pages read current data, not a snapshot: membership and recommendation can change between calls. Restart the traversal after a work-state change before selecting work. Invalid continuation and oversized metadata return bounded errors with complete CLI detail commands.
 
 ### Context Read
 
 **Kind:** Read.
 
-- MCP: `context_show({ scopeRef? })`, `context_directory({})`, `context_search({ query?, view? })`, or `context_conflicts({ query?, view? })`.
+- MCP: `resource_show({ request: { resource: "context", scopeRef? } })`, `resource_list({ request: { resource: "context", view: "directory", continuation? } })`, `context_search({ query?, view? })`, or `context_conflicts({ query?, view? })`.
+- Use **Resource Metadata Read** with `resource: "contextTerm"`, `term`, and optional `scopeRef` for one term. Follow returned body references to read context summaries and term definitions in full before use.
+- Collection MCP reads: `resource_list({ request: { resource: "context", view: "list" | "directory", continuation? } })` and `context_search({ query?, view?, continuation? })`. Each serialized response is at most 8192 UTF-8 JSON bytes. Start without continuation. Copy each non-null `nextContinuation` into the same request until it is null. For `resource_list`, put continuation inside `request`. Join every collection section across pages before use. In directory and search results, retain the non-null `shared` section and append `initiatives`, `terms`, and `duplicateTerms`.
+- List pages contain context metadata and term counts. Directory and search pages contain context metadata and term-source summaries, not context bodies or definitions. Follow each `reads.body` reference through **Resource Body Read** for complete text. Keep the selected revision and scope from the reference. Complete CLI reads remain unchanged.
+- Lists use ascending immutable context-key order. Directory and search use ascending JSON tuples of section and context key or normalized term, with term spelling as a tie-breaker. Continuation is bound to the operation, tenant, workspace/project, trimmed query, view, fixed order, and MCP process. Invalid continuation or changed request parameters require a new traversal.
+- Pages are live reads, not a snapshot. Keys at or before the cursor are not revisited. Later matches use current metadata; removed records disappear. Restart to include changes behind the cursor. A single oversized summary or request returns a bounded error with a complete CLI detail command, not partial data or an empty-page loop.
 - CLI fallback: `agent-issues context show [<scope>] --json`, `agent-issues context list --json`, `agent-issues context search <query> [--view <all|global|initiatives>] --json`, or `agent-issues context conflicts [<query>] [--view <all|initiatives>] --json`.
 
 ### Context Write
 
 **Kind:** Write.
 
-- MCP: `context_set({ scopeRef?, title, summary, expectedRevision?, expectedContentHash? })`, `context_term_define({ scopeRef?, term, definition, avoid?, expectedRevision?, expectedContentHash? })`, or `context_term_forget({ scopeRef?, term, expectedRevision?, expectedContentHash? })`.
+- MCP: `resource_create({ request: { resource: "context", scopeRef?, title, summary, expectedRevision?, expectedContentHash? } })`, `context_term_define({ scopeRef?, term, definition, avoid?, expectedRevision?, expectedContentHash? })`, or `resource_delete({ request: { resource: "contextTerm", action: "delete", scopeRef?, term, expectedRevision?, expectedContentHash? } })`.
 - CLI fallback: `agent-issues context set --scope <scope> --title "<title>" --body-file - --json`, `agent-issues context define "<term>" --scope <scope> --body-file - [--avoid "<term[,term]>"] --json`, or `agent-issues context forget "<term>" --scope <scope> --json`.
 
 ### Entity Create And Edit
 
 **Kind:** Write.
 
-- MCP create: `entity_create({ kind, title, body?, parentId?, status?, category?, priority?, type?, links? })`.
-- MCP edit: first use the **Entity Read** recipe, then call `entity_edit({ entityId, title?, body?, category?, priority?, type?, expectedRevision, expectedContentHash })`.
+- MCP create: `resource_create({ request: { resource: "entity", kind, title, body?, parentId?, status?, category?, priority?, type?, links? } })`.
+- MCP edit: first use the **Entity Read** recipe, then call `resource_edit({ request: { resource: "entity", entityId, title?, body?, category?, priority?, type?, expectedRevision, expectedContentHash } })`.
 - CLI fallback: `agent-issues create <kind> --title "<title>" [--parent <parent>] --body-file - --json`, or `agent-issues edit <entityId> [--title "<title>"] --body-file - --json`.
 
 ### Entity State And Structure
@@ -98,14 +186,28 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Read.
 
-- MCP: `plan_entry_list({ planId })` or `plan_entry_history({ entryId })`.
+- MCP: `resource_list({ request: { resource: "planEntry", planId, continuation? } })` or `resource_history({ request: { resource: "planEntry", action: "list", entryId, continuation? } })`.
+- Both operations return summaries and `nextContinuation` within 8192 serialized UTF-8 JSON bytes. Start without continuation. Copy each non-null `nextContinuation` into the next call with the same request until it is null. Join pages before using the complete result. Do not calculate continuation values.
+- Lists use ascending immutable entry ID order. History uses ascending revision order. Summaries retain identity, role, lifecycle state, revision, and linked-record references. Bodies are separate. Use each summary's `reads.body` and `reads.details` for complete body and metadata reads.
+- Continuation is bound to the resolved Plan or entry, tenant, workspace/project, fixed order, and MCP server process. Invalid continuation, changed scope, or a server restart requires a new traversal. A single oversized summary or link collection returns a bounded error with a complete detail reference, not partial data or an empty-page loop.
+- Pages read current data, not a snapshot. Earlier IDs or revisions are not revisited. Later entries use current metadata; new history revisions can appear, and `headRevision` can change. Restart to include changes behind the cursor. These reads do not change Plan confirmation or issue-breakdown approval snapshots.
 - CLI fallback: `agent-issues plan-entry list <planId> --json` or `agent-issues plan-entry history <entryId> --json`.
+
+### Plan Entry Detail Read
+
+**Kind:** Read.
+
+- MCP: `resource_body({ request: { resource: "planEntry", entryId, revision?, offset?, documentHash? } })` for Markdown, or `resource_show({ request: { resource: "planEntry", view: "details", entryId, revision?, offset?, documentHash? } })` for complete metadata, including link and supersession collections. Omit `view`, or set `view: "summary"`, for current summary metadata and read references.
+- The first text block is part metadata. The second is content. Each response is at most 8192 serialized UTF-8 JSON bytes and does not duplicate content in `structuredContent`. Omit revision for current content, or retain the selected revision from a summary on every call.
+- Start without offset and hash. Copy `nextOffset` into `request.offset` with the same resource, view, entry, revision, and returned hash until `nextOffset` is null. Read all parts in order. Join content without separators. For metadata, parse the joined JSON only after the last part. Do not calculate offsets.
+- Invalid offsets, unavailable revisions, and changed documents return errors without partial content. If the hash changes, discard all parts and restart without offset and hash. Body and metadata hashes cannot be exchanged.
+- CLI fallback: use the complete Plan-entry list or history command from **Plan Entry Read**, with the same project, tenant, and database selection.
 
 ### Plan Entry Write
 
 **Kind:** Write.
 
-- MCP: `plan_entry_create({ planId, role, body, scopeDirection?, referencedEntityIds?, supersededEntryIds? })`, `plan_entry_edit({ entryId, body, expectedRevision, expectedContentHash })`, or `plan_entry_delete({ entryId, expectedRevision, expectedContentHash })`.
+- MCP: `resource_create({ request: { resource: "planEntry", planId, role, body, scopeDirection?, referencedEntityIds?, supersededEntryIds? } })`, `resource_edit({ request: { resource: "planEntry", entryId, body, expectedRevision, expectedContentHash } })`, or `resource_delete({ request: { resource: "planEntry", action: "delete", entryId, expectedRevision, expectedContentHash } })`.
 - CLI fallback: `agent-issues plan-entry add <planId> --role <role> --body-file - [--scope-direction <included|excluded>] [--reference <entity>] [--supersedes <entry>] --json`, `agent-issues plan-entry edit <planId> <entryId> --body-file - --json`, or `agent-issues plan-entry delete <planId> <entryId> --json`.
 
 ### Plan Entry Issue Link
@@ -121,7 +223,7 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 **Kind:** Write.
 
 - MCP create: `issue_breakdown_create({ targetId, issues })`.
-- MCP read: `issue_breakdown_show({ draftId })` or `issue_breakdown_latest({ targetId })`.
+- MCP read: `resource_show({ request: { resource: "issueBreakdown", action: "show", draftId } })` or `resource_show({ request: { resource: "issueBreakdown", action: "latest", targetId } })`. These return metadata and a complete CLI detail reference, not issue specifications.
 - MCP preview: `issue_breakdown_preview({ draftId })`.
 - MCP approve: `issue_breakdown_approve({ draftId, snapshotDigest })`.
 - CLI fallback: `agent-issues issue-breakdown create <targetId> --input-file <path> --json`, `agent-issues issue-breakdown show <draftId> --json`, `agent-issues issue-breakdown latest <targetId> --json`, or `agent-issues issue-breakdown approve <draftId> --snapshot-digest <digest> --json`.
@@ -142,22 +244,55 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Read.
 
-- MCP: `comment_list({ issueId, before?, all? })` or `comment_history({ commentId })`.
+- MCP list: `resource_list({ request: { resource: "comment", issueId, before?, all? } })`. Copy `nextBefore` into `request.before` with the same issue until it is `null`. Each page returns the newest remaining comments in ascending creation-time and reference order. Prepend older pages to retain chronological order. `total` is the current issue-wide count. `all` cannot disable MCP paging.
+- MCP history: `resource_history({ request: { resource: "comment", action: "list", commentId, continuation? } })`. Copy `nextContinuation` into `request.continuation` with the same comment until it is `null`. Append pages in ascending revision order.
+- Both operations return summaries within 8192 serialized UTF-8 JSON bytes. Bodies are separate. A single oversized summary returns an error, not a partial page. Complete CLI metadata reads remain available.
+- Continuation is bound to the issue or comment, tenant, workspace/project, and MCP server process. Invalid continuation returns an error with no page. Pages are live reads, not a snapshot. New comments newer than the list cursor are not revisited. Edits use current metadata. New history revisions after the cursor can appear, and `headRevision` can change.
 - CLI fallback: `agent-issues comment list <issueId> [--before <cursor>] [--all] --json` or `agent-issues comment history <commentId> --json`.
+
+### Issue Comment Body Read
+
+**Kind:** Read.
+
+- MCP: `resource_body({ request: { resource: "comment", commentId, revision?, offset?, documentHash? } })`. Use the body-read reference from a summary to retain its selected revision. Omit `revision` to read the current body.
+- The first text block is JSON metadata. The second is Markdown. Copy `nextOffset` into `offset` with the same comment, revision, and returned `documentHash` until `nextOffset` is `null`. Read all parts before use. Do not calculate offsets.
+- If the document changes, discard all parts and restart without `offset` and `documentHash`. Invalid offsets, unavailable revisions, and mismatched hashes return an error with no body.
+- CLI fallback: use the complete comment list or history read from **Issue Comment Read**.
 
 ### Issue Comment Write
 
 **Kind:** Write.
 
-- MCP: `comment_create({ issueId, body, referencedIssueIds? })`, `comment_edit({ commentId, body, referencedIssueIds?, expectedRevision, expectedContentHash })`, or `comment_delete({ commentId, expectedRevision, expectedContentHash })`.
+- MCP: `resource_create({ request: { resource: "comment", issueId, body, referencedIssueIds? } })`, `resource_edit({ request: { resource: "comment", commentId, body, referencedIssueIds?, expectedRevision, expectedContentHash } })`, or `resource_delete({ request: { resource: "comment", action: "delete", commentId, expectedRevision, expectedContentHash } })`.
 - CLI fallback: `agent-issues comment add <issueId> --body-file - [--reference <issue>] --json`, `agent-issues comment edit <issueId> <commentId> --body-file - [--reference <issue>] --json`, or `agent-issues comment delete <issueId> <commentId> --json`.
 
 ### Revision Read
 
 **Kind:** Read.
 
-- MCP: `entity_history({ entityId, revision })`, `context_revision({ scopeRef?, revision })`, or `context_term_revision({ scopeRef?, term, revision })`.
+- MCP: `resource_history({ request })`. Select one supported revision operation:
+	- `resource: "entity"`, `action: "revision"`, `entityId`, and `revision` for selected entity metadata.
+	- `resource: "context"`, `action: "revision"`, optional `scopeRef`, and `revision` for selected context metadata.
+	- `resource: "contextTerm"`, `action: "revision"`, optional `scopeRef`, `term`, and `revision` for selected term metadata.
+	- `resource: "instructionSource"`, `action: "list"`, `key`, and optional `continuation` for saved source revision summaries in ascending revision order.
+	- `resource: "instructionSource"`, `action: "revision"`, `key`, and `revision` for selected source metadata.
+- Comment and Plan-entry revision lists use the **Issue Comment Read** and **Plan Entry Read** recipes. Other resource kinds do not provide revision lists. Unsupported requests fail before storage opens.
+- Selected revisions return metadata and `reads.body` references, not historical text. Follow the registered `resource_body` reference with its selected revision. Retain target and head revision meanings, canonical references, and lifecycle state. Instruction source remains unexpanded; runtime loaders continue to use `instruction_retrieve`.
+- Paged histories use continuation bound to resource kind, action, identity, tenant, workspace/project, order, and server process. Instruction histories also bind the owner and requesting CLI release. Keep the request unchanged and copy `nextContinuation` into `request.continuation` until null. Each history page is at most 8192 serialized UTF-8 JSON bytes. Histories are live reads, not snapshots. Later revisions can appear; earlier revisions are not revisited. Oversized summaries and invalid continuation return errors without a page.
 - CLI fallback: `agent-issues history <entityId> --revision <revision> --json`, `agent-issues history --context <scope> --revision <revision> --json`, or `agent-issues history --context <scope> --term <term> --revision <revision> --json`.
+- Instruction CLI fallback: `agent-issues instruction history <key> --json` or `agent-issues instruction revision <key> --revision <revision> --json`. Keep the same tenant, workspace, database, and owner selection.
+- Use **Resource Body Read** for complete historical Markdown in bounded parts. Keep the selected revision on every continuation request. Restore operations and writes remain separate.
+
+### Instruction Inspect
+
+**Kind:** Read.
+
+- MCP comparison: `instruction_inspect({ request: { action: "compare", key, offset?, documentHash? } })`. The first text block contains metadata with `format: "json"`. The second contains a JSON text part. Copy `nextOffset` into `request.offset` with the same key and hash until null. Join text parts without separators, then parse the complete JSON. Each response is at most 8192 serialized UTF-8 JSON bytes.
+- Comparison includes complete current and default sources, differences, and release information. Its hash binds the owner, scope, CLI release, and selected source snapshots. On changed sources or an invalid continuation, discard all parts and restart without offset and hash. Do not use incomplete JSON.
+- MCP dependencies: `instruction_inspect({ request: { action: "dependencies", key, continuation? } })`. Copy `nextContinuation` into `request.continuation` with the same key until null. Join `dependencies`, `affectedInstructions`, and `modifiedFragments` across pages. Order is the JSON tuple of section and stable item key.
+- Dependency pages are at most 8192 serialized UTF-8 JSON bytes. Continuation binds the action, key, owner, CLI release, tenant, workspace/project, order, and server process. Pages are live reads, not snapshots. Earlier keys are not revisited; later keys use current data. Invalid tokens and oversized summaries return errors without a page. Use the complete CLI detail read if a single summary exceeds the budget.
+- CLI fallback: `agent-issues instruction compare <key> --json` or `agent-issues instruction dependencies <key> --json`. Keep the same tenant, workspace, database, and owner selection. These complete CLI reads are unchanged.
+- Pending preview remains `instruction_inspect({ request: { action: "preview", key, changes } })`. Runtime instruction loaders continue to use `instruction_retrieve`; its offset and hash contract is unchanged.
 
 ### Entity Restore
 
@@ -177,14 +312,14 @@ Every tracker operation uses one of these recipes. CLI fallbacks use `--json`.
 
 **Kind:** Read.
 
-- MCP: `entity_list({ kind: "handoff" })`, `relation_query({ entityId: handoffId, direction: "outgoing", types: ["handsOff"] })`, then `entity_show({ reference: handoffId })`.
+- MCP: `resource_list({ request: { resource: "entity", kind: "handoff" } })`, `relation_query({ entityId: handoffId, direction: "outgoing", types: ["handsOff"] })`, then `resource_show({ request: { resource: "entity", reference: handoffId } })` and its body read.
 - CLI fallback: `agent-issues list handoff --json`, `agent-issues relations <handoffId> --direction outgoing --type handsOff --json`, then `agent-issues show <handoffId> --json`.
 
 ### Handoff Write
 
 **Kind:** Write.
 
-- MCP: `entity_create({ kind: "handoff", title, body, links: [{ relationType: "handsOff", targetId: focusId }] })`.
+- MCP: `resource_create({ request: { resource: "entity", kind: "handoff", title, body, links: [{ relationType: "handsOff", targetId: focusId }] } })`.
 - CLI fallback: `agent-issues create handoff --title "<title>" --body-file - --link handsOff <focusId> --json`.
 
 ### Host Operations

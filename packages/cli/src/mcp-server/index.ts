@@ -1,3 +1,4 @@
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,9 +11,15 @@ import {
 	InstructionWriteError,
 	backfillBodies,
 	computeEntityContentHash,
+	encodeCanonicalReference,
 	PLAN_ENTRY_ROLES,
 	PLAN_ENTRY_SCOPE_DIRECTIONS,
 	projectProposedPlan,
+	toContextSummary,
+	toEntitySummary,
+	type ContextDetails,
+	type ContextDirectory,
+	type QueryContextDirectoryResult,
 	type EntityRecord,
 	type EntitySummary,
 	type RelationDirection,
@@ -27,7 +34,9 @@ import { resolveProjectIdentity } from "../runtime/project-identity.js";
 import { ConfirmationTokenStore } from "../runtime/confirmation-tokens.js";
 import { resolveMcpWorkspaceScope, type McpWorkspaceScope } from "./client-workspace.js";
 import { formatInstructionResponse } from "./instruction-response.js";
+import { formatMarkdownResponse } from "./markdown-response.js";
 import packageJson from "../../package.json" with { type: "json" };
+import { getInstructionVersion } from "../runtime/instruction-version.js";
 
 const PLAN_PREVIEW_RESOURCE_URI = "ui://agent-issues/plan-preview.html";
 const PLAN_PREVIEW_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -63,6 +72,149 @@ const issueBreakdownIssueSchema = z.object({
 	planEntryIds: z.array(z.string().min(1)).optional(),
 	relationReferences: z.array(issueBreakdownRelationSchema)
 });
+
+const relationTypesSchema = z.array(z.string().min(1), { error: "Relation types must be an array of nonempty strings." });
+const boundedRelationTypesSchema = z.preprocess(
+	(value) => relationTypesSchema.safeParse(value).success ? value : null,
+	relationTypesSchema
+).meta(z.toJSONSchema(relationTypesSchema, { io: "input", target: "draft-7" }));
+
+const resourceBodyPartSchema = {
+	revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+	offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+	documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional()
+};
+const resourceBodySchema = z.discriminatedUnion("resource", [
+	z.object({ resource: z.literal("entity"), entityId: z.string().min(1), ...resourceBodyPartSchema }).strict(),
+	z.object({ resource: z.literal("comment"), commentId: z.string().min(1), ...resourceBodyPartSchema }).strict(),
+	z.object({ resource: z.literal("planEntry"), entryId: z.string().min(1), ...resourceBodyPartSchema }).strict(),
+	z.object({ resource: z.literal("context"), scopeRef: z.string().min(1).optional(), ...resourceBodyPartSchema }).strict(),
+	z.object({ resource: z.literal("contextTerm"), scopeRef: z.string().min(1).optional(), term: z.string().min(1), ...resourceBodyPartSchema }).strict(),
+	z.object({ resource: z.literal("instructionSource"), key: z.string().min(1), ...resourceBodyPartSchema }).strict()
+]);
+
+const collectionContinuationSchema = z.string().min(1).max(2048).optional();
+const resourceCreateSchema = z.discriminatedUnion("resource", [
+	z.object({
+		resource: z.literal("entity"),
+		kind: z.string().min(1),
+		title: z.string().min(1),
+		body: z.string().optional(),
+		parentId: z.string().min(1).optional(),
+		status: z.string().min(1).optional(),
+		category: z.string().min(1).optional(),
+		priority: z.string().min(1).optional(),
+		type: z.string().min(1).optional(),
+		links: z.array(z.object({ relationType: z.string().min(1), targetId: z.string().min(1) })).optional()
+	}).strict(),
+	z.object({
+		resource: z.literal("comment"),
+		issueId: z.string().min(1),
+		body: z.string().min(1),
+		referencedIssueIds: z.array(z.string().min(1)).optional()
+	}).strict(),
+	z.object({
+		resource: z.literal("planEntry"),
+		planId: z.string().min(1),
+		role: z.enum(PLAN_ENTRY_ROLES),
+		body: z.string().min(1),
+		scopeDirection: z.enum(PLAN_ENTRY_SCOPE_DIRECTIONS).optional(),
+		referencedEntityIds: z.array(z.string().min(1)).optional(),
+		supersededEntryIds: z.array(z.string().min(1)).optional()
+	}).strict(),
+	z.object({
+		resource: z.literal("context"),
+		scopeRef: z.string().min(1).optional(),
+		title: z.string().min(1),
+		summary: z.string().min(1),
+		expectedRevision: z.number().int().positive().optional(),
+		expectedContentHash: z.string().min(1).optional()
+	}).strict()
+]);
+const resourceEditSchema = z.discriminatedUnion("resource", [
+	z.object({
+		resource: z.literal("entity"),
+		entityId: z.string().min(1),
+		title: z.string().min(1).optional(),
+		body: z.string().optional(),
+		category: z.string().min(1).optional(),
+		priority: z.string().min(1).optional(),
+		type: z.string().min(1).nullable().optional(),
+		expectedRevision: z.number().int().positive(),
+		expectedContentHash: z.string().min(1)
+	}).strict(),
+	z.object({
+		resource: z.literal("comment"),
+		commentId: z.string().min(1),
+		body: z.string().min(1),
+		referencedIssueIds: z.array(z.string().min(1)).optional(),
+		expectedRevision: z.number().int().positive(),
+		expectedContentHash: z.string().min(1)
+	}).strict(),
+	z.object({
+		resource: z.literal("planEntry"),
+		entryId: z.string().min(1),
+		body: z.string().min(1),
+		expectedRevision: z.number().int().positive(),
+		expectedContentHash: z.string().min(1)
+	}).strict()
+]);
+const resourceDeleteSchema = z.discriminatedUnion("resource", [
+	z.discriminatedUnion("action", [
+		z.object({ resource: z.literal("entity"), action: z.literal("inspect"), entityId: z.string().min(1) }).strict(),
+		z.object({ resource: z.literal("entity"), action: z.literal("delete"), entityId: z.string().min(1), confirmationToken: z.string().uuid() }).strict()
+	]),
+	z.discriminatedUnion("action", [
+		z.object({ resource: z.literal("tenant"), action: z.literal("inspect"), tenantId: z.string().min(1) }).strict(),
+		z.object({ resource: z.literal("tenant"), action: z.literal("delete"), tenantId: z.string().min(1), confirmationToken: z.string().uuid() }).strict()
+	]),
+	z.object({
+		resource: z.literal("comment"),
+		action: z.literal("delete"),
+		commentId: z.string().min(1),
+		expectedRevision: z.number().int().positive(),
+		expectedContentHash: z.string().min(1)
+	}).strict(),
+	z.object({
+		resource: z.literal("planEntry"),
+		action: z.literal("delete"),
+		entryId: z.string().min(1),
+		expectedRevision: z.number().int().positive(),
+		expectedContentHash: z.string().min(1)
+	}).strict(),
+	z.object({
+		resource: z.literal("contextTerm"),
+		action: z.literal("delete"),
+		scopeRef: z.string().min(1).optional(),
+		term: z.string().min(1),
+		expectedRevision: z.number().int().positive().optional(),
+		expectedContentHash: z.string().min(1).optional()
+	}).strict()
+]);
+const resourceListSchema = z.discriminatedUnion("resource", [
+	z.object({ resource: z.literal("entity"), kind: z.string().min(1), statuses: z.array(z.string().min(1)).optional(), parentId: z.string().min(1).optional(), limit: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("orphanEntity"), kind: z.string().min(1).optional(), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("planEntry"), planId: z.string().min(1), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("context"), view: z.enum(["list", "directory"]).default("list"), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("comment"), issueId: z.string().min(1), before: collectionContinuationSchema, all: z.boolean().optional() }).strict(),
+	z.object({ resource: z.literal("instructionSource"), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("tenant"), continuation: collectionContinuationSchema }).strict()
+]);
+type ResourceListRequest = z.infer<typeof resourceListSchema>;
+
+const selectedRevisionSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const resourceHistorySchema = z.discriminatedUnion("resource", [
+	z.object({ resource: z.literal("comment"), action: z.literal("list"), commentId: z.string().min(1), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("planEntry"), action: z.literal("list"), entryId: z.string().min(1), continuation: collectionContinuationSchema }).strict(),
+	z.object({ resource: z.literal("entity"), action: z.literal("revision"), entityId: z.string().min(1), revision: selectedRevisionSchema }).strict(),
+	z.object({ resource: z.literal("context"), action: z.literal("revision"), scopeRef: z.string().min(1).optional(), revision: selectedRevisionSchema }).strict(),
+	z.object({ resource: z.literal("contextTerm"), action: z.literal("revision"), scopeRef: z.string().min(1).optional(), term: z.string().min(1), revision: selectedRevisionSchema }).strict(),
+	z.discriminatedUnion("action", [
+		z.object({ resource: z.literal("instructionSource"), action: z.literal("list"), key: z.string().min(1), continuation: collectionContinuationSchema }).strict(),
+		z.object({ resource: z.literal("instructionSource"), action: z.literal("revision"), key: z.string().min(1), revision: selectedRevisionSchema }).strict()
+	])
+]);
+type ResourceHistoryRequest = z.infer<typeof resourceHistorySchema>;
 
 export type McpServerOptions = {
 	projectIdentity?: string;
@@ -145,6 +297,7 @@ export type McpServerOptions = {
 export function createMcpServer(options: McpServerOptions): McpServer {
 	const server = new McpServer({ name: "agent-issues", version: packageJson.version });
 	const confirmationTokens = new ConfirmationTokenStore(options.now ?? Date.now);
+	const entityListSecret = randomBytes(32);
 
 	async function resolveScope(): Promise<McpWorkspaceScope> {
 		return resolveMcpWorkspaceScope({
@@ -160,75 +313,128 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		return options.openStore(await resolveScope());
 	}
 
+	async function readPlanEntryPart(input: { entryId: string; revision?: number; offset?: number; documentHash?: string }) {
+		const toolName = "resource_show";
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const entry = await store.getPlanEntry({ entryId: input.entryId });
+			let selected: Record<string, unknown> = entry;
+			const revision = input.revision ?? entry.revision;
+			if (input.revision !== undefined) {
+				const history = await store.listPlanEntryHistory({ entryId: entry.id });
+				const target = history.find((item) => item.targetRevision === input.revision);
+				if (!target) throw new Error(`Plan-entry revision ${input.revision} is unavailable.`);
+				const { headRevision: _headRevision, ...snapshot } = target;
+				selected = { ...snapshot, reference: entry.reference, planId: entry.planId, revision };
+			}
+			const { body, ...metadata } = selected;
+			const text = JSON.stringify(metadata);
+			const documentHash = createHash("sha256").update(JSON.stringify({ toolName, resource: "planEntry", view: "details", scope, tenantId: store.tenantId, entryId: entry.id, revision, text })).digest("hex");
+			return formatMarkdownResponse(text, { reference: entry.reference, revision, format: "json" }, documentHash, toolName, input.offset, input.documentHash);
+		} catch (error) {
+			return boundedReadError(error, "Plan-entry detail read failed.", "Plan-entry detail read failed. No part was returned. Restart without offset and documentHash.");
+		}
+	}
+
 	server.registerTool(
 		"instruction_retrieve",
 		{
-			description: "Read database instructions in bounded parts. The first text block is JSON metadata; the second is Markdown. Call again with the same key, documentHash, and nextOffset as offset until nextOffset is null. Copy the returned offset; do not calculate it. Read all parts before use. On failure, stop; on a changed document, discard all parts and restart with key only.",
+			description: "Retrieve the complete instructions for a skill or agent by key. Use this tool when a loader requires instruction_retrieve, such as key skill/start-work. Returns database Markdown with all required fragments included, in bounded parts. The first text block is JSON metadata; the second is Markdown. Call again with the same key, documentHash, and nextOffset as offset until nextOffset is null. Copy the returned offset; do not calculate it. Read all parts before use. On failure, stop; on a changed document, discard all parts and restart with key only.",
 			inputSchema: {
 				key: z.string().min(1),
 				offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 				documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional()
 			}
 		},
-		async ({ key, offset, documentHash }) => formatInstructionResponse(await (await openStore()).retrieveInstruction({ key, version: packageJson.version }), offset, documentHash)
+		async ({ key, offset, documentHash }) => formatInstructionResponse(await (await openStore()).retrieveInstruction({ key, version: getInstructionVersion() }), offset, documentHash)
 	);
 
 	server.registerTool(
-		"instruction_list",
-		{ description: "List instruction sources for the current owner and running CLI release.", inputSchema: {} },
-		async () => toolResult(await (await openStore()).listInstructionSources({ version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_preview",
+		"instruction_inspect",
 		{
-			description: "Preview pending instruction Markdown with nested fragments. Use one owner snapshot without saving or activating changes. Saved source metadata identifies the base revisions; pendingKeys identifies unsaved bodies.",
-			inputSchema: { key: z.string().min(1), changes: z.array(z.object({ key: z.string().min(1), body: z.string() })).min(1) }
+			description: "Inspect instruction sources without saving changes. Set request.action to compare, dependencies, or preview. Compare returns complete JSON in parts within 8192 UTF-8 JSON bytes: the first text block is metadata with format json; the second is a JSON text part. Copy nextOffset into request.offset with the same key and documentHash until null, join text parts without separators, then parse JSON. The hash binds the owner, scope, release, and selected source snapshots; changed sources require restart without offset and documentHash. Dependencies returns bounded dependencies, affectedInstructions, and modifiedFragments sections in section/key order. Copy nextContinuation into request.continuation with the same key until null and join each section. Dependency pages are live reads, not snapshots; earlier keys are not revisited. Invalid continuation or oversized summaries returns an error without a page. Preview expands pending changes without activation. Use resource_list for catalog summaries, resource_history for revision summaries, resource_body for unexpanded Markdown, and instruction_retrieve for runtime instructions.",
+			annotations: { readOnlyHint: true },
+			inputSchema: { request: z.discriminatedUnion("action", [
+				z.object({ action: z.literal("compare"), key: z.string().min(1), offset: resourceBodyPartSchema.offset, documentHash: resourceBodyPartSchema.documentHash }),
+				z.object({ action: z.literal("dependencies"), key: z.string().min(1), continuation: collectionContinuationSchema }),
+				z.object({ action: z.literal("preview"), key: z.string().min(1), changes: z.array(z.object({ key: z.string().min(1), body: z.string() })).min(1) })
+			]) }
 		},
-		async ({ key, changes }) => toolResult(await (await openStore()).previewInstruction({ key, changes, version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_read",
-		{ description: "Read instruction source Markdown without expanding fragment includes.", inputSchema: { key: z.string().min(1) } },
-		async ({ key }) => toolResult(await (await openStore()).readInstructionSource({ key, version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_compare",
-		{ description: "Compare personal source with the running CLI release default. Return both Markdown bodies, source revision, original override version, and newer default versions. Do not change saved content. Personal fragments have no default.", inputSchema: { key: z.string().min(1) } },
-		async ({ key }) => toolResult(await (await openStore()).compareInstructionSource({ key, version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_dependencies",
-		{ description: "Inspect direct and nested fragment dependencies, unresolved targets, modified fragments, and affected instructions for the current owner and running CLI release. Do not change saved content.", inputSchema: { key: z.string().min(1) } },
-		async ({ key }) => toolResult(await (await openStore()).inspectInstructionDependencies({ key, version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_save",
-		{
-			description: "Save a personal Markdown override with the expected source revision. Validate dependencies before activation on the next retrieval.",
-			inputSchema: { key: z.string().min(1), body: z.string(), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }
-		},
-		async ({ key, body, expectedRevision }) => {
-			try {
-				return toolResult(await (await openStore()).saveInstructionSource({ key, body, expectedRevision, version: packageJson.version }));
-			} catch (error) {
-				if (!(error instanceof InstructionWriteError)) throw error;
-				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource }), isError: true };
+		async ({ request }) => {
+			if (request.action === "dependencies") {
+				try {
+					const scope = await resolveScope();
+					const store = await options.openStore(scope);
+					const version = getInstructionVersion();
+					const { owner } = await store.inspectInstructionResetAll({ version });
+					const requestHash = createHash("sha256").update(JSON.stringify({ tool: "instruction_inspect", action: request.action, key: request.key, tenantId: store.tenantId, scope, owner, version, order: "section-key-asc" })).digest("hex");
+					const after = readPageContinuation(request.continuation, requestHash, entityListSecret, "instruction_inspect");
+					const inspection = await store.inspectInstructionDependencies({ key: request.key, version });
+					const items = [
+						...inspection.dependencies.map((item) => ({ key: JSON.stringify(["dependencies", item.key]), section: "dependencies", value: item })),
+						...inspection.affectedInstructions.map((key) => ({ key: JSON.stringify(["affectedInstructions", key]), section: "affectedInstructions", value: key })),
+						...inspection.modifiedFragments.map((key) => ({ key: JSON.stringify(["modifiedFragments", key]), section: "modifiedFragments", value: key }))
+					];
+					return formatKeyedCollectionPage(items, after, requestHash, entityListSecret, (page) => ({
+						key: inspection.key, version, source: inspection.source,
+						dependencies: page.filter((item) => item.section === "dependencies").map((item) => item.value),
+						affectedInstructions: page.filter((item) => item.section === "affectedInstructions").map((item) => item.value),
+						modifiedFragments: page.filter((item) => item.section === "modifiedFragments").map((item) => item.value)
+					}), "agent-issues instruction dependencies <key> --json", "Instruction dependency");
+				} catch (error) {
+					return boundedReadError(error, "Instruction dependency read failed.", "Instruction dependency read failed. No page was returned. Restart without continuation.");
+				}
+			}
+			if (request.action === "compare") {
+				try {
+					const scope = await resolveScope();
+					const store = await options.openStore(scope);
+					const version = getInstructionVersion();
+					const { owner } = await store.inspectInstructionResetAll({ version });
+					const comparison = await store.compareInstructionSource({ key: request.key, version });
+					const text = JSON.stringify(comparison);
+					const documentHash = createHash("sha256").update(JSON.stringify({ tool: "instruction_inspect", action: request.action, key: request.key, tenantId: store.tenantId, scope, owner, version, text })).digest("hex");
+					return formatMarkdownResponse(text, { key: request.key, version, format: "json" }, documentHash, "instruction_inspect", request.offset, request.documentHash);
+				} catch (error) {
+					return boundedReadError(error, "Instruction comparison read failed.", "Instruction comparison read failed. No part was returned. Restart without offset and documentHash.");
+				}
+			}
+			const store = await openStore();
+			const version = getInstructionVersion();
+			switch (request.action) {
+				case "preview": return toolResult(await store.previewInstruction({ key: request.key, changes: request.changes, version }));
 			}
 		}
 	);
 
 	server.registerTool(
-		"instruction_commit",
+		"instruction_update",
 		{
-			description: "Commit related Markdown saves and personal fragment removals together. Check every revision and the final graph; commit all changes or none.",
-			inputSchema: { changes: z.array(z.discriminatedUnion("operation", [
-				z.object({ operation: z.literal("save"), key: z.string().min(1), body: z.string(), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
-				z.object({ operation: z.literal("remove"), key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
-			])).min(1) }
+			description: "Update personal instruction sources. Set request.action to save, commit, restore, create_fragment, or remove_fragment. Save, restore, and removal require expected revisions. Commit validates all changes and saves all or none. Validate fragment dependencies before activation on the next retrieval. Keep official defaults unchanged.",
+			annotations: { readOnlyHint: false, destructiveHint: true },
+			inputSchema: { request: z.discriminatedUnion("action", [
+				z.object({ action: z.literal("save"), key: z.string().min(1), body: z.string(), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
+				z.object({ action: z.literal("commit"), changes: z.array(z.discriminatedUnion("operation", [
+					z.object({ operation: z.literal("save"), key: z.string().min(1), body: z.string(), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
+					z.object({ operation: z.literal("remove"), key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
+				])).min(1) }),
+				z.object({ action: z.literal("restore"), key: z.string().min(1), revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
+				z.object({ action: z.literal("create_fragment"), key: z.string().min(1), body: z.string() }),
+				z.object({ action: z.literal("remove_fragment"), key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
+			]) }
 		},
-		async ({ changes }) => {
+		async ({ request }) => {
 			try {
-				return toolResult(await (await openStore()).commitInstructionChanges({ changes, version: packageJson.version }));
+				const store = await openStore();
+				const version = getInstructionVersion();
+				switch (request.action) {
+					case "save": return toolResult(await store.saveInstructionSource({ key: request.key, body: request.body, expectedRevision: request.expectedRevision, version }));
+					case "commit": return toolResult(await store.commitInstructionChanges({ changes: request.changes, version }));
+					case "restore": return toolResult(await store.restoreInstructionRevision({ key: request.key, revision: request.revision, expectedRevision: request.expectedRevision, version }));
+					case "create_fragment": return toolResult(await store.createInstructionFragment({ key: request.key, body: request.body, version }));
+					case "remove_fragment": return toolResult(await store.removeInstructionFragment({ key: request.key, expectedRevision: request.expectedRevision, version }));
+				}
 			} catch (error) {
 				if (!(error instanceof InstructionWriteError) && !(error instanceof InstructionFragmentError)) throw error;
 				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource,
@@ -238,118 +444,42 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	);
 
 	server.registerTool(
-		"instruction_history",
-		{ description: "List saved instruction source revisions for the current owner and running CLI release.", inputSchema: { key: z.string().min(1) } },
-		async ({ key }) => toolResult(await (await openStore()).listInstructionHistory({ key, version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_revision",
-		{ description: "Read saved instruction Markdown and revision metadata without expanding fragments.", inputSchema: {
-			key: z.string().min(1), revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
-		} },
-		async ({ key, revision }) => toolResult(await (await openStore()).readInstructionRevision({ key, revision, version: packageJson.version }))
-	);
-	server.registerTool(
-		"instruction_restore",
-		{
-			description: "Restore saved instruction Markdown as a new revision. Check the current revision and dependencies before activation on the next retrieval. Keep official defaults unchanged.",
-			inputSchema: { key: z.string().min(1), revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }
-		},
-		async ({ key, revision, expectedRevision }) => {
-			try {
-				return toolResult(await (await openStore()).restoreInstructionRevision({ key, revision, expectedRevision, version: packageJson.version }));
-			} catch (error) {
-				if (!(error instanceof InstructionWriteError)) throw error;
-				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource }), isError: true };
-			}
-		}
-	);
-
-	server.registerTool(
-		"instruction_reset_inspect",
-		{ description: "Inspect a selected-item reset before confirmation. Show proposed Markdown, affected instructions, and remaining modified fragments. Do not save changes.", inputSchema: { key: z.string().min(1) } },
-		async ({ key }) => {
-			const store = await openStore();
-			const impact = await store.inspectInstructionReset({ key, version: packageJson.version });
-			const confirmation = confirmationTokens.issue("instruction_reset", { tenantId: store.tenantId, key, expectedRevision: impact.currentSource.source.revision, impact });
-			return toolResult({ ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
-		}
-	);
-	server.registerTool(
 		"instruction_reset",
 		{
-			description: "Reset only the selected source to the running release default after inspection and confirmation. Check revisions and dependencies, retain fragment overrides, and record history.",
-			inputSchema: { key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), confirmationToken: z.string().uuid() }
+			description: "Reset personal instruction sources to release defaults. Set request.scope to one or all and request.phase to inspect or apply. Inspect returns impact and a confirmation token without saving. Review the impact before apply. Apply requires that token and expected revisions. Scope one retains fragment overrides. Scope all clears owner overrides and personal fragments together. Retain official defaults and other owners.",
+			annotations: { readOnlyHint: false, destructiveHint: true },
+			inputSchema: { request: z.union([
+				z.object({ scope: z.literal("one"), phase: z.literal("inspect"), key: z.string().min(1) }),
+				z.object({ scope: z.literal("all"), phase: z.literal("inspect") }),
+				z.object({ scope: z.literal("one"), phase: z.literal("apply"), key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), confirmationToken: z.string().uuid() }),
+				z.object({ scope: z.literal("all"), phase: z.literal("apply"), expectedRevisions: z.array(z.object({ key: z.string().min(1), sourceType: z.enum(["override", "personal"]), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })), confirmationToken: z.string().uuid() })
+			]) }
 		},
-		async ({ key, expectedRevision, confirmationToken }) => {
+		async ({ request }) => {
 			try {
 				const store = await openStore();
-				const impact = await store.inspectInstructionReset({ key, version: packageJson.version });
-				if (impact.currentSource.source.revision !== expectedRevision) throw new InstructionWriteError("revision-conflict", impact.currentSource, `Instruction revision conflict: ${JSON.stringify(impact.currentSource)}`);
-				confirmationTokens.consume(confirmationToken, "instruction_reset", { tenantId: store.tenantId, key, expectedRevision, impact });
-				return toolResult(await store.resetInstructionSource({ key, expectedRevision, version: packageJson.version }));
+				const version = getInstructionVersion();
+				if (request.scope === "one") {
+					const impact = await store.inspectInstructionReset({ key: request.key, version });
+					if (request.phase === "inspect") {
+						const confirmation = confirmationTokens.issue("instruction_reset", { tenantId: store.tenantId, key: request.key, expectedRevision: impact.currentSource.source.revision, impact });
+						return toolResult({ ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+					}
+					if (impact.currentSource.source.revision !== request.expectedRevision) throw new InstructionWriteError("revision-conflict", impact.currentSource, `Instruction revision conflict: ${JSON.stringify(impact.currentSource)}`);
+					confirmationTokens.consume(request.confirmationToken, "instruction_reset", { tenantId: store.tenantId, key: request.key, expectedRevision: request.expectedRevision, impact });
+					return toolResult(await store.resetInstructionSource({ key: request.key, expectedRevision: request.expectedRevision, version }));
+				}
+				const impact = await store.inspectInstructionResetAll({ version });
+				if (request.phase === "inspect") {
+					const confirmation = confirmationTokens.issue("instruction_reset_all", { impact });
+					return toolResult({ ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+				}
+				confirmationTokens.consume(request.confirmationToken, "instruction_reset_all", { impact });
+				return toolResult(await store.resetInstructionAll({ expectedRevisions: request.expectedRevisions, version }));
 			} catch (error) {
+				if (error instanceof InstructionResetAllError) return { ...toolResult({ error: error.message, reason: error.reason, currentInspection: error.currentInspection }), isError: true };
 				if (!(error instanceof InstructionWriteError)) throw error;
 				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource }), isError: true };
-			}
-		}
-	);
-
-	server.registerTool(
-		"instruction_reset_all_inspect",
-		{ description: "Inspect Reset All before confirmation. List every owner override, personal fragment, proposed default, and affected instruction. Do not save changes.", inputSchema: {} },
-		async () => {
-			const impact = await (await openStore()).inspectInstructionResetAll({ version: packageJson.version });
-			const confirmation = confirmationTokens.issue("instruction_reset_all", { impact });
-			return toolResult({ ...impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
-		}
-	);
-	server.registerTool(
-		"instruction_reset_all",
-		{
-			description: "Reset the complete owner instruction set after inspection and confirmation. Clear overrides and personal fragments together. Check all revisions and final dependencies; retain official defaults and other owners.",
-			inputSchema: { expectedRevisions: z.array(z.object({ key: z.string().min(1), sourceType: z.enum(["override", "personal"]), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })), confirmationToken: z.string().uuid() }
-		},
-		async ({ expectedRevisions, confirmationToken }) => {
-			try {
-				const store = await openStore();
-				const impact = await store.inspectInstructionResetAll({ version: packageJson.version });
-				confirmationTokens.consume(confirmationToken, "instruction_reset_all", { impact });
-				return toolResult(await store.resetInstructionAll({ expectedRevisions, version: packageJson.version }));
-			} catch (error) {
-				if (!(error instanceof InstructionResetAllError)) throw error;
-				return { ...toolResult({ error: error.message, reason: error.reason, currentInspection: error.currentInspection }), isError: true };
-			}
-		}
-	);
-
-	server.registerTool(
-		"instruction_fragment_create",
-		{
-			description: "Create a personal Markdown fragment with a stable key in the current owner scope. Validate includes before activation.",
-			inputSchema: { key: z.string().min(1), body: z.string() }
-		},
-		async ({ key, body }) => {
-			try {
-				return toolResult(await (await openStore()).createInstructionFragment({ key, body, version: packageJson.version }));
-			} catch (error) {
-				if (!(error instanceof InstructionFragmentError)) throw error;
-				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource, affectedReferences: error.affectedReferences }), isError: true };
-			}
-		}
-	);
-	server.registerTool(
-		"instruction_fragment_remove",
-		{
-			description: "Remove an unreferenced personal fragment with the expected source revision. Retain its revision history.",
-			inputSchema: { key: z.string().min(1), expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }
-		},
-		async ({ key, expectedRevision }) => {
-			try {
-				return toolResult(await (await openStore()).removeInstructionFragment({ key, expectedRevision, version: packageJson.version }));
-			} catch (error) {
-				if (!(error instanceof InstructionFragmentError)) throw error;
-				return { ...toolResult({ error: error.message, reason: error.reason, currentSource: error.currentSource, affectedReferences: error.affectedReferences }), isError: true };
 			}
 		}
 	);
@@ -386,53 +516,62 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	);
 
 	server.registerTool(
-		"entity_create",
+		"resource_create",
 		{
-			description: "Create a tracker entity.",
-			inputSchema: {
-				kind: z.string().min(1),
-				title: z.string().min(1),
-				body: z.string().optional(),
-				parentId: z.string().min(1).optional(),
-				status: z.string().min(1).optional(),
-				category: z.string().min(1).optional(),
-				priority: z.string().min(1).optional(),
-				type: z.string().min(1).optional(),
-				links: z.array(z.object({ relationType: z.string().min(1), targetId: z.string().min(1) })).optional()
-			}
+			description: "Create an entity, issue comment, or Plan entry, or create or update tracker context text. Set request.resource to select the resource and provide its typed fields.",
+			inputSchema: { request: resourceCreateSchema }
 		},
-		async (input) => {
-			const entity = await (await openStore()).createEntity(input);
-			const result = { entity };
-			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				structuredContent: result
-			};
+		async ({ request }) => {
+			switch (request.resource) {
+				case "entity": {
+					const { resource: _resource, ...input } = request;
+					return toolResult({ entity: await (await openStore()).createEntity(input) });
+				}
+				case "comment": {
+					const store = await openStore();
+					const referencedIssueIds = request.referencedIssueIds === undefined ? undefined : await resolveEntityIds(store, request.referencedIssueIds);
+					const comment = await store.createIssueComment({ issueId: request.issueId, body: request.body, referencedIssueIds });
+					return toolResult({ comment });
+				}
+				case "planEntry": {
+					const store = await openStore();
+					const { resource: _resource, ...input } = request;
+					const referencedEntityIds = input.referencedEntityIds === undefined ? undefined : await resolveEntityIds(store, input.referencedEntityIds);
+					const supersededEntryIds = input.supersededEntryIds === undefined ? undefined : await resolvePlanEntryIds(store, input.supersededEntryIds);
+					const entry = await store.createPlanEntry({ ...input, referencedEntityIds, supersededEntryIds });
+					return toolResult({ entry });
+				}
+				case "context": {
+					const { resource: _resource, ...input } = request;
+					return toolResult(await (await openStore()).upsertContext(input));
+				}
+			}
 		}
 	);
 
 	server.registerTool(
-		"entity_edit",
+		"resource_edit",
 		{
-			description: "Edit a tracker entity.",
-			inputSchema: {
-				entityId: z.string().min(1),
-				title: z.string().min(1).optional(),
-				body: z.string().optional(),
-				category: z.string().min(1).optional(),
-				priority: z.string().min(1).optional(),
-				type: z.string().min(1).nullable().optional(),
-				expectedRevision: z.number().int().positive(),
-				expectedContentHash: z.string().min(1)
-			}
+			description: "Edit an entity, issue comment, or Plan entry. Set request.resource to select the resource and provide its typed fields.",
+			inputSchema: { request: resourceEditSchema }
 		},
-		async (input) => {
-			const entity = await (await openStore()).updateEntity(input);
-			const result = { entity };
-			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				structuredContent: result
-			};
+		async ({ request }) => {
+			switch (request.resource) {
+				case "entity": {
+					const { resource: _resource, ...input } = request;
+					return toolResult({ entity: await (await openStore()).updateEntity(input) });
+				}
+				case "comment": {
+					const store = await openStore();
+					const referencedIssueIds = request.referencedIssueIds === undefined ? undefined : await resolveEntityIds(store, request.referencedIssueIds);
+					const { resource: _resource, ...input } = request;
+					return toolResult({ comment: await store.updateIssueComment({ ...input, referencedIssueIds }) });
+				}
+				case "planEntry": {
+					const { resource: _resource, ...input } = request;
+					return toolResult({ entry: await (await openStore()).updatePlanEntry(input) });
+				}
+			}
 		}
 	);
 
@@ -446,27 +585,49 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	);
 
 	server.registerTool(
-		"entity_delete_inspect",
+		"resource_delete",
 		{
-			description: "Inspect the impact of deleting a tracker entity and get a confirmation token.",
-			inputSchema: { entityId: z.string().min(1) }
+			description: "Delete an entity, tenant, issue comment, Plan entry, or context term. Set request.resource to select the resource and request.action to inspect or delete.",
+			inputSchema: { request: resourceDeleteSchema }
 		},
-		async ({ entityId }) => {
-			const impact = await (await openStore()).getEntityDetails(entityId);
-			const confirmation = confirmationTokens.issue("entity_delete", { entityId });
-			return toolResult({ impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
-		}
-	);
+		async ({ request }) => {
+			switch (request.resource) {
+				case "entity": {
+					if (request.action === "inspect") {
+						const impact = await (await openStore()).getEntityDetails(request.entityId);
+						const confirmation = confirmationTokens.issue("entity_delete", { entityId: request.entityId });
+						return toolResult({ impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+					}
 
-	server.registerTool(
-		"entity_delete",
-		{
-			description: "Delete a tracker entity after inspection confirmation.",
-			inputSchema: { entityId: z.string().min(1), confirmationToken: z.string().uuid() }
-		},
-		async ({ entityId, confirmationToken }) => {
-			confirmationTokens.consume(confirmationToken, "entity_delete", { entityId });
-			return toolResult(await (await openStore()).deleteEntity({ entityId }));
+					confirmationTokens.consume(request.confirmationToken, "entity_delete", { entityId: request.entityId });
+					return toolResult(await (await openStore()).deleteEntity({ entityId: request.entityId }));
+				}
+				case "tenant": {
+					if (request.action === "inspect") {
+						const impact = (await (await openStore()).listTenants()).find((tenant) => tenant.id === request.tenantId);
+						if (!impact) throw new Error(`Tenant not found: ${request.tenantId}`);
+
+						const confirmation = confirmationTokens.issue("tenant_delete", { tenantId: request.tenantId });
+						return toolResult({ impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt });
+					}
+
+					confirmationTokens.consume(request.confirmationToken, "tenant_delete", { tenantId: request.tenantId });
+					return toolResult(await (await openStore()).deleteTenant(request.tenantId));
+				}
+				case "comment": {
+					const store = await openStore();
+					const { resource: _resource, action: _action, ...input } = request;
+					return toolResult({ comment: await store.deleteIssueComment(input) });
+				}
+				case "planEntry": {
+					const { resource: _resource, action: _action, ...input } = request;
+					return toolResult({ entry: await (await openStore()).deletePlanEntry(input) });
+				}
+				case "contextTerm": {
+					const { resource: _resource, action: _action, ...input } = request;
+					return toolResult(await (await openStore()).forgetContextTerm(input));
+				}
+			}
 		}
 	);
 
@@ -496,39 +657,296 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		}
 	);
 
+	async function readEntityList({ kind, statuses, parentId, limit, continuation }: Extract<ResourceListRequest, { resource: "entity" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const requestHash = createHash("sha256").update(JSON.stringify({
+				tool: "resource_list", resource: "entity", operation: "list",
+				tenantId: store.tenantId, projectIdentity: scope.projectIdentity ?? null,
+				workspaceRoot: scope.workspaceRoot ?? null, kind, statuses: [...new Set(statuses ?? [])].sort(),
+				parentId: parentId ?? null, limit: limit ?? null, order: "id-asc"
+			})).digest("hex");
+			const after = readPageContinuation(continuation, requestHash, entityListSecret);
+			const result = await store.queryEntities({ kind, statuses, parentId });
+			return formatEntityListPage(result.entities, after, requestHash, entityListSecret, limit);
+		} catch (error) {
+			return boundedReadError(error, "Entity list failed.", "Entity list failed. Error details exceed the response budget. No page was returned. Check the request and restart without continuation.");
+		}
+	}
+
+	async function readInstructionCatalog(request: Extract<ResourceListRequest, { resource: "instructionSource" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const version = getInstructionVersion();
+			const { owner } = await store.inspectInstructionResetAll({ version });
+			const requestHash = createHash("sha256").update(JSON.stringify({ tool: "resource_list", resource: request.resource, tenantId: store.tenantId, scope, owner, version, order: "key-asc" })).digest("hex");
+			const after = readPageContinuation(request.continuation, requestHash, entityListSecret, "resource_list");
+			const catalog = await store.listInstructionSources({ version });
+			return formatKeyedCollectionPage(catalog.items.map(({ body: _body, ...item }) => ({
+				key: item.key,
+				value: { ...item, reads: {
+					body: { tool: "resource_body", arguments: { request: { resource: "instructionSource", key: item.key, ...(item.source.type === "default" ? {} : { revision: item.source.revision }) } } },
+					details: { command: "agent-issues", arguments: ["instruction", "read", item.key, "--json"] }
+				} }
+			})), after, requestHash, entityListSecret, (items) => ({ version, items: items.map((item) => item.value) }), "agent-issues instruction list --json", "Instruction");
+		} catch (error) {
+			return boundedReadError(error, "Instruction catalog read failed.", "Instruction catalog read failed. No page was returned. Restart without continuation.");
+		}
+	}
+
 	server.registerTool(
-		"entity_list",
+		"resource_list",
 		{
-			description: "List tracker entities by kind and optional filters.",
-			inputSchema: {
-				kind: z.string().min(1),
-				statuses: z.array(z.string().min(1)).optional(),
-				parentId: z.string().min(1).optional(),
-				limit: z.number().int().positive().optional()
+			description: "List resources without changes. Set request.resource to entity (required kind; optional statuses, parentId, limit), orphanEntity (optional kind), planEntry (required planId), context (view list or directory), comment (required issueId), instructionSource, or tenant. Keep each request unchanged during traversal. Paged routes return nextContinuation; copy it into request.continuation until null. Instruction catalog summaries use ascending item-key order and exclude Markdown bodies; use returned resource_body or CLI detail references for complete source. Comments retain newest-page ordering: copy nextBefore into request.before and prepend older pages; all cannot disable paging. Summary pages fit 8192 UTF-8 JSON bytes. Pages are live reads, not snapshots. Tokens are bound to the resource, operation, owner, release where applicable, scope, filters, order, and server process. Invalid continuation or oversized metadata returns an error without a page. Use returned read references for complete details.",
+			annotations: { readOnlyHint: true },
+			inputSchema: { request: resourceListSchema }
+		},
+		async ({ request }) => {
+			switch (request.resource) {
+				case "entity": return readEntityList(request);
+				case "orphanEntity": return readOrphanList(request);
+				case "planEntry": return readPlanEntryList(request);
+				case "context": return readContextPage(request.view === "directory" ? "context_directory" : "context_list", { continuation: request.continuation });
+				case "comment": return readCommentList(request);
+				case "instructionSource": return readInstructionCatalog(request);
+				case "tenant": return readTenantList(request);
 			}
-		},
-		async (input) => toolResult(await (await openStore()).queryEntities(input))
+		}
 	);
 
 	server.registerTool(
-		"entity_history",
+		"resource_body",
 		{
-			description: "Get a tracker entity at a historical revision.",
-			inputSchema: { entityId: z.string().min(1), revision: z.number().int().positive() }
+			description: "Read complete current or historical resource text in parts within 8192 UTF-8 JSON bytes. Set request.resource to entity, planEntry, context, contextTerm, comment, or instructionSource and supply its identifiers. Instruction source is unexpanded Markdown; use instruction_retrieve for runtime instructions. The first text block is metadata; the second is Markdown. Copy nextOffset into request.offset with the same resource, revision, and documentHash until null. Read all parts before use. On a changed document, discard all parts and restart without offset and documentHash.",
+			annotations: { readOnlyHint: true },
+			inputSchema: { request: resourceBodySchema }
 		},
-		async (input) => toolResult(await (await openStore()).materializeEntityRevision(input))
+		async ({ request }) => {
+			try {
+				const scope = await resolveScope();
+				const store = await options.openStore(scope);
+				let body: string;
+				let reference: string;
+				let revision: number;
+				let resourceScope: Record<string, unknown> = {};
+				switch (request.resource) {
+					case "entity": {
+						const { entity } = await store.getEntityDetails(request.entityId);
+						const selected = request.revision === undefined ? entity : await store.materializeEntityRevision({ entityId: entity.id, revision: request.revision });
+						body = selected.body;
+						reference = entity.reference;
+						revision = request.revision ?? entity.revision;
+						break;
+					}
+					case "comment": {
+						const history = await store.listIssueCommentHistory({ commentId: request.commentId });
+						revision = request.revision ?? Math.max(...history.map((entry) => entry.targetRevision));
+						const selected = history.find((entry) => entry.targetRevision === revision);
+						if (!selected) throw new Error("Issue comment or revision not found.");
+						body = selected.body;
+						reference = encodeCanonicalReference("issueComment", selected.commentId);
+						break;
+					}
+					case "planEntry": {
+						const entry = await store.getPlanEntry({ entryId: request.entryId });
+						revision = request.revision ?? entry.revision;
+						const selected = request.revision === undefined ? entry : (await store.listPlanEntryHistory({ entryId: entry.id })).find((item) => item.targetRevision === revision);
+						if (!selected) throw new Error(`Plan-entry revision ${revision} is unavailable.`);
+						if (typeof selected.body !== "string") throw new Error("Plan-entry body is unavailable.");
+						body = selected.body;
+						reference = entry.reference;
+						break;
+					}
+					case "context": {
+						const { context } = await store.getContextDetails({ scopeRef: request.scopeRef });
+						const selected = request.revision === undefined ? context : await store.materializeContextRevision({ scopeRef: request.scopeRef, revision: request.revision });
+						body = selected.summary;
+						reference = context.reference ?? context.key;
+						revision = request.revision ?? context.revision;
+						resourceScope = { contextKey: context.key };
+						break;
+					}
+					case "contextTerm": {
+						const details = await store.getContextDetails({ scopeRef: request.scopeRef });
+						if (request.revision === undefined) {
+							const term = details.terms.find((item) => item.term === request.term);
+							if (!term) throw new Error("Context term not found.");
+							body = term.definition;
+							reference = term.reference;
+							revision = term.revision;
+						} else {
+							const selected = await store.materializeContextTermRevision({ scopeRef: request.scopeRef, term: request.term, revision: request.revision });
+							body = selected.definition;
+							reference = encodeCanonicalReference("contextTerm", selected.id);
+							revision = request.revision;
+						}
+						resourceScope = { contextKey: details.context.key, term: request.term };
+						break;
+					}
+					case "instructionSource": {
+						const version = getInstructionVersion();
+						const selected = request.revision === undefined
+							? await store.readInstructionSource({ key: request.key, version })
+							: await store.readInstructionRevision({ key: request.key, version, revision: request.revision });
+						const { owner } = await store.inspectInstructionResetAll({ version });
+						body = selected.body;
+						reference = selected.key;
+						revision = selected.source.revision;
+						resourceScope = { owner, version, source: selected.source };
+						break;
+					}
+				}
+				const identity = { resource: request.resource, reference, revision, tenantId: store.tenantId, scope, ...resourceScope };
+				const hash = createHash("sha256").update(JSON.stringify({ ...identity, body })).digest("hex");
+				return formatMarkdownResponse(body, identity, hash, "resource_body", request.offset, request.documentHash);
+			} catch (error) {
+				return boundedReadError(error, "Resource body read failed.", "Resource body read failed. No body was returned. Check the resource and revision, then restart without offset and documentHash.");
+			}
+		}
 	);
 
+	async function readInstructionHistory(request: Extract<ResourceHistoryRequest, { resource: "instructionSource"; action: "list" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const version = getInstructionVersion();
+			const { owner } = await store.inspectInstructionResetAll({ version });
+			const requestHash = createHash("sha256").update(JSON.stringify({ tool: "resource_history", resource: request.resource, action: request.action, key: request.key, tenantId: store.tenantId, scope, owner, version, order: "revision-asc" })).digest("hex");
+			const after = readPageContinuation(request.continuation, requestHash, entityListSecret, "resource_history");
+			const history = await store.listInstructionHistory({ key: request.key, version });
+			return formatKeyedCollectionPage(history.revisions.map(({ body: _body, ...entry }) => ({
+				key: String(entry.source.revision).padStart(16, "0"),
+				value: { ...entry, reads: { body: { tool: "resource_body", arguments: { request: { resource: "instructionSource", key: entry.key, revision: entry.source.revision } } } } }
+			})), after, requestHash, entityListSecret, (items) => ({ key: history.key, version, revisions: items.map((item) => item.value) }), "agent-issues instruction history <key> --json", "Instruction history");
+		} catch (error) {
+			return boundedReadError(error, "Instruction history read failed.", "Instruction history read failed. No page was returned. Restart without continuation.");
+		}
+	}
+
 	server.registerTool(
-		"entity_show",
+		"resource_history",
 		{
-			description: "Get tracker entity details by reference.",
-			inputSchema: { reference: z.string().min(1) }
+			description: "Read resource revision metadata without historical text. Use action list for comment, planEntry, or instructionSource histories; use action revision for entity, context, contextTerm, or instructionSource with a positive revision. Follow returned resource_body or complete CLI detail references for selected text. History pages fit within 8192 UTF-8 JSON bytes: copy nextContinuation into request.continuation with the same request until null. Instruction revisions use ascending source-revision order and exclude Markdown bodies. Continuation is bound to the resource, action, identity, owner and release where applicable, tenant, workspace/project, order, and server process. Histories are live reads, not snapshots; later revisions can appear and headRevision can change. Invalid continuation or oversized summaries returns an error without a page. Unsupported combinations fail before storage opens. Restores and writes use separate tools.",
+			annotations: { readOnlyHint: true },
+			inputSchema: { request: resourceHistorySchema }
 		},
-		async ({ reference }) => {
+		async ({ request }) => {
+			if (request.resource === "comment") return readCommentHistory(request);
+			if (request.resource === "planEntry") return readPlanEntryHistory(request);
+			if (request.resource === "instructionSource" && request.action === "list") return readInstructionHistory(request);
 			const store = await openStore();
-			const details = await store.getEntityDetails(reference);
-			return toolResult(details.entity.kind === "initiative" ? await store.getInitiativeBundle(reference) : details);
+			switch (request.resource) {
+				case "entity": {
+					const { entity } = await store.getEntityDetails(request.entityId);
+					const selected = await store.materializeEntityRevision({ entityId: request.entityId, revision: request.revision });
+					const { body: _body, ...metadata } = selected;
+					const { action: _action, ...bodyRequest } = request;
+					return toolResult({ ...metadata, reference: entity.reference, reads: { body: { tool: "resource_body", arguments: { request: { ...bodyRequest, entityId: entity.reference } } } } });
+				}
+				case "context": {
+					const { context } = await store.getContextDetails({ scopeRef: request.scopeRef });
+					const selected = await store.materializeContextRevision({ scopeRef: request.scopeRef, revision: request.revision });
+					const { summary: _summary, ...metadata } = selected;
+					const { action: _action, ...bodyRequest } = request;
+					return toolResult({ ...metadata, reference: context.reference, reads: { body: { tool: "resource_body", arguments: { request: bodyRequest } } } });
+				}
+				case "contextTerm": {
+					const selected = await store.materializeContextTermRevision({ scopeRef: request.scopeRef, term: request.term, revision: request.revision });
+					const { definition: _definition, ...metadata } = selected;
+					const { action: _action, ...bodyRequest } = request;
+					return toolResult({ ...metadata, reference: encodeCanonicalReference("contextTerm", selected.id), reads: { body: { tool: "resource_body", arguments: { request: bodyRequest } } } });
+				}
+				case "instructionSource": {
+					const version = getInstructionVersion();
+					const selected = await store.readInstructionRevision({ key: request.key, revision: request.revision, version });
+					const { body: _body, ...metadata } = selected;
+					const { action: _action, ...bodyRequest } = request;
+					return toolResult({ ...metadata, reads: { body: { tool: "resource_body", arguments: { request: bodyRequest } } } });
+				}
+			}
+		}
+	);
+
+	server.registerTool(
+		"resource_show",
+		{
+			description: "Read resource metadata without authored bodies. Set request.resource to entity with reference, planEntry with entryId, context with optional scopeRef, contextTerm with term and optional scopeRef, or instructionSource with key. Plan-entry view summary is the default; view details returns complete metadata, including link and supersession collections, in bounded JSON parts. Details accepts optional revision, offset, and documentHash inside request. Join second text blocks without separators, then parse JSON. Copy nextOffset into request.offset with the same entry, revision, view, and hash until null. Parts fit 8192 UTF-8 JSON bytes. Invalid continuation or changed documents returns an error without partial data; discard parts and restart. Bodies use resource_body. For issueBreakdown use action show with draftId or latest with targetId. Follow returned read references. Use initiative_bundle explicitly for an initiative graph and instruction_retrieve for runtime instructions.",
+			annotations: { readOnlyHint: true },
+			inputSchema: { request: z.discriminatedUnion("resource", [
+				z.object({ resource: z.literal("entity"), reference: z.string().min(1) }).strict(),
+				z.discriminatedUnion("view", [
+					z.object({ resource: z.literal("planEntry"), view: z.literal("summary").optional(), entryId: z.string().min(1) }).strict(),
+					z.object({ resource: z.literal("planEntry"), view: z.literal("details"), entryId: z.string().min(1), ...resourceBodyPartSchema }).strict()
+				]),
+				z.object({ resource: z.literal("instructionSource"), key: z.string().min(1) }).strict(),
+				z.object({ resource: z.literal("context"), scopeRef: z.string().min(1).optional() }).strict(),
+				z.object({ resource: z.literal("contextTerm"), scopeRef: z.string().min(1).optional(), term: z.string().min(1) }).strict(),
+				z.discriminatedUnion("action", [
+					z.object({ resource: z.literal("issueBreakdown"), action: z.literal("show"), draftId: z.string().min(1) }).strict(),
+					z.object({ resource: z.literal("issueBreakdown"), action: z.literal("latest"), targetId: z.string().min(1) }).strict()
+				])
+			]) }
+		},
+		async ({ request }) => {
+			if (request.resource === "planEntry" && request.view === "details") return readPlanEntryPart(request);
+			try {
+				const store = await openStore();
+				if (request.resource === "issueBreakdown") {
+					const selected = request.action === "show"
+						? await store.getIssueBreakdownDraft({ draftId: request.draftId })
+						: await store.getLatestIssueBreakdownDraft({ targetId: (await store.getEntityDetails(request.targetId)).entity.id });
+					const { issues: _issues, ...draft } = selected;
+					return toolResult({ draft, reads: { details: { command: "agent-issues", arguments: ["issue-breakdown", "show", draft.id, "--json"] } } });
+				}
+				if (request.resource === "instructionSource") {
+					const version = getInstructionVersion();
+					const { body: _body, ...source } = await store.readInstructionSource({ key: request.key, version });
+					return toolResult({ ...source, reads: {
+						body: { tool: "resource_body", arguments: { request: { resource: "instructionSource", key: source.key, ...(source.source.type === "default" ? {} : { revision: source.source.revision }) } } },
+						details: { command: "agent-issues", arguments: ["instruction", "read", source.key, "--json"] }
+					} });
+				}
+				if (request.resource === "planEntry") {
+					const { body: _body, ...entry } = await store.getPlanEntry({ entryId: request.entryId });
+					return toolResult({ entry, reads: {
+						body: { tool: "resource_body", arguments: { request: { resource: "planEntry", entryId: entry.reference, revision: entry.revision } } },
+						details: planEntryDetailRead(entry.reference, entry.revision)
+					} });
+				}
+				if (request.resource === "context" || request.resource === "contextTerm") {
+					const details = await store.getContextDetails({ scopeRef: request.scopeRef });
+					const detailRead = { command: "agent-issues", arguments: ["context", "show", ...(request.scopeRef ? [request.scopeRef] : []), "--json"] };
+					const terms = details.terms.map(({ definition: _definition, ...term }) => ({
+						...term,
+						reads: { body: { tool: "resource_body", arguments: { request: { resource: "contextTerm", scopeRef: request.scopeRef, term: term.term, revision: term.revision } } }, details: detailRead }
+					}));
+					if (request.resource === "contextTerm") {
+						const term = terms.find((item) => item.term === request.term);
+						if (!term) throw new Error("Context term not found.");
+						return toolResult({ term, reads: term.reads });
+					}
+					const { summary: _summary, ...context } = details.context;
+					return toolResult({ context, terms, reads: { body: { tool: "resource_body", arguments: { request: { resource: "context", scopeRef: request.scopeRef, ...(context.revision > 0 ? { revision: context.revision } : {}) } } }, details: detailRead } });
+				}
+				const reference = request.reference;
+				const details = await store.getEntityDetails(reference);
+				const { body, bodySource, ...entity } = details.entity;
+				const reads = {
+					body: { tool: "resource_body", arguments: { request: { resource: "entity", entityId: entity.reference } } },
+					relations: { tool: "relation_query", arguments: { entityId: entity.reference } },
+					details: { command: "agent-issues", arguments: ["show", entity.reference, "--json"] }
+				};
+				const result = toolResult({ entity, reads });
+				if (Buffer.byteLength(JSON.stringify(result), "utf8") <= 8192) return result;
+				return {
+					...toolResult({ error: "Entity metadata exceeds the 8192-byte response budget. No metadata was returned. Use the complete CLI detail read.", reference: entity.reference, reads }),
+					isError: true
+				};
+			} catch (error) {
+				return boundedReadError(error, "Resource metadata read failed.", "Resource metadata read failed. Error details exceed the response budget. No metadata was returned. Check the resource identifiers or use the complete CLI detail read.");
+			}
 		}
 	);
 
@@ -572,28 +990,6 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		}
 	);
 
-	server.registerTool(
-		"issue_breakdown_show",
-		{
-			description: "Get an issue-breakdown draft.",
-			inputSchema: { draftId: z.string().min(1) }
-		},
-		async ({ draftId }) => toolResult({ draft: await (await openStore()).getIssueBreakdownDraft({ draftId }) })
-	);
-
-	server.registerTool(
-		"issue_breakdown_latest",
-		{
-			description: "Get the latest issue-breakdown draft for a target.",
-			inputSchema: { targetId: z.string().min(1) }
-		},
-		async ({ targetId }) => {
-			const store = await openStore();
-			const target = await store.getEntityDetails(targetId);
-			return toolResult({ draft: await store.getLatestIssueBreakdownDraft({ targetId: target.entity.id }) });
-		}
-	);
-
 	registerAppTool(
 		server,
 		"issue_breakdown_preview",
@@ -626,43 +1022,41 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		async (input) => toolResult(await (await openStore()).confirmPlan(input))
 	);
 
-	server.registerTool(
-		"context_list",
-		{
-			description: "List tracker contexts.",
-			inputSchema: {}
-		},
-		async () => toolResult(await (await openStore()).listContexts())
-	);
-
-	server.registerTool(
-		"context_show",
-		{
-			description: "Get tracker context details and terms.",
-			inputSchema: { scopeRef: z.string().min(1).optional() }
-		},
-		async ({ scopeRef }) => toolResult(await (await openStore()).getContextDetails({ scopeRef }))
-	);
-
-	server.registerTool(
-		"context_directory",
-		{
-			description: "Get the tracker context directory.",
-			inputSchema: {}
-		},
-		async () => toolResult(await (await openStore()).getContextDirectory())
-	);
+	async function readContextPage(tool: "context_list" | "context_directory" | "context_search", input: { query?: string; view?: "all" | "global" | "initiatives"; continuation?: string }) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const query = input.query?.trim() ?? "";
+			const view = input.view ?? "all";
+			const requestHash = createHash("sha256").update(JSON.stringify({
+				operation: tool === "context_search" ? { tool } : { tool: "resource_list", resource: "context", view: tool === "context_list" ? "list" : "directory" }, tenantId: store.tenantId, scope, query, view, order: "section-key-asc"
+			})).digest("hex");
+			const after = readPageContinuation(input.continuation, requestHash, entityListSecret, tool);
+			if (tool === "context_list") {
+				const { contexts } = await store.listContexts();
+				return formatKeyedCollectionPage(contexts.map((item) => ({
+					key: item.context.key,
+					value: contextPageSummary(item)
+				})), after, requestHash, entityListSecret, (items) => ({ contexts: items.map((item) => item.value) }), "agent-issues context list --json");
+			}
+			const directory = tool === "context_directory" ? await store.getContextDirectory() : await store.queryContextDirectory({ query, view });
+			return formatContextDirectoryPage(directory, after, requestHash, entityListSecret);
+		} catch (error) {
+			return boundedReadError(error, "Context collection read failed.", "Context collection read failed. No page was returned. Check the request and restart without continuation.");
+		}
+	}
 
 	server.registerTool(
 		"context_search",
 		{
-			description: "Search tracker context terms.",
+			description: "Search context summary sections within 8192 UTF-8 JSON bytes. Copy nextContinuation with the same query and view until null and join all sections. Order is the JSON tuple of section and immutable context key or normalized term, with term spelling as a tie-breaker. Definitions and bodies use returned resource_body references. Continuation is bound to the operation, tenant, workspace/project, trimmed query, view, order, and server process. Pages are live reads: earlier keys are not revisited and later matches use current data. Invalid continuation or oversized summaries return an error with no page.",
 			inputSchema: {
 				query: z.string().min(1).optional(),
-				view: z.enum(["all", "global", "initiatives"]).optional()
+				view: z.enum(["all", "global", "initiatives"]).optional(),
+				continuation: z.string().min(1).max(2048).optional()
 			}
 		},
-		async (input) => toolResult(await (await openStore()).queryContextDirectory(input))
+		async (input) => readContextPage("context_search", input)
 	);
 
 	server.registerTool(
@@ -675,21 +1069,6 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			}
 		},
 		async ({ query, view }) => toolResult(await (await openStore()).queryContextDirectory({ conflictsOnly: true, query, view }))
-	);
-
-	server.registerTool(
-		"context_set",
-		{
-			description: "Create or edit tracker context text.",
-			inputSchema: {
-				scopeRef: z.string().min(1).optional(),
-				title: z.string().min(1),
-				summary: z.string().min(1),
-				expectedRevision: z.number().int().positive().optional(),
-				expectedContentHash: z.string().min(1).optional()
-			}
-		},
-		async (input) => toolResult(await (await openStore()).upsertContext(input))
 	);
 
 	server.registerTool(
@@ -708,186 +1087,77 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		async (input) => toolResult(await (await openStore()).defineContextTerm(input))
 	);
 
-	server.registerTool(
-		"context_term_forget",
-		{
-			description: "Remove a tracker context term.",
-			inputSchema: {
-				scopeRef: z.string().min(1).optional(),
-				term: z.string().min(1),
-				expectedRevision: z.number().int().positive().optional(),
-				expectedContentHash: z.string().min(1).optional()
-			}
-		},
-		async (input) => toolResult(await (await openStore()).forgetContextTerm(input))
-	);
-
-	server.registerTool(
-		"context_revision",
-		{
-			description: "Get a tracker context revision.",
-			inputSchema: { scopeRef: z.string().min(1).optional(), revision: z.number().int().positive() }
-		},
-		async (input) => toolResult(await (await openStore()).materializeContextRevision(input))
-	);
-
-	server.registerTool(
-		"context_term_revision",
-		{
-			description: "Get a tracker context term revision.",
-			inputSchema: { scopeRef: z.string().min(1).optional(), term: z.string().min(1), revision: z.number().int().positive() }
-		},
-		async (input) => toolResult(await (await openStore()).materializeContextTermRevision(input))
-	);
-
-	server.registerTool(
-		"comment_create",
-		{
-			description: "Create an issue comment.",
-			inputSchema: {
-				issueId: z.string().min(1),
-				body: z.string().min(1),
-				referencedIssueIds: z.array(z.string().min(1)).optional()
-			}
-		},
-		async (input) => {
-			const store = await openStore();
-			const referencedIssueIds = input.referencedIssueIds === undefined ? undefined : await resolveEntityIds(store, input.referencedIssueIds);
-			const comment = await store.createIssueComment({ ...input, referencedIssueIds });
-			return toolResult({ comment });
+	async function readCommentList({ issueId, before, all }: Extract<ResourceListRequest, { resource: "comment" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const { entity } = await store.getEntityDetails(issueId);
+			const requestHash = createHash("sha256").update(JSON.stringify({
+				tool: "resource_list", resource: "comment", operation: "list", all: all ?? false, tenantId: store.tenantId, projectIdentity: scope.projectIdentity ?? null,
+				workspaceRoot: scope.workspaceRoot ?? null, issueId: entity.id, order: "createdAt-reference-before"
+			})).digest("hex");
+			const cursor = readPageContinuation(before, requestHash, entityListSecret, "comment_list");
+			return formatCommentListPage(await store.listIssueComments({ issueId: entity.id, before: cursor }), requestHash, entityListSecret);
+		} catch (error) {
+			return boundedReadError(error, "Comment list failed.", "Comment list failed. No page was returned. Check the issue and restart without before.");
 		}
-	);
+	}
 
-	server.registerTool(
-		"comment_edit",
-		{
-			description: "Edit an issue comment.",
-			inputSchema: {
-				commentId: z.string().min(1),
-				body: z.string().min(1),
-				referencedIssueIds: z.array(z.string().min(1)).optional(),
-				expectedRevision: z.number().int().positive(),
-				expectedContentHash: z.string().min(1)
-			}
-		},
-		async (input) => {
-			const store = await openStore();
-			const referencedIssueIds = input.referencedIssueIds === undefined ? undefined : await resolveEntityIds(store, input.referencedIssueIds);
-			const comment = await store.updateIssueComment({ ...input, referencedIssueIds });
-			return toolResult({ comment });
+	async function readCommentHistory({ commentId, continuation }: Extract<ResourceHistoryRequest, { resource: "comment" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const history = await store.listIssueCommentHistory({ commentId });
+			const requestHash = createHash("sha256").update(JSON.stringify({
+				tool: "resource_history", resource: "comment", action: "list", tenantId: store.tenantId, projectIdentity: scope.projectIdentity ?? null,
+				workspaceRoot: scope.workspaceRoot ?? null, commentId: history[0]?.commentId ?? commentId, order: "revision-asc"
+			})).digest("hex");
+			const after = readPageContinuation(continuation, requestHash, entityListSecret, "resource_history");
+			return formatCommentHistoryPage(history, after, requestHash, entityListSecret);
+		} catch (error) {
+			return boundedReadError(error, "Comment history failed.", "Comment history failed. No page was returned. Check the comment and restart without continuation.");
 		}
-	);
+	}
 
-	server.registerTool(
-		"comment_delete",
-		{
-			description: "Delete an issue comment.",
-			inputSchema: {
-				commentId: z.string().min(1),
-				expectedRevision: z.number().int().positive(),
-				expectedContentHash: z.string().min(1)
-			}
-		},
-		async (input) => {
-			const comment = await (await openStore()).deleteIssueComment(input);
-			return toolResult({ comment });
+	async function readPlanEntryList({ planId, continuation }: Extract<ResourceListRequest, { resource: "planEntry" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const plan = await store.getEntityDetails(planId);
+			const requestHash = createHash("sha256").update(JSON.stringify({ tool: "resource_list", resource: "planEntry", operation: "list", scope, tenantId: store.tenantId, planId: plan.entity.id, order: "id-asc" })).digest("hex");
+			const after = readPageContinuation(continuation, requestHash, entityListSecret, "plan_entry_list");
+			const entries = (await store.listPlanEntries({ planId: plan.entity.id })).map(({ body: _body, ...entry }) => ({
+				...entry, reads: {
+					body: { tool: "resource_body", arguments: { request: { resource: "planEntry", entryId: entry.reference, revision: entry.revision } } },
+					details: planEntryDetailRead(entry.reference, entry.revision)
+				}
+			}));
+			return formatSummaryListPage(entries, "entries", after, requestHash, entityListSecret,
+				(entry) => `Plan-entry summary exceeds the 8192-byte response budget. No page was returned. Use resource_show with resource planEntry, view details, entryId ${entry.reference}, and revision ${entry.revision}, or agent-issues plan-entry list ${plan.entity.reference} --json.`);
+		} catch (error) {
+			return boundedReadError(error, "Plan-entry list failed.", "Plan-entry list failed. No page was returned. Check the Plan and restart without continuation.");
 		}
-	);
+	}
 
-	server.registerTool(
-		"comment_list",
-		{
-			description: "List issue comments.",
-			inputSchema: {
-				issueId: z.string().min(1),
-				before: z.string().min(1).optional(),
-				all: z.boolean().optional()
-			}
-		},
-		async (input) => toolResult(await (await openStore()).listIssueComments(input))
-	);
-
-	server.registerTool(
-		"comment_history",
-		{
-			description: "Get issue comment revision history.",
-			inputSchema: { commentId: z.string().min(1) }
-		},
-		async ({ commentId }) => toolResult({ history: await (await openStore()).listIssueCommentHistory({ commentId }) })
-	);
-
-	server.registerTool(
-		"plan_entry_create",
-		{
-			description: "Create a Plan entry.",
-			inputSchema: {
-				planId: z.string().min(1),
-				role: z.enum(PLAN_ENTRY_ROLES),
-				body: z.string().min(1),
-				scopeDirection: z.enum(PLAN_ENTRY_SCOPE_DIRECTIONS).optional(),
-				referencedEntityIds: z.array(z.string().min(1)).optional(),
-				supersededEntryIds: z.array(z.string().min(1)).optional()
-			}
-		},
-		async (input) => {
-			const store = await openStore();
-			const referencedEntityIds = input.referencedEntityIds === undefined ? undefined : await resolveEntityIds(store, input.referencedEntityIds);
-			const supersededEntryIds = input.supersededEntryIds === undefined ? undefined : await resolvePlanEntryIds(store, input.supersededEntryIds);
-			const entry = await store.createPlanEntry({ ...input, referencedEntityIds, supersededEntryIds });
-			return toolResult({ entry });
+	async function readPlanEntryHistory({ entryId, continuation }: Extract<ResourceHistoryRequest, { resource: "planEntry" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const entry = await store.getPlanEntry({ entryId });
+			const requestHash = createHash("sha256").update(JSON.stringify({ tool: "resource_history", resource: "planEntry", action: "list", scope, tenantId: store.tenantId, entryId: entry.id, order: "revision-asc" })).digest("hex");
+			const after = readPageContinuation(continuation, requestHash, entityListSecret, "resource_history");
+			const history = (await store.listPlanEntryHistory({ entryId: entry.id })).map(({ body: _body, ...revision }) => ({
+				...revision, reads: {
+					body: { tool: "resource_body", arguments: { request: { resource: "planEntry", entryId: entry.reference, revision: revision.targetRevision } } },
+					details: planEntryDetailRead(entry.reference, revision.targetRevision)
+				}
+			}));
+			return formatRevisionHistoryPage(history, after, requestHash, entityListSecret,
+				`Plan-entry revision metadata exceeds the 8192-byte response budget. No page was returned. Use resource_show with resource planEntry, view details, and entryId ${entry.reference}, or agent-issues plan-entry history ${entry.reference} --json.`);
+		} catch (error) {
+			return boundedReadError(error, "Plan-entry history failed.", "Plan-entry history failed. No page was returned. Check the entry and restart without continuation.");
 		}
-	);
-
-	server.registerTool(
-		"plan_entry_edit",
-		{
-			description: "Edit a Plan entry.",
-			inputSchema: {
-				entryId: z.string().min(1),
-				body: z.string().min(1),
-				expectedRevision: z.number().int().positive(),
-				expectedContentHash: z.string().min(1)
-			}
-		},
-		async (input) => {
-			const entry = await (await openStore()).updatePlanEntry(input);
-			return toolResult({ entry });
-		}
-	);
-
-	server.registerTool(
-		"plan_entry_delete",
-		{
-			description: "Delete a Plan entry.",
-			inputSchema: {
-				entryId: z.string().min(1),
-				expectedRevision: z.number().int().positive(),
-				expectedContentHash: z.string().min(1)
-			}
-		},
-		async (input) => {
-			const entry = await (await openStore()).deletePlanEntry(input);
-			return toolResult({ entry });
-		}
-	);
-
-	server.registerTool(
-		"plan_entry_list",
-		{
-			description: "List Plan entries.",
-			inputSchema: { planId: z.string().min(1) }
-		},
-		async ({ planId }) => toolResult({ entries: await (await openStore()).listPlanEntries({ planId }) })
-	);
-
-	server.registerTool(
-		"plan_entry_history",
-		{
-			description: "Get Plan entry revision history.",
-			inputSchema: { entryId: z.string().min(1) }
-		},
-		async ({ entryId }) => toolResult({ history: await (await openStore()).listPlanEntryHistory({ entryId }) })
-	);
+	}
 
 	server.registerTool(
 		"plan_entry_entity_link",
@@ -907,20 +1177,21 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		async (input) => toolResult(await (await openStore()).unlinkPlanEntryEntity(input))
 	);
 
-	server.registerTool(
-		"tenant_list",
-		{
-			description: "List tracker tenants.",
-			inputSchema: {}
-		},
-		async () => {
-			const tenants = await (await openStore()).listTenants();
-			return {
-				content: [{ type: "text", text: JSON.stringify(tenants) }],
-				structuredContent: { tenants }
-			};
+	async function readTenantList({ continuation }: Extract<ResourceListRequest, { resource: "tenant" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const requestHash = createHash("sha256").update(JSON.stringify({
+				tool: "resource_list", resource: "tenant", operation: "list", tenantId: store.tenantId, projectIdentity: scope.projectIdentity ?? null,
+				workspaceRoot: scope.workspaceRoot ?? null, order: "id-asc"
+			})).digest("hex");
+			const after = readPageContinuation(continuation, requestHash, entityListSecret, "tenant_list");
+			return formatSummaryListPage(await store.listTenants(), "tenants", after, requestHash, entityListSecret,
+				"Tenant summary exceeds the 8192-byte response budget. No page was returned. Use agent-issues tenant list --json for complete details.");
+		} catch (error) {
+			return boundedReadError(error, "Tenant list failed.", "Tenant list failed. Error details exceed the response budget. No page was returned. Check authorization and restart without continuation.");
 		}
-	);
+	}
 
 	server.registerTool(
 		"tenant_rename",
@@ -930,43 +1201,6 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		},
 		async ({ previousTenantId, newTenantId }) => {
 			const result = await (await openStore()).renameTenant(previousTenantId, newTenantId);
-			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				structuredContent: result
-			};
-		}
-	);
-
-	server.registerTool(
-		"tenant_delete_inspect",
-		{
-			description: "Inspect the impact of deleting a tracker tenant and get a confirmation token.",
-			inputSchema: { tenantId: z.string().min(1) }
-		},
-		async ({ tenantId }) => {
-			const impact = (await (await openStore()).listTenants()).find((tenant) => tenant.id === tenantId);
-			if (!impact) {
-				throw new Error(`Tenant not found: ${tenantId}`);
-			}
-
-			const confirmation = confirmationTokens.issue("tenant_delete", { tenantId });
-			const result = { impact, confirmationToken: confirmation.token, expiresAt: confirmation.expiresAt };
-			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				structuredContent: result
-			};
-		}
-	);
-
-	server.registerTool(
-		"tenant_delete",
-		{
-			description: "Delete a tracker tenant after inspection confirmation.",
-			inputSchema: { tenantId: z.string().min(1), confirmationToken: z.string().uuid() }
-		},
-		async ({ tenantId, confirmationToken }) => {
-			confirmationTokens.consume(confirmationToken, "tenant_delete", { tenantId });
-			const result = await (await openStore()).deleteTenant(tenantId);
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],
 				structuredContent: result
@@ -1075,50 +1309,373 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"relation_query",
 		{
-			description: "Query tracker entity relations.",
+			description: "Read relation and linked Plan provenance summaries within 8192 serialized UTF-8 JSON bytes. Keys sort by JSON tuples of section, relation type, and immutable item ID. Plan provenance is independent of entity-relation filters. Copy nextContinuation into continuation with the same request until null; join all sections across pages. Continuation is bound to the entity, tenant, workspace/project, direction, type filters, and server process. Pages are live reads, not a snapshot: later keys use current metadata; removed links disappear; keys at or before the cursor are not revisited. Invalid continuation or oversized metadata returns a bounded error with no page. Bodies use separate detail reads.",
 			inputSchema: {
 				entityId: z.string().min(1),
 				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
-				types: z.array(z.string().min(1)).optional()
+				types: boundedRelationTypesSchema.optional(),
+				continuation: z.string().min(1).max(2048).optional()
 			}
 		},
-		async ({ entityId, direction, types }) =>
-			toolResult(await (await openStore()).queryEntityRelations({ entityId, direction, types: types as RelationType[] | undefined }))
+		async ({ entityId, direction, types, continuation }) => {
+			try {
+				const scope = await resolveScope();
+				const store = await options.openStore(scope);
+				const result = await store.queryEntityRelations({ entityId, direction, types: types as RelationType[] | undefined });
+				const requestHash = createHash("sha256").update(JSON.stringify({
+					operation: "relation_query", scope, tenantId: store.tenantId, entityId: result.entity.id,
+					direction: direction ?? "both", types: types === undefined ? null : [...new Set(types)].sort(), order: "section-type-id-asc"
+				})).digest("hex");
+				const after = readPageContinuation(continuation, requestHash, entityListSecret, "relation_query");
+				return formatRelationPage(result, after, requestHash, entityListSecret);
+			} catch (error) {
+				return boundedReadError(error, "Relation page read failed.", "Relation page read failed. Use resource_show with resource entity for related entity details.");
+			}
+		}
 	);
 
 	server.registerTool(
 		"initiative_bundle",
 		{
-			description: "Get an initiative and all of its tracked work.",
-			inputSchema: { initiativeId: z.string().min(1) }
+			description: "Explicitly read initiative summary sections within 8192 UTF-8 JSON bytes. Copy nextContinuation into continuation with the same initiative until null and join every section across pages. Keys sort by section and immutable IDs. Bodies use resource_body. Continuation is bound to the initiative, tenant, workspace/project, operation, order, and server process. Pages read current data, not a snapshot: earlier keys are not revisited and later keys use current records. Invalid continuation or oversized metadata returns an error with a complete CLI detail reference.",
+			inputSchema: { initiativeId: z.string().min(1), continuation: z.string().min(1).max(2048).optional() }
 		},
-		async ({ initiativeId }) => toolResult(await (await openStore()).getInitiativeBundle(initiativeId))
+		async ({ initiativeId, continuation }) => {
+			try {
+				const scope = await resolveScope();
+				const store = await options.openStore(scope);
+				const bundle = await store.getInitiativeBundle(initiativeId);
+				const requestHash = createHash("sha256").update(JSON.stringify({
+					operation: "initiative_bundle", scope, tenantId: store.tenantId, initiativeId: bundle.initiative.id, order: "section-id-asc"
+				})).digest("hex");
+				const after = readPageContinuation(continuation, requestHash, entityListSecret, "initiative_bundle");
+				const collections = {
+					entities: bundle.entities.map(combinedEntitySummary), prds: bundle.prds.map(combinedEntitySummary),
+					userStories: bundle.userStories.map(combinedEntitySummary), adrs: bundle.adrs.map(combinedEntitySummary),
+					issues: bundle.issues.map(combinedEntitySummary),
+					fixLinks: bundle.fixLinks.map(({ issue, userStory }) => ({ issue: combinedEntitySummary(issue), userStory: combinedEntitySummary(userStory) })),
+					subIssueLinks: bundle.subIssueLinks.map(({ parent, issue }) => ({ parent: combinedEntitySummary(parent), issue: combinedEntitySummary(issue) })),
+					blockerLinks: bundle.blockerLinks.map(({ source, target }) => ({ source: combinedEntitySummary(source), target: combinedEntitySummary(target) })),
+					constrainsLinks: bundle.constrainsLinks.map(({ adr, issue }) => ({ adr: combinedEntitySummary(adr), issue: combinedEntitySummary(issue) })),
+					versionCoverage: bundle.versionCoverage
+				};
+				return formatCombinedPage(bundle.initiative, collections, after, requestHash, entityListSecret, `agent-issues show ${bundle.initiative.reference} --json`);
+			} catch (error) {
+				return boundedReadError(error, "Initiative bundle failed.", "Initiative bundle failed. No page was returned. Use agent-issues show <initiative> --json for complete details.");
+			}
+		}
 	);
 
 	server.registerTool(
 		"entity_next_work",
 		{
-			description: "Find available and blocked work for an initiative or its descendant.",
-			inputSchema: { scopeId: z.string().min(1) }
+			description: "Read work summary sections within 8192 UTF-8 JSON bytes. Copy nextContinuation into continuation with the same scope until null and join all sections. Recommendation and its unfinished-unblock-count reason repeat on each page; ties use immutable issue ID. available and blocked include counts; large inline reference lists are omitted and supplied completely through blockerLinks and unblockLinks. Bodies use resource_body. Keys sort by section and stable identity. Continuation binds the requested scope, initiative, tenant, workspace/project, operation, order, and server process. Pages read current data, not a snapshot; membership and recommendation can change. Restart after work-state changes. Availability and blocker rules are unchanged. Invalid continuation or oversized metadata returns a bounded error with a CLI detail reference.",
+			inputSchema: { scopeId: z.string().min(1), continuation: z.string().min(1).max(2048).optional() }
 		},
-		async ({ scopeId }) => {
-			const store = await openStore();
-			const initiative = await resolveContainingInitiative(store, scopeId);
-			const [bundle, allIssues] = await Promise.all([store.getInitiativeBundle(initiative.id), store.queryEntities({ kind: "issue" })]);
-			return toolResult(deriveNextWork(bundle, allIssues.openBlockers ?? {}));
+		async ({ scopeId, continuation }) => {
+			try {
+				const scope = await resolveScope();
+				const store = await options.openStore(scope);
+				const initiative = await resolveContainingInitiative(store, scopeId);
+				const [bundle, allIssues] = await Promise.all([store.getInitiativeBundle(initiative.id), store.queryEntities({ kind: "issue" })]);
+				const requestHash = createHash("sha256").update(JSON.stringify({
+					operation: "entity_next_work", scope, tenantId: store.tenantId, initiativeId: initiative.id, scopeId, order: "section-id-asc"
+				})).digest("hex");
+				const after = readPageContinuation(continuation, requestHash, entityListSecret, "entity_next_work");
+				const work = deriveNextWork(bundle, allIssues.openBlockers ?? {});
+				const items = [...work.available, ...work.blocked];
+				const summarize = (item: NextWorkItem) => ({ issue: combinedEntitySummary(item.issue),
+					blockerCount: item.blockers.length, unfinishedUnblockCount: item.unblocks.length,
+					...(Buffer.byteLength(JSON.stringify(item.blockers), "utf8") <= 1024 ? { blockers: item.blockers } : {}),
+					...(Buffer.byteLength(JSON.stringify(item.unblocks), "utf8") <= 1024 ? { unblocks: item.unblocks } : {})
+				});
+				const selected = work.available.slice().sort((first, second) => second.unblocks.length - first.unblocks.length
+					|| (first.issue.id < second.issue.id ? -1 : first.issue.id > second.issue.id ? 1 : 0))[0];
+				const recommendation = selected ? { issue: combinedEntitySummary(selected.issue),
+					reason: { unfinishedUnblockCount: selected.unblocks.length, tieBreak: "immutable-issue-id-asc" } } : null;
+				return formatCombinedPage(bundle.initiative, {
+					available: work.available.map(summarize), blocked: work.blocked.map(summarize),
+					blockerLinks: items.flatMap((item) => item.blockers.map((blocker) => ({ issue: item.issue.reference, blocker }))),
+					unblockLinks: items.flatMap((item) => item.unblocks.map((unblocks) => ({ issue: item.issue.reference, unblocks })))
+				}, after, requestHash, entityListSecret, `agent-issues next-work ${initiative.reference} --json`, { recommendation });
+			} catch (error) {
+				return boundedReadError(error, "Next-work read failed.", "Next-work read failed. No page was returned. Use agent-issues next-work <initiative> --json for complete details.");
+			}
 		}
 	);
 
-	server.registerTool(
-		"entity_orphans",
-		{
-			description: "List tracker entities that have no structural parent.",
-			inputSchema: { kind: z.string().min(1).optional() }
-		},
-		async ({ kind }) => toolResult({ entities: await (await openStore()).listOrphans(kind) })
-	);
+	async function readOrphanList({ kind, continuation }: Extract<ResourceListRequest, { resource: "orphanEntity" }>) {
+		try {
+			const scope = await resolveScope();
+			const store = await options.openStore(scope);
+			const requestHash = createHash("sha256").update(JSON.stringify({
+				tool: "resource_list", resource: "orphanEntity", operation: "list", tenantId: store.tenantId, projectIdentity: scope.projectIdentity ?? null,
+				workspaceRoot: scope.workspaceRoot ?? null, kind: kind ?? null, order: "id-asc"
+			})).digest("hex");
+			const after = readPageContinuation(continuation, requestHash, entityListSecret, "entity_orphans");
+			const summaries = (await store.listOrphans(kind)).map(({ body: _body, bodySource: _bodySource, ...summary }) => summary);
+			return formatEntityListPage(summaries, after, requestHash, entityListSecret);
+		} catch (error) {
+			return boundedReadError(error, "Orphan list failed.", "Orphan list failed. Error details exceed the response budget. No page was returned. Check authorization and restart without continuation.");
+		}
+	}
 
 	return server;
+}
+
+function combinedEntitySummary(entity: EntityRecord) {
+	return { ...toEntitySummary(entity), reads: {
+		body: { tool: "resource_body", arguments: { request: { resource: "entity", entityId: entity.reference } } },
+		details: { command: "agent-issues", arguments: ["show", entity.reference, "--json"] }
+	} };
+}
+
+function combinedItemKey(section: string, value: unknown): string {
+	const record = value as Record<string, unknown>;
+	if (typeof record.id === "string") return JSON.stringify([section, record.id]);
+	if (section === "versionCoverage") return JSON.stringify([section, record.calculatedVersionState, record.calculatedVersion]);
+	if (section === "available" || section === "blocked") return JSON.stringify([section, (record.issue as EntitySummary).id]);
+	return JSON.stringify([section, ...Object.keys(record).sort().map((field) => {
+		const endpoint = record[field];
+		return typeof endpoint === "string" ? endpoint : (endpoint as EntitySummary).id;
+	})]);
+}
+
+function formatCombinedPage(initiative: EntityRecord, collections: Record<string, unknown[]>, after: string | undefined, requestHash: string, secret: Buffer, details: string, metadata: Record<string, unknown> = {}) {
+	const remaining = Object.entries(collections).flatMap(([section, values]) => values.map((value) => ({
+		section, value, key: combinedItemKey(section, value)
+	}))).filter((item) => after === undefined || item.key > after)
+		.sort((first, second) => first.key < second.key ? -1 : first.key > second.key ? 1 : 0);
+	const responseAt = (count: number) => {
+		let nextContinuation: string | null = null;
+		if (count > 0 && count < remaining.length) {
+			const payload = Buffer.from(JSON.stringify({ requestHash, after: remaining[count - 1].key })).toString("base64url");
+			nextContinuation = `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+		}
+		const page = remaining.slice(0, count);
+		return toolResult({ initiative: combinedEntitySummary(initiative), ...metadata, ...Object.fromEntries(Object.keys(collections).map((section) => [section,
+			page.filter((item) => item.section === section).map((item) => item.value)])), nextContinuation });
+	};
+	if (Buffer.byteLength(JSON.stringify(responseAt(0)), "utf8") > 8192) throw new Error(`Initiative metadata exceeds the response budget. No page was returned. Use ${details}.`);
+	return boundedCollectionPage(responseAt, remaining.length, `Combined summary exceeds the response budget. No page was returned. Use ${details}.`);
+}
+
+function readPageContinuation(continuation: string | undefined, requestHash: string, secret: Buffer, operation = "entity_list"): string | undefined {
+	if (continuation === undefined) return undefined;
+	try {
+		const [payload, signature, extra] = continuation.split(".");
+		if (!payload || !signature || extra !== undefined) throw new Error();
+		const expected = createHmac("sha256", secret).update(payload).digest("base64url");
+		if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw new Error();
+		const cursor = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { requestHash?: unknown; after?: unknown };
+		if (cursor.requestHash !== requestHash || typeof cursor.after !== "string") throw new Error();
+		return cursor.after;
+	} catch {
+		throw new Error(`Invalid ${operation} continuation or changed request. Restart without continuation.`);
+	}
+}
+
+function planEntryDetailRead(entryId: string, revision: number) {
+	return { tool: "resource_show", arguments: { request: { resource: "planEntry", view: "details", entryId, revision } } };
+}
+
+function formatRelationPage(result: Awaited<ReturnType<StorageDriver["queryEntityRelations"]>>, after: string | undefined, requestHash: string, secret: Buffer) {
+	const relations = (["incoming", "outgoing"] as const).flatMap((direction) => result[direction].map((edge) => ({
+		direction, edge, key: JSON.stringify([direction, edge.relationType, edge.entity.id]), details: `resource_show with resource entity and reference ${edge.entity.reference}`
+	})));
+	const planEntries = result.planEntries.map((entry) => {
+		const { body: _body, ...summary } = entry;
+		return {
+			direction: "planEntries" as const, key: JSON.stringify(["planEntries", "informs", entry.id]),
+			edge: { ...summary, reads: {
+				body: { tool: "resource_body", arguments: { request: { resource: "planEntry", entryId: entry.reference, revision: entry.revision } } },
+				details: planEntryDetailRead(entry.reference, entry.revision)
+			} },
+			details: `resource_show with resource planEntry, view details, entryId ${entry.reference}, and revision ${entry.revision}`
+		};
+	});
+	const remaining = [...relations, ...planEntries].filter((item) => after === undefined || item.key > after)
+		.sort((first, second) => first.key < second.key ? -1 : first.key > second.key ? 1 : 0);
+	const entity = { id: result.entity.id, reference: result.entity.reference, kind: result.entity.kind, revision: result.entity.revision };
+	const responseAt = (count: number) => {
+		let nextContinuation: string | null = null;
+		if (count > 0 && count < remaining.length) {
+			const payload = Buffer.from(JSON.stringify({ requestHash, after: remaining[count - 1].key })).toString("base64url");
+			nextContinuation = `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+		}
+		const page = remaining.slice(0, count);
+		return toolResult({ entity,
+			incoming: page.filter((item) => item.direction === "incoming").map((item) => item.edge),
+			outgoing: page.filter((item) => item.direction === "outgoing").map((item) => item.edge),
+			planEntries: page.filter((item) => item.direction === "planEntries").map((item) => item.edge),
+			nextContinuation
+		});
+	};
+	let response = responseAt(0);
+	if (Buffer.byteLength(JSON.stringify(response), "utf8") > 8192) throw new Error("Relation identity exceeds the 8192-byte response budget. No page was returned.");
+	for (let count = 1; count <= remaining.length; count++) {
+		const candidate = responseAt(count);
+		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 8192) {
+			if (count === 1) throw new Error(`Relation summary exceeds the 8192-byte response budget. No page was returned. Use ${remaining[0].details}.`);
+			break;
+		}
+		response = candidate;
+	}
+	return response;
+}
+
+function formatEntityListPage(entities: EntitySummary[], after: string | undefined, requestHash: string, secret: Buffer, limit?: number) {
+	const summaries = entities.map((entity) => ({
+		...entity,
+		reads: {
+			body: { tool: "resource_body", arguments: { request: { resource: "entity", entityId: entity.reference } } },
+			details: { command: "agent-issues", arguments: ["show", entity.reference, "--json"] }
+		}
+	}));
+	return formatSummaryListPage(summaries, "entities", after, requestHash, secret,
+		(summary) => `Entity summary exceeds the 8192-byte response budget. No page was returned. Use agent-issues show ${summary.reference} --json for complete details.`, limit);
+}
+
+function formatSummaryListPage<Summary extends { id: string }>(summaries: Summary[], collection: "tenants" | "entities" | "entries", after: string | undefined, requestHash: string, secret: Buffer, oversizedMessage: string | ((summary: Summary) => string), limit?: number) {
+	const remaining = summaries.filter((summary) => after === undefined || summary.id > after)
+		.sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
+	const responseAt = (count: number) => {
+		let nextContinuation: string | null = null;
+		if (count > 0 && count < remaining.length) {
+			const payload = Buffer.from(JSON.stringify({ requestHash, after: remaining[count - 1].id })).toString("base64url");
+			nextContinuation = `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+		}
+		return toolResult({ [collection]: remaining.slice(0, count), nextContinuation });
+	};
+	let response = responseAt(0);
+	const itemLimit = Math.min(limit ?? remaining.length, remaining.length);
+	for (let count = 1; count <= itemLimit; count++) {
+		const candidate = responseAt(count);
+		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 8192) {
+			if (count === 1) throw new Error(typeof oversizedMessage === "string" ? oversizedMessage : oversizedMessage(remaining[0]));
+			break;
+		}
+		response = candidate;
+	}
+	return response;
+}
+
+function contextPageSummary(item: { context: ContextDetails["context"]; termCount: number }) {
+	const scopeRef = item.context.scopeEntityId ?? undefined;
+	return {
+		context: toContextSummary(item.context), termCount: item.termCount,
+		reads: {
+			body: { tool: "resource_body", arguments: { request: { resource: "context", scopeRef, revision: item.context.revision || undefined } } },
+			details: { command: "agent-issues", arguments: ["context", "show", ...(scopeRef ? [scopeRef] : []), "--json"] }
+		}
+	};
+}
+
+function formatContextDirectoryPage(directory: ContextDirectory | QueryContextDirectoryResult, after: string | undefined, requestHash: string, secret: Buffer) {
+	const details = [...(directory.shared ? [directory.shared] : []), ...directory.initiatives];
+	const contextsByKey = new Map(details.map((item) => [item.context.key, item]));
+	const contextItems = details.map((item) => ({
+		key: JSON.stringify([item === directory.shared ? "shared" : "initiatives", item.context.key]),
+		section: item === directory.shared ? "shared" : "initiatives",
+		value: contextPageSummary({ context: item.context, termCount: item.terms.length })
+	}));
+	const termItems = directory.terms.map(({ sources, ...term }) => ({
+		key: JSON.stringify(["terms", term.term.toLowerCase(), term.term]),
+		section: "terms",
+		value: {
+			...term,
+			sources: sources.map(({ definition: _definition, ...source }) => {
+				const selected = contextsByKey.get(source.contextKey)?.terms.find((item) => item.term.toLowerCase() === term.term.toLowerCase());
+				return {
+					...source,
+					reads: { body: { tool: "resource_body", arguments: { request: { resource: "contextTerm", scopeRef: source.scopeEntityId ?? undefined, term: selected?.term ?? term.term, revision: selected?.revision } } } }
+				};
+			})
+		}
+	}));
+	return formatKeyedCollectionPage<{ key: string; section: string; value: unknown }>([...contextItems, ...termItems], after, requestHash, secret, (items) => ({
+		...("query" in directory ? { query: directory.query, view: directory.view, conflictsOnly: directory.conflictsOnly } : {}),
+		shared: items.find((item) => item.section === "shared")?.value ?? null,
+		initiatives: items.filter((item) => item.section === "initiatives").map((item) => item.value),
+		terms: items.filter((item) => item.section === "terms").map((item) => item.value),
+		duplicateTerms: items.filter((item) => item.section === "terms").map((item) => item.value as { term: string; hasDuplicates: boolean }).filter((item) => item.hasDuplicates).map((item) => item.term)
+	}), "agent-issues context list --json, then agent-issues context show <scope> --json");
+}
+
+function formatKeyedCollectionPage<Item extends { key: string }>(items: Item[], after: string | undefined, requestHash: string, secret: Buffer, format: (items: Item[]) => Record<string, unknown>, details: string, label = "Context") {
+	const remaining = items.filter((item) => after === undefined || item.key > after)
+		.sort((first, second) => first.key < second.key ? -1 : first.key > second.key ? 1 : 0);
+	const responseAt = (count: number) => {
+		let nextContinuation: string | null = null;
+		if (count > 0 && count < remaining.length) {
+			const payload = Buffer.from(JSON.stringify({ requestHash, after: remaining[count - 1].key })).toString("base64url");
+			nextContinuation = `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+		}
+		return toolResult({ ...format(remaining.slice(0, count)), nextContinuation });
+	};
+	if (Buffer.byteLength(JSON.stringify(responseAt(0)), "utf8") > 8192) throw new Error(`${label} request metadata exceeds the 8192-byte response budget. No page was returned. Use ${details}.`);
+	return boundedCollectionPage(responseAt, remaining.length, `${label} summary exceeds the 8192-byte response budget. No page was returned. Use ${details} for complete details.`);
+}
+
+function formatCommentListPage(page: Awaited<ReturnType<StorageDriver["listIssueComments"]>>, requestHash: string, secret: Buffer) {
+	const summaries = page.comments.map(({ body: _body, ...comment }) => ({
+		...comment, reads: { body: { tool: "resource_body", arguments: { request: { resource: "comment", commentId: comment.reference, revision: comment.revision } } } }
+	}));
+	const responseAt = (count: number) => {
+		const comments = summaries.slice(summaries.length - count);
+		const userIds = new Set(comments.flatMap((comment) => [comment.createdBy, comment.updatedBy]));
+		const oldest = comments[0];
+		const cursor = count < summaries.length && oldest
+			? Buffer.from(JSON.stringify({ createdAt: oldest.createdAt, reference: oldest.reference })).toString("base64url")
+			: page.nextBefore;
+		let nextBefore: string | null = null;
+		if (cursor) {
+			const payload = Buffer.from(JSON.stringify({ requestHash, after: cursor })).toString("base64url");
+			nextBefore = `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+		}
+		return toolResult({ comments, users: page.users.filter((user) => userIds.has(user.id)), total: page.total, nextBefore });
+	};
+	return boundedCollectionPage(responseAt, summaries.length, "Comment summary exceeds the 8192-byte response budget. No page was returned. Use agent-issues comment list <issue> --all --json for complete metadata.");
+}
+
+function formatCommentHistoryPage(history: Awaited<ReturnType<StorageDriver["listIssueCommentHistory"]>>, after: string | undefined, requestHash: string, secret: Buffer) {
+	const summaries = history.map(({ body: _body, ...entry }) => ({
+			...entry, reads: { body: { tool: "resource_body", arguments: { request: { resource: "comment", commentId: entry.commentId, revision: entry.targetRevision } } } }
+		}));
+	return formatRevisionHistoryPage(summaries, after, requestHash, secret, "Comment revision metadata exceeds the 8192-byte response budget. No page was returned. Use agent-issues comment history <comment> --json for complete metadata.");
+}
+
+function formatRevisionHistoryPage<Summary extends { targetRevision: number }>(summaries: Summary[], after: string | undefined, requestHash: string, secret: Buffer, oversizedMessage: string) {
+	const remaining = summaries.filter((entry) => after === undefined || entry.targetRevision > Number(after))
+		.sort((first, second) => first.targetRevision - second.targetRevision);
+	const responseAt = (count: number) => {
+		let nextContinuation: string | null = null;
+		if (count > 0 && count < remaining.length) {
+			const payload = Buffer.from(JSON.stringify({ requestHash, after: String(remaining[count - 1].targetRevision) })).toString("base64url");
+			nextContinuation = `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
+		}
+		return toolResult({ history: remaining.slice(0, count), nextContinuation });
+	};
+	return boundedCollectionPage(responseAt, remaining.length, oversizedMessage);
+}
+
+function boundedCollectionPage(responseAt: (count: number) => ReturnType<typeof toolResult>, itemCount: number, oversizedMessage: string) {
+	let response = responseAt(0);
+	for (let count = 1; count <= itemCount; count++) {
+		const candidate = responseAt(count);
+		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 8192) {
+			if (count === 1) throw new Error(oversizedMessage);
+			break;
+		}
+		response = candidate;
+	}
+	return response;
+}
+
+function boundedReadError(error: unknown, message: string, oversizedMessage: string) {
+	const result = { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : message }] };
+	if (Buffer.byteLength(JSON.stringify(result), "utf8") > 8192) result.content[0].text = oversizedMessage;
+	return result;
 }
 
 function toolResult(result: unknown): { content: Array<{ type: "text"; text: string }>; structuredContent: Record<string, unknown> } {

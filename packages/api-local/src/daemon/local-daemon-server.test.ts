@@ -99,6 +99,34 @@ describe("local daemon JSON-RPC tracer bullet (ISS186)", () => {
 		expect(await response.json()).toMatchObject({ error: { code: -32601 } });
 	});
 
+	it("keeps tracker commands available when immutable instruction defaults conflict", async () => {
+		await handle.close();
+		const dbPath = path.join(tempDir, "test.db");
+		const original = { version: "4.0.0", items: [{ key: "skill/prepare", kind: "skill" as const, body: "Original defaults" }] };
+		const seeded = await openSqliteStore(dbPath);
+		await seeded.store.importInstructionBundle(original);
+		await seeded.store.close();
+		handle = createLocalDaemonServer({ authProvider, dbPath, port: 0, instructionBundle: {
+			...original, items: [{ ...original.items[0], body: "Changed defaults" }]
+		} });
+		await new Promise<void>((resolve) => handle.server.once("listening", resolve));
+		const bearerToken = await authProvider.issueToken({ userId: "user-1", tenantId: "daemon-tenant" });
+		const address = handle.server.address() as AddressInfo;
+		const client = new HttpStore({ baseUrl: `http://127.0.0.1:${address.port}`, bearerToken, tenantId: "daemon-tenant", buildHash: readBuildContentHash(), dbPath });
+		const issue = await client.createEntity({ kind: "issue", title: "Tracker is available" });
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await expect(client.retrieveInstruction({ version: original.version, key: "skill/prepare" })).rejects.toThrow("Instruction bundle is immutable");
+		}
+		expect(await client.updateEntityStatus({ entityId: issue.id, status: "done" })).toMatchObject({ entity: { status: "done" } });
+		expect(await client.getEntityDetails(issue.id)).toMatchObject({ entity: { title: "Tracker is available" } });
+		const check = await openSqliteStore(dbPath);
+		try {
+			expect(await check.store.retrieveInstruction({ version: original.version, key: "skill/prepare" })).toMatchObject({ body: "Original defaults" });
+		} finally {
+			await check.store.close();
+		}
+	});
+
 	it("returns only an error when instruction storage is unavailable", async () => {
 		await handle.close();
 		const dbPath = path.join(tempDir, "test.db");

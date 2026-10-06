@@ -53,6 +53,38 @@ The document hash identifies the complete instruction snapshot, including source
 
 The CLI supplies immutable release defaults for database import. Personal changes remain in the database. Runtime instructions do not load from plugin files. If the tool is unavailable or retrieval fails, the agent must stop. It must not use cached instructions or another release as a fallback.
 
+## Resource Collections
+
+Use the read-only `resource_list` tool for entity, orphan-entity, Plan-entry, context, comment, instruction-source, and tenant collections. Put resource-specific fields inside `request`. For example:
+
+```json
+{ "request": { "resource": "entity", "kind": "issue", "statuses": ["todo"], "limit": 10 } }
+```
+
+Use `resource: "orphanEntity"` for orphans, `resource: "planEntry"` with `planId` for Plan entries, or `resource: "context"` with `view: "list"` or `view: "directory"`. Comments require `issueId`. Instruction-source and tenant lists need only their resource kind.
+
+Copy `nextContinuation` into `request.continuation` until null for paged collections. Comments use `nextBefore` and `request.before`; prepend older pages. Keep the same resource, filters, and scope. Pages are live reads, not snapshots. Instruction catalogs retain their existing result contract. The old collection tool registrations and the instruction-inspection `list` action are removed. CLI commands and `instruction_retrieve` remain unchanged.
+
+## Resource Metadata
+
+Use `resource_show` for one entity, current Plan entry, context, context term, instruction source, or issue-breakdown draft. Put the resource kind and its required identifiers inside `request`. Context scope is optional. Draft lookup uses `action: "show"` with `draftId`, or `action: "latest"` with `targetId`.
+
+The tool returns metadata and complete body or detail read references, not authored text or an initiative graph. Follow these references under the same tenant, workspace, and owner selection. Use `relation_query` and `initiative_bundle` explicitly for graph reads. Draft lookup does not change approval state. Instruction source reads do not replace runtime instruction retrieval.
+
+## Resource Text
+
+Use `resource_body` to read entity bodies, Plan-entry bodies, context summaries, term definitions, comment bodies, or unexpanded instruction sources. Follow the shared Resource Body Read recipe and the returned read references. Put resource identifiers, selected revision, offset, and hash inside `request`. Copy each returned `nextOffset` until it is null, then join all Markdown parts without separators.
+
+Each serialized response is at most 8192 UTF-8 JSON bytes. A changed document requires a restart, not partial use. This tool does not assemble instruction fragments. Skill and agent loaders must continue to use `instruction_retrieve`.
+
+## Resource Revisions
+
+Use the read-only `resource_history` tool with a resource-specific `request`. Use `action: "list"` for comments with `commentId`, Plan entries with `entryId`, or instruction sources with `key`. Use `action: "revision"` with a positive `revision` for entities with `entityId`, contexts with optional `scopeRef`, context terms with `term` and optional `scopeRef`, or instruction sources with `key`.
+
+Selected revisions return metadata and body-read references. Follow the returned `resource_body` reference with its selected revision; do not substitute a current body. Comment and Plan-entry lists use ascending revision order and existing bounded pages. Copy `nextContinuation` into `request.continuation` until null with the same resource, action, identifiers, and scope. Instruction histories retain their newest-first result contract. Histories are live reads, not snapshots.
+
+The replaced revision tools and instruction-inspection history actions are removed. Comparison, dependencies, and pending previews remain in `instruction_inspect`. CLI history reads, restore controls, confirmations, and writes remain separate and unchanged.
+
 ## Author Instructions
 
 Keep source skills in `packages/cli/skills/<name>/SKILL.md`. The build copies authored Markdown into `instruction-defaults.json`, which ships with the CLI. Discovery files remain small database loaders.

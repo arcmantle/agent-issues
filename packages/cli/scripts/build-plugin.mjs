@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +24,7 @@ const PLUGIN_FIELDS = new Set([
 	"extensions"
 ]);
 
-export function buildPlugin({ sourceDir, targetDir }) {
+export function buildPlugin({ sourceDir, targetDir, development = false }) {
 	const sourceRoot = path.resolve(sourceDir);
 	const outputRoot = path.resolve(targetDir);
 	const sourceSkillsDir = path.join(sourceRoot, "skills");
@@ -145,10 +146,13 @@ export function buildPlugin({ sourceDir, targetDir }) {
 		{ key: "agent/agent-issues", kind: "agent", body: sourceCopilotAgentContent },
 		{ key: "agent/agent-issues-claude", kind: "agent", body: sourceClaudeAgentContent }
 	);
-	writeJson(path.join(outputRoot, "instruction-defaults.json"), { version: packageJson.version, items: instructionSources });
+	const instructionVersion = development
+		? `${packageJson.version}-dev.${createHash("sha256").update(JSON.stringify(instructionSources)).digest("hex")}`
+		: packageJson.version;
+	writeJson(path.join(outputRoot, "instruction-defaults.json"), { version: instructionVersion, items: instructionSources });
 	validatePlugin(outputRoot);
 
-	return { outputRoot, skillNames, version: packageJson.version };
+	return { outputRoot, skillNames, version: packageJson.version, instructionVersion };
 }
 
 export function validatePlugin(pluginDir) {
@@ -260,7 +264,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 	} else {
 		buildPlugin({
 			sourceDir: readArgument("--source-dir"),
-			targetDir: readArgument("--target-dir")
+			targetDir: readArgument("--target-dir"),
+			development: process.argv.includes("--development")
 		});
 	}
 }
