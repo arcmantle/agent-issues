@@ -1,10 +1,213 @@
 # agent-issues
 
-`agent-issues` is a TypeScript ESM CLI for managing shared context, initiatives, PRDs, user stories, ADRs, and issues in a local SQLite database.
+**A project tracker that gives people and AI coding agents the same source of truth.**
 
-## Install and use
+`agent-issues` connects requirements, decisions, issues, and project terms in a persistent database. Use the command-line interface (CLI), a browser view, or the Model Context Protocol (MCP) server to work with the same records.
 
-## Requirements
+The local workflow uses SQLite and does not need a cloud account. The repository also includes a PostgreSQL API and Microsoft Entra ID authentication for remote use.
+
+[Quick start](#quick-start) · [Demo](#demo) · [Project model](#project-model) · [Engineering decisions](#engineering-decisions) · [Development](#development) · [Documentation](#documentation)
+
+## Why This Exists
+
+A coding session can end before the work does. Requirements, decisions, and project terms must remain available when a person or an agent resumes the task.
+
+`agent-issues` stores that information as linked records, not only as chat history. An issue can refer to the user story it fixes, the decision that constrains it, and the issue that blocks it. A handoff records the context needed to resume work.
+
+The goal is to make the reason for a change available with the task itself.
+
+## What You Can Do
+
+| Capability | Use |
+| --- | --- |
+| Track linked work | Connect projects, epics, versions, initiatives, requirements, user stories, decisions, and issues. |
+| Keep planning state | Record questions, answers, and decisions in Plans for different kinds of work. |
+| Track debt | Record accepted costs or risks, their impact, and the work that resolves them. |
+| Plan work across sessions | Use Pioneer to map open decisions and resolve linked tickets without loading the whole effort into one session. |
+| Share project terms | Store a project glossary and initiative-specific context. Search terms without losing their source scope. |
+| Give agents structured access | Use typed MCP tools, JSON output, and command and schema discovery. |
+| Inspect work in the browser | Open a live view of the tracker without a separate frontend deployment. |
+| Resume a task | Save a handoff linked to its active work. |
+| Read earlier revisions | Walk backwards through recorded changes or restore an earlier entity revision without removing its history. |
+| Manage agent instructions | Use versioned defaults, personal changes, revision history, and reusable fragments. |
+| Select local or remote storage | Use local SQLite or a saved remote login for the PostgreSQL API. |
+
+## Quick Start
+
+Requires **Node.js 24 or newer**. Install the CLI and MCP server:
+
+```bash
+npm install --global agent-issues agent-issues-mcp
+```
+
+From your project directory:
+
+```bash
+agent-issues init
+agent-issues create initiative --title "Improve the release workflow"
+agent-issues list initiative
+agent-issues site
+```
+
+Open the URL printed by `site`. The command starts the local browser server in the background. Stop it with `agent-issues site --stop`.
+
+The default database is `~/.agent-issues/agent-issues.db`. The workspace determines the project scope, including when you run commands from a subdirectory. Use `--db <path>` for a separate database or `--project-identity <id>` to select a project explicitly.
+
+## Demo
+
+This sequence shows how a requirement becomes linked implementation work. Use the IDs returned by each command in place of `<initiative-id>`, `<prd-id>`, `<story-id>`, and `<issue-id>`.
+
+```bash
+agent-issues create initiative --title "Reliable releases"
+agent-issues create prd --title "Release checks" --parent <initiative-id>
+agent-issues create userStory --title "See failed checks before release" --parent <prd-id>
+agent-issues create issue --title "Add the release check summary" --parent <initiative-id>
+agent-issues link <issue-id> fixes <story-id>
+agent-issues show <initiative-id> --json --pretty
+agent-issues site
+```
+
+The initiative read returns the complete initiative graph. Open the browser view to inspect the same work. Then inspect the agent-facing contract:
+
+```bash
+agent-issues capabilities --json
+agent-issues context --json
+```
+
+`capabilities` returns the command catalog and workflow schema. `context` returns the project context directory. Both give agents a way to discover the project without depending on text from an earlier chat.
+
+## Project Model
+
+| Record | Entity Kind | Purpose |
+| --- | --- | --- |
+| Project | `project` | Group epics, own versions, and record shared decisions and debt. |
+| Epic | `epic` | Group related initiatives within a project. |
+| Version | `version` | Identify a release that initiatives and issues can refer to. |
+| Initiative | `initiative` | Own a related set of plans, requirements, decisions, debt, and implementation work. |
+| Plan | `plan` | Keep planning questions, answers, and decisions in entries for different kinds of work. |
+| Product requirements document (PRD) | `prd` | Define requirements within an initiative. |
+| User story | `userStory` | Describe a user outcome from a PRD. |
+| Architecture decision record (ADR) | `adr` | Record a decision that can constrain implementation. |
+| Issue | `issue` | Track implementation work and sub-issues. |
+| Debt | `debt` | Record an accepted cost or risk, its impact, evidence, and suggested remediation. |
+| Handoff | `handoff` | Record context to resume work on a linked record. |
+
+A Plan is not specific to a PRD. It can support requirements, architecture decisions, implementation approaches, research, or other work that needs a recorded planning process.
+
+Relations give these records meaning beyond a task list:
+
+- Projects contain epics. Epics contain initiatives. Projects own versions; initiatives and issues can be tagged with a version.
+- Initiatives own Plans and PRDs and track issues. The `informs` relation can link a Plan to a PRD.
+- Projects, epics, and initiatives can record ADRs.
+- PRDs create user stories. Issues fix user stories.
+- ADRs constrain issues. Issues can block other issues.
+- Projects, epics, initiatives, and issues can record debt. Epics, initiatives, and issues can resolve it. Debt can link to related records with `relatesTo`.
+- Issues can contain sub-issues. Handoffs link to their active focus with `handsOff`.
+
+Project context holds shared terms. Initiative context holds terms for that initiative. The context directory keeps these scopes distinct.
+
+## Pioneer
+
+Pioneer is a planning workflow for work that is too large or uncertain for one agent session. It is **not a separate entity kind**. Its map and decision tickets are issues with the types `pioneer-map` and `pioneer-ticket`.
+
+Each effort uses one initiative-owned Plan for detailed planning state. The map records the destination, links to resolved decisions, and questions that are not yet specific enough to become tickets. Child tickets hold specific questions; `blocks` relations identify which decisions must come first.
+
+Tickets can use research, prototypes, live planning conversations, or tasks that supply facts needed for a decision. Resolve available tickets and add new ones as the answers make the next questions clear. The shared map lets later sessions resume without loading every ticket body.
+
+By default, Pioneer produces decisions, not implementation work. The map is complete when no open tickets or unresolved in-scope questions remain. See the [Pioneer workflow](packages/cli/skills/pioneer/SKILL.md) for the full process.
+
+## Engineering Decisions
+
+**Immutable change history, with the latest document stored directly.** The current entity record always holds its latest state. Each recorded change adds an immutable reverse patch to an append-only revision history, rather than storing another complete document snapshot. The patch contains the information needed to recover the preceding state, including changed text and fields.
+
+To read an earlier revision of any entity kind, start with the latest record and apply its patches backwards. Each step checks the source and target state hashes. This reconstructs earlier documents without changing the current record or its history. Entity history includes edits and lifecycle changes such as status, parent, and deletion state. A restore creates a new latest revision; it does not rewrite or remove the changes that came before it.
+
+**One shared domain, several interfaces.** The core package holds the schema, database, and store layers. The CLI, MCP server, and browser app use this shared model. This keeps workflow rules separate from interface code.
+
+**Local use without cloud setup.** SQLite provides the default persistent store. The PostgreSQL API supports the remote path. Local use does not require Entra ID registration or a running PostgreSQL service.
+
+**Explicit contracts for agents.** MCP collection and body reads are bounded to 8192 serialized UTF-8 JSON bytes. Continuation tokens and body hashes support larger reads. JSON output, typed resource requests, and schema discovery reduce dependence on free-form text parsing.
+
+**Guarded changes.** MCP resource edits require an expected revision and content hash. Entity and tenant deletion require an impact inspection and a confirmation token. These checks protect against stale writes and unintended deletion.
+
+**Versioned instructions.** Official instruction defaults are immutable for each release. Personal changes retain revision history. Instruction retrieval validates fragment dependencies and returns an error for missing content or cycles, rather than partial instructions.
+
+## Repository
+
+The project is a **TypeScript ESM pnpm monorepo**.
+
+| Package | Responsibility |
+| --- | --- |
+| [packages/core](packages/core) | Shared domain, schema, database, and store layers. |
+| [packages/cli](packages/cli) | CLI, plugin distribution, and browser server entry point. |
+| [packages/mcp-server](packages/mcp-server) | MCP server executable. |
+| [packages/api-local](packages/api-local) | Local API implementation. |
+| [packages/api-pg](packages/api-pg) | PostgreSQL API and authentication support. |
+| [packages/site](packages/site) | Browser app built with Lit and Vite. |
+| [packages/kanban](packages/kanban) | Kanban UI package. |
+| [packages/vscode-mcp-provider](packages/vscode-mcp-provider) | VS Code MCP provider. |
+
+The browser package also uses Cytoscape for graph views and BlockNote for rich-text editing. Vitest provides the test runner.
+
+## Agent Integration
+
+Install the global packages from [Quick Start](#quick-start), then install the host plugin:
+
+```bash
+agent-issues agent init
+```
+
+This installs for Copilot CLI and VS Code. In VS Code, enable `chat.plugins.enabled`. For Claude Code:
+
+```bash
+agent-issues agent init --host claude
+```
+
+The plugin includes agents, workflow skills, and MCP registration. For direct MCP setup, register `agent-issues-mcp` as a stdio command with no arguments. See the [agent integration reference](#agent-integration-installation) for manual installation and updates.
+
+For a multi-root VS Code workspace, set `agentIssues.projectIdentity` in the workspace settings to use one project identity. See the [project identity reference](#mcp-project-identity) for resolution rules and other hosts.
+
+## Development
+
+Requires Node.js 24 or newer and pnpm.
+
+```bash
+git clone https://github.com/arcmantle/agent-issues.git
+cd agent-issues
+pnpm install
+pnpm build:dev
+```
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm build:dev` | Build with a content-based development instruction identity. |
+| `pnpm build` | Build for a release with immutable instruction defaults. |
+| `pnpm site:dev` | Start the Vite development server and local backend. |
+| `pnpm typecheck` | Build required packages and run workspace type checks. |
+| `pnpm test` | Run workspace tests. |
+
+The site development server uses `http://127.0.0.1:5173`, with the backend on port `4313` by default. Rebuild with `pnpm build:dev` after instruction-source changes. PostgreSQL service tests need the local database setup described below; they are not required for the local SQLite demo.
+
+## Documentation
+
+- [Local API and PostgreSQL development](docs/local-dev-setup.md)
+- [Microsoft Entra ID setup](docs/auth-entra-id-setup.md)
+- [MCP registry setup](docs/mcp-registry-setup.md)
+- [Plugin installation and instruction loading](packages/cli/plugin/README.md)
+- [Release notes and contract changes](docs/release-notes.md)
+- [Search benchmark](docs/search-benchmark.md)
+- [Migration benchmark](docs/migration-benchmark.md)
+
+For command details, use `agent-issues help <command>`. Use `agent-issues schema --json` to inspect supported record kinds, statuses, relations, and parent rules.
+
+## Technical Reference
+
+<details>
+<summary>Installation, storage, CLI commands, MCP contracts, and instruction management</summary>
+
+## CLI And MCP Installation
+
+### Requirements
 
 - Node.js 24 or newer
 
@@ -374,9 +577,13 @@ agent-issues auth logout work
 
 ## Current relation model
 
-- Initiatives own PRDs.
+- Projects contain epics; epics contain initiatives.
+- Projects own versions; initiatives and issues can be tagged with versions.
+- Initiatives own Plans and PRDs. Plans can inform PRDs.
 - PRDs create user stories.
-- Initiatives record ADRs.
+- Projects, epics, and initiatives record ADRs.
+- Projects, epics, initiatives, and issues record debt.
+- Epics, initiatives, and issues can resolve debt; debt can link to related records.
 - Initiatives track issues.
 - Issues can decompose into sub-issues.
 - Issues fix user stories.
@@ -526,3 +733,5 @@ The live server exposes the viewer assets together with `site-config.json`, `/ap
 
 - `move <id> <newParentId>` reparents an entity by replacing its structural parent relation in one guarded operation.
 - For issues, `move` can also reparent a sub-issue under a different parent issue.
+
+</details>
