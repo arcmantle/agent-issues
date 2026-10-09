@@ -137,6 +137,13 @@ h3 {
 	margin-top: 5px;
 	font-size: 12px;
 }
+.current-project .brand-mark {
+	flex-shrink: 0;
+}
+.current-project > span:last-child {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
 .repository-path {
 	font-size: 11px;
 	line-height: 1.6;

@@ -235,7 +235,8 @@ function rail(review = false) {
 function repositoryHeader(review) {
 	const brand = `<div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div>`;
 	if (!review) return `${brand}<div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p>`;
-	return brand;
+	const repository = repositories[state.repository];
+	return `<div class="eyebrow muted">Project</div><div class="brand current-project"><span class="brand-mark">${icon('folder-git-2')}</span><span>${escapeHtml(repository.projectIdentity || repository.name)}</span></div>${repository.projectIdentity ? '' : '<p class="muted">Not connected</p>'}`;
 }
 function refreshRepositoryContext() {
 	for (const panel of app.querySelectorAll('[data-page-panel="workspace"], [data-page-panel="planning"]')) {
