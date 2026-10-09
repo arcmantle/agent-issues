@@ -8,6 +8,7 @@
 		"node": ">=24"
 	},
 	"scripts": {
+		"prototype:harness": "node ./scripts/harness-prototype.mjs",
 		"build": "node ./scripts/build.mjs",
 		"build:dev": "node ./scripts/build.mjs --development",
 		"typecheck": "pnpm --filter @agent-issues/core build && pnpm --filter @agent-issues/api-local build && pnpm --filter @agent-issues/api-pg build && pnpm --filter agent-issues-mcp build && pnpm -r typecheck",

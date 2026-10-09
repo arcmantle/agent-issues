@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- PROTOTYPE: Three harness workspace variants, switchable through ?variant=A|B|C. All activity is simulated. -->
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Harness Workspace Prototype | Agent Issues</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+	<link rel="stylesheet" href="harness-workspace-prototype.css" />
+	<script defer src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+	<script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+	<script defer src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+	<script defer src="harness-workspace-prototype.js"></script>
+</head>
+<body>
+	<div class="prototype-notice"><span>DESIGN PROTOTYPE</span><span>Simulated activity / No live agents</span></div>
+	<main id="app"></main>
+	<nav class="prototype-switcher" aria-label="Prototype variants">
+		<button type="button" id="previous-variant" aria-label="Previous design" title="Previous design"><i data-lucide="arrow-left"></i></button>
+		<div><span class="switcher-caption">WORKSPACE DESIGN</span><strong id="variant-label"></strong></div>
+		<button type="button" id="next-variant" aria-label="Next design" title="Next design"><i data-lucide="arrow-right"></i></button>
+		<span class="switcher-divider"></span>
+		<button type="button" id="reset-prototype" aria-label="Reset simulation" title="Reset simulation"><i data-lucide="rotate-ccw"></i></button>
+	</nav>
+	<dialog id="action-dialog"></dialog>
+	<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
