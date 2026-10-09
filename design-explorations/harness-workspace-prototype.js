@@ -3,12 +3,12 @@ const dialog = document.querySelector('#action-dialog');
 const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
-	mode: 'running', tab: 'inbox', file: 0, question: true, answerDraft: '', approved: false, integrated: false,
+	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
 	limits: { copilot: 40, interpreter: 250 },
 	workers: [
 		{ id: '01', title: 'Session recovery', issue: 'DEMO-01', status: 'running', visible: true, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues tdd DEMO-01', '', 'Read issue context and recovery contract.', 'Run focused validation.', '', '$ pnpm test -- recovery', 'PASS  interrupted session records', 'PASS  restore pending inbox items', '', 'REFACTOR: no justified change.', 'Independent review is in progress.'] },
 		{ id: '02', title: 'Usage limits', issue: 'DEMO-02', status: 'waiting', visible: true, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues implement DEMO-02', '', 'Read provider usage requirements.', 'Inspect the shared accounting boundary.', '', 'Question for the user:', 'Should the limit apply across all workers?', '', 'Waiting for your decision.', 'Independent work can continue.'] },
-		{ id: '03', title: 'Approval checkpoint', issue: 'DEMO-03', status: 'review', visible: false, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues tdd DEMO-03', '', 'PASS  approval binds to recorded changes', 'PASS  changed revision requires approval', '', 'Independent review: no material findings.', 'Final focused validation: passed.', '', 'Issue complete. Integration awaits approval.'] },
+		{ id: '03', title: 'Approval checkpoint', issue: 'DEMO-03', status: 'review', visible: true, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues tdd DEMO-03', '', 'PASS  approval binds to recorded changes', 'PASS  changed revision requires approval', '', 'Independent review: no material findings.', 'Final focused validation: passed.', '', 'Issue complete. Integration awaits approval.'] },
 	],
 	activity: ['Worker 03 completed its skill review.', 'Checkpoint saved: validation / attempt 03.1.', 'Worker 02 requested a usage-limit decision.', 'Workers 01 and 02 started in separate worktrees.'],
 });
@@ -19,6 +19,7 @@ const initiativeViews = {
 	navigation: { title: 'Tracker navigation', summary: 'Find tracked requirements and linked work.', prd: 'Connected work navigation', story: 'Browse initiative records', issues: ['Initiative selector', 'Linked record view', 'Work filters'], adrs: ['Shared tracker queries'], run: 'No active run' },
 };
 let terminals = [];
+let scrollPositions = {};
 let variant = new URL(location.href).searchParams.get('variant') || 'A';
 if (!variants.includes(variant)) variant = 'A';
 const icon = (name) => `<i data-lucide="${name}"></i>`;
@@ -81,6 +82,63 @@ const diffs = [
 function changesContent() {
 	return `<div class="checkpoint-bar"><span>Worker 03 / Review checkpoint</span><span class="mono">c7b90a2</span></div>${fileNames.map((file, index) => `<button class="change-file ${state.file === index ? 'active' : ''}" data-action="file" data-index="${index}"><span>${icon('file-code-2')} ${file}</span><span class="additions">+${[9, 11, 4][index]}</span></button>`).join('')}<pre class="diff" aria-label="Simulated checkpoint diff">${diffs[state.file].map((line) => `<span class="${line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : ''}">${escapeHtml(line)}</span>`).join('')}</pre>`;
 }
+const checkpointFiles = Array.from({ length: 50 }, (_, index) => {
+	const folders = ['src/runner', 'src/providers', 'src/checkpoints', 'src/workspace', 'tests'];
+	const modules = ['approval', 'checkpoint', 'recovery', 'session', 'usage', 'worker', 'integration', 'inbox', 'limits', 'scheduler'];
+	const folder = folders[Math.floor(index / 10)];
+	const name = `${modules[index % 10]}${folder === 'tests' ? '.test' : ''}.ts`;
+	return { index, folder, name, path: `${folder}/${name}`, added: index % 9 + 3, removed: index % 4, kind: index % 7 === 0 ? 'A' : 'M' };
+});
+const matchingFiles = () => checkpointFiles.filter((file) => file.path.toLowerCase().includes(state.fileQuery.toLowerCase().trim()));
+function checkpointBrowser() {
+	const files = matchingFiles();
+	const selected = checkpointFiles[state.reviewFile];
+	const position = files.findIndex((file) => file.index === state.reviewFile);
+	const folders = [...new Set(files.map((file) => file.folder))];
+	const diff = [`@@ ${selected.path} / simulated checkpoint @@`, ...diffs[state.reviewFile % diffs.length]];
+	return `<div class="checkpoint-files" data-scroll-key="checkpoint-files" aria-label="Changed files"><div class="file-result-count">${files.length} of 50 files</div>${folders.map((folder) => `<details data-folder="${folder}" ${state.collapsedFolders.includes(folder) ? '' : 'open'}><summary>${folder} <span>${files.filter((file) => file.folder === folder).length}</span></summary>${files.filter((file) => file.folder === folder).map((file) => `<button class="checkpoint-file ${file.index === state.reviewFile ? 'active' : ''}" data-action="review-file" data-index="${file.index}" aria-current="${file.index === state.reviewFile ? 'true' : 'false'}" title="${file.path}"><span>${file.name}</span><small><b>${file.kind}</b> +${file.added} -${file.removed}</small></button>`).join('')}</details>`).join('')}${!files.length ? '<p class="no-files">No matching files</p>' : ''}</div><section class="checkpoint-selected"><div class="selected-file-header"><span class="mono">${selected.path}</span><div><span>${position < 0 ? 'Outside filter' : `${position + 1} / ${files.length}`}</span><button class="icon-button" data-action="review-previous" aria-label="Previous changed file" title="Previous changed file" ${position <= 0 ? 'disabled' : ''}>${icon('chevron-up')}</button><button class="icon-button" data-action="review-next" aria-label="Next changed file" title="Next changed file" ${position < 0 || position >= files.length - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button></div></div><pre class="diff checkpoint-diff" data-scroll-key="checkpoint-diff" aria-label="Selected checkpoint diff">${diff.map((line) => `<span class="${line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : ''}">${escapeHtml(line)}</span>`).join('')}</pre></section>`;
+}
+function reviewCheckpoint() {
+	const added = checkpointFiles.reduce((total, file) => total + file.added, 0);
+	const removed = checkpointFiles.reduce((total, file) => total + file.removed, 0);
+	return `<section class="review-main"><div class="checkpoint-heading"><div><h2>Approval checkpoint</h2><div class="checkpoint-context">DEMO-03 / attempt 03.1 / c7b90a2<br>50 files <span class="additions">+${added}</span> -${removed} / simulated</div></div><button class="primary" data-action="approve" ${state.mode !== 'running' || state.integrated ? 'disabled' : ''}>${icon(state.integrated ? 'check' : 'git-merge')}${state.integrated ? 'Integrated' : 'Approve integration'}</button></div><div class="checkpoint-search"><label for="checkpoint-search">${icon('search')}</label><input id="checkpoint-search" type="search" aria-label="Search changed files" placeholder="Find a file..." value="${escapeHtml(state.fileQuery)}" /><button class="icon-button" data-action="clear-file-query" title="Clear file search" aria-label="Clear file search">${icon('x')}</button></div><div class="checkpoint-browser">${checkpointBrowser()}</div></section>`;
+}
+function reviewInbox() {
+	return `<div class="panel-title"><h2>Run inbox <span class="count">${pendingCount()}</span></h2></div><div class="tabs" role="tablist" aria-label="Run decisions">${['inbox', 'activity'].map((tab) => `<button role="tab" aria-selected="${state.tab === tab}" class="${state.tab === tab ? 'active' : ''}" data-action="tab" data-tab="${tab}">${tab === 'inbox' ? 'Inbox' : 'Activity'}</button>`).join('')}</div><section>${state.tab === 'activity' ? activityContent() : `${questionItem()}${state.integrated ? '<article class="inbox-item"><h3>Integration recorded</h3><p>DEMO-03 / simulated integration complete.</p></article>' : '<article class="inbox-item"><h3>Review ready</h3><p>DEMO-03 / 6 checks passed / independent review passed. Integration awaits your approval.</p></article>'}`}</section>`;
+}
+function rememberScroll() {
+	for (const region of app.querySelectorAll('[data-scroll-key]')) {
+		if (!region.closest('[hidden]')) scrollPositions[region.dataset.scrollKey] = region.scrollTop;
+	}
+}
+function switchWorkspace(view) {
+	rememberScroll();
+	state.view = view;
+	for (const panel of app.querySelectorAll('[data-workspace-panel]')) panel.hidden = panel.dataset.workspacePanel !== view;
+	for (const tab of app.querySelectorAll('[data-action="workspace-view"]')) {
+		tab.setAttribute('aria-selected', String(tab.dataset.view === view));
+		tab.tabIndex = tab.dataset.view === view ? 0 : -1;
+	}
+	const workspace = app.querySelector('.review-layout .workspace');
+	workspace.dataset.scrollKey = `workspace-${view}`;
+	workspace.scrollTop = scrollPositions[`workspace-${view}`] || 0;
+	app.dataset.view = view;
+	requestAnimationFrame(() => terminals.forEach(({ fit, host }) => { if (host.offsetWidth && host.offsetHeight) fit.fit(); }));
+}
+function rememberFolders() {
+	for (const folder of app.querySelectorAll('.checkpoint-files [data-folder]')) {
+		state.collapsedFolders = state.collapsedFolders.filter((name) => name !== folder.dataset.folder);
+		if (!folder.open) state.collapsedFolders.push(folder.dataset.folder);
+	}
+}
+function refreshCheckpoint() {
+	const browser = app.querySelector('.checkpoint-browser');
+	const listScroll = browser.querySelector('.checkpoint-files').scrollTop;
+	rememberFolders();
+	browser.innerHTML = checkpointBrowser();
+	browser.querySelector('.checkpoint-files').scrollTop = listScroll;
+	window.lucide?.createIcons();
+}
 function activityContent() {
 	return state.activity.map((entry, index) => `<div class="activity-entry"><span class="mono muted">${index === 0 ? 'now' : `-${index}m`}</span><span>${escapeHtml(entry)}</span></div>`).join('');
 }
@@ -99,14 +157,19 @@ function VariantC() {
 		const initiative = initiativeViews[viewedInitiative];
 		return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section></div>`;
 	}
-	return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<div class="review-content"><section class="review-main"><div class="panel-title"><h2>Approval checkpoint</h2><span class="status review">${state.integrated ? 'Integrated' : 'Ready for inspection'}</span></div>${changesContent()}</section><aside>${inspector()}</aside></div><section class="review-terminals"><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section></section></div>`;
+	return `<div class="review-layout">${rail(true)}<section class="workspace" data-scroll-key="workspace-${state.view}">${runHeader()}<div class="workspace-tabs" role="tablist" aria-label="Workspace view"><button id="agents-tab" role="tab" data-action="workspace-view" data-view="agents" aria-controls="agents-panel" aria-selected="${state.view === 'agents'}">${icon('terminal')}Agents</button><button id="review-tab" role="tab" data-action="workspace-view" data-view="review" aria-controls="review-panel" aria-selected="${state.view === 'review'}">${icon('file-diff')}Review <span class="count">${pendingCount()}</span></button></div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}><div class="review-content">${reviewCheckpoint()}<aside>${reviewInbox()}</aside></div></section></section></div>`;
 }
 function render() {
+	rememberScroll();
+	rememberFolders();
 	terminals.forEach(({ terminal, observer }) => { observer.disconnect(); terminal.dispose(); });
 	terminals = [];
 	app.innerHTML = ({ A: VariantA, B: VariantB, C: VariantC })[variant]();
 	document.querySelector('#variant-label').textContent = `${variant} / ${names[variant]}`;
 	document.body.dataset.variant = variant;
+	app.dataset.view = state.view;
+	for (const tab of app.querySelectorAll('[data-action="workspace-view"]')) tab.tabIndex = tab.dataset.view === state.view ? 0 : -1;
+	app.querySelector('.review-layout .rail')?.setAttribute('data-scroll-key', 'sidebar');
 	window.lucide?.createIcons();
 	for (const host of app.querySelectorAll('[data-terminal]')) {
 		const worker = state.workers.find((item) => item.id === host.dataset.terminal);
@@ -118,7 +181,7 @@ function render() {
 		const fit = new window.FitAddon.FitAddon();
 		terminal.loadAddon(fit);
 		terminal.open(host);
-		fit.fit();
+		if (host.offsetWidth && host.offsetHeight) fit.fit();
 		worker.lines.forEach((line, index) => terminal.writeln(index === 0 ? `\x1b[38;2;201;237;106m${line}\x1b[0m` : line.startsWith('PASS') ? `\x1b[38;2;145;221;210m${line}\x1b[0m` : line));
 		terminal.scrollToTop();
 		worker.input ??= '';
@@ -136,10 +199,11 @@ function render() {
 				terminal.write(data);
 			}
 		});
-		const observer = new ResizeObserver(() => fit.fit());
+		const observer = new ResizeObserver(() => { if (host.offsetWidth && host.offsetHeight) fit.fit(); });
 		observer.observe(host);
-		terminals.push({ terminal, observer });
+		terminals.push({ terminal, observer, fit, host });
 	}
+	for (const region of app.querySelectorAll('[data-scroll-key]')) region.scrollTop = scrollPositions[region.dataset.scrollKey] || 0;
 	document.querySelector('#app').dataset.state = JSON.stringify({ viewedInitiative, activeInitiative: 'harness', mode: state.mode, visible: state.workers.filter((worker) => worker.visible).map((worker) => worker.id), workers: state.workers.map(({ id, status, manual }) => ({ id, status, manual })), pending: pendingCount(), integrated: state.integrated, limits: state.limits });
 }
 function notify(message) {
@@ -169,6 +233,22 @@ document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
 	if (!button || button.disabled) return;
 	const action = button.dataset.action;
+	if (action === 'workspace-view') { switchWorkspace(button.dataset.view); return; }
+	if (['review-file', 'review-previous', 'review-next', 'clear-file-query'].includes(action)) {
+		if (action === 'review-file') state.reviewFile = Number(button.dataset.index);
+		if (action === 'clear-file-query') {
+			state.fileQuery = '';
+			app.querySelector('#checkpoint-search').value = '';
+		} else if (action !== 'review-file') {
+			const files = matchingFiles();
+			const position = files.findIndex((file) => file.index === state.reviewFile);
+			const next = files[position + (action === 'review-next' ? 1 : -1)];
+			if (next) state.reviewFile = next.index;
+		}
+		refreshCheckpoint();
+		app.querySelector('.checkpoint-file.active')?.scrollIntoView({ block: 'nearest' });
+		return;
+	}
 	if (action === 'record') {
 		const initiative = initiativeViews[viewedInitiative];
 		const kind = button.dataset.kind;
@@ -182,6 +262,7 @@ document.addEventListener('click', (event) => {
 	}
 	if (action === 'active-run') viewedInitiative = 'harness';
 	if (action === 'show-worker') {
+		state.view = 'agents';
 		state.workers.find((worker) => worker.id === button.dataset.id).visible = true;
 		dialog.close();
 	}
@@ -210,7 +291,7 @@ document.addEventListener('click', (event) => {
 		notify(worker.manual ? `Worker ${worker.id}: input belongs to you.` : `Worker ${worker.id}: input returned to the harness.`);
 	}
 	if (action === 'tab') state.tab = button.dataset.tab;
-	if (action === 'changes') state.tab = 'changes';
+	if (action === 'changes') { state.tab = 'changes'; state.view = 'review'; }
 	if (action === 'file') state.file = Number(button.dataset.index);
 	if (action === 'approve' && state.mode === 'running') {
 		state.approved = true;
@@ -224,6 +305,12 @@ document.addEventListener('click', (event) => {
 });
 document.addEventListener('input', (event) => {
 	if (event.target.matches('.answer-form [name="answer"]')) state.answerDraft = event.target.value;
+	if (event.target.id === 'checkpoint-search') {
+		state.fileQuery = event.target.value;
+		const files = matchingFiles();
+		if (files.length && !files.some((file) => file.index === state.reviewFile)) state.reviewFile = files[0].index;
+		refreshCheckpoint();
+	}
 });
 document.addEventListener('change', (event) => {
 	if (event.target.id === 'initiative-selector') {
@@ -265,8 +352,15 @@ document.addEventListener('submit', (event) => {
 });
 document.querySelector('#previous-variant').addEventListener('click', () => changeVariant(-1));
 document.querySelector('#next-variant').addEventListener('click', () => changeVariant(1));
-document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; render(); notify('Simulation reset.'); });
+document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
+	if (event.target.matches('[data-action="workspace-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+		event.preventDefault();
+		const view = event.key === 'Home' ? 'agents' : event.key === 'End' ? 'review' : state.view === 'agents' ? 'review' : 'agents';
+		switchWorkspace(view);
+		app.querySelector(`[data-action="workspace-view"][data-view="${view}"]`).focus();
+		return;
+	}
 	if (event.target.closest('input, textarea, select, [contenteditable], .xterm') || dialog.open) return;
 	if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
 		event.preventDefault();
