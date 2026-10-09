@@ -14,7 +14,7 @@ const initialState = () => ({
 	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
 	planningContexts: [{ id: 'harness', mode: 'pioneer', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
-	planningMode: 'pioneer', graphZoom: .8,
+	planningMode: 'pioneer', pioneerView: 'session', graphZoom: .8,
 	planningSessions: {
 		pioneer: { drafts: {}, paused: false, answers: [], messages: [{ role: 'agent', kind: 'Findings', paragraphs: ['Native CLI sessions and a local runner are already selected. Provider control is resolved.', 'Workspace design and approval gates can be considered together. Recovery and usage decisions depend on these results.'] }] },
 		plan: { drafts: {}, paused: false, answers: [], messages: [{ role: 'agent', kind: 'Findings and recommendation', paragraphs: ['The current scope permits concurrent initiative runs in different repositories. Each repository has one active initiative.', 'Integration requires approval for each issue. Final merge requires separate approval. I recommend keeping these decisions in the first-release plan.', 'Provider choice, the plan review boundary, and release acceptance are not yet specified.'] }] },
@@ -88,7 +88,7 @@ const discoveryQuestions = [
 	{ question: 'What would make the first version acceptable?', role: 'constraint', prefix: 'Acceptance' },
 ];
 const planQuestions = () => state.planningContext === 'harness' ? harnessQuestions : discoveryQuestions;
-const planningSnapshot = () => ({ planningMode: state.planningMode, graphZoom: state.graphZoom, planningSessions: state.planningSessions, planEntries: state.planEntries, pioneerResolutions: state.pioneerResolutions });
+const planningSnapshot = () => ({ planningMode: state.planningMode, pioneerView: state.pioneerView, graphZoom: state.graphZoom, planningSessions: state.planningSessions, planEntries: state.planEntries, pioneerResolutions: state.pioneerResolutions });
 function planningStartForm() {
 	const draft = state.planningLaunch;
 	return `<form class="planning-start-form" data-form="planning-start" data-repository="${state.repository}"><label for="planning-brief">Starting point</label><textarea id="planning-brief" name="brief" rows="5" required>${escapeHtml(draft.brief)}</textarea><label for="planning-initiative">Initiative</label><select id="planning-initiative" name="initiative"><option value="">Not yet defined</option>${repositoryInitiatives().map(([id, initiative]) => `<option value="${id}" ${draft.initiative === id ? 'selected' : ''}>${initiative.title}</option>`).join('')}</select><fieldset><legend>Mode</legend>${['plan', 'pioneer'].map((mode) => `<label><input type="radio" name="mode" value="${mode}" ${draft.mode === mode ? 'checked' : ''} />${mode === 'plan' ? 'Plan' : 'Pioneer'}</label>`).join('')}</fieldset><div class="dialog-actions"><button class="primary">${icon('play')}Start planning</button></div></form>`;
@@ -151,7 +151,18 @@ function singlePlan() {
 function planningWorkspace() {
 	const context = planningContext();
 	const modes = `<span class="planning-modes">${icon(context.mode === 'pioneer' ? 'git-branch' : 'notebook-pen')}${context.mode === 'pioneer' ? 'Pioneer' : 'Plan'}</span>`;
-	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated / ${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</div><h2 tabindex="-1">${escapeHtml(context.title)}</h2></div>${modes}</div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>${escapeHtml(context.title)}</h3><p>${escapeHtml(context.brief)}</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
+	const pioneer = context.mode === 'pioneer';
+	const tabs = pioneer ? `<div class="workspace-tabs" role="tablist" aria-label="Pioneer view">${[['session', 'messages-square', 'Planning session'], ['map', 'git-branch', 'Pioneer map']].map(([view, symbol, title]) => `<button id="pioneer-${view}-tab" role="tab" data-action="pioneer-view" data-view="${view}" aria-controls="pioneer-${view}-panel" aria-selected="${state.pioneerView === view}" tabindex="${state.pioneerView === view ? 0 : -1}">${icon(symbol)}${title}</button>`).join('')}</div>` : '';
+	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated / ${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</div><h2 tabindex="-1">${escapeHtml(context.title)}</h2></div>${modes}</div>${tabs}<section id="pioneer-session-panel" ${pioneer ? `role="tabpanel" aria-labelledby="pioneer-session-tab" data-pioneer-view="session" ${state.pioneerView !== 'session' ? 'hidden' : ''}` : ''}><div id="planning-session-content">${planningSession()}</div></section><section id="pioneer-map-panel" data-planning-panel="pioneer" ${pioneer ? 'role="tabpanel" aria-labelledby="pioneer-map-tab" data-pioneer-view="map"' : ''} ${!pioneer || state.pioneerView !== 'map' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>${escapeHtml(context.title)}</h3><p>${escapeHtml(context.brief)}</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
+}
+function switchPioneerView(view) {
+	if (planningContext()?.mode !== 'pioneer' || !['session', 'map'].includes(view)) return;
+	state.pioneerView = view;
+	app.querySelectorAll('[data-pioneer-view]').forEach((panel) => { panel.hidden = panel.dataset.pioneerView !== view; });
+	app.querySelectorAll('[data-action="pioneer-view"]').forEach((tab) => {
+		tab.setAttribute('aria-selected', String(tab.dataset.view === view));
+		tab.tabIndex = tab.dataset.view === view ? 0 : -1;
+	});
 }
 function refreshPlanning() {
 	const graph = app.querySelector('.pioneer-viewport');
@@ -478,6 +489,7 @@ document.addEventListener('click', (event) => {
 		return;
 	}
 	if (action === 'planning-session') { switchPlanningContext(button.dataset.id); return; }
+	if (action === 'pioneer-view') { switchPioneerView(button.dataset.view); return; }
 	if (action === 'open-review') { switchWorkspace('review'); return; }
 	if (action === 'workspace-view') { switchWorkspace(button.dataset.view); return; }
 	if (action === 'planning-pause') {
@@ -632,7 +644,7 @@ document.addEventListener('submit', (event) => {
 		if (initiative && !repositories[state.repository].initiatives.includes(initiative)) return;
 		const opening = [{ role: 'user', kind: 'Starting point', paragraphs: [brief] }, { role: 'agent', kind: 'Planning approach', paragraphs: [initiative ? `This session is scoped to ${initiativeViews[initiative].title}.` : 'The initiative is not yet defined.', 'I will establish the purpose, users, scope, and acceptance criteria before implementation.'] }];
 		const context = { id: `session-${state.nextPlanningContext++}`, mode: String(values.get('mode')), repository: state.repository, projectIdentity: repositories[state.repository].projectIdentity, title: brief.split('\n')[0].slice(0, 72), brief, initiative, saved: {
-			planningMode: String(values.get('mode')), graphZoom: .8,
+			planningMode: String(values.get('mode')), pioneerView: 'session', graphZoom: .8,
 			planningSessions: { pioneer: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) }, plan: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) } },
 			planEntries: [], pioneerResolutions: ['', '', '', '', '', ''],
 		} };
@@ -703,6 +715,13 @@ window.addEventListener('popstate', () => { if (variant === 'C') switchPage(new 
 document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
 	if (event.key === 'Escape' && dialog.open) { event.preventDefault(); dialog.requestClose(); return; }
+	if (event.target.matches('[data-action="pioneer-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+		event.preventDefault();
+		const view = event.key === 'Home' ? 'session' : event.key === 'End' ? 'map' : event.target.dataset.view === 'session' ? 'map' : 'session';
+		switchPioneerView(view);
+		app.querySelector(`[data-action="pioneer-view"][data-view="${view}"]`).focus();
+		return;
+	}
 	if (event.target.matches('[data-action="workspace-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
 		event.preventDefault();
 		const views = ['agents', 'review', 'initiative'];
