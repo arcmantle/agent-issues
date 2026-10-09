@@ -137,6 +137,21 @@ h3 {
 	margin-top: 5px;
 	font-size: 12px;
 }
+.rail-project label.eyebrow {
+	display: block;
+}
+.repository-path {
+	font-size: 11px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+.repository-project {
+	overflow-wrap: anywhere;
+}
+.planning-empty {
+	margin-top: 16px;
+	font-size: 12px;
+}
 .section-label {
 	display: flex;
 	justify-content: space-between;

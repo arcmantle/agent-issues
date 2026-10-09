@@ -2,10 +2,17 @@ const app = document.querySelector('#app');
 const dialog = document.querySelector('#action-dialog');
 const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
+const repositories = {
+	'agent-issues': { name: 'agent-issues', projectIdentity: 'agent-issues', path: '/Users/roen/Developer/Personal/agent-issues', tenant: 'local-roen', initiatives: ['harness', 'navigation'] },
+	'studio-site': { name: 'studio-site / example', projectIdentity: 'studio-site', path: '~/projects/studio-site', tenant: 'local-roen', initiatives: ['studio'] },
+	'task-api': { name: 'task-api / example', projectIdentity: 'task-api', path: '~/projects/task-api', tenant: 'local-roen', initiatives: ['api'] },
+};
 const initialState = () => ({
+	repository: 'agent-issues',
+	repositoryViews: Object.fromEntries(Object.entries(repositories).map(([id, repository]) => [id, { initiative: repository.initiatives[0], planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } }])),
 	page: new URL(location.href).searchParams.get('page') === 'planning' ? 'planning' : 'workspace',
 	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
-	planningContexts: [{ id: 'harness', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
+	planningContexts: [{ id: 'harness', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
 	planningMode: 'pioneer', graphZoom: .8,
 	planningSessions: {
@@ -31,7 +38,10 @@ let viewedInitiative = 'harness';
 const initiativeViews = {
 	harness: { title: 'Initiative execution harness', summary: 'Coordinate agents, user decisions, and approved changes.', prd: 'Local execution workspace', story: 'Inspect and control agent work', issues: ['Session recovery', 'Usage limits', 'Approval checkpoint', 'Serial integration', 'Restart confirmation', 'Final merge approval'], adrs: ['Native terminal workspace', 'Approved integration'] },
 	navigation: { title: 'Tracker navigation', summary: 'Find tracked requirements and linked work.', prd: 'Connected work navigation', story: 'Browse initiative records', issues: ['Initiative selector', 'Linked record view', 'Work filters'], adrs: ['Shared tracker queries'], run: 'No active run' },
+	studio: { title: 'Studio portfolio', summary: 'Present selected work and project details.', prd: 'Portfolio navigation', story: 'Inspect selected work', issues: ['Project index', 'Project detail', 'Contact form'], adrs: ['Static content'], run: 'No active run' },
+	api: { title: 'Task service', summary: 'Manage tasks through a project-scoped API.', prd: 'Task API', story: 'Manage project tasks', issues: ['Task list', 'Task updates', 'Access control'], adrs: ['Project-scoped access'], run: 'No active run' },
 };
+const repositoryInitiatives = () => Object.entries(initiativeViews).filter(([id]) => repositories[state.repository].initiatives.includes(id));
 const routePrds = [
 	{ title: 'Local execution workspace', story: 'Inspect and control agent work', issues: [0, 1, 2] },
 	{ title: 'Safe delivery and recovery', story: 'Integrate and recover approved work', issues: [3, 4, 5] },
@@ -81,10 +91,11 @@ const planQuestions = () => state.planningContext === 'harness' ? harnessQuestio
 const planningSnapshot = () => ({ planningMode: state.planningMode, graphZoom: state.graphZoom, planningSessions: state.planningSessions, planEntries: state.planEntries, pioneerResolutions: state.pioneerResolutions });
 function planningStartForm() {
 	const draft = state.planningLaunch;
-	return `<form class="planning-start-form" data-form="planning-start"><label for="planning-brief">Starting point</label><textarea id="planning-brief" name="brief" rows="5" required>${escapeHtml(draft.brief)}</textarea><label for="planning-initiative">Initiative</label><select id="planning-initiative" name="initiative"><option value="">Not yet defined</option>${Object.entries(initiativeViews).map(([id, initiative]) => `<option value="${id}" ${draft.initiative === id ? 'selected' : ''}>${initiative.title}</option>`).join('')}</select><fieldset><legend>Mode</legend>${['plan', 'pioneer'].map((mode) => `<label><input type="radio" name="mode" value="${mode}" ${draft.mode === mode ? 'checked' : ''} />${mode === 'plan' ? 'Plan' : 'Pioneer'}</label>`).join('')}</fieldset><div class="dialog-actions"><button class="primary">${icon('play')}Start planning</button></div></form>`;
+	return `<form class="planning-start-form" data-form="planning-start" data-repository="${state.repository}"><label for="planning-brief">Starting point</label><textarea id="planning-brief" name="brief" rows="5" required>${escapeHtml(draft.brief)}</textarea><label for="planning-initiative">Initiative</label><select id="planning-initiative" name="initiative"><option value="">Not yet defined</option>${repositoryInitiatives().map(([id, initiative]) => `<option value="${id}" ${draft.initiative === id ? 'selected' : ''}>${initiative.title}</option>`).join('')}</select><fieldset><legend>Mode</legend>${['plan', 'pioneer'].map((mode) => `<label><input type="radio" name="mode" value="${mode}" ${draft.mode === mode ? 'checked' : ''} />${mode === 'plan' ? 'Plan' : 'Pioneer'}</label>`).join('')}</fieldset><div class="dialog-actions"><button class="primary">${icon('play')}Start planning</button></div></form>`;
 }
 function planningSidebar() {
-	return `<div class="eyebrow muted">Sessions</div><div class="planning-session-list">${state.planningContexts.map((context) => `<button data-action="planning-session" data-id="${context.id}" ${state.planningContext === context.id ? 'aria-current="true"' : ''}><strong>${escapeHtml(context.title)}</strong><span>${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</span></button>`).join('')}</div>`;
+	const contexts = state.planningContexts.filter((context) => context.repository === state.repository);
+	return `<div class="eyebrow muted">Sessions</div><div class="planning-session-list">${contexts.map((context) => `<button data-action="planning-session" data-id="${context.id}" ${state.planningContext === context.id ? 'aria-current="true"' : ''}><strong>${escapeHtml(context.title)}</strong><span>${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</span></button>`).join('')}</div>${contexts.length ? '' : '<p class="muted planning-empty">No planning work.</p>'}`;
 }
 function planningPageContent() {
 	return planningContext() ? planningWorkspace() : `<section class="planning-start"><h2>New planning session</h2>${planningStartForm()}</section>`;
@@ -95,9 +106,10 @@ function refreshPlanningPage() {
 	window.lucide?.createIcons();
 }
 function switchPlanningContext(id) {
+	const context = state.planningContexts.find((candidate) => candidate.id === id && candidate.repository === state.repository);
+	if (!context) return;
 	const current = planningContext();
 	if (current) current.saved = planningSnapshot();
-	const context = state.planningContexts.find((candidate) => candidate.id === id);
 	context.saved ??= planningSnapshot();
 	Object.assign(state, context.saved);
 	state.planningContext = id;
@@ -184,15 +196,15 @@ function controls() {
 		<button class="icon-button danger" data-action="terminate" title="Terminate workers" aria-label="Terminate workers" ${!active && state.mode !== 'stopping' ? 'disabled' : ''}>${icon('octagon-x')}</button>
 	</div>`;
 }
-function runHeader(showBrand = false) {
-	const browsing = variant === 'C' && viewedInitiative !== 'harness';
-	return `<header class="run-header"><div>${showBrand ? '<div class="brand">agent-issues / harness</div>' : ''}<h1>${browsing ? initiativeViews[viewedInitiative].title : initiativeViews.harness.title}</h1><div class="run-subtitle">${browsing ? '<span>No active run</span><span>Read-only view</span>' : `<span class="status ${state.mode}">${runLabel()}</span><span class="mono">harness/initiative</span><span>Run 004</span>`}</div></div>${browsing ? '<button data-action="active-run">' + icon('arrow-left') + 'Return to active run</button>' : controls()}</header>`;
+function runHeader(showBrand = false, initiativeId = viewedInitiative) {
+	const browsing = variant === 'C' && initiativeId !== 'harness';
+	return `<header class="run-header"><div>${showBrand ? '<div class="brand">agent-issues / harness</div>' : ''}<h1>${browsing ? initiativeViews[initiativeId].title : initiativeViews.harness.title}</h1><div class="run-subtitle">${browsing ? '<span>No active run</span><span>Read-only view</span>' : `<span class="status ${state.mode}">${runLabel()}</span><span class="mono">harness/initiative</span><span>Run 004</span>`}</div></div>${browsing ? '<button data-action="active-run">' + icon('arrow-left') + 'agent-issues / ' + runLabel() + '</button>' : controls()}</header>`;
 }
 function trackedWork() {
 	const initiative = initiativeViews[viewedInitiative];
 	const row = (title, kind, index, status) => `<button class="tracked-record" data-action="record" data-kind="${kind}" data-index="${index}"><span>${icon(kind === 'issue' ? 'circle-dot' : 'file-text')}<span>${title}</span></span><small>${status}</small></button>`;
 	const prds = viewedInitiative === 'harness' ? routePrds : [{ title: initiative.prd, story: initiative.story, issues: [0, 1, 2] }];
-	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${Object.entries(initiativeViews).map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'Harness / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRDs / ${prds.length}</summary>${prds.map((prd, prdIndex) => `${row(prd.title, 'prd', prdIndex, 'Draft')}<details open class="story-group"><summary>User story</summary>${row(prd.story, 'story', prdIndex, 'In progress')}<div class="issue-group">${prd.issues.map((index) => row(initiative.issues[index], 'issue', index, viewedInitiative === 'harness' ? routeState(index).label : 'Ready')).join('')}</div></details>`).join('')}</details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
+	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${repositoryInitiatives().map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'agent-issues / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRDs / ${prds.length}</summary>${prds.map((prd, prdIndex) => `${row(prd.title, 'prd', prdIndex, 'Draft')}<details open class="story-group"><summary>User story</summary>${row(prd.story, 'story', prdIndex, 'In progress')}<div class="issue-group">${prd.issues.map((index) => row(initiative.issues[index], 'issue', index, viewedInitiative === 'harness' ? routeState(index).label : 'Ready')).join('')}</div></details>`).join('')}</details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
 }
 function workerList(title = 'Agents') {
 	return `<div class="section-label eyebrow"><span>${title}</span><span>${state.workers.filter((worker) => worker.visible).length} visible</span></div><div class="worker-list">${state.workers.map((worker) => `<label class="worker-row ${worker.visible ? 'selected' : ''}"><span class="worker-number">${worker.id}</span><span><strong>Worker ${worker.id}</strong><small>${labels[worker.status]}</small></span><input type="checkbox" data-worker="${worker.id}" ${worker.visible ? 'checked' : ''} aria-label="Show Worker ${worker.id} terminal" /></label>`).join('')}</div>`;
@@ -202,7 +214,45 @@ function usage() {
 }
 function rail(review = false) {
 	const browsing = review && viewedInitiative !== 'harness';
-	return `<aside class="rail"><div class="rail-project"><div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div><div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p></div><div class="sidebar-scope" ${review ? `data-sidebar-panel="workspace" ${state.page !== 'workspace' ? 'hidden' : ''}` : ''}>${review ? trackedWork() : ''}${!review && !browsing ? `<section>${workerList()}</section>` : ''}${review && !browsing ? '<section class="review-queue"><div class="eyebrow muted">Integration queue</div><div class="queue-row"><strong>Approval checkpoint</strong><span class="status review">' + (state.integrated ? 'Integrated' : 'Awaiting approval') + '</span></div><div class="queue-row"><strong>Session recovery</strong><span class="muted">Independent review</span></div><div class="queue-row"><strong>Usage limits</strong><span class="muted">' + (state.question ? 'Needs a decision' : 'In progress') + '</span></div></section>' : ''}${!browsing ? usage() : ''}</div>${review ? `<section id="planning-sidebar-content" data-sidebar-panel="planning" ${state.page !== 'planning' ? 'hidden' : ''}>${planningSidebar()}</section>` : ''}</aside>`;
+	return `<aside class="rail"><div class="rail-project">${repositoryHeader(review)}</div><div class="sidebar-scope" ${review ? `data-sidebar-panel="workspace" ${state.page !== 'workspace' ? 'hidden' : ''}` : ''}>${review ? trackedWork() : ''}${!review && !browsing ? `<section>${workerList()}</section>` : ''}${review && !browsing ? '<section class="review-queue"><div class="eyebrow muted">Integration queue</div><div class="queue-row"><strong>Approval checkpoint</strong><span class="status review">' + (state.integrated ? 'Integrated' : 'Awaiting approval') + '</span></div><div class="queue-row"><strong>Session recovery</strong><span class="muted">Independent review</span></div><div class="queue-row"><strong>Usage limits</strong><span class="muted">' + (state.question ? 'Needs a decision' : 'In progress') + '</span></div></section>' : ''}${!browsing ? usage() : ''}</div>${review ? `<section id="planning-sidebar-content" data-sidebar-panel="planning" ${state.page !== 'planning' ? 'hidden' : ''}>${planningSidebar()}</section>` : ''}</aside>`;
+}
+function repositoryHeader(review) {
+	const brand = `<div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div>`;
+	if (!review) return `${brand}<div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p>`;
+	const repository = repositories[state.repository];
+	return `${brand}<label class="eyebrow" for="repository-selector">Repository</label><select id="repository-selector">${Object.entries(repositories).map(([id, item]) => `<option value="${id}" ${id === state.repository ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><p class="repository-project">Project / <span class="mono">${escapeHtml(repository.projectIdentity)}</span></p><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p>`;
+}
+function selectRepository(id) {
+	if (id === state.repository || !repositories[id]) return;
+	rememberScroll();
+	state.planningContexts[0].saved ??= planningSnapshot();
+	const current = planningContext();
+	if (current) current.saved = planningSnapshot();
+	state.repositoryViews[state.repository] = { initiative: viewedInitiative, planningContext: state.planningContext, planningLaunch: state.planningLaunch };
+	state.repository = id;
+	const view = state.repositoryViews[id];
+	viewedInitiative = view.initiative;
+	state.planningContext = view.planningContext;
+	state.planningLaunch = view.planningLaunch;
+	const context = planningContext();
+	if (context?.saved) Object.assign(state, context.saved);
+	app.querySelector('.rail').outerHTML = rail(true);
+	app.querySelector('.rail').dataset.scrollKey = `sidebar-${id}`;
+	app.querySelector('.rail').scrollTop = scrollPositions[`sidebar-${id}`] || 0;
+	app.querySelector('#repository-workspace-view').dataset.repositoryScope = id === 'agent-issues' ? 'other' : id;
+	app.querySelector('#repository-workspace-view').dataset.scrollKey = `repository-workspace-${id}`;
+	app.querySelector('#repository-workspace-view').innerHTML = id === 'agent-issues' ? '' : repositoryWorkspace();
+	app.querySelector('.planning-page').dataset.scrollKey = `planning-page-${id}`;
+	refreshPlanningPage();
+	switchPage(state.page, false);
+	app.dataset.repository = id;
+	app.dataset.projectIdentity = repositories[id].projectIdentity;
+	window.lucide?.createIcons();
+	app.querySelector('#repository-selector').focus();
+}
+function repositoryWorkspace() {
+	const initiative = initiativeViews[viewedInitiative];
+	return `${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">${initiative.issues.length} ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section>`;
 }
 function applicationNavigation() {
 	return `<nav class="application-navigation" aria-label="Application pages">${[['workspace', 'activity', 'Workspace'], ['planning', 'notebook-pen', 'Planning']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav>`;
@@ -281,7 +331,7 @@ function switchWorkspace(view) {
 function switchPage(page, updateHistory = true) {
 	rememberScroll();
 	state.page = page;
-	app.querySelectorAll('[data-page-panel], [data-sidebar-panel]').forEach((panel) => { panel.hidden = (panel.dataset.pagePanel || panel.dataset.sidebarPanel) !== page; });
+	app.querySelectorAll('[data-page-panel], [data-sidebar-panel]').forEach((panel) => { panel.hidden = (panel.dataset.pagePanel || panel.dataset.sidebarPanel) !== page || Boolean(panel.dataset.repositoryScope && panel.dataset.repositoryScope !== state.repository); });
 	app.querySelectorAll('[data-action="page"]').forEach((link) => {
 		if (link.dataset.page === page) link.setAttribute('aria-current', 'page');
 		else link.removeAttribute('aria-current');
@@ -291,7 +341,8 @@ function switchPage(page, updateHistory = true) {
 		url.searchParams.set('page', page);
 		history.pushState(null, '', url);
 	}
-	app.querySelector(`[data-page-panel="${page}"]`).scrollTop = scrollPositions[page === 'planning' ? 'planning-page' : `workspace-${state.view}`] || 0;
+	const panel = app.querySelector(`[data-page-panel="${page}"]:not([hidden])`);
+	panel.scrollTop = scrollPositions[panel.dataset.scrollKey] || 0;
 	requestAnimationFrame(() => terminals.forEach(({ fit, host }) => { if (host.offsetWidth && host.offsetHeight) fit.fit(); }));
 }
 function rememberFolders() {
@@ -322,14 +373,15 @@ function VariantB() {
 	return `<div class="signal">${runHeader(true)}<section class="metrics"><div class="metric"><strong>${state.integrated ? '4' : '3'}<span> / 9</span></strong><span>Issues integrated</span></div><div class="metric"><strong>${working}</strong><span>Agents working</span></div><div class="metric"><strong>${pendingCount()}</strong><span>Decisions pending</span></div><div class="metric"><strong>18<span> / ${state.limits.copilot}</span></strong><span>Copilot requests / simulated</span></div></section><div class="signal-body">${rail()}<section><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>Run 004 / ${runLabel()}</span></div>${terminalGrid()}<section class="signal-dock">${inspector()}</section></section></div></div>`;
 }
 function VariantC() {
+	const workspaceInitiative = state.repository === 'agent-issues' ? viewedInitiative : state.repositoryViews['agent-issues'].initiative;
 	let workspace;
-	if (viewedInitiative !== 'harness') {
-		const initiative = initiativeViews[viewedInitiative];
-		workspace = `<section class="workspace" data-page-panel="workspace" ${state.page !== 'workspace' ? 'hidden' : ''}>${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section>`;
+	if (workspaceInitiative !== 'harness') {
+		const initiative = initiativeViews[workspaceInitiative];
+		workspace = `<section class="workspace" data-page-panel="workspace" data-repository-scope="agent-issues" ${state.page !== 'workspace' || state.repository !== 'agent-issues' ? 'hidden' : ''}>${runHeader(false, workspaceInitiative)}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section>`;
 	} else {
-		workspace = `<section class="workspace" data-page-panel="workspace" data-scroll-key="workspace-${state.view}" ${state.page !== 'workspace' ? 'hidden' : ''}>${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section>`;
+		workspace = `<section class="workspace" data-page-panel="workspace" data-repository-scope="agent-issues" data-scroll-key="workspace-${state.view}" ${state.page !== 'workspace' || state.repository !== 'agent-issues' ? 'hidden' : ''}>${runHeader(false, workspaceInitiative)}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section>`;
 	}
-	return `<div class="review-layout">${applicationNavigation()}${rail(true)}${workspace}<section class="workspace planning-page" data-page-panel="planning" data-scroll-key="planning-page" ${state.page !== 'planning' ? 'hidden' : ''}><header class="page-heading"><h1>Planning</h1><button class="primary" data-action="new-planning-session">${icon('plus')}New session</button></header><div id="planning-workspace-content">${planningPageContent()}</div></section></div>`;
+	return `<div class="review-layout">${applicationNavigation()}${rail(true)}${workspace}<section id="repository-workspace-view" class="workspace" data-page-panel="workspace" data-repository-scope="${state.repository === 'agent-issues' ? 'other' : state.repository}" data-scroll-key="repository-workspace-${state.repository}" ${state.page !== 'workspace' || state.repository === 'agent-issues' ? 'hidden' : ''}>${state.repository === 'agent-issues' ? '' : repositoryWorkspace()}</section><section class="workspace planning-page" data-page-panel="planning" data-scroll-key="planning-page-${state.repository}" ${state.page !== 'planning' ? 'hidden' : ''}><header class="page-heading"><h1>Planning</h1><button class="primary" data-action="new-planning-session">${icon('plus')}New session</button></header><div id="planning-workspace-content">${planningPageContent()}</div></section></div>`;
 }
 function render() {
 	rememberScroll();
@@ -341,7 +393,9 @@ function render() {
 	document.body.dataset.variant = variant;
 	app.dataset.view = state.view;
 	for (const tab of app.querySelectorAll('[data-action="workspace-view"]')) tab.tabIndex = tab.dataset.view === state.view ? 0 : -1;
-	app.querySelector('.review-layout .rail')?.setAttribute('data-scroll-key', 'sidebar');
+	app.querySelector('.review-layout .rail')?.setAttribute('data-scroll-key', `sidebar-${state.repository}`);
+	app.dataset.repository = state.repository;
+	app.dataset.projectIdentity = repositories[state.repository].projectIdentity;
 	window.lucide?.createIcons();
 	for (const host of app.querySelectorAll('[data-terminal]')) {
 		const worker = state.workers.find((item) => item.id === host.dataset.terminal);
@@ -409,6 +463,10 @@ document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
 	if (!button || button.disabled) return;
 	const action = button.dataset.action;
+	if (action === 'active-run' && state.repository !== 'agent-issues') {
+		selectRepository('agent-issues');
+		if (viewedInitiative === 'harness') return;
+	}
 	if (action === 'page') { event.preventDefault(); switchPage(button.dataset.page); return; }
 	if (action === 'new-planning-session') {
 		const current = planningContext();
@@ -555,8 +613,10 @@ document.addEventListener('input', (event) => {
 	}
 });
 document.addEventListener('change', (event) => {
+	if (event.target.id === 'repository-selector') { selectRepository(event.target.value); return; }
 	if (event.target.id === 'initiative-selector') {
 		viewedInitiative = event.target.value;
+		state.repositoryViews[state.repository].initiative = viewedInitiative;
 		render();
 		return;
 	}
@@ -571,12 +631,14 @@ document.addEventListener('submit', (event) => {
 	event.preventDefault();
 	const values = new FormData(form);
 	if (form.dataset.form === 'planning-start') {
+		if (form.dataset.repository !== state.repository) return;
 		const brief = String(values.get('brief') || '').trim();
 		if (!brief) { form.querySelector('textarea').setCustomValidity('Enter a starting point.'); form.reportValidity(); return; }
 		state.planningContexts[0].saved ??= planningSnapshot();
 		const initiative = String(values.get('initiative') || '') || null;
+		if (initiative && !repositories[state.repository].initiatives.includes(initiative)) return;
 		const opening = [{ role: 'user', kind: 'Starting point', paragraphs: [brief] }, { role: 'agent', kind: 'Planning approach', paragraphs: [initiative ? `This session is scoped to ${initiativeViews[initiative].title}.` : 'The initiative is not yet defined.', 'I will establish the purpose, users, scope, and acceptance criteria before implementation.'] }];
-		const context = { id: `session-${state.nextPlanningContext++}`, title: brief.split('\n')[0].slice(0, 72), brief, initiative, saved: {
+		const context = { id: `session-${state.nextPlanningContext++}`, repository: state.repository, projectIdentity: repositories[state.repository].projectIdentity, title: brief.split('\n')[0].slice(0, 72), brief, initiative, saved: {
 			planningMode: String(values.get('mode')), graphZoom: .8,
 			planningSessions: { pioneer: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) }, plan: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) } },
 			planEntries: [], pioneerResolutions: ['', '', '', '', '', ''],
