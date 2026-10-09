@@ -319,7 +319,7 @@ describe("JSON-RPC gate is generic over StorageDriver", () => {
 			.set("x-agent-issues-workspace-root", "/workspaces/repo-a")
 			.send({ jsonrpc: "2.0", id: 1, method: "createEntity", params: { kind: "initiative", title: "Ship the daemon" } });
 
-		expect(createStore).toHaveBeenCalledWith(expect.objectContaining({ tenantId }), "repo-a", "/workspaces/repo-a");
+		expect(createStore).toHaveBeenCalledWith(expect.objectContaining({ tenantId }), "repo-a", "/workspaces/repo-a", "createEntity");
 	});
 });
 

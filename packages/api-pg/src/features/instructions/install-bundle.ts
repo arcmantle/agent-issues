@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { normalizeInstructionBundle, type InstructionBundle } from "@agent-issues/core";
+import { sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool } from "pg";
 
 function hash(content: string): string {
@@ -9,25 +11,17 @@ function hash(content: string): string {
 export async function installInstructionBundle(pool: Pool, bundle: InstructionBundle): Promise<void> {
 	const { items } = normalizeInstructionBundle(bundle);
 	const contentHash = hash(JSON.stringify(items));
-	const client = await pool.connect();
-	try {
-		await client.query("BEGIN");
-		await client.query("LOCK TABLE instruction_bundles IN EXCLUSIVE MODE");
-		const existing = await client.query("SELECT content_hash FROM instruction_bundles WHERE version = $1", [bundle.version]);
+	await drizzle(pool).transaction(async (executor) => {
+		await executor.execute(sql`LOCK TABLE instruction_bundles IN EXCLUSIVE MODE`);
+		const existing = await executor.execute<{ content_hash: string }>(sql`SELECT content_hash FROM instruction_bundles WHERE version = ${bundle.version}`);
 		if (existing.rows.length) {
 			if (existing.rows[0].content_hash !== contentHash) throw new Error(`Instruction bundle is immutable: ${bundle.version}`);
 		} else {
-			await client.query("INSERT INTO instruction_bundles (version, content_hash) VALUES ($1, $2)", [bundle.version, contentHash]);
+			await executor.execute(sql`INSERT INTO instruction_bundles (version, content_hash) VALUES (${bundle.version}, ${contentHash})`);
 			for (const item of items) {
-				await client.query("INSERT INTO instruction_defaults (version, item_key, kind, body, revision, content_hash) VALUES ($1, $2, $3, $4, 1, $5)",
-					[bundle.version, item.key, item.kind, item.body, hash(item.body)]);
+				await executor.execute(sql`INSERT INTO instruction_defaults (version, item_key, kind, body, revision, content_hash)
+					VALUES (${bundle.version}, ${item.key}, ${item.kind}, ${item.body}, 1, ${hash(item.body)})`);
 			}
 		}
-		await client.query("COMMIT");
-	} catch (error) {
-		await client.query("ROLLBACK");
-		throw error;
-	} finally {
-		client.release();
-	}
+	});
 }

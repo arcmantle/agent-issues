@@ -9,8 +9,8 @@ jobs:
     name: Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     env:
-      AGENT_ISSUES_TEST_PG_URL: postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues
-      AGENT_ISSUES_TEST_PG_APP_URL: postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues
+      AGENT_ISSUES_TEST_PG_URL: ${{ matrix.postgres && 'postgres://agent_issues:agent_issues_dev_only@127.0.0.1:5433/agent_issues' || '' }}
+      AGENT_ISSUES_TEST_PG_APP_URL: ${{ matrix.postgres && 'postgres://agent_issues_app:agent_issues_app_dev_only@127.0.0.1:5433/agent_issues' || '' }}
     strategy:
       fail-fast: false
       matrix:

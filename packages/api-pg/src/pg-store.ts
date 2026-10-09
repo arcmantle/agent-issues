@@ -185,7 +185,7 @@ export class PgStore implements StorageDriver {
 			throw new Error("Instruction retrieval requires an authenticated owner.");
 		}
 		return this.tenantWideTransaction(async (executor) => {
-			await executor.query("SELECT set_config('app.instruction_user_id', $1, true)", [identity.userId]);
+			await executor.execute(sql`SELECT set_config('app.instruction_user_id', ${identity.userId}, true)`);
 			return operation(new PgInstructionStore(executor, identity.userId));
 		});
 	}

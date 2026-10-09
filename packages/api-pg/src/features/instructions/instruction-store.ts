@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { assembleInstruction, compareInstructionSource, describeInstructionReleaseChanges, inspectInstructionDependencies, inspectInstructionReset, inspectInstructionResetAll, prepareInstructionChanges, prepareInstructionFragmentCreate, prepareInstructionFragmentRemove, prepareInstructionReset, prepareInstructionResetAll, prepareInstructionSave, previewInstruction, readInstructionSource } from "@agent-issues/core";
 import type { CommitInstructionChangesInput, CreateInstructionFragmentInput, RemoveInstructionFragmentInput, InstructionSourceResult, InstructionKind, InstructionSnapshotItem, InstructionStore, RetrieveInstructionInput, SaveInstructionSourceInput } from "@agent-issues/core";
 import type { TenantExecutor } from "../../db/connection.js";
+import { sql } from "drizzle-orm";
 
 export class PgInstructionStore implements InstructionStore {
 	constructor(executor: TenantExecutor, userId: string) {
@@ -34,8 +35,8 @@ export class PgInstructionStore implements InstructionStore {
 
 	async compareInstructionSource(input: RetrieveInstructionInput) {
 		const current = readInstructionSource(input, await this.readManagedItems(input.version));
-		const result = await this.executor.query<{ version: string; kind: InstructionKind; body: string; revision: number; content_hash: string }>(
-			"SELECT version, kind, body, revision, content_hash FROM instruction_defaults WHERE item_key = $1", [input.key]
+		const result = await this.executor.execute<{ version: string; kind: InstructionKind; body: string; revision: number; content_hash: string }>(
+			sql`SELECT version, kind, body, revision, content_hash FROM instruction_defaults WHERE item_key = ${input.key}`
 		);
 		return compareInstructionSource(input, current, result.rows.map((row) => ({
 			version: row.version, key: input.key, kind: row.kind, body: row.body,
@@ -54,7 +55,7 @@ export class PgInstructionStore implements InstructionStore {
 	async commitInstructionChanges(input: CommitInstructionChangesInput) {
 		await this.lockOwner();
 		const items = await this.readItems(input.version);
-		const overrides = await this.executor.query<{ key: string; body: string }>("SELECT item_key AS key, body FROM instruction_overrides WHERE tenant_id = $1 AND user_id = $2", [this.executor.tenantId, this.userId]);
+		const overrides = await this.executor.execute<{ key: string; body: string }>(sql`SELECT item_key AS key, body FROM instruction_overrides WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId}`);
 		const result = prepareInstructionChanges(input, items, (body) => createHash("sha256").update(body).digest("hex"), overrides.rows);
 		for (const change of result.changes) {
 			if (change.operation === "remove") await this.appendFragment(change.source, true);
@@ -65,10 +66,9 @@ export class PgInstructionStore implements InstructionStore {
 
 	async listInstructionHistory(input: RetrieveInstructionInput) {
 		const current = readInstructionSource(input, await this.readItems(input.version));
-		const result = await this.executor.query<{ body: string; revision: number; content_hash: string; default_version: string | null; is_default: boolean }>(current.source.type === "personal"
-			? "SELECT body, revision, content_hash, NULL AS default_version, FALSE AS is_default FROM instruction_personal_fragments WHERE tenant_id = $1 AND user_id = $2 AND item_key = $3 AND removed = FALSE ORDER BY revision DESC"
-			: "SELECT body, revision, content_hash, default_version, is_default FROM instruction_history WHERE tenant_id = $1 AND user_id = $2 AND item_key = $3 ORDER BY revision DESC",
-		[this.executor.tenantId, this.userId, input.key]);
+		const result = await this.executor.execute<{ body: string; revision: number; content_hash: string; default_version: string | null; is_default: boolean }>(current.source.type === "personal"
+			? sql`SELECT body, revision, content_hash, NULL AS default_version, FALSE AS is_default FROM instruction_personal_fragments WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId} AND item_key = ${input.key} AND removed = FALSE ORDER BY revision DESC`
+			: sql`SELECT body, revision, content_hash, default_version, is_default FROM instruction_history WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId} AND item_key = ${input.key} ORDER BY revision DESC`);
 		return { ...input, revisions: result.rows.map((row): InstructionSourceResult => ({
 			version: input.version, key: input.key, kind: current.kind, body: row.body,
 			source: row.is_default ? { type: "default", revision: row.revision, contentHash: row.content_hash } : row.default_version === null
@@ -123,31 +123,30 @@ export class PgInstructionStore implements InstructionStore {
 	}
 
 	protected async writeResetSource(reset: InstructionSourceResult): Promise<void> {
-		await this.executor.query(`INSERT INTO instruction_history (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version, is_default)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)`,
-		[this.executor.tenantId, this.userId, reset.key, reset.kind, reset.body, reset.source.revision, reset.source.contentHash, reset.version]);
-		await this.executor.query("DELETE FROM instruction_overrides WHERE tenant_id = $1 AND user_id = $2 AND item_key = $3", [this.executor.tenantId, this.userId, reset.key]);
+		await this.executor.execute(sql`INSERT INTO instruction_history (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version, is_default)
+			VALUES (${this.executor.tenantId}, ${this.userId}, ${reset.key}, ${reset.kind}, ${reset.body}, ${reset.source.revision}, ${reset.source.contentHash}, ${reset.version}, TRUE)`);
+		await this.executor.execute(sql`DELETE FROM instruction_overrides WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId} AND item_key = ${reset.key}`);
 	}
 
 	protected async readResetAllItems(version: string) {
-		if (!(await this.executor.query("SELECT 1 FROM instruction_bundles WHERE version = $1", [version])).rows.length) throw new Error(`Instruction defaults unavailable for release: ${version}`);
-		const overrides = await this.executor.query<{ item_key: string; kind: InstructionKind; body: string; revision: number; content_hash: string; default_version: string }>(
-			"SELECT item_key, kind, body, revision, content_hash, default_version FROM instruction_overrides WHERE tenant_id = $1 AND user_id = $2", [this.executor.tenantId, this.userId]);
+		if (!(await this.executor.execute(sql`SELECT 1 FROM instruction_bundles WHERE version = ${version}`)).rows.length) throw new Error(`Instruction defaults unavailable for release: ${version}`);
+		const overrides = await this.executor.execute<{ item_key: string; kind: InstructionKind; body: string; revision: number; content_hash: string; default_version: string }>(
+			sql`SELECT item_key, kind, body, revision, content_hash, default_version FROM instruction_overrides WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId}`);
 		const changed = overrides.rows.map((row): InstructionSnapshotItem => ({ key: row.item_key, kind: row.kind, body: row.body, source: { type: "override", revision: row.revision, contentHash: row.content_hash, defaultVersion: row.default_version } }));
-		const personal = await this.executor.query<{ item_key: string; body: string; revision: number; content_hash: string }>(`
+		const personal = await this.executor.execute<{ item_key: string; body: string; revision: number; content_hash: string }>(sql`
 			SELECT fragment.item_key, fragment.body, fragment.revision, fragment.content_hash FROM instruction_personal_fragments AS fragment
-			WHERE fragment.tenant_id = $1 AND fragment.user_id = $2 AND fragment.removed = FALSE
+			WHERE fragment.tenant_id = ${this.executor.tenantId} AND fragment.user_id = ${this.userId} AND fragment.removed = FALSE
 				AND fragment.revision = (SELECT MAX(history.revision) FROM instruction_personal_fragments AS history
-					WHERE history.tenant_id = $1 AND history.user_id = $2 AND history.item_key = fragment.item_key)
-		`, [this.executor.tenantId, this.userId]);
+					WHERE history.tenant_id = ${this.executor.tenantId} AND history.user_id = ${this.userId} AND history.item_key = fragment.item_key)
+		`);
 		for (const row of personal.rows) changed.push({ key: row.item_key, kind: "fragment", body: row.body, source: { type: "personal", revision: row.revision, contentHash: row.content_hash } });
-		const result = await this.executor.query<{ item_key: string; kind: InstructionKind; body: string; revision: number; content_hash: string }>("SELECT item_key, kind, body, revision, content_hash FROM instruction_defaults WHERE version = $1", [version]);
+		const result = await this.executor.execute<{ item_key: string; kind: InstructionKind; body: string; revision: number; content_hash: string }>(sql`SELECT item_key, kind, body, revision, content_hash FROM instruction_defaults WHERE version = ${version}`);
 		const defaults = result.rows.map((row): InstructionSnapshotItem => ({ key: row.item_key, kind: row.kind, body: row.body, source: { type: "default", revision: row.revision, contentHash: row.content_hash } }));
 		return { items: [...defaults.filter((item) => !changed.some((current) => current.key === item.key)), ...changed], defaults };
 	}
 
 	protected async readDefault(input: RetrieveInstructionInput): Promise<InstructionSnapshotItem> {
-		const result = await this.executor.query<{ kind: InstructionKind; body: string; content_hash: string }>("SELECT kind, body, content_hash FROM instruction_defaults WHERE version = $1 AND item_key = $2", [input.version, input.key]);
+		const result = await this.executor.execute<{ kind: InstructionKind; body: string; content_hash: string }>(sql`SELECT kind, body, content_hash FROM instruction_defaults WHERE version = ${input.version} AND item_key = ${input.key}`);
 		const row = result.rows[0];
 		if (!row) throw new Error(`Instruction default not found: ${input.key}`);
 		return { key: input.key, kind: row.kind, body: row.body, source: { type: "default", revision: 1, contentHash: row.content_hash } };
@@ -156,7 +155,7 @@ export class PgInstructionStore implements InstructionStore {
 	async createInstructionFragment(input: CreateInstructionFragmentInput) {
 		await this.lockOwner();
 		const items = await this.readItems(input.version);
-		const latest = await this.executor.query<{ revision: number | null }>("SELECT MAX(revision) AS revision FROM instruction_personal_fragments WHERE tenant_id = $1 AND user_id = $2 AND item_key = $3", [this.executor.tenantId, this.userId, input.key]);
+		const latest = await this.executor.execute<{ revision: number | null }>(sql`SELECT MAX(revision) AS revision FROM instruction_personal_fragments WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId} AND item_key = ${input.key}`);
 		const contentHash = createHash("sha256").update(typeof input.body === "string" ? input.body : "").digest("hex");
 		const created = prepareInstructionFragmentCreate(input, items, (latest.rows[0]?.revision ?? 0) + 1, contentHash);
 		await this.appendFragment(created, false);
@@ -166,14 +165,14 @@ export class PgInstructionStore implements InstructionStore {
 	async removeInstructionFragment(input: RemoveInstructionFragmentInput) {
 		await this.lockOwner();
 		const items = await this.readItems(input.version);
-		const overrides = await this.executor.query<{ key: string; body: string }>("SELECT item_key AS key, body FROM instruction_overrides WHERE tenant_id = $1 AND user_id = $2", [this.executor.tenantId, this.userId]);
+		const overrides = await this.executor.execute<{ key: string; body: string }>(sql`SELECT item_key AS key, body FROM instruction_overrides WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId}`);
 		const removed = prepareInstructionFragmentRemove(input, items, [...items, ...overrides.rows]);
 		await this.appendFragment(removed, true);
 		return removed;
 	}
 
 	protected async lockOwner(): Promise<void> {
-		await this.executor.query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", [this.executor.tenantId, `instructions:${this.userId}`]);
+		await this.executor.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${this.executor.tenantId}), hashtext(${`instructions:${this.userId}`}))`);
 	}
 
 	protected async writeSource(saved: InstructionSourceResult): Promise<void> {
@@ -182,28 +181,26 @@ export class PgInstructionStore implements InstructionStore {
 			return;
 		}
 		if (saved.source.type !== "override") throw new Error("Expected instruction override.");
-		await this.executor.query(`INSERT INTO instruction_history (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		[this.executor.tenantId, this.userId, saved.key, saved.kind, saved.body, saved.source.revision, saved.source.contentHash, saved.source.defaultVersion]);
-		await this.executor.query(`INSERT INTO instruction_overrides (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			ON CONFLICT (tenant_id, user_id, item_key) DO UPDATE SET body = excluded.body, revision = excluded.revision, content_hash = excluded.content_hash`,
-		[this.executor.tenantId, this.userId, saved.key, saved.kind, saved.body, saved.source.revision, saved.source.contentHash, saved.source.defaultVersion]);
+		await this.executor.execute(sql`INSERT INTO instruction_history (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version)
+			VALUES (${this.executor.tenantId}, ${this.userId}, ${saved.key}, ${saved.kind}, ${saved.body}, ${saved.source.revision}, ${saved.source.contentHash}, ${saved.source.defaultVersion})`);
+		await this.executor.execute(sql`INSERT INTO instruction_overrides (tenant_id, user_id, item_key, kind, body, revision, content_hash, default_version)
+			VALUES (${this.executor.tenantId}, ${this.userId}, ${saved.key}, ${saved.kind}, ${saved.body}, ${saved.source.revision}, ${saved.source.contentHash}, ${saved.source.defaultVersion})
+			ON CONFLICT (tenant_id, user_id, item_key) DO UPDATE SET body = excluded.body, revision = excluded.revision, content_hash = excluded.content_hash`);
 	}
 
 	protected async appendFragment(item: InstructionSourceResult, removed: boolean): Promise<void> {
-		await this.executor.query(`INSERT INTO instruction_personal_fragments (tenant_id, user_id, item_key, revision, body, content_hash, removed)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`, [this.executor.tenantId, this.userId, item.key, item.source.revision, item.body, item.source.contentHash, removed]);
+		await this.executor.execute(sql`INSERT INTO instruction_personal_fragments (tenant_id, user_id, item_key, revision, body, content_hash, removed)
+			VALUES (${this.executor.tenantId}, ${this.userId}, ${item.key}, ${item.source.revision}, ${item.body}, ${item.source.contentHash}, ${removed})`);
 	}
 
 	protected async readManagedItems(version: string) {
 		const items = await this.readItems(version);
-		const result = await this.executor.query<{ version: string; item_key: string; kind: InstructionKind; body: string; revision: number; content_hash: string }>(`
+		const result = await this.executor.execute<{ version: string; item_key: string; kind: InstructionKind; body: string; revision: number; content_hash: string }>(sql`
 			SELECT version, item_key, kind, body, revision, content_hash FROM instruction_defaults
-			WHERE version = $1 OR version IN (
-				SELECT default_version FROM instruction_overrides WHERE tenant_id = $2 AND user_id = $3
+			WHERE version = ${version} OR version IN (
+				SELECT default_version FROM instruction_overrides WHERE tenant_id = ${this.executor.tenantId} AND user_id = ${this.userId}
 			)
-		`, [version, this.executor.tenantId, this.userId]);
+		`);
 		return describeInstructionReleaseChanges(version, items, result.rows.map((item) => ({
 			version: item.version, key: item.item_key, kind: item.kind, body: item.body,
 			source: { type: "default", revision: item.revision, contentHash: item.content_hash }
@@ -211,29 +208,29 @@ export class PgInstructionStore implements InstructionStore {
 	}
 
 	protected async readItems(version: string): Promise<InstructionSnapshotItem[]> {
-		const result = await this.executor.query<{
+		const result = await this.executor.execute<{
 			item_key: string | null; kind: InstructionKind | null; body: string; revision: number; content_hash: string; default_version: string | null; personal: boolean;
-		}>(`
+		}>(sql`
 			SELECT defaults.item_key, defaults.kind,
 				COALESCE(overrides.body, defaults.body) AS body,
 				COALESCE(overrides.revision, (SELECT MAX(history.revision) FROM instruction_history AS history
-					WHERE history.tenant_id = $2 AND history.user_id = $3 AND history.item_key = defaults.item_key), defaults.revision) AS revision,
+					WHERE history.tenant_id = ${this.executor.tenantId} AND history.user_id = ${this.userId} AND history.item_key = defaults.item_key), defaults.revision) AS revision,
 				COALESCE(overrides.content_hash, defaults.content_hash) AS content_hash,
 				overrides.default_version, FALSE AS personal
 			FROM instruction_bundles AS bundle
 			LEFT JOIN instruction_defaults AS defaults ON defaults.version = bundle.version
 			LEFT JOIN instruction_overrides AS overrides ON overrides.item_key = defaults.item_key
-				AND overrides.tenant_id = $2 AND overrides.user_id = $3
-			WHERE bundle.version = $1
+				AND overrides.tenant_id = ${this.executor.tenantId} AND overrides.user_id = ${this.userId}
+			WHERE bundle.version = ${version}
 			UNION ALL
 			SELECT fragment.item_key, 'fragment', fragment.body, fragment.revision, fragment.content_hash, NULL, TRUE
 			FROM instruction_personal_fragments AS fragment
-			WHERE fragment.tenant_id = $2 AND fragment.user_id = $3 AND fragment.removed = FALSE
+			WHERE fragment.tenant_id = ${this.executor.tenantId} AND fragment.user_id = ${this.userId} AND fragment.removed = FALSE
 				AND fragment.revision = (SELECT MAX(history.revision) FROM instruction_personal_fragments AS history
-					WHERE history.tenant_id = $2 AND history.user_id = $3 AND history.item_key = fragment.item_key)
-				AND EXISTS (SELECT 1 FROM instruction_bundles WHERE version = $1)
+					WHERE history.tenant_id = ${this.executor.tenantId} AND history.user_id = ${this.userId} AND history.item_key = fragment.item_key)
+				AND EXISTS (SELECT 1 FROM instruction_bundles WHERE version = ${version})
 			ORDER BY item_key
-		`, [version, this.executor.tenantId, this.userId]);
+		`);
 		if (!result.rows.length) throw new Error(`Instruction defaults unavailable for release: ${version}`);
 		const keys = new Set<string>();
 		return result.rows.flatMap((item): InstructionSnapshotItem[] => {

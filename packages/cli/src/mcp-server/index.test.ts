@@ -1342,7 +1342,8 @@ describe("agent-issues MCP server", () => {
 		}
 	});
 
-	it.each(["local", "cloud"])("previews, commits, and compares instructions through site, CLI, and MCP (%s)", async (backend) => {
+	it.for(["local", "cloud"])("previews, commits, and compares instructions through site, CLI, and MCP (%s)", async (backend, { skip }) => {
+		if (backend === "cloud" && (!process.env.AGENT_ISSUES_TEST_PG_URL || !process.env.AGENT_ISSUES_TEST_PG_APP_URL)) skip();
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-batch-interfaces-"));
 		directories.push(directory);
 		const dbPath = path.join(directory, "instructions.db");

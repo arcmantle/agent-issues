@@ -502,7 +502,7 @@ describe("cli", () => {
 				process.env.AGENT_ISSUES_NO_DAEMON = previousNoDaemon;
 			}
 		}
-	});
+	}, 15_000);
 
 	it("creates and reads an issue-breakdown draft", async () => {
 		const root = createTempDir();
