@@ -7,15 +7,13 @@ const repositories = {
 	'studio-site': { name: 'studio-site / example', projectIdentity: 'studio-site', path: '~/projects/studio-site', tenant: 'local-roen', initiatives: ['studio'] },
 	'task-api': { name: 'task-api / example', projectIdentity: 'task-api', path: '~/projects/task-api', tenant: 'local-roen', initiatives: ['api'] },
 };
-const folderRepositories = {
-	'docs-site': { name: 'docs-site / example', projectIdentity: 'docs-site', path: '~/projects/docs-site', tenant: 'local-roen', initiatives: [], added: true },
-	'notes-cli': { name: 'notes-cli / example', projectIdentity: 'notes-cli', path: '~/projects/notes-cli', tenant: 'local-roen', initiatives: [], added: true },
-};
+let folderRequest = 0;
+let folderBrowser = { path: '', parent: null, root: '', entries: [], loading: false, error: '' };
 const initialState = () => ({
 	repository: 'agent-issues',
 	repositoryViews: Object.fromEntries(Object.entries(repositories).map(([id, repository]) => [id, { initiative: repository.initiatives[0], planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } }])),
 	page: ['planning', 'repositories'].includes(new URL(location.href).searchParams.get('page')) ? new URL(location.href).searchParams.get('page') : 'workspace',
-	repositoryQuery: '',
+	repositoryQuery: '', nextRepository: 1,
 	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
 	planningContexts: [{ id: 'harness', mode: 'pioneer', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
@@ -238,7 +236,7 @@ function repositoryHeader(review) {
 	const brand = `<div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div>`;
 	if (!review) return `${brand}<div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p>`;
 	const repository = repositories[state.repository];
-	return `${brand}<label class="eyebrow" for="repository-selector">Repository</label><select id="repository-selector">${Object.entries(repositories).map(([id, item]) => `<option value="${id}" ${id === state.repository ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><p class="repository-project">Project / <span class="mono">${escapeHtml(repository.projectIdentity)}</span></p><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p><button data-action="page" data-page="repositories">${icon('folders')}Browse repositories</button>`;
+	return `${brand}<label class="eyebrow" for="repository-selector">Repository</label><select id="repository-selector">${Object.entries(repositories).map(([id, item]) => `<option value="${id}" ${id === state.repository ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><p class="repository-project">Project / <span class="mono">${escapeHtml(repository.projectIdentity || 'Not connected')}</span></p><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p><button data-action="page" data-page="repositories">${icon('folders')}Browse repositories</button>`;
 }
 function selectRepository(id) {
 	if (id === state.repository || !repositories[id]) return;
@@ -264,7 +262,7 @@ function selectRepository(id) {
 	refreshPlanningPage();
 	switchPage(state.page, false);
 	app.dataset.repository = id;
-	app.dataset.projectIdentity = repositories[id].projectIdentity;
+	app.dataset.projectIdentity = repositories[id].projectIdentity || '';
 	refreshRepositories();
 	window.lucide?.createIcons();
 	app.querySelector('#repository-selector').focus();
@@ -279,8 +277,8 @@ function applicationNavigation() {
 }
 function repositoryList() {
 	const query = state.repositoryQuery.trim().toLowerCase();
-	const matches = Object.entries(repositories).filter(([, repository]) => [repository.name, repository.path, repository.projectIdentity, repository.tenant].some((value) => value.toLowerCase().includes(query)));
-	return `<div class="repository-list-heading"><h2>Configured repositories</h2><span class="muted">${matches.length} / ${Object.keys(repositories).length}</span></div>${matches.length ? `<ul class="repository-list">${matches.map(([id, repository]) => `<li class="repository-row"><div class="repository-name">${icon('folder-git-2')}<div><h3>${escapeHtml(repository.name)}</h3><p class="mono muted">${escapeHtml(repository.path)}</p>${id === state.repository ? '<span class="repository-current">Selected</span>' : ''}</div></div><div class="repository-identity"><span class="eyebrow muted">Agent Issues project</span><strong>${escapeHtml(repository.projectIdentity)}</strong><span class="muted">${escapeHtml(repository.tenant)}</span></div><div class="repository-run"><span class="status ${id === 'agent-issues' ? state.mode : ''}">${id === 'agent-issues' ? runLabel() : 'No active run'}</span><span class="muted">${repository.initiatives.length} ${repository.initiatives.length === 1 ? 'initiative' : 'initiatives'}</span></div><button data-action="repository-open" data-id="${id}" aria-label="Open ${escapeHtml(repository.name)}">${icon('arrow-up-right')}Open</button></li>`).join('')}</ul>` : '<div class="repository-empty"><h3>No repositories found</h3><p class="muted">No match for this search.</p></div>'}`;
+	const matches = Object.entries(repositories).filter(([, repository]) => [repository.name, repository.path, repository.projectIdentity || '', repository.tenant].some((value) => value.toLowerCase().includes(query)));
+	return `<div class="repository-list-heading"><h2>Configured repositories</h2><span class="muted">${matches.length} / ${Object.keys(repositories).length}</span></div>${matches.length ? `<ul class="repository-list">${matches.map(([id, repository]) => `<li class="repository-row"><div class="repository-name">${icon('folder-git-2')}<div><h3>${escapeHtml(repository.name)}</h3><p class="mono muted">${escapeHtml(repository.path)}</p>${id === state.repository ? '<span class="repository-current">Selected</span>' : ''}</div></div><div class="repository-identity"><span class="eyebrow muted">Agent Issues project</span><strong>${escapeHtml(repository.projectIdentity || 'Not connected')}</strong><span class="muted">${escapeHtml(repository.tenant)}</span></div><div class="repository-run"><span class="status ${id === 'agent-issues' ? state.mode : ''}">${id === 'agent-issues' ? runLabel() : 'No active run'}</span><span class="muted">${repository.initiatives.length} ${repository.initiatives.length === 1 ? 'initiative' : 'initiatives'}</span></div><button data-action="repository-open" data-id="${id}" aria-label="Open ${escapeHtml(repository.name)}">${icon('arrow-up-right')}Open</button></li>`).join('')}</ul>` : '<div class="repository-empty"><h3>No repositories found</h3><p class="muted">No match for this search.</p></div>'}`;
 }
 function repositoriesPage() {
 	return `<section class="workspace repositories-page" data-page-panel="repositories" data-scroll-key="repositories-page" ${state.page !== 'repositories' ? 'hidden' : ''}><header class="page-heading"><h1>Repositories</h1><button class="primary" data-action="open-folder">${icon('folder-open')}Open folder</button></header><div class="repositories-content"><div class="repository-search"><label for="repository-search">Search repositories</label><div>${icon('search')}<input id="repository-search" type="search" value="${escapeHtml(state.repositoryQuery)}" placeholder="Name, project, or path" /></div></div><div id="repository-list-content">${repositoryList()}</div></div></section>`;
@@ -365,6 +363,7 @@ function switchWorkspace(view) {
 function switchPage(page, updateHistory = true) {
 	rememberScroll();
 	state.page = page;
+	app.dataset.page = page;
 	if (page === 'repositories') refreshRepositories();
 	app.querySelectorAll('[data-page-panel], [data-sidebar-panel]').forEach((panel) => { panel.hidden = (panel.dataset.pagePanel || panel.dataset.sidebarPanel) !== page || Boolean(panel.dataset.repositoryScope && panel.dataset.repositoryScope !== state.repository); });
 	app.querySelectorAll('[data-action="page"]').forEach((link) => {
@@ -428,10 +427,11 @@ function render() {
 	document.querySelector('#variant-label').textContent = `${variant} / ${names[variant]}`;
 	document.body.dataset.variant = variant;
 	app.dataset.view = state.view;
+	app.dataset.page = state.page;
 	for (const tab of app.querySelectorAll('[data-action="workspace-view"]')) tab.tabIndex = tab.dataset.view === state.view ? 0 : -1;
 	app.querySelector('.review-layout .rail')?.setAttribute('data-scroll-key', `sidebar-${state.repository}`);
 	app.dataset.repository = state.repository;
-	app.dataset.projectIdentity = repositories[state.repository].projectIdentity;
+	app.dataset.projectIdentity = repositories[state.repository].projectIdentity || '';
 	window.lucide?.createIcons();
 	for (const host of app.querySelectorAll('[data-terminal]')) {
 		const worker = state.workers.find((item) => item.id === host.dataset.terminal);
@@ -485,11 +485,76 @@ function changeVariant(direction) {
 	history.replaceState(null, '', url);
 	render();
 }
+function renderFolderBrowser() {
+	if (!dialog.open || !dialog.querySelector('#folder-browser-content')) return;
+	dialog.querySelector('#folder-browser-content').innerHTML = `<div class="folder-navigation"><button class="icon-button" data-action="folder-browse" data-path="" title="Home folder" aria-label="Home folder">${icon('house')}</button><button class="icon-button" data-action="folder-browse" data-path="${escapeHtml(folderBrowser.root)}" title="File system root" aria-label="File system root" ${!folderBrowser.root ? 'disabled' : ''}>${icon('hard-drive')}</button><button class="icon-button" data-action="folder-browse" data-path="${escapeHtml(folderBrowser.parent || '')}" title="Parent folder" aria-label="Parent folder" ${!folderBrowser.parent ? 'disabled' : ''}>${icon('arrow-up')}</button></div><form data-form="browse-folder"><label for="folder-path">Folder path</label><div class="folder-path-control"><input id="folder-path" name="path" value="${escapeHtml(folderBrowser.path)}" required /><button class="icon-button" title="Go to folder" aria-label="Go to folder">${icon('arrow-right')}</button></div></form>${folderBrowser.error ? `<p role="alert">${escapeHtml(folderBrowser.error)}</p>` : ''}<div class="folder-browser-list" aria-busy="${folderBrowser.loading}">${folderBrowser.loading ? '<p role="status">Loading folders...</p>' : folderBrowser.entries.length ? folderBrowser.entries.map((entry) => `<button data-action="folder-browse" data-path="${escapeHtml(entry.path)}">${icon('folder')}<span>${escapeHtml(entry.name)}</span>${icon('chevron-right')}</button>`).join('') : '<p class="muted">No subfolders.</p>'}</div>`;
+	dialog.querySelector('[data-action="folder-select"]').disabled = folderBrowser.loading || !folderBrowser.path || Boolean(folderBrowser.error);
+	window.lucide?.createIcons();
+}
+async function browseFolders(path = '') {
+	const request = ++folderRequest;
+	folderBrowser.loading = true;
+	folderBrowser.error = '';
+	renderFolderBrowser();
+	try {
+		const response = await fetch(`/api/folders?path=${encodeURIComponent(path)}`);
+		const result = await response.json();
+		if (request !== folderRequest || !dialog.open || !dialog.querySelector('#folder-browser-content')) return;
+		if (!response.ok) throw new Error(result.error);
+		folderBrowser = { ...result, loading: false, error: '' };
+	} catch (error) {
+		if (request !== folderRequest) return;
+		folderBrowser.loading = false;
+		folderBrowser.error = error.message || 'Folders could not be loaded.';
+	}
+	renderFolderBrowser();
+	dialog.querySelector('#folder-path')?.focus();
+}
+async function openSelectedFolder() {
+	const request = ++folderRequest;
+	const path = folderBrowser.path;
+	folderBrowser.loading = true;
+	renderFolderBrowser();
+	try {
+		const response = await fetch(`/api/repository?path=${encodeURIComponent(path)}`);
+		const result = await response.json();
+		if (request !== folderRequest || !dialog.open || !dialog.querySelector('#folder-browser-content')) return;
+		if (!response.ok) throw new Error(result.error);
+		let id = Object.keys(repositories).find((key) => repositories[key].path === result.path);
+		if (!id) {
+			const matches = await Promise.all(Object.entries(repositories).map(async ([key, repository]) => {
+				try {
+					const configured = await fetch(`/api/repository?path=${encodeURIComponent(repository.path)}`);
+					const resolved = await configured.json();
+					return configured.ok && resolved.path === result.path ? key : null;
+				} catch { return null; }
+			}));
+			if (request !== folderRequest || !dialog.open || !dialog.querySelector('#folder-browser-content')) return;
+			id = matches.find(Boolean);
+		}
+		if (!id) {
+			id = `local-${state.nextRepository++}`;
+			repositories[id] = { name: result.name, path: result.path, projectIdentity: null, tenant: 'Not connected', initiatives: [], added: true };
+			state.repositoryViews[id] = { initiative: null, planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } };
+		}
+		state.repositoryQuery = '';
+		app.querySelector('#repository-search').value = '';
+		dialog.close();
+		selectRepository(id);
+		switchPage('workspace');
+	} catch (error) {
+		if (request !== folderRequest) return;
+		folderBrowser.loading = false;
+		folderBrowser.error = error.message || 'The repository could not be opened.';
+		renderFolderBrowser();
+	}
+}
 function openDialog(action) {
 	dialog.removeAttribute('aria-labelledby');
 	if (action === 'open-folder') {
 		dialog.setAttribute('aria-labelledby', 'open-folder-heading');
-		dialog.innerHTML = `<form data-form="open-folder"><h2 id="open-folder-heading">Open folder</h2><div class="eyebrow muted">Simulated folders</div><p class="folder-location mono">${icon('folder-open')}~/projects</p><fieldset class="folder-choices"><legend>Repository folders</legend>${Object.entries(folderRepositories).map(([id, repository], index) => `<label><input type="radio" name="folder" value="${id}" ${index === 0 ? 'checked' : ''} required /><span>${icon('folder-git-2')}<strong>${escapeHtml(repository.name)}</strong><small>Project / ${escapeHtml(repository.projectIdentity)}</small></span></label>`).join('')}</fieldset><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('folder-open')}Open repository</button></div></form>`;
+		folderBrowser = { path: '', parent: null, root: '', entries: [], loading: false, error: '' };
+		dialog.innerHTML = `<h2 id="open-folder-heading">Open folder</h2><div id="folder-browser-content"></div><div class="dialog-actions"><button data-action="close-dialog">Cancel</button><button class="primary" data-action="folder-select" disabled>${icon('folder-open')}Open repository</button></div>`;
 	} else if (action === 'terminate') {
 		dialog.innerHTML = `<form data-form="terminate"><h2>Terminate workers?</h2><p>Worker processes will end immediately. Recorded work remains available. Interrupted writes may be incomplete.</p><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="danger">${icon('octagon-x')}Terminate</button></div></form>`;
 	} else {
@@ -497,6 +562,7 @@ function openDialog(action) {
 	}
 	window.lucide?.createIcons();
 	dialog.showModal();
+	if (action === 'open-folder') browseFolders();
 }
 document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
@@ -508,6 +574,8 @@ document.addEventListener('click', (event) => {
 	}
 	if (action === 'page') { event.preventDefault(); switchPage(button.dataset.page); return; }
 	if (action === 'open-folder') { openDialog(action); return; }
+	if (action === 'folder-browse') { browseFolders(button.dataset.path); return; }
+	if (action === 'folder-select') { openSelectedFolder(); return; }
 	if (action === 'repository-open') { selectRepository(button.dataset.id); switchPage('workspace'); return; }
 	if (action === 'new-planning-session') {
 		const current = planningContext();
@@ -665,22 +733,7 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
-	if (form.dataset.form === 'open-folder') {
-		const id = String(values.get('folder'));
-		if (!folderRepositories[id]) return;
-		if (!repositories[id]) {
-			repositories[id] = structuredClone(folderRepositories[id]);
-			state.repositoryViews[id] = { initiative: null, planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } };
-		}
-		state.repositoryQuery = '';
-		const search = app.querySelector('#repository-search');
-		if (search) search.value = '';
-		dialog.close();
-		selectRepository(id);
-		switchPage('workspace');
-		notify('Example repository opened. No files or tracker records were changed.');
-		return;
-	}
+	if (form.dataset.form === 'browse-folder') { browseFolders(String(values.get('path')).trim()); return; }
 	if (form.dataset.form === 'planning-start') {
 		if (form.dataset.repository !== state.repository) return;
 		const brief = String(values.get('brief') || '').trim();

@@ -746,8 +746,25 @@ body[data-variant='C'] #app {
 	gap: 24px;
 }
 .repositories-content {
+	margin: 0 auto;
 	max-width: 1200px;
 	padding: 24px;
+}
+#app[data-page='repositories'] .review-layout {
+	grid-template-columns: 56px minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr);
+}
+#app[data-page='repositories'] .review-layout .rail {
+	display: none;
+}
+#app[data-page='repositories'] .review-layout .workspace {
+	grid-column: 2;
+	grid-row: 1;
+}
+@media (max-width: 700px) {
+	#app[data-page='repositories'] .review-layout {
+		grid-template-columns: 48px minmax(0, 1fr);
+	}
 }
 .repository-search {
 	max-width: 460px;
@@ -833,44 +850,45 @@ body[data-variant='C'] #app {
 	padding: 32px 0;
 	border-top: 1px solid var(--border);
 }
-.folder-location {
+.folder-navigation, .folder-path-control {
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	padding: 16px 0;
-	font-size: 12px;
 }
-.folder-choices {
+.folder-navigation {
+	margin: 16px 0;
+}
+.folder-path-control input {
 	min-width: 0;
-	margin: 0;
-	padding: 0;
-	border: 0;
+	flex: 1;
 }
-.folder-choices legend {
-	padding-bottom: 12px;
-	font-size: 12px;
+.folder-browser-list {
+	max-height: min(40vh, 360px);
+	margin: 16px 0;
+	overflow: auto;
 }
-.folder-choices label {
+.folder-browser-list button {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 16px 0;
+	width: 100%;
+	padding: 12px 4px;
+	border: 0;
 	border-top: 1px solid var(--border);
+	border-radius: 0;
+	text-align: left;
+	background: transparent;
 }
-.folder-choices input {
-	width: auto;
+.folder-browser-list button:hover {
+	background: var(--surface);
 }
-.folder-choices span {
-	display: grid;
-	grid-template-columns: 20px minmax(0, 1fr);
-	align-items: center;
-	gap: 6px 12px;
+.folder-browser-list span {
 	min-width: 0;
+	flex: 1;
 	overflow-wrap: anywhere;
 }
-.folder-choices small {
-	grid-column: 2;
-	color: var(--muted);
+.folder-browser-list svg {
+	flex-shrink: 0;
 }
 @media (max-width: 1150px) {
 	.repository-row {
