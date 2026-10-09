@@ -3,7 +3,7 @@ const dialog = document.querySelector('#action-dialog');
 const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
-	mode: 'running', tab: 'inbox', file: 0, question: true, approved: false, integrated: false,
+	mode: 'running', tab: 'inbox', file: 0, question: true, answerDraft: '', approved: false, integrated: false,
 	limits: { copilot: 40, interpreter: 250 },
 	workers: [
 		{ id: '01', title: 'Session recovery', issue: 'DEMO-01', status: 'running', visible: true, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues tdd DEMO-01', '', 'Read issue context and recovery contract.', 'Run focused validation.', '', '$ pnpm test -- recovery', 'PASS  interrupted session records', 'PASS  restore pending inbox items', '', 'REFACTOR: no justified change.', 'Independent review is in progress.'] },
@@ -13,6 +13,11 @@ const initialState = () => ({
 	activity: ['Worker 03 completed its skill review.', 'Checkpoint saved: validation / attempt 03.1.', 'Worker 02 requested a usage-limit decision.', 'Workers 01 and 02 started in separate worktrees.'],
 });
 let state = initialState();
+let viewedInitiative = 'harness';
+const initiativeViews = {
+	harness: { title: 'Initiative execution harness', summary: 'Coordinate agents, user decisions, and approved changes.', prd: 'Local execution workspace', story: 'Inspect and control agent work', issues: ['Session recovery', 'Usage limits', 'Approval checkpoint'], adrs: ['Native terminal workspace', 'Approved integration'] },
+	navigation: { title: 'Tracker navigation', summary: 'Find tracked requirements and linked work.', prd: 'Connected work navigation', story: 'Browse initiative records', issues: ['Initiative selector', 'Linked record view', 'Work filters'], adrs: ['Shared tracker queries'], run: 'No active run' },
+};
 let terminals = [];
 let variant = new URL(location.href).searchParams.get('variant') || 'A';
 if (!variants.includes(variant)) variant = 'A';
@@ -31,7 +36,13 @@ function controls() {
 	</div>`;
 }
 function runHeader(showBrand = false) {
-	return `<header class="run-header"><div>${showBrand ? '<div class="brand">agent-issues / harness</div>' : ''}<h1>Initiative execution harness</h1><div class="run-subtitle"><span class="status ${state.mode}">${runLabel()}</span><span class="mono">harness/initiative</span><span>Run 004</span></div></div>${controls()}</header>`;
+	const browsing = variant === 'C' && viewedInitiative !== 'harness';
+	return `<header class="run-header"><div>${showBrand ? '<div class="brand">agent-issues / harness</div>' : ''}<h1>${browsing ? initiativeViews[viewedInitiative].title : initiativeViews.harness.title}</h1><div class="run-subtitle">${browsing ? '<span>No active run</span><span>Read-only view</span>' : `<span class="status ${state.mode}">${runLabel()}</span><span class="mono">harness/initiative</span><span>Run 004</span>`}</div></div>${browsing ? '<button data-action="active-run">' + icon('arrow-left') + 'Return to active run</button>' : controls()}</header>`;
+}
+function trackedWork() {
+	const initiative = initiativeViews[viewedInitiative];
+	const row = (title, kind, index, status) => `<button class="tracked-record" data-action="record" data-kind="${kind}" data-index="${index}"><span>${icon(kind === 'issue' ? 'circle-dot' : 'file-text')}<span>${title}</span></span><small>${status}</small></button>`;
+	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${Object.entries(initiativeViews).map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'Harness / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRD / 1</summary>${row(initiative.prd, 'prd', 0, 'Draft')}<details open class="story-group"><summary>User story / 1</summary>${row(initiative.story, 'story', 0, 'In progress')}<div class="issue-group">${initiative.issues.map((title, index) => row(title, 'issue', index, viewedInitiative === 'harness' ? labels[state.workers[index].status] : 'Ready')).join('')}</div></details></details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
 }
 function workerList() {
 	return `<div class="section-label eyebrow"><span>Agents</span><span>${state.workers.filter((worker) => worker.visible).length} visible</span></div><div class="worker-list">${state.workers.map((worker) => `<label class="worker-row ${worker.visible ? 'selected' : ''}"><span class="worker-number">${worker.id}</span><span><strong>Worker ${worker.id}</strong><small>${labels[worker.status]}</small></span><input type="checkbox" data-worker="${worker.id}" ${worker.visible ? 'checked' : ''} aria-label="Show Worker ${worker.id} terminal" /></label>`).join('')}</div>`;
@@ -40,7 +51,8 @@ function usage() {
 	return `<section class="usage"><div class="usage-heading"><span class="eyebrow muted">Usage / simulated</span><button data-action="limits" title="Edit usage limits" aria-label="Edit usage limits">${icon('sliders-horizontal')}</button></div><div class="usage-label"><span>Copilot requests</span><span class="mono">18 / ${state.limits.copilot}</span></div><progress max="${state.limits.copilot}" value="18" aria-label="Simulated Copilot usage"></progress><div class="usage-label"><span>Interpreter calls</span><span class="mono">42 / ${state.limits.interpreter}</span></div><progress max="${state.limits.interpreter}" value="42" aria-label="Simulated interpreter usage"></progress></section>`;
 }
 function rail(review = false) {
-	return `<aside class="rail"><div class="rail-project"><div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div><div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p></div><section>${workerList()}</section>${review ? '<section class="review-queue"><div class="eyebrow muted">Integration queue</div><div class="queue-row"><strong>Approval checkpoint</strong><span class="status review">' + (state.integrated ? 'Integrated' : 'Awaiting approval') + '</span></div><div class="queue-row"><strong>Session recovery</strong><span class="muted">Independent review</span></div><div class="queue-row"><strong>Usage limits</strong><span class="muted">' + (state.question ? 'Needs a decision' : 'In progress') + '</span></div></section>' : ''}${usage()}</aside>`;
+	const browsing = review && viewedInitiative !== 'harness';
+	return `<aside class="rail"><div class="rail-project"><div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div><div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p></div>${review ? trackedWork() : ''}${!browsing ? `<section>${workerList()}</section>` : ''}${review && !browsing ? '<section class="review-queue"><div class="eyebrow muted">Integration queue</div><div class="queue-row"><strong>Approval checkpoint</strong><span class="status review">' + (state.integrated ? 'Integrated' : 'Awaiting approval') + '</span></div><div class="queue-row"><strong>Session recovery</strong><span class="muted">Independent review</span></div><div class="queue-row"><strong>Usage limits</strong><span class="muted">' + (state.question ? 'Needs a decision' : 'In progress') + '</span></div></section>' : ''}${!browsing ? usage() : ''}</aside>`;
 }
 function terminalGrid() {
 	const selected = state.workers.filter((worker) => worker.visible);
@@ -51,7 +63,7 @@ function questionItem() {
 	if (!state.question) return '';
 	const worker = state.workers[1];
 	const blocked = worker.manual || ['stopping', 'stopped', 'terminated'].includes(state.mode);
-	return `<article class="inbox-item"><div class="item-kicker"><span class="item-kind">${icon('message-circle')}Decision required</span><span>Worker 02</span></div><h3>One limit across all workers?</h3><p>Should Copilot usage be counted per worker or across the whole provider integration?</p><form class="answer-form" data-form="answer"><textarea name="answer" placeholder="Your decision..." aria-label="Answer for Worker 02" required ${blocked ? 'disabled' : ''}></textarea><button class="primary" ${blocked ? 'disabled' : ''}>${icon('send')}Send to Worker 02</button></form>${worker.manual ? '<p>Terminal input is owned by you.</p>' : ''}</article>`;
+	return `<article class="inbox-item"><div class="item-kicker"><span class="item-kind">${icon('message-circle')}Decision required</span><span>Worker 02</span></div><h3>One limit across all workers?</h3><p>Should Copilot usage be counted per worker or across the whole provider integration?</p><form class="answer-form" data-form="answer"><textarea name="answer" placeholder="Your decision..." aria-label="Answer for Worker 02" required ${blocked ? 'disabled' : ''}>${escapeHtml(state.answerDraft)}</textarea><button class="primary" ${blocked ? 'disabled' : ''}>${icon('send')}Send to Worker 02</button></form>${worker.manual ? '<p>Terminal input is owned by you.</p>' : ''}</article>`;
 }
 function approvalItem() {
 	if (state.integrated) return '';
@@ -83,6 +95,10 @@ function VariantB() {
 	return `<div class="signal">${runHeader(true)}<section class="metrics"><div class="metric"><strong>${state.integrated ? '4' : '3'}<span> / 9</span></strong><span>Issues integrated</span></div><div class="metric"><strong>${working}</strong><span>Agents working</span></div><div class="metric"><strong>${pendingCount()}</strong><span>Decisions pending</span></div><div class="metric"><strong>18<span> / ${state.limits.copilot}</span></strong><span>Copilot requests / simulated</span></div></section><div class="signal-body">${rail()}<section><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>Run 004 / ${runLabel()}</span></div>${terminalGrid()}<section class="signal-dock">${inspector()}</section></section></div></div>`;
 }
 function VariantC() {
+	if (viewedInitiative !== 'harness') {
+		const initiative = initiativeViews[viewedInitiative];
+		return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section></div>`;
+	}
 	return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<div class="review-content"><section class="review-main"><div class="panel-title"><h2>Approval checkpoint</h2><span class="status review">${state.integrated ? 'Integrated' : 'Ready for inspection'}</span></div>${changesContent()}</section><aside>${inspector()}</aside></div><section class="review-terminals"><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section></section></div>`;
 }
 function render() {
@@ -105,17 +121,18 @@ function render() {
 		fit.fit();
 		worker.lines.forEach((line, index) => terminal.writeln(index === 0 ? `\x1b[38;2;201;237;106m${line}\x1b[0m` : line.startsWith('PASS') ? `\x1b[38;2;145;221;210m${line}\x1b[0m` : line));
 		terminal.scrollToTop();
-		let input = '';
+		worker.input ??= '';
+		if (worker.input) terminal.write(worker.input);
 		terminal.onData((data) => {
 			if (!worker.manual || !['running', 'paused'].includes(state.mode)) return;
 			if (data === '\r') {
-				worker.lines.push(`> ${input}`, 'Simulated input recorded.');
+				worker.lines.push(`> ${worker.input}`, 'Simulated input recorded.');
 				terminal.write('\r\nSimulated input recorded.\r\n> ');
-				input = '';
+				worker.input = '';
 			} else if (data === '\u007f') {
-				if (input.length) { input = input.slice(0, -1); terminal.write('\b \b'); }
+				if (worker.input.length) { worker.input = worker.input.slice(0, -1); terminal.write('\b \b'); }
 			} else if (/^[\x20-\x7e]+$/.test(data)) {
-				input += data;
+				worker.input += data;
 				terminal.write(data);
 			}
 		});
@@ -123,7 +140,7 @@ function render() {
 		observer.observe(host);
 		terminals.push({ terminal, observer });
 	}
-	document.querySelector('#app').dataset.state = JSON.stringify({ mode: state.mode, visible: state.workers.filter((worker) => worker.visible).map((worker) => worker.id), workers: state.workers.map(({ id, status, manual }) => ({ id, status, manual })), pending: pendingCount(), integrated: state.integrated, limits: state.limits });
+	document.querySelector('#app').dataset.state = JSON.stringify({ viewedInitiative, activeInitiative: 'harness', mode: state.mode, visible: state.workers.filter((worker) => worker.visible).map((worker) => worker.id), workers: state.workers.map(({ id, status, manual }) => ({ id, status, manual })), pending: pendingCount(), integrated: state.integrated, limits: state.limits });
 }
 function notify(message) {
 	const toast = document.querySelector('#toast');
@@ -152,6 +169,22 @@ document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
 	if (!button || button.disabled) return;
 	const action = button.dataset.action;
+	if (action === 'record') {
+		const initiative = initiativeViews[viewedInitiative];
+		const kind = button.dataset.kind;
+		const index = Number(button.dataset.index);
+		const title = ({ prd: [initiative.prd], story: [initiative.story], issue: initiative.issues, adr: initiative.adrs })[kind][index];
+		const worker = viewedInitiative === 'harness' && kind === 'issue' ? state.workers[index] : null;
+		dialog.innerHTML = `<div class="eyebrow muted">${kind === 'story' ? 'User story' : kind.toUpperCase()} / simulated record</div><h2>${title}</h2><p>${initiative.title}</p>${worker ? `<p>${worker.issue} / Worker ${worker.id}<br>${labels[worker.status]} / attempt ${worker.id}.1</p><button data-action="show-worker" data-id="${worker.id}">${icon('terminal')}Show terminal</button>` : `<p>${initiative.summary}</p>`}<div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
+		window.lucide?.createIcons();
+		dialog.showModal();
+		return;
+	}
+	if (action === 'active-run') viewedInitiative = 'harness';
+	if (action === 'show-worker') {
+		state.workers.find((worker) => worker.id === button.dataset.id).visible = true;
+		dialog.close();
+	}
 	if (['terminate', 'limits'].includes(action)) { openDialog(action); return; }
 	if (action === 'close-dialog') { dialog.close(); return; }
 	if (action === 'pause') {
@@ -189,7 +222,15 @@ document.addEventListener('click', (event) => {
 	}
 	render();
 });
+document.addEventListener('input', (event) => {
+	if (event.target.matches('.answer-form [name="answer"]')) state.answerDraft = event.target.value;
+});
 document.addEventListener('change', (event) => {
+	if (event.target.id === 'initiative-selector') {
+		viewedInitiative = event.target.value;
+		render();
+		return;
+	}
 	if (!event.target.matches('[data-worker]')) return;
 	state.workers.find((worker) => worker.id === event.target.dataset.worker).visible = event.target.checked;
 	render();
@@ -203,6 +244,7 @@ document.addEventListener('submit', (event) => {
 		const worker = state.workers[1];
 		if (worker.manual || ['stopping', 'stopped', 'terminated'].includes(state.mode)) return;
 		state.question = false;
+		state.answerDraft = '';
 		worker.status = 'running';
 		worker.lines.push(`User decision: ${values.get('answer')}`, 'Resume the existing skill with this decision.');
 		state.activity.unshift('User decision routed to Worker 02.');
@@ -223,7 +265,7 @@ document.addEventListener('submit', (event) => {
 });
 document.querySelector('#previous-variant').addEventListener('click', () => changeVariant(-1));
 document.querySelector('#next-variant').addEventListener('click', () => changeVariant(1));
-document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); render(); notify('Simulation reset.'); });
+document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
 	if (event.target.closest('input, textarea, select, [contenteditable], .xterm') || dialog.open) return;
 	if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {

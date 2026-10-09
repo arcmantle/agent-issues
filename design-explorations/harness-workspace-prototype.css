@@ -284,6 +284,9 @@ progress::-webkit-progress-value {
 .terminal-grid[data-count='1'] {
 	grid-template-columns: minmax(0, 1fr);
 }
+.terminal-grid[data-count='3'] > .terminal-panel:last-child {
+	grid-column: 1 / -1;
+}
 .terminal-panel {
 	display: flex;
 	flex-direction: column;
@@ -647,6 +650,79 @@ textarea {
 }
 .review-layout .rail {
 	background: #f5f6f5;
+}
+.initiative-navigation {
+	min-width: 0;
+}
+.initiative-navigation select {
+	margin-top: 8px;
+	font-size: 12px;
+}
+.scope-run {
+	margin: 8px 0 16px;
+	font-size: 11px;
+	color: var(--muted);
+}
+.active-run-link {
+	width: 100%;
+	margin-bottom: 12px;
+	font-size: 12px;
+}
+.tracked-work summary {
+	padding: 9px 0;
+	font-size: 11px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.story-group {
+	margin-left: 8px;
+}
+.issue-group {
+	margin-left: 8px;
+	border-left: 1px solid var(--border);
+}
+.tracked-record {
+	display: flex;
+	align-items: flex-start;
+	flex-direction: column;
+	gap: 5px;
+	width: 100%;
+	padding: 8px;
+	border: 0;
+	font-size: 11px;
+	text-align: left;
+	background: transparent;
+}
+.tracked-record > span {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+}
+.tracked-record small {
+	padding-left: 22px;
+	font-size: 10px;
+	color: var(--muted);
+}
+.initiative-overview {
+	max-width: 720px;
+	padding: 28px;
+}
+.initiative-overview p {
+	margin: 12px 0 28px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.overview-heading {
+	display: flex;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+	font-size: 11px;
+}
+.initiative-overview .tracked-record {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
 }
 .review-layout .run-header {
 	border-bottom: 1px solid var(--border);
