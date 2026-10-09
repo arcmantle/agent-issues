@@ -5,7 +5,7 @@ const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
 	planningMode: 'pioneer', graphZoom: .8,
-	planningSessions: { pioneer: { draft: '', paused: false, answers: [] }, plan: { draft: '', paused: false, answers: [] } },
+	planningSessions: { pioneer: { drafts: {}, paused: false, answers: [] }, plan: { drafts: {}, paused: false, answers: [] } },
 	planEntries: [
 		{ role: 'scope', body: 'Support concurrent initiative runs across different repositories.' },
 		{ role: 'decision', body: 'Keep one active initiative per repository.' },
@@ -49,31 +49,25 @@ const pioneerTickets = [
 ];
 function pioneerStatus(index) {
 	if (state.pioneerResolutions[index]) return 'Resolved';
-	if (index === activePioneerTicket()) return 'Active';
-	return pioneerTickets[index].dependencies.some((dependency) => !state.pioneerResolutions[dependency]) ? 'Blocked' : 'Open';
+	return pioneerTickets[index].dependencies.some((dependency) => !state.pioneerResolutions[dependency]) ? 'Blocked' : 'Active';
 }
 const planQuestions = [
 	{ question: 'Which coding providers must the first release support?', role: 'scope', prefix: 'First-release providers' },
 	{ question: 'When should the agent stop planning and ask you to review the plan?', role: 'decision', prefix: 'Plan review boundary' },
 	{ question: 'What must be demonstrated before you accept the first release?', role: 'constraint', prefix: 'Release acceptance' },
 ];
-function activePioneerTicket() {
-	return pioneerTickets.findIndex((ticket, index) => !state.pioneerResolutions[index] && ticket.dependencies.every((dependency) => state.pioneerResolutions[dependency]));
-}
-function planningQuestion() {
+function planningQuestions() {
 	if (state.planningMode === 'pioneer') {
-		const index = activePioneerTicket();
-		return index < 0 ? null : { index, title: pioneerTickets[index].title, question: pioneerTickets[index].question };
+		return pioneerTickets.flatMap((ticket, index) => !state.pioneerResolutions[index] && ticket.dependencies.every((dependency) => state.pioneerResolutions[dependency]) ? [{ index, title: ticket.title, question: ticket.question }] : []);
 	}
-	const index = state.planningSessions.plan.answers.length;
-	return index >= planQuestions.length ? null : { index, title: 'First-release harness', question: planQuestions[index].question };
+	return planQuestions.flatMap((question, index) => index >= state.planningSessions.plan.answers.length ? [{ index, title: 'First-release harness', question: question.question }] : []);
 }
 function planningSession() {
 	const session = state.planningSessions[state.planningMode];
-	const question = planningQuestion();
-	const status = session.paused ? 'Paused' : question ? 'Needs your answer' : 'Ready for your review';
+	const questions = planningQuestions();
+	const status = session.paused ? 'Paused' : questions.length ? 'Needs your answers' : 'Ready for your review';
 	const last = session.answers.at(-1);
-	return `<section class="planning-session" aria-label="Planning agent session"><div class="planner-agent"><span>${icon('bot')}Planning agent / Copilot</span><div><span class="status ${question ? 'waiting' : 'review'}">${status}</span>${question ? `<button class="icon-button" data-action="planning-pause" title="${session.paused ? 'Resume planning' : 'Pause planning'}" aria-label="${session.paused ? 'Resume planning' : 'Pause planning'}">${icon(session.paused ? 'play' : 'pause')}</button>` : ''}</div></div>${last ? `<div class="planner-record"><span class="eyebrow muted">Agent recorded</span><p>${escapeHtml(last.result)}</p></div>` : ''}${question ? `<div class="planner-question"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions.length}</div><h3>${question.question}</h3><form data-form="planning-answer" data-mode="${state.planningMode}"><label for="planning-answer">Your answer</label><textarea id="planning-answer" name="answer" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.draft)}</textarea><button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answer</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3><p>The planning agent has recorded your answers. No execution or integration was started.</p></div>`}${session.answers.length ? `<details class="planner-history"><summary>Conversation / ${session.answers.length} answers</summary><ol>${session.answers.map((answer) => `<li><strong>Agent</strong><p>${escapeHtml(answer.question)}</p><strong>You</strong><p>${escapeHtml(answer.answer)}</p><strong>Agent recorded</strong><p>${escapeHtml(answer.result)}</p></li>`).join('')}</ol></details>` : ''}</section>`;
+	return `<section class="planning-session" aria-label="Planning agent session"><div class="planner-agent"><span>${icon('bot')}Planning agent / Copilot</span><div><span class="status ${questions.length ? 'waiting' : 'review'}">${status}</span>${questions.length ? `<button class="icon-button" data-action="planning-pause" title="${session.paused ? 'Resume planning' : 'Pause planning'}" aria-label="${session.paused ? 'Resume planning' : 'Pause planning'}">${icon(session.paused ? 'play' : 'pause')}</button>` : ''}</div></div>${last ? `<div class="planner-record"><span class="eyebrow muted">Agent recorded</span><p>${escapeHtml(last.result)}</p></div>` : ''}${questions.length ? `<div class="planner-question"><div class="eyebrow muted">Questions / ${questions.length}</div><form data-form="planning-answer" data-mode="${state.planningMode}">${questions.map((question, position) => `<div class="planner-question-field"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions.length}</div><h3>${question.question}</h3><label for="planning-answer-${question.index}">Answer ${position + 1}</label><textarea id="planning-answer-${question.index}" data-planning-question="${question.index}" name="answer-${question.index}" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.drafts[question.index] || '')}</textarea></div>`).join('')}<button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answers</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3><p>The planning agent has recorded your answers. No execution or integration was started.</p></div>`}${session.answers.length ? `<details class="planner-history"><summary>Conversation / ${session.answers.length} answers</summary><ol>${session.answers.map((answer) => `<li><strong>Agent</strong><p>${escapeHtml(answer.question)}</p><strong>You</strong><p>${escapeHtml(answer.answer)}</p><strong>Agent recorded</strong><p>${escapeHtml(answer.result)}</p></li>`).join('')}</ol></details>` : ''}</section>`;
 }
 function pioneerGraph() {
 	const edges = pioneerTickets.flatMap((ticket, index) => ticket.dependencies.map((dependency) => {
@@ -457,7 +451,10 @@ document.addEventListener('click', (event) => {
 });
 document.addEventListener('input', (event) => {
 	if (event.target.matches('.answer-form [name="answer"]')) state.answerDraft = event.target.value;
-	if (event.target.id === 'planning-answer') state.planningSessions[event.target.form.dataset.mode].draft = event.target.value;
+	if (event.target.matches('[data-planning-question]')) {
+		state.planningSessions[event.target.form.dataset.mode].drafts[event.target.dataset.planningQuestion] = event.target.value;
+		event.target.setCustomValidity('');
+	}
 	if (event.target.id === 'checkpoint-search') {
 		state.fileQuery = event.target.value;
 		const files = matchingFiles();
@@ -483,17 +480,26 @@ document.addEventListener('submit', (event) => {
 	if (form.dataset.form === 'planning-answer') {
 		if (form.dataset.mode !== state.planningMode) return;
 		const session = state.planningSessions[state.planningMode];
-		const question = planningQuestion();
-		const answer = String(values.get('answer')).trim();
-		if (!answer || session.paused || !question) return;
-		const result = state.planningMode === 'pioneer' ? `${question.title}: ${answer}` : `${planQuestions[question.index].prefix}: ${answer}`;
-		if (state.planningMode === 'pioneer') state.pioneerResolutions[question.index] = result;
-		else state.planEntries.push({ role: planQuestions[question.index].role, body: result });
-		session.answers.push({ question: question.question, answer, result });
-		session.draft = '';
+		const questions = planningQuestions();
+		if (session.paused || !questions.length) return;
+		const answers = questions.map((question) => ({ ...question, answer: String(values.get(`answer-${question.index}`) || '').trim() }));
+		const missing = answers.find((answer) => !answer.answer);
+		if (missing) {
+			const field = form.querySelector(`[data-planning-question="${missing.index}"]`);
+			field.setCustomValidity('Enter an answer.');
+			field.reportValidity();
+			return;
+		}
+		answers.forEach((question) => {
+			const result = state.planningMode === 'pioneer' ? `${question.title}: ${question.answer}` : `${planQuestions[question.index].prefix}: ${question.answer}`;
+			if (state.planningMode === 'pioneer') state.pioneerResolutions[question.index] = result;
+			else state.planEntries.push({ role: planQuestions[question.index].role, body: result });
+			session.answers.push({ question: question.question, answer: question.answer, result });
+			delete session.drafts[question.index];
+		});
 		refreshPlanning();
-		(app.querySelector('#planning-answer') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]')).focus();
-		notify('Simulated planning agent recorded your answer.');
+		(app.querySelector('[data-planning-question]') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]')).focus();
+		notify('Simulated planning agent recorded your answers.');
 		return;
 	}
 	if (form.dataset.form === 'answer') {

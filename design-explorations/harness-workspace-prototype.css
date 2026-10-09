@@ -1264,6 +1264,13 @@ body[data-variant='C'] #app {
 	display: grid;
 	gap: 10px;
 }
+.planner-question-field {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
 .planner-question label {
 	font-size: 12px;
 }
