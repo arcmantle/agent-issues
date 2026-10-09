@@ -281,12 +281,15 @@ function render() {
 			host.innerHTML = `<pre>${escapeHtml(worker.lines.join('\n'))}</pre>`;
 			continue;
 		}
-		const terminal = new window.Terminal({ fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, lineHeight: 1.45, cursorBlink: worker.manual, theme: { background: '#17201c', foreground: '#cfddd2', cursor: '#c9ed6a', selectionBackground: '#42604c' }, scrollback: 300, convertEol: true });
+		const theme = variant === 'C' ? { background: '#f6f7f6', foreground: '#445149', cursor: '#245c48', selectionBackground: '#dce9e2' } : { background: '#17201c', foreground: '#cfddd2', cursor: '#c9ed6a', selectionBackground: '#42604c' };
+		const terminal = new window.Terminal({ fontFamily: 'IBM Plex Mono, monospace', fontSize: 11, lineHeight: 1.45, cursorBlink: worker.manual, theme, scrollback: 300, convertEol: true });
 		const fit = new window.FitAddon.FitAddon();
 		terminal.loadAddon(fit);
 		terminal.open(host);
 		if (host.offsetWidth && host.offsetHeight) fit.fit();
-		worker.lines.forEach((line, index) => terminal.writeln(index === 0 ? `\x1b[38;2;201;237;106m${line}\x1b[0m` : line.startsWith('PASS') ? `\x1b[38;2;145;221;210m${line}\x1b[0m` : line));
+		const headingColor = variant === 'C' ? '82;103;90' : '201;237;106';
+		const passColor = variant === 'C' ? '36;92;72' : '145;221;210';
+		worker.lines.forEach((line, index) => terminal.writeln(index === 0 ? `\x1b[38;2;${headingColor}m${line}\x1b[0m` : line.startsWith('PASS') ? `\x1b[38;2;${passColor}m${line}\x1b[0m` : line));
 		terminal.scrollToTop();
 		worker.input ??= '';
 		if (worker.input) terminal.write(worker.input);

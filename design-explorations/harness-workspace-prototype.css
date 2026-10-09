@@ -804,6 +804,28 @@ body[data-variant='C'] #app {
 	min-height: 265px;
 	grid-auto-rows: 265px;
 }
+.review-terminals .terminal-panel {
+	border-color: var(--border);
+	color: #445149;
+	background: var(--subtle);
+}
+.review-terminals .terminal-header {
+	border-color: var(--border);
+	color: var(--ink);
+	background: var(--surface);
+}
+.review-terminals .terminal-meta, .review-terminals .terminal-footer {
+	border-color: var(--border);
+	color: var(--muted);
+}
+.review-terminals .terminal-footer button {
+	border-color: var(--border);
+	color: var(--ink);
+	background: var(--surface);
+}
+.review-terminals .terminal-footer button:hover {
+	background: var(--canvas);
+}
 .review-layout .usage {
 	margin-top: 20px;
 }
