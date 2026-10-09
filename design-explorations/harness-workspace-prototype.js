@@ -7,10 +7,15 @@ const repositories = {
 	'studio-site': { name: 'studio-site / example', projectIdentity: 'studio-site', path: '~/projects/studio-site', tenant: 'local-roen', initiatives: ['studio'] },
 	'task-api': { name: 'task-api / example', projectIdentity: 'task-api', path: '~/projects/task-api', tenant: 'local-roen', initiatives: ['api'] },
 };
+const folderRepositories = {
+	'docs-site': { name: 'docs-site / example', projectIdentity: 'docs-site', path: '~/projects/docs-site', tenant: 'local-roen', initiatives: [], added: true },
+	'notes-cli': { name: 'notes-cli / example', projectIdentity: 'notes-cli', path: '~/projects/notes-cli', tenant: 'local-roen', initiatives: [], added: true },
+};
 const initialState = () => ({
 	repository: 'agent-issues',
 	repositoryViews: Object.fromEntries(Object.entries(repositories).map(([id, repository]) => [id, { initiative: repository.initiatives[0], planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } }])),
-	page: new URL(location.href).searchParams.get('page') === 'planning' ? 'planning' : 'workspace',
+	page: ['planning', 'repositories'].includes(new URL(location.href).searchParams.get('page')) ? new URL(location.href).searchParams.get('page') : 'workspace',
+	repositoryQuery: '',
 	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
 	planningContexts: [{ id: 'harness', mode: 'pioneer', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
@@ -214,6 +219,7 @@ function runHeader(showBrand = false, initiativeId = viewedInitiative) {
 }
 function trackedWork() {
 	const initiative = initiativeViews[viewedInitiative];
+	if (!initiative) return '<section><h3>No initiatives</h3><button data-action="page" data-page="planning">' + icon('notebook-pen') + 'Start planning</button></section>';
 	const row = (title, kind, index, status) => `<button class="tracked-record" data-action="record" data-kind="${kind}" data-index="${index}"><span>${icon(kind === 'issue' ? 'circle-dot' : 'file-text')}<span>${title}</span></span><small>${status}</small></button>`;
 	const prds = viewedInitiative === 'harness' ? routePrds : [{ title: initiative.prd, story: initiative.story, issues: [0, 1, 2] }];
 	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${repositoryInitiatives().map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'agent-issues / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRDs / ${prds.length}</summary>${prds.map((prd, prdIndex) => `${row(prd.title, 'prd', prdIndex, 'Draft')}<details open class="story-group"><summary>User story</summary>${row(prd.story, 'story', prdIndex, 'In progress')}<div class="issue-group">${prd.issues.map((index) => row(initiative.issues[index], 'issue', index, viewedInitiative === 'harness' ? routeState(index).label : 'Ready')).join('')}</div></details>`).join('')}</details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
@@ -232,7 +238,7 @@ function repositoryHeader(review) {
 	const brand = `<div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div>`;
 	if (!review) return `${brand}<div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p>`;
 	const repository = repositories[state.repository];
-	return `${brand}<label class="eyebrow" for="repository-selector">Repository</label><select id="repository-selector">${Object.entries(repositories).map(([id, item]) => `<option value="${id}" ${id === state.repository ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><p class="repository-project">Project / <span class="mono">${escapeHtml(repository.projectIdentity)}</span></p><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p>`;
+	return `${brand}<label class="eyebrow" for="repository-selector">Repository</label><select id="repository-selector">${Object.entries(repositories).map(([id, item]) => `<option value="${id}" ${id === state.repository ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}</select><p class="repository-project">Project / <span class="mono">${escapeHtml(repository.projectIdentity)}</span></p><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p><button data-action="page" data-page="repositories">${icon('folders')}Browse repositories</button>`;
 }
 function selectRepository(id) {
 	if (id === state.repository || !repositories[id]) return;
@@ -259,15 +265,31 @@ function selectRepository(id) {
 	switchPage(state.page, false);
 	app.dataset.repository = id;
 	app.dataset.projectIdentity = repositories[id].projectIdentity;
+	refreshRepositories();
 	window.lucide?.createIcons();
 	app.querySelector('#repository-selector').focus();
 }
 function repositoryWorkspace() {
 	const initiative = initiativeViews[viewedInitiative];
+	if (!initiative) return `<header class="run-header"><div><h1>${escapeHtml(repositories[state.repository].name)}</h1><div class="run-subtitle"><span>No active run</span></div></div><button data-action="active-run">${icon('arrow-left')}agent-issues / ${runLabel()}</button></header><section class="initiative-overview"><h2>No initiatives</h2><button data-action="page" data-page="planning">${icon('notebook-pen')}Start planning</button></section>`;
 	return `${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">${initiative.issues.length} ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section>`;
 }
 function applicationNavigation() {
-	return `<nav class="application-navigation" aria-label="Application pages">${[['workspace', 'activity', 'Workspace'], ['planning', 'notebook-pen', 'Planning']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav>`;
+	return `<nav class="application-navigation" aria-label="Application pages">${[['workspace', 'activity', 'Workspace'], ['planning', 'notebook-pen', 'Planning'], ['repositories', 'folders', 'Repositories']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav>`;
+}
+function repositoryList() {
+	const query = state.repositoryQuery.trim().toLowerCase();
+	const matches = Object.entries(repositories).filter(([, repository]) => [repository.name, repository.path, repository.projectIdentity, repository.tenant].some((value) => value.toLowerCase().includes(query)));
+	return `<div class="repository-list-heading"><h2>Configured repositories</h2><span class="muted">${matches.length} / ${Object.keys(repositories).length}</span></div>${matches.length ? `<ul class="repository-list">${matches.map(([id, repository]) => `<li class="repository-row"><div class="repository-name">${icon('folder-git-2')}<div><h3>${escapeHtml(repository.name)}</h3><p class="mono muted">${escapeHtml(repository.path)}</p>${id === state.repository ? '<span class="repository-current">Selected</span>' : ''}</div></div><div class="repository-identity"><span class="eyebrow muted">Agent Issues project</span><strong>${escapeHtml(repository.projectIdentity)}</strong><span class="muted">${escapeHtml(repository.tenant)}</span></div><div class="repository-run"><span class="status ${id === 'agent-issues' ? state.mode : ''}">${id === 'agent-issues' ? runLabel() : 'No active run'}</span><span class="muted">${repository.initiatives.length} ${repository.initiatives.length === 1 ? 'initiative' : 'initiatives'}</span></div><button data-action="repository-open" data-id="${id}" aria-label="Open ${escapeHtml(repository.name)}">${icon('arrow-up-right')}Open</button></li>`).join('')}</ul>` : '<div class="repository-empty"><h3>No repositories found</h3><p class="muted">No match for this search.</p></div>'}`;
+}
+function repositoriesPage() {
+	return `<section class="workspace repositories-page" data-page-panel="repositories" data-scroll-key="repositories-page" ${state.page !== 'repositories' ? 'hidden' : ''}><header class="page-heading"><h1>Repositories</h1><button class="primary" data-action="open-folder">${icon('folder-open')}Open folder</button></header><div class="repositories-content"><div class="repository-search"><label for="repository-search">Search repositories</label><div>${icon('search')}<input id="repository-search" type="search" value="${escapeHtml(state.repositoryQuery)}" placeholder="Name, project, or path" /></div></div><div id="repository-list-content">${repositoryList()}</div></div></section>`;
+}
+function refreshRepositories() {
+	const list = app.querySelector('#repository-list-content');
+	if (!list) return;
+	list.innerHTML = repositoryList();
+	window.lucide?.createIcons();
 }
 function terminalGrid() {
 	const selected = state.workers.filter((worker) => worker.visible);
@@ -343,6 +365,7 @@ function switchWorkspace(view) {
 function switchPage(page, updateHistory = true) {
 	rememberScroll();
 	state.page = page;
+	if (page === 'repositories') refreshRepositories();
 	app.querySelectorAll('[data-page-panel], [data-sidebar-panel]').forEach((panel) => { panel.hidden = (panel.dataset.pagePanel || panel.dataset.sidebarPanel) !== page || Boolean(panel.dataset.repositoryScope && panel.dataset.repositoryScope !== state.repository); });
 	app.querySelectorAll('[data-action="page"]').forEach((link) => {
 		if (link.dataset.page === page) link.setAttribute('aria-current', 'page');
@@ -401,6 +424,7 @@ function render() {
 	terminals.forEach(({ terminal, observer }) => { observer.disconnect(); terminal.dispose(); });
 	terminals = [];
 	app.innerHTML = ({ A: VariantA, B: VariantB, C: VariantC })[variant]();
+	if (variant === 'C') app.querySelector('.review-layout').insertAdjacentHTML('beforeend', repositoriesPage());
 	document.querySelector('#variant-label').textContent = `${variant} / ${names[variant]}`;
 	document.body.dataset.variant = variant;
 	app.dataset.view = state.view;
@@ -463,7 +487,10 @@ function changeVariant(direction) {
 }
 function openDialog(action) {
 	dialog.removeAttribute('aria-labelledby');
-	if (action === 'terminate') {
+	if (action === 'open-folder') {
+		dialog.setAttribute('aria-labelledby', 'open-folder-heading');
+		dialog.innerHTML = `<form data-form="open-folder"><h2 id="open-folder-heading">Open folder</h2><div class="eyebrow muted">Simulated folders</div><p class="folder-location mono">${icon('folder-open')}~/projects</p><fieldset class="folder-choices"><legend>Repository folders</legend>${Object.entries(folderRepositories).map(([id, repository], index) => `<label><input type="radio" name="folder" value="${id}" ${index === 0 ? 'checked' : ''} required /><span>${icon('folder-git-2')}<strong>${escapeHtml(repository.name)}</strong><small>Project / ${escapeHtml(repository.projectIdentity)}</small></span></label>`).join('')}</fieldset><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('folder-open')}Open repository</button></div></form>`;
+	} else if (action === 'terminate') {
 		dialog.innerHTML = `<form data-form="terminate"><h2>Terminate workers?</h2><p>Worker processes will end immediately. Recorded work remains available. Interrupted writes may be incomplete.</p><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="danger">${icon('octagon-x')}Terminate</button></div></form>`;
 	} else {
 		dialog.innerHTML = `<form data-form="limits"><h2>Usage limits / simulated</h2><label>Copilot requests<input type="number" name="copilot" min="18" value="${state.limits.copilot}" required /></label><label>Interpreter calls<input type="number" name="interpreter" min="42" value="${state.limits.interpreter}" required /></label><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">Save limits</button></div></form>`;
@@ -480,6 +507,8 @@ document.addEventListener('click', (event) => {
 		if (viewedInitiative === 'harness') return;
 	}
 	if (action === 'page') { event.preventDefault(); switchPage(button.dataset.page); return; }
+	if (action === 'open-folder') { openDialog(action); return; }
+	if (action === 'repository-open') { selectRepository(button.dataset.id); switchPage('workspace'); return; }
 	if (action === 'new-planning-session') {
 		const current = planningContext();
 		if (current) current.saved = planningSnapshot();
@@ -601,6 +630,7 @@ document.addEventListener('click', (event) => {
 	render();
 });
 document.addEventListener('input', (event) => {
+	if (event.target.id === 'repository-search') { state.repositoryQuery = event.target.value; refreshRepositories(); return; }
 	if (event.target.closest('[data-form="planning-start"]')) {
 		state.planningLaunch[event.target.name] = event.target.value;
 		event.target.setCustomValidity('');
@@ -635,6 +665,22 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
+	if (form.dataset.form === 'open-folder') {
+		const id = String(values.get('folder'));
+		if (!folderRepositories[id]) return;
+		if (!repositories[id]) {
+			repositories[id] = structuredClone(folderRepositories[id]);
+			state.repositoryViews[id] = { initiative: null, planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } };
+		}
+		state.repositoryQuery = '';
+		const search = app.querySelector('#repository-search');
+		if (search) search.value = '';
+		dialog.close();
+		selectRepository(id);
+		switchPage('workspace');
+		notify('Example repository opened. No files or tracker records were changed.');
+		return;
+	}
 	if (form.dataset.form === 'planning-start') {
 		if (form.dataset.repository !== state.repository) return;
 		const brief = String(values.get('brief') || '').trim();
@@ -711,8 +757,17 @@ document.addEventListener('submit', (event) => {
 });
 document.querySelector('#previous-variant').addEventListener('click', () => changeVariant(-1));
 document.querySelector('#next-variant').addEventListener('click', () => changeVariant(1));
-window.addEventListener('popstate', () => { if (variant === 'C') switchPage(new URL(location.href).searchParams.get('page') === 'planning' ? 'planning' : 'workspace', false); });
-document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
+window.addEventListener('popstate', () => {
+	const params = new URL(location.href).searchParams;
+	const nextVariant = variants.includes(params.get('variant')) ? params.get('variant') : 'A';
+	const page = ['planning', 'repositories'].includes(params.get('page')) ? params.get('page') : 'workspace';
+	if (nextVariant !== variant) {
+		variant = nextVariant;
+		state.page = page;
+		render();
+	} else if (variant === 'C') switchPage(page, false);
+});
+document.querySelector('#reset-prototype').addEventListener('click', () => { for (const [id, repository] of Object.entries(repositories)) { if (repository.added) delete repositories[id]; } state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
 	if (event.key === 'Escape' && dialog.open) { event.preventDefault(); dialog.requestClose(); return; }
 	if (event.target.matches('[data-action="pioneer-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
