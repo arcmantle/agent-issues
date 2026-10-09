@@ -150,7 +150,7 @@ function singlePlan() {
 }
 function planningWorkspace() {
 	const context = planningContext();
-	const modes = context.mode === 'pioneer' ? `<div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div>` : `<span class="planning-modes">${icon('notebook-pen')}Plan</span>`;
+	const modes = `<span class="planning-modes">${icon(context.mode === 'pioneer' ? 'git-branch' : 'notebook-pen')}${context.mode === 'pioneer' ? 'Pioneer' : 'Plan'}</span>`;
 	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated / ${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</div><h2 tabindex="-1">${escapeHtml(context.title)}</h2></div>${modes}</div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>${escapeHtml(context.title)}</h3><p>${escapeHtml(context.brief)}</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
 }
 function refreshPlanning() {
@@ -480,15 +480,6 @@ document.addEventListener('click', (event) => {
 	if (action === 'planning-session') { switchPlanningContext(button.dataset.id); return; }
 	if (action === 'open-review') { switchWorkspace('review'); return; }
 	if (action === 'workspace-view') { switchWorkspace(button.dataset.view); return; }
-	if (action === 'planning-mode') {
-		if (planningContext()?.mode !== 'pioneer') return;
-		state.planningMode = button.dataset.mode;
-		app.querySelectorAll('[data-planning-panel]').forEach((panel) => { panel.hidden = panel.dataset.planningPanel !== state.planningMode; });
-		app.querySelectorAll('[data-action="planning-mode"]').forEach((control) => control.setAttribute('aria-pressed', String(control.dataset.mode === state.planningMode)));
-		app.querySelector('#planning-session-content').innerHTML = planningSession();
-		window.lucide?.createIcons();
-		return;
-	}
 	if (action === 'planning-pause') {
 		const session = state.planningSessions[state.planningMode];
 		session.paused = !session.paused;
@@ -679,7 +670,7 @@ document.addEventListener('submit', (event) => {
 			records: session.answers.slice(-answers.length).map((answer) => answer.result),
 		});
 		refreshPlanning();
-		(app.querySelector('[data-planning-question]') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]') || app.querySelector('.planning-heading h2')).focus();
+		(app.querySelector('[data-planning-question]') || app.querySelector('.planning-heading h2')).focus();
 		notify('Simulated planning agent recorded your answers.');
 		return;
 	}
