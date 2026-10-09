@@ -3,6 +3,9 @@ const dialog = document.querySelector('#action-dialog');
 const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
+	page: new URL(location.href).searchParams.get('page') === 'planning' ? 'planning' : 'workspace',
+	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
+	planningContexts: [{ id: 'harness', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
 	planningMode: 'pioneer', graphZoom: .8,
 	planningSessions: {
@@ -42,7 +45,7 @@ const routeIssues = [
 	{ stage: 2, dependencies: [3, 4], outcome: 'Request separate approval before the initiative branch merges to the target branch.', criteria: ['All required issue changes must be integrated.', 'Do not push automatically.'], evidence: 'Not assigned. No validation evidence.' },
 ];
 const routeReference = (index) => `DEMO-${String(index + 1).padStart(2, '0')}`;
-const pioneerTickets = [
+const harnessTickets = [
 	{ title: 'Provider control', type: 'research', question: 'How should the harness control native agent sessions?', dependencies: [], position: [24, 24] },
 	{ title: 'Workspace design', type: 'prototype', question: 'Which workspace layout makes agents and user decisions easy to inspect?', dependencies: [0], position: [324, 24] },
 	{ title: 'Approval gates', type: 'grilling', question: 'Which approvals are required before changes can integrate?', dependencies: [0], position: [624, 24] },
@@ -50,20 +53,62 @@ const pioneerTickets = [
 	{ title: 'Usage accounting', type: 'task', question: 'What is the shared usage boundary across workers and repositories?', dependencies: [0, 2], position: [474, 244] },
 	{ title: 'First-release scope', type: 'grilling', question: 'Which capabilities and limits belong in the first release?', dependencies: [3, 4], position: [324, 464] },
 ];
+const discoveryTickets = [
+	{ title: 'Purpose', type: 'grilling', question: 'What result should this work achieve?', dependencies: [], position: [24, 24] },
+	{ title: 'Users', type: 'research', question: 'Who needs this result, and what must they be able to do?', dependencies: [0], position: [324, 24] },
+	{ title: 'Scope', type: 'grilling', question: 'What belongs in the first version, and what is out of scope?', dependencies: [0], position: [624, 24] },
+	{ title: 'Constraints', type: 'research', question: 'Which technical or operational constraints must the work satisfy?', dependencies: [1], position: [174, 244] },
+	{ title: 'Acceptance', type: 'task', question: 'What evidence will show that the result is acceptable?', dependencies: [0, 2], position: [474, 244] },
+	{ title: 'Delivery', type: 'grilling', question: 'What must be decided before implementation can start?', dependencies: [3, 4], position: [324, 464] },
+];
+const planningContext = () => state.planningContexts.find((context) => context.id === state.planningContext);
+const pioneerTickets = () => state.planningContext === 'harness' ? harnessTickets : discoveryTickets;
 function pioneerStatus(index) {
 	if (state.pioneerResolutions[index]) return 'Resolved';
-	return pioneerTickets[index].dependencies.some((dependency) => !state.pioneerResolutions[dependency]) ? 'Blocked' : 'Active';
+	return pioneerTickets()[index].dependencies.some((dependency) => !state.pioneerResolutions[dependency]) ? 'Blocked' : 'Active';
 }
-const planQuestions = [
+const harnessQuestions = [
 	{ question: 'Which coding providers must the first release support?', role: 'scope', prefix: 'First-release providers' },
 	{ question: 'When should the agent stop planning and ask you to review the plan?', role: 'decision', prefix: 'Plan review boundary' },
 	{ question: 'What must be demonstrated before you accept the first release?', role: 'constraint', prefix: 'Release acceptance' },
 ];
+const discoveryQuestions = [
+	{ question: 'What problem should this work solve?', role: 'scope', prefix: 'Problem' },
+	{ question: 'Who needs the result, and what must they be able to do?', role: 'scope', prefix: 'Intended users' },
+	{ question: 'What would make the first version acceptable?', role: 'constraint', prefix: 'Acceptance' },
+];
+const planQuestions = () => state.planningContext === 'harness' ? harnessQuestions : discoveryQuestions;
+const planningSnapshot = () => ({ planningMode: state.planningMode, graphZoom: state.graphZoom, planningSessions: state.planningSessions, planEntries: state.planEntries, pioneerResolutions: state.pioneerResolutions });
+function planningStartForm() {
+	const draft = state.planningLaunch;
+	return `<form class="planning-start-form" data-form="planning-start"><label for="planning-brief">Starting point</label><textarea id="planning-brief" name="brief" rows="5" required>${escapeHtml(draft.brief)}</textarea><label for="planning-initiative">Initiative</label><select id="planning-initiative" name="initiative"><option value="">Not yet defined</option>${Object.entries(initiativeViews).map(([id, initiative]) => `<option value="${id}" ${draft.initiative === id ? 'selected' : ''}>${initiative.title}</option>`).join('')}</select><fieldset><legend>Mode</legend>${['plan', 'pioneer'].map((mode) => `<label><input type="radio" name="mode" value="${mode}" ${draft.mode === mode ? 'checked' : ''} />${mode === 'plan' ? 'Plan' : 'Pioneer'}</label>`).join('')}</fieldset><div class="dialog-actions"><button class="primary">${icon('play')}Start planning</button></div></form>`;
+}
+function planningSidebar() {
+	return `<div class="eyebrow muted">Sessions</div><div class="planning-session-list">${state.planningContexts.map((context) => `<button data-action="planning-session" data-id="${context.id}" ${state.planningContext === context.id ? 'aria-current="true"' : ''}><strong>${escapeHtml(context.title)}</strong><span>${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</span></button>`).join('')}</div>`;
+}
+function planningPageContent() {
+	return planningContext() ? planningWorkspace() : `<section class="planning-start"><h2>New planning session</h2>${planningStartForm()}</section>`;
+}
+function refreshPlanningPage() {
+	app.querySelector('#planning-workspace-content').innerHTML = planningPageContent();
+	app.querySelector('#planning-sidebar-content').innerHTML = planningSidebar();
+	window.lucide?.createIcons();
+}
+function switchPlanningContext(id) {
+	const current = planningContext();
+	if (current) current.saved = planningSnapshot();
+	const context = state.planningContexts.find((candidate) => candidate.id === id);
+	context.saved ??= planningSnapshot();
+	Object.assign(state, context.saved);
+	state.planningContext = id;
+	refreshPlanningPage();
+	app.querySelector('.planning-heading h2').focus();
+}
 function planningQuestions() {
 	if (state.planningMode === 'pioneer') {
-		return pioneerTickets.flatMap((ticket, index) => !state.pioneerResolutions[index] && ticket.dependencies.every((dependency) => state.pioneerResolutions[dependency]) ? [{ index, title: ticket.title, question: ticket.question }] : []);
+		return pioneerTickets().flatMap((ticket, index) => !state.pioneerResolutions[index] && ticket.dependencies.every((dependency) => state.pioneerResolutions[dependency]) ? [{ index, title: ticket.title, question: ticket.question }] : []);
 	}
-	return planQuestions.flatMap((question, index) => index >= state.planningSessions.plan.answers.length ? [{ index, title: 'First-release harness', question: question.question }] : []);
+	return planQuestions().flatMap((question, index) => index >= state.planningSessions.plan.answers.length ? [{ index, title: planningContext().title, question: question.question }] : []);
 }
 function planningSession() {
 	const session = state.planningSessions[state.planningMode];
@@ -72,12 +117,12 @@ function planningSession() {
 	return `<section class="planning-session" aria-label="Planning agent session">
 		<div class="planner-agent"><span>${icon('bot')}Planning agent / Copilot</span><div><span class="status ${questions.length ? 'waiting' : 'review'}">${status}</span>${questions.length ? `<button class="icon-button" data-action="planning-pause" title="${session.paused ? 'Resume planning' : 'Pause planning'}" aria-label="${session.paused ? 'Resume planning' : 'Pause planning'}">${icon(session.paused ? 'play' : 'pause')}</button>` : ''}</div></div>
 		<ol class="planner-conversation" aria-label="Planning conversation">${session.messages.map((message) => `<li class="planner-message ${message.role}"><div class="planner-message-heading"><strong>${icon(message.role === 'agent' ? 'bot' : 'user')}${message.role === 'agent' ? 'Agent' : 'You'}</strong><span>${escapeHtml(message.kind)}</span></div>${(message.paragraphs || []).map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('')}${message.answers ? `<dl>${message.answers.map((answer) => `<dt>${escapeHtml(answer.question)}</dt><dd>${escapeHtml(answer.answer)}</dd>`).join('')}</dl>` : ''}${message.records ? `<ul class="planner-message-records">${message.records.map((record) => `<li>${escapeHtml(record)}</li>`).join('')}</ul>` : ''}</li>`).join('')}</ol>
-		${questions.length ? `<div class="planner-question"><div class="eyebrow muted">Questions / ${questions.length}</div><form data-form="planning-answer" data-mode="${state.planningMode}">${questions.map((question, position) => `<div class="planner-question-field"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions.length}</div><h3>${question.question}</h3><label for="planning-answer-${question.index}">Answer ${position + 1}</label><textarea id="planning-answer-${question.index}" data-planning-question="${question.index}" name="answer-${question.index}" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.drafts[question.index] || '')}</textarea></div>`).join('')}<button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answers</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3></div>`}
+		${questions.length ? `<div class="planner-question"><div class="eyebrow muted">Questions / ${questions.length}</div><form data-form="planning-answer" data-mode="${state.planningMode}">${questions.map((question, position) => `<div class="planner-question-field"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions().length}</div><h3>${question.question}</h3><label for="planning-answer-${question.index}">Answer ${position + 1}</label><textarea id="planning-answer-${question.index}" data-planning-question="${question.index}" name="answer-${question.index}" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.drafts[question.index] || '')}</textarea></div>`).join('')}<button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answers</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3></div>`}
 	</section>`;
 }
 function pioneerGraph() {
-	const edges = pioneerTickets.flatMap((ticket, index) => ticket.dependencies.map((dependency) => {
-		const source = pioneerTickets[dependency].position;
+	const edges = pioneerTickets().flatMap((ticket, index) => ticket.dependencies.map((dependency) => {
+		const source = pioneerTickets()[dependency].position;
 		const target = ticket.position;
 		const sameRow = source[1] === target[1];
 		const start = sameRow ? [source[0] + 240, source[1] + 70] : [source[0] + 120, source[1] + 150];
@@ -86,19 +131,20 @@ function pioneerGraph() {
 		const path = sameRow && index === 2 ? `M ${source[0] + 120} ${source[1]} V 8 H ${target[0] + 120} V ${target[1]}` : sameRow ? `M ${start.join(' ')} H ${end[0]}` : `M ${start.join(' ')} C ${start[0]} ${bend}, ${end[0]} ${bend}, ${end.join(' ')}`;
 		return `<path d="${path}" data-source="${dependency}" data-target="${index}" marker-end="url(#pioneer-arrow)" />`;
 	}));
-	return `<div class="graph-toolbar"><span>${pioneerTickets.length} tickets / ${edges.length} dependencies</span><div><button class="icon-button" data-action="graph-out" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><output aria-label="Graph zoom">${Math.round(state.graphZoom * 100)}%</output><button class="icon-button" data-action="graph-in" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="icon-button" data-action="graph-fit" title="Fit graph" aria-label="Fit graph">${icon('scan')}</button></div></div><div class="pioneer-viewport" data-scroll-key="pioneer-graph" tabindex="0" aria-label="Pioneer issue graph"><div class="pioneer-bounds" style="width:${900 * state.graphZoom}px;height:${640 * state.graphZoom}px"><div class="pioneer-canvas" style="transform:scale(${state.graphZoom})"><svg class="pioneer-edges" viewBox="0 0 900 640" aria-hidden="true"><defs><marker id="pioneer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.join('')}</svg>${pioneerTickets.map((ticket, index) => `<button class="pioneer-node ${pioneerStatus(index).toLowerCase()}" style="left:${ticket.position[0]}px;top:${ticket.position[1]}px" data-action="pioneer-ticket" data-index="${index}"><span class="route-issue-meta"><span class="mono">PIONEER-${String(index + 1).padStart(2, '0')}</span><span>${pioneerStatus(index)}</span></span><strong>${ticket.title}</strong><span>${ticket.type}</span><small>${ticket.question}</small></button>`).join('')}</div></div></div>`;
+	return `<div class="graph-toolbar"><span>${pioneerTickets().length} tickets / ${edges.length} dependencies</span><div><button class="icon-button" data-action="graph-out" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><output aria-label="Graph zoom">${Math.round(state.graphZoom * 100)}%</output><button class="icon-button" data-action="graph-in" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="icon-button" data-action="graph-fit" title="Fit graph" aria-label="Fit graph">${icon('scan')}</button></div></div><div class="pioneer-viewport" data-scroll-key="pioneer-graph" tabindex="0" aria-label="Pioneer issue graph"><div class="pioneer-bounds" style="width:${900 * state.graphZoom}px;height:${640 * state.graphZoom}px"><div class="pioneer-canvas" style="transform:scale(${state.graphZoom})"><svg class="pioneer-edges" viewBox="0 0 900 640" aria-hidden="true"><defs><marker id="pioneer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.join('')}</svg>${pioneerTickets().map((ticket, index) => `<button class="pioneer-node ${pioneerStatus(index).toLowerCase()}" style="left:${ticket.position[0]}px;top:${ticket.position[1]}px" data-action="pioneer-ticket" data-index="${index}"><span class="route-issue-meta"><span class="mono">PIONEER-${String(index + 1).padStart(2, '0')}</span><span>${pioneerStatus(index)}</span></span><strong>${ticket.title}</strong><span>${ticket.type}</span><small>${ticket.question}</small></button>`).join('')}</div></div></div>`;
 }
 function singlePlan() {
-	return `<div class="single-plan-heading"><div><div class="eyebrow muted">Agent-authored plan / draft</div><h2>First-release harness</h2></div><span>${state.planEntries.length} entries</span></div><ol class="plan-entries">${state.planEntries.map((entry, index) => `<li class="plan-entry"><span class="plan-entry-number mono">${String(index + 1).padStart(2, '0')}</span><span><small>${entry.role}</small><span>${escapeHtml(entry.body)}</span></span></li>`).join('')}</ol>`;
+	return `<div class="single-plan-heading"><div><div class="eyebrow muted">Agent-authored plan / draft</div><h2>${escapeHtml(planningContext().title)}</h2></div><span>${state.planEntries.length} entries</span></div><ol class="plan-entries">${state.planEntries.map((entry, index) => `<li class="plan-entry"><span class="plan-entry-number mono">${String(index + 1).padStart(2, '0')}</span><span><small>${entry.role}</small><span>${escapeHtml(entry.body)}</span></span></li>`).join('')}</ol>`;
 }
 function planningWorkspace() {
-	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated</div><h2>Initiative execution harness</h2></div><div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div></div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>Complete the harness design</h3><p>Resolve provider control, workspace design, approvals, recovery, and usage before fixing the first-release scope.</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
+	const context = planningContext();
+	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated / ${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</div><h2 tabindex="-1">${escapeHtml(context.title)}</h2></div><div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div></div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>${escapeHtml(context.title)}</h3><p>${escapeHtml(context.brief)}</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
 }
 function refreshPlanning() {
 	const graph = app.querySelector('.pioneer-viewport');
 	const scroll = { top: graph?.scrollTop || 0, left: graph?.scrollLeft || 0 };
 	app.querySelector('#planning-session-content').innerHTML = planningSession();
-	app.querySelector('.pioneer-map-summary > span').textContent = `${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved`;
+	app.querySelector('.pioneer-map-summary > span').textContent = `${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved`;
 	app.querySelector('#pioneer-graph-content').innerHTML = pioneerGraph();
 	app.querySelector('#single-plan-content').innerHTML = singlePlan();
 	app.querySelector('.pioneer-viewport').scrollTo(scroll.left, scroll.top);
@@ -156,7 +202,10 @@ function usage() {
 }
 function rail(review = false) {
 	const browsing = review && viewedInitiative !== 'harness';
-	return `<aside class="rail"><div class="rail-project"><div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div><div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p></div>${review ? trackedWork() : ''}${!review && !browsing ? `<section>${workerList()}</section>` : ''}${review && !browsing ? '<section class="review-queue"><div class="eyebrow muted">Integration queue</div><div class="queue-row"><strong>Approval checkpoint</strong><span class="status review">' + (state.integrated ? 'Integrated' : 'Awaiting approval') + '</span></div><div class="queue-row"><strong>Session recovery</strong><span class="muted">Independent review</span></div><div class="queue-row"><strong>Usage limits</strong><span class="muted">' + (state.question ? 'Needs a decision' : 'In progress') + '</span></div></section>' : ''}${!browsing ? usage() : ''}</aside>`;
+	return `<aside class="rail"><div class="rail-project"><div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div><div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p></div><div class="sidebar-scope" ${review ? `data-sidebar-panel="workspace" ${state.page !== 'workspace' ? 'hidden' : ''}` : ''}>${review ? trackedWork() : ''}${!review && !browsing ? `<section>${workerList()}</section>` : ''}${review && !browsing ? '<section class="review-queue"><div class="eyebrow muted">Integration queue</div><div class="queue-row"><strong>Approval checkpoint</strong><span class="status review">' + (state.integrated ? 'Integrated' : 'Awaiting approval') + '</span></div><div class="queue-row"><strong>Session recovery</strong><span class="muted">Independent review</span></div><div class="queue-row"><strong>Usage limits</strong><span class="muted">' + (state.question ? 'Needs a decision' : 'In progress') + '</span></div></section>' : ''}${!browsing ? usage() : ''}</div>${review ? `<section id="planning-sidebar-content" data-sidebar-panel="planning" ${state.page !== 'planning' ? 'hidden' : ''}>${planningSidebar()}</section>` : ''}</aside>`;
+}
+function applicationNavigation() {
+	return `<nav class="application-navigation" aria-label="Application pages">${[['workspace', 'activity', 'Workspace'], ['planning', 'notebook-pen', 'Planning']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav>`;
 }
 function terminalGrid() {
 	const selected = state.workers.filter((worker) => worker.visible);
@@ -229,6 +278,22 @@ function switchWorkspace(view) {
 	app.dataset.view = view;
 	requestAnimationFrame(() => terminals.forEach(({ fit, host }) => { if (host.offsetWidth && host.offsetHeight) fit.fit(); }));
 }
+function switchPage(page, updateHistory = true) {
+	rememberScroll();
+	state.page = page;
+	app.querySelectorAll('[data-page-panel], [data-sidebar-panel]').forEach((panel) => { panel.hidden = (panel.dataset.pagePanel || panel.dataset.sidebarPanel) !== page; });
+	app.querySelectorAll('[data-action="page"]').forEach((link) => {
+		if (link.dataset.page === page) link.setAttribute('aria-current', 'page');
+		else link.removeAttribute('aria-current');
+	});
+	if (updateHistory) {
+		const url = new URL(location.href);
+		url.searchParams.set('page', page);
+		history.pushState(null, '', url);
+	}
+	app.querySelector(`[data-page-panel="${page}"]`).scrollTop = scrollPositions[page === 'planning' ? 'planning-page' : `workspace-${state.view}`] || 0;
+	requestAnimationFrame(() => terminals.forEach(({ fit, host }) => { if (host.offsetWidth && host.offsetHeight) fit.fit(); }));
+}
 function rememberFolders() {
 	for (const folder of app.querySelectorAll('.checkpoint-files [data-folder]')) {
 		state.collapsedFolders = state.collapsedFolders.filter((name) => name !== folder.dataset.folder);
@@ -257,11 +322,14 @@ function VariantB() {
 	return `<div class="signal">${runHeader(true)}<section class="metrics"><div class="metric"><strong>${state.integrated ? '4' : '3'}<span> / 9</span></strong><span>Issues integrated</span></div><div class="metric"><strong>${working}</strong><span>Agents working</span></div><div class="metric"><strong>${pendingCount()}</strong><span>Decisions pending</span></div><div class="metric"><strong>18<span> / ${state.limits.copilot}</span></strong><span>Copilot requests / simulated</span></div></section><div class="signal-body">${rail()}<section><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>Run 004 / ${runLabel()}</span></div>${terminalGrid()}<section class="signal-dock">${inspector()}</section></section></div></div>`;
 }
 function VariantC() {
+	let workspace;
 	if (viewedInitiative !== 'harness') {
 		const initiative = initiativeViews[viewedInitiative];
-		return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section></div>`;
+		workspace = `<section class="workspace" data-page-panel="workspace" ${state.page !== 'workspace' ? 'hidden' : ''}>${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section>`;
+	} else {
+		workspace = `<section class="workspace" data-page-panel="workspace" data-scroll-key="workspace-${state.view}" ${state.page !== 'workspace' ? 'hidden' : ''}>${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section>`;
 	}
-	return `<div class="review-layout">${rail(true)}<section class="workspace" data-scroll-key="workspace-${state.view}">${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative'], ['planning', 'notebook-pen', 'Planning']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section><section id="planning-panel" role="tabpanel" aria-labelledby="planning-tab" data-workspace-panel="planning" ${state.view !== 'planning' ? 'hidden' : ''}>${planningWorkspace()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section></div>`;
+	return `<div class="review-layout">${applicationNavigation()}${rail(true)}${workspace}<section class="workspace planning-page" data-page-panel="planning" data-scroll-key="planning-page" ${state.page !== 'planning' ? 'hidden' : ''}><header class="page-heading"><h1>Planning</h1><button class="primary" data-action="new-planning-session">${icon('plus')}New session</button></header><div id="planning-workspace-content">${planningPageContent()}</div></section></div>`;
 }
 function render() {
 	rememberScroll();
@@ -341,6 +409,16 @@ document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
 	if (!button || button.disabled) return;
 	const action = button.dataset.action;
+	if (action === 'page') { event.preventDefault(); switchPage(button.dataset.page); return; }
+	if (action === 'new-planning-session') {
+		const current = planningContext();
+		if (current) current.saved = planningSnapshot();
+		state.planningContext = '';
+		refreshPlanningPage();
+		app.querySelector('#planning-brief').focus();
+		return;
+	}
+	if (action === 'planning-session') { switchPlanningContext(button.dataset.id); return; }
 	if (action === 'open-review') { switchWorkspace('review'); return; }
 	if (action === 'workspace-view') { switchWorkspace(button.dataset.view); return; }
 	if (action === 'planning-mode') {
@@ -368,9 +446,9 @@ document.addEventListener('click', (event) => {
 	}
 	if (action === 'pioneer-ticket') {
 		const index = Number(button.dataset.index);
-		const ticket = pioneerTickets[index];
+		const ticket = pioneerTickets()[index];
 		dialog.setAttribute('aria-labelledby', 'planning-record-title');
-		dialog.innerHTML = `<div class="eyebrow muted">Pioneer ticket / ${ticket.type} / ${pioneerStatus(index)}</div><h2 id="planning-record-title">${ticket.title}</h2><section class="record-section"><h3>Question</h3><p>${ticket.question}</p></section><section class="record-section"><h3>Dependencies</h3>${ticket.dependencies.length ? ticket.dependencies.map((dependency) => `<button class="record-link" data-action="pioneer-ticket" data-index="${dependency}">${icon('circle-dot')}${pioneerTickets[dependency].title} / ${pioneerStatus(dependency)}</button>`).join('') : '<p>No prerequisites.</p>'}</section><section class="record-section"><h3>Agent-recorded resolution</h3><p>${escapeHtml(state.pioneerResolutions[index] || 'Not yet resolved.')}</p></section><div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
+		dialog.innerHTML = `<div class="eyebrow muted">Pioneer ticket / ${ticket.type} / ${pioneerStatus(index)}</div><h2 id="planning-record-title">${ticket.title}</h2><section class="record-section"><h3>Question</h3><p>${ticket.question}</p></section><section class="record-section"><h3>Dependencies</h3>${ticket.dependencies.length ? ticket.dependencies.map((dependency) => `<button class="record-link" data-action="pioneer-ticket" data-index="${dependency}">${icon('circle-dot')}${pioneerTickets()[dependency].title} / ${pioneerStatus(dependency)}</button>`).join('') : '<p>No prerequisites.</p>'}</section><section class="record-section"><h3>Agent-recorded resolution</h3><p>${escapeHtml(state.pioneerResolutions[index] || 'Not yet resolved.')}</p></section><div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
 		window.lucide?.createIcons();
 		if (!dialog.open) dialog.showModal();
 		else { dialog.scrollTop = 0; dialog.querySelector('button').focus(); }
@@ -460,6 +538,10 @@ document.addEventListener('click', (event) => {
 	render();
 });
 document.addEventListener('input', (event) => {
+	if (event.target.closest('[data-form="planning-start"]')) {
+		state.planningLaunch[event.target.name] = event.target.value;
+		event.target.setCustomValidity('');
+	}
 	if (event.target.matches('.answer-form [name="answer"]')) state.answerDraft = event.target.value;
 	if (event.target.matches('[data-planning-question]')) {
 		state.planningSessions[event.target.form.dataset.mode].drafts[event.target.dataset.planningQuestion] = event.target.value;
@@ -488,6 +570,23 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
+	if (form.dataset.form === 'planning-start') {
+		const brief = String(values.get('brief') || '').trim();
+		if (!brief) { form.querySelector('textarea').setCustomValidity('Enter a starting point.'); form.reportValidity(); return; }
+		state.planningContexts[0].saved ??= planningSnapshot();
+		const initiative = String(values.get('initiative') || '') || null;
+		const opening = [{ role: 'user', kind: 'Starting point', paragraphs: [brief] }, { role: 'agent', kind: 'Planning approach', paragraphs: [initiative ? `This session is scoped to ${initiativeViews[initiative].title}.` : 'The initiative is not yet defined.', 'I will establish the purpose, users, scope, and acceptance criteria before implementation.'] }];
+		const context = { id: `session-${state.nextPlanningContext++}`, title: brief.split('\n')[0].slice(0, 72), brief, initiative, saved: {
+			planningMode: String(values.get('mode')), graphZoom: .8,
+			planningSessions: { pioneer: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) }, plan: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) } },
+			planEntries: [], pioneerResolutions: ['', '', '', '', '', ''],
+		} };
+		state.planningContexts.push(context);
+		state.planningLaunch = { brief: '', initiative: '', mode: 'plan' };
+		switchPlanningContext(context.id);
+		notify('Simulated planning session started. No initiative or execution run was created.');
+		return;
+	}
 	if (form.dataset.form === 'planning-answer') {
 		if (form.dataset.mode !== state.planningMode) return;
 		const session = state.planningSessions[state.planningMode];
@@ -502,9 +601,9 @@ document.addEventListener('submit', (event) => {
 			return;
 		}
 		answers.forEach((question) => {
-			const result = state.planningMode === 'pioneer' ? `${question.title}: ${question.answer}` : `${planQuestions[question.index].prefix}: ${question.answer}`;
+			const result = state.planningMode === 'pioneer' ? `${question.title}: ${question.answer}` : `${planQuestions()[question.index].prefix}: ${question.answer}`;
 			if (state.planningMode === 'pioneer') state.pioneerResolutions[question.index] = result;
-			else state.planEntries.push({ role: planQuestions[question.index].role, body: result });
+			else state.planEntries.push({ role: planQuestions()[question.index].role, body: result });
 			session.answers.push({ question: question.question, answer: question.answer, result });
 			delete session.drafts[question.index];
 		});
@@ -545,19 +644,20 @@ document.addEventListener('submit', (event) => {
 });
 document.querySelector('#previous-variant').addEventListener('click', () => changeVariant(-1));
 document.querySelector('#next-variant').addEventListener('click', () => changeVariant(1));
+window.addEventListener('popstate', () => { if (variant === 'C') switchPage(new URL(location.href).searchParams.get('page') === 'planning' ? 'planning' : 'workspace', false); });
 document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
 	if (event.key === 'Escape' && dialog.open) { event.preventDefault(); dialog.requestClose(); return; }
 	if (event.target.matches('[data-action="workspace-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
 		event.preventDefault();
-		const views = ['agents', 'review', 'initiative', 'planning'];
+		const views = ['agents', 'review', 'initiative'];
 		const current = views.indexOf(event.target.dataset.view);
 		const view = event.key === 'Home' ? views[0] : event.key === 'End' ? views.at(-1) : views[(current + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length];
 		switchWorkspace(view);
 		app.querySelector(`[data-action="workspace-view"][data-view="${view}"]`).focus();
 		return;
 	}
-	if (event.target.closest('input, textarea, select, [contenteditable], .xterm, .pioneer-viewport') || dialog.open) return;
+	if (event.target.closest('input, textarea, select, [contenteditable], .xterm, .pioneer-viewport, .application-navigation') || dialog.open) return;
 	if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
 		event.preventDefault();
 		changeVariant(event.key === 'ArrowRight' ? 1 : -1);
