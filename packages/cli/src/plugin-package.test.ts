@@ -93,6 +93,21 @@ describe("portable plugin package", () => {
 				}
 				expect(retrieved.body).not.toContain("<!-- include:");
 			}
+			for (const item of bundle.items) {
+				const references = [...item.body.matchAll(/^- `[^`]+`: `((?:fragment|skill|agent)\/[^`]+)`\.$/gm)];
+				for (const [, key] of references) {
+					await expect(store.retrieveInstruction({ version, key })).resolves.toMatchObject({ key, version });
+				}
+			}
+			const domainModeling = await store.retrieveInstruction({ version, key: "skill/domain-modeling" });
+			expect(domainModeling.body).toContain('- `./CONTEXT-FORMAT.md`: `fragment/domain-modeling/context-format`.');
+			expect(domainModeling.body).toContain('- `./ADR-FORMAT.md`: `fragment/domain-modeling/adr-format`.');
+			expect(domainModeling.body).toContain('- `./context-summary.md`: `fragment/recipes/context-summary`.');
+			const prototype = await store.retrieveInstruction({ version, key: "skill/prototype" });
+			expect(prototype.body).toContain('- `LOGIC.md`: `fragment/prototype/logic`.');
+			expect(prototype.body).toContain('- `UI.md`: `fragment/prototype/ui`.');
+			const tdd = await store.retrieveInstruction({ version, key: "skill/tdd" });
+			expect(tdd.body).toContain('- `tests.md`: `fragment/tdd/tests`.');
 			await expect(store.retrieveInstruction({ version: "missing-release", key: "skill/prepare" })).rejects.toThrow();
 		} finally {
 			await store.close();
@@ -148,11 +163,33 @@ describe("portable plugin package", () => {
 			const retrieved = await store.retrieveInstruction({ version: bundle.version, key: "skill/prepare" });
 			expect(retrieved.body).toContain(`An example: \`${reference}\`; follow ${reference}.`);
 			expect(retrieved.body).toContain(`\`\`\`md\n${reference}\n\`\`\``);
+			expect(retrieved.body).toContain('- `./reference-only.md`: `fragment/prepare/reference-only`.');
 			expect(retrieved.body).not.toContain("Reference-only content.");
 			expect(retrieved.body).toContain("Before include.\nExplicitly included content.\nAfter include.");
 		} finally {
 			await store.close();
 		}
+	});
+
+	it("rejects missing instruction links but ignores examples and external documents", () => {
+		targetDir = mkdtempSync(path.join(tmpdir(), "agent-issues-plugin-"));
+		const sourceDir = path.join(targetDir, "source");
+		const pluginDir = path.join(targetDir, "plugin");
+		copyPluginSource(sourceDir);
+		const sourcePath = path.join(sourceDir, "skills", "prepare", "SKILL.md");
+		const body = readFileSync(sourcePath, "utf8");
+		const missing = "[missing document](./missing.md)";
+		writeFileSync(sourcePath, `${body}\n\`${missing}\`\n\n\`\`\`md\n${missing}\n\`\`\`\n\n[external document](https://example.com/missing.md)\n`);
+		expect(() => buildPlugin(pluginDir, sourceDir)).not.toThrow();
+		const bundlePath = path.join(pluginDir, "instruction-defaults.json");
+		const previousBundle = readFileSync(bundlePath, "utf8");
+		writeFileSync(sourcePath, `${body}\n${missing}\n`);
+		const build = spawnSync(process.execPath, [
+			"scripts/build-plugin.mjs", "--source-dir", sourceDir, "--target-dir", pluginDir
+		], { encoding: "utf8" });
+		expect(build.status).toBe(1);
+		expect(build.stderr).toContain("Instruction reference not found: skill/prepare: ./missing.md");
+		expect(readFileSync(bundlePath, "utf8")).toBe(previousBundle);
 	});
 
 	it("packages every canonical skill with portable metadata and a global MCP server", () => {

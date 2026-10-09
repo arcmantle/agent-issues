@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { marked } from "marked";
 
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
@@ -61,6 +62,34 @@ export function buildPlugin({ sourceDir, targetDir, development = false }) {
 		throw new Error(`Package version not found in: ${packageJsonPath}`);
 	}
 
+	const sourceCopilotAgentContent = readFileSync(sourceCopilotAgent, "utf8");
+	const sourceClaudeAgentContent = readFileSync(sourceClaudeAgent, "utf8");
+	const sourceDocuments = readdirSync(sourceSkillsDir, { recursive: true })
+		.filter((relativePath) => relativePath.endsWith(".md"))
+		.sort()
+		.map((relativePath) => {
+			const portablePath = relativePath.split(path.sep).join("/");
+			const isSkill = skillNames.some((name) => portablePath === `${name}/SKILL.md`);
+			return {
+				key: isSkill ? `skill/${portablePath.split("/")[0]}` : `fragment/${portablePath.slice(0, -3).toLowerCase()}`,
+				kind: isSkill ? "skill" : "fragment",
+				filePath: path.join(sourceSkillsDir, relativePath),
+				body: readFileSync(path.join(sourceSkillsDir, relativePath), "utf8")
+			};
+		});
+	sourceDocuments.push(
+		{ key: "agent/agent-issues", kind: "agent", filePath: sourceCopilotAgent, body: sourceCopilotAgentContent },
+		{ key: "agent/agent-issues-claude", kind: "agent", filePath: sourceClaudeAgent, body: sourceClaudeAgentContent }
+	);
+	const keysByPath = new Map(sourceDocuments.map(({ filePath, key }) => [path.resolve(filePath), key]));
+	const instructionSources = sourceDocuments.map(({ filePath, body, ...metadata }) => ({
+		...metadata,
+		body: appendInstructionReferences(body, filePath, metadata.key, keysByPath)
+	}));
+	const instructionVersion = development
+		? `${packageJson.version}-dev.${createHash("sha256").update(JSON.stringify(instructionSources)).digest("hex")}`
+		: packageJson.version;
+
 	rmSync(outputRoot, { force: true, recursive: true });
 	cpSync(sourcePluginReadme, path.join(outputRoot, "README.md"));
 	const outputSkillsDir = path.join(outputRoot, "skills");
@@ -117,10 +146,8 @@ export function buildPlugin({ sourceDir, targetDir, development = false }) {
 	mkdirSync(path.join(outputRoot, "agents"), { recursive: true });
 	mkdirSync(path.join(outputRoot, "agents", "copilot"), { recursive: true });
 	mkdirSync(path.join(outputRoot, "com.github.copilot", "agents"), { recursive: true });
-	const sourceClaudeAgentContent = readFileSync(sourceClaudeAgent, "utf8");
 	const packagedClaudeAgentContent = instructionLoader(sourceClaudeAgentContent, "agent/agent-issues-claude");
 	writeFileSync(path.join(outputRoot, "agents", "agent-issues.md"), packagedClaudeAgentContent);
-	const sourceCopilotAgentContent = readFileSync(sourceCopilotAgent, "utf8");
 	const packagedCopilotAgentContent = instructionLoader(sourceCopilotAgentContent, "agent/agent-issues");
 	writeFileSync(
 		path.join(outputRoot, "agents", "copilot", "agent-issues.agent.md"),
@@ -130,25 +157,6 @@ export function buildPlugin({ sourceDir, targetDir, development = false }) {
 		path.join(outputRoot, "com.github.copilot", "agents", "agent-issues.agent.md"),
 		packagedCopilotAgentContent
 	);
-	const instructionSources = readdirSync(sourceSkillsDir, { recursive: true })
-		.filter((relativePath) => relativePath.endsWith(".md"))
-		.sort()
-		.map((relativePath) => {
-			const portablePath = relativePath.split(path.sep).join("/");
-			const isSkill = skillNames.some((name) => portablePath === `${name}/SKILL.md`);
-			return {
-				key: isSkill ? `skill/${portablePath.split("/")[0]}` : `fragment/${portablePath.slice(0, -3).toLowerCase()}`,
-				kind: isSkill ? "skill" : "fragment",
-				body: readFileSync(path.join(sourceSkillsDir, relativePath), "utf8")
-			};
-		});
-	instructionSources.push(
-		{ key: "agent/agent-issues", kind: "agent", body: sourceCopilotAgentContent },
-		{ key: "agent/agent-issues-claude", kind: "agent", body: sourceClaudeAgentContent }
-	);
-	const instructionVersion = development
-		? `${packageJson.version}-dev.${createHash("sha256").update(JSON.stringify(instructionSources)).digest("hex")}`
-		: packageJson.version;
 	writeJson(path.join(outputRoot, "instruction-defaults.json"), { version: instructionVersion, items: instructionSources });
 	validatePlugin(outputRoot);
 
@@ -195,6 +203,30 @@ export function validatePlugin(pluginDir) {
 	}
 
 	return { pluginRoot, skillNames: skillNames.sort(), version: manifest.version };
+}
+
+function appendInstructionReferences(body, sourcePath, sourceKey, keysByPath) {
+	const references = new Map();
+	marked.walkTokens(marked.lexer(body), (token) => {
+		if (token.type !== "link" || /^[a-z][a-z\d+.-]*:|^\/\//i.test(token.href)) {
+			return;
+		}
+		const relativePath = decodeURIComponent(token.href.split(/[?#]/)[0]);
+		if (!relativePath.toLowerCase().endsWith(".md")) {
+			return;
+		}
+		const targetPath = path.resolve(path.dirname(sourcePath), relativePath);
+		const key = keysByPath.get(targetPath);
+		if (!key) {
+			throw new Error(`Instruction reference not found: ${sourceKey}: ${token.href}`);
+		}
+		references.set(token.href, key);
+	});
+	if (references.size === 0) {
+		return body;
+	}
+	const entries = [...references].map(([href, key]) => `- \`${href}\`: \`${key}\`.`);
+	return `${body.trimEnd()}\n\n## Referenced Instruction Keys For \`${sourceKey}\`\n\nUse these exact keys with \`instruction_retrieve\` when a linked document is required. Keep each key's directory.\n\n${entries.join("\n")}\n`;
 }
 
 function instructionLoader(source, key) {
