@@ -645,11 +645,35 @@ textarea {
 .review-layout {
 	display: grid;
 	grid-template-columns: 260px minmax(0, 1fr);
-	min-height: calc(100dvh - 124px);
+	height: 100%;
+	min-height: 0;
+	overflow: hidden;
 	background: #ffffff;
 }
+body[data-variant='C'] {
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr);
+	height: 100dvh;
+	overflow: hidden;
+}
+body[data-variant='C'] #app {
+	min-height: 0;
+	padding-bottom: 84px;
+	overflow: hidden;
+}
+.review-layout .workspace {
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
 .review-layout .rail {
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	background: #f5f6f5;
+}
+.review-layout .rail > * {
+	flex-shrink: 0;
 }
 .initiative-navigation {
 	min-width: 0;
@@ -705,6 +729,7 @@ textarea {
 }
 .initiative-overview {
 	max-width: 720px;
+	min-height: 0;
 	padding: 28px;
 }
 .initiative-overview p {
@@ -730,15 +755,21 @@ textarea {
 .review-layout .review-content {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) 320px;
-	min-height: 330px;
+	min-height: 0;
 	border-bottom: 1px solid var(--border);
 }
 .review-main {
 	min-width: 0;
+	min-height: 0;
 	border-right: 1px solid var(--border);
 }
+.review-content > aside {
+	min-height: 0;
+}
 .review-layout .diff {
-	max-height: 265px;
+	max-height: none;
+	overflow-x: auto;
+	overflow-y: hidden;
 }
 .review-queue {
 	margin-top: 10px;
@@ -752,6 +783,7 @@ textarea {
 	font-size: 12px;
 }
 .review-terminals {
+	min-height: 0;
 	padding: 20px 28px;
 }
 .review-terminals .terminal-grid {
@@ -880,6 +912,9 @@ dialog input {
 	}
 	.workbench, .review-layout, .signal-body {
 		grid-template-columns: minmax(0, 1fr);
+	}
+	.review-layout {
+		grid-template-rows: minmax(120px, .7fr) minmax(0, 2fr);
 	}
 	.rail {
 		gap: 16px;
