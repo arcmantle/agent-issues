@@ -137,9 +137,6 @@ h3 {
 	margin-top: 5px;
 	font-size: 12px;
 }
-.rail-project label.eyebrow {
-	display: block;
-}
 .repository-path {
 	font-size: 11px;
 	line-height: 1.6;
@@ -147,6 +144,39 @@ h3 {
 }
 .repository-project {
 	overflow-wrap: anywhere;
+}
+.repository-context {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+	padding: 16px 24px;
+	border-bottom: 1px solid var(--border);
+	background: var(--subtle);
+}
+.repository-context > div {
+	min-width: 0;
+	flex: 1 1 280px;
+	overflow-wrap: anywhere;
+}
+.repository-context strong {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 14px;
+}
+.repository-context p {
+	margin: 6px 0 0;
+	font-size: 11px;
+}
+.repository-context .repository-project {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+}
+.repository-context > button {
+	flex-shrink: 0;
 }
 .planning-empty {
 	margin-top: 16px;
