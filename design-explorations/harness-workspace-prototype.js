@@ -12,7 +12,7 @@ const initialState = () => ({
 	repositoryViews: Object.fromEntries(Object.entries(repositories).map(([id, repository]) => [id, { initiative: repository.initiatives[0], planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } }])),
 	page: new URL(location.href).searchParams.get('page') === 'planning' ? 'planning' : 'workspace',
 	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
-	planningContexts: [{ id: 'harness', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
+	planningContexts: [{ id: 'harness', mode: 'pioneer', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
 	planningMode: 'pioneer', graphZoom: .8,
 	planningSessions: {
@@ -150,7 +150,8 @@ function singlePlan() {
 }
 function planningWorkspace() {
 	const context = planningContext();
-	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated / ${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</div><h2 tabindex="-1">${escapeHtml(context.title)}</h2></div><div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div></div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>${escapeHtml(context.title)}</h3><p>${escapeHtml(context.brief)}</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
+	const modes = context.mode === 'pioneer' ? `<div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div>` : `<span class="planning-modes">${icon('notebook-pen')}Plan</span>`;
+	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated / ${context.initiative ? escapeHtml(initiativeViews[context.initiative].title) : 'Initiative not yet defined'}</div><h2 tabindex="-1">${escapeHtml(context.title)}</h2></div>${modes}</div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>${escapeHtml(context.title)}</h3><p>${escapeHtml(context.brief)}</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets().length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
 }
 function refreshPlanning() {
 	const graph = app.querySelector('.pioneer-viewport');
@@ -480,6 +481,7 @@ document.addEventListener('click', (event) => {
 	if (action === 'open-review') { switchWorkspace('review'); return; }
 	if (action === 'workspace-view') { switchWorkspace(button.dataset.view); return; }
 	if (action === 'planning-mode') {
+		if (planningContext()?.mode !== 'pioneer') return;
 		state.planningMode = button.dataset.mode;
 		app.querySelectorAll('[data-planning-panel]').forEach((panel) => { panel.hidden = panel.dataset.planningPanel !== state.planningMode; });
 		app.querySelectorAll('[data-action="planning-mode"]').forEach((control) => control.setAttribute('aria-pressed', String(control.dataset.mode === state.planningMode)));
@@ -638,7 +640,7 @@ document.addEventListener('submit', (event) => {
 		const initiative = String(values.get('initiative') || '') || null;
 		if (initiative && !repositories[state.repository].initiatives.includes(initiative)) return;
 		const opening = [{ role: 'user', kind: 'Starting point', paragraphs: [brief] }, { role: 'agent', kind: 'Planning approach', paragraphs: [initiative ? `This session is scoped to ${initiativeViews[initiative].title}.` : 'The initiative is not yet defined.', 'I will establish the purpose, users, scope, and acceptance criteria before implementation.'] }];
-		const context = { id: `session-${state.nextPlanningContext++}`, repository: state.repository, projectIdentity: repositories[state.repository].projectIdentity, title: brief.split('\n')[0].slice(0, 72), brief, initiative, saved: {
+		const context = { id: `session-${state.nextPlanningContext++}`, mode: String(values.get('mode')), repository: state.repository, projectIdentity: repositories[state.repository].projectIdentity, title: brief.split('\n')[0].slice(0, 72), brief, initiative, saved: {
 			planningMode: String(values.get('mode')), graphZoom: .8,
 			planningSessions: { pioneer: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) }, plan: { drafts: {}, paused: false, answers: [], messages: structuredClone(opening) } },
 			planEntries: [], pioneerResolutions: ['', '', '', '', '', ''],
@@ -677,7 +679,7 @@ document.addEventListener('submit', (event) => {
 			records: session.answers.slice(-answers.length).map((answer) => answer.result),
 		});
 		refreshPlanning();
-		(app.querySelector('[data-planning-question]') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]')).focus();
+		(app.querySelector('[data-planning-question]') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]') || app.querySelector('.planning-heading h2')).focus();
 		notify('Simulated planning agent recorded your answers.');
 		return;
 	}
