@@ -899,7 +899,7 @@ async function getOpenSubIssues(executor: TenantExecutor, issueId: string): Prom
 	return (result.rows as EntityRow[])
 		.map(mapEntityRow)
 		.map((entity) => applyDerivedStatus(entity, statusMap))
-		.filter((entity) => entity.status !== "done");
+		.filter((entity) => entity.status !== "done" && entity.status !== "deferred");
 }
 
 async function getFixingIssueStatuses(executor: TenantExecutor, storyId: string): Promise<string[]> {
@@ -2335,7 +2335,8 @@ export async function getInitiativeTab(
 					adrCount: bundle.adrs.length,
 					contextTermCount: (await queryProjectContextDetails(executor, bundle.initiative, bundle.initiative.id)).terms.length,
 					debtCount: bundle.entities.filter((entity) => entity.kind === "debt").length,
-					issueCount: bundle.issues.length,
+					issueCount: bundle.issues.filter((issue) => issue.status !== "deferred").length,
+					totalIssueCount: bundle.issues.length,
 					completedIssueCount: bundle.issues.filter((issue) => issue.status === "done").length,
 					planCount: bundle.entities.filter((entity) => entity.kind === "plan").length,
 					prdCount: bundle.prds.length,
@@ -2688,7 +2689,8 @@ export async function getProjectSummary(executor: TenantExecutor, input: { proje
 						adrCount: reachableEntities.filter((entity) => entity.kind === "adr").length,
 						contextTermCount: contextTermCountByInitiativeId.get(initiative.id) ?? 0,
 						debtCount: reachableEntities.filter((entity) => entity.kind === "debt").length,
-						issueCount: issues.length,
+						issueCount: issues.filter((issue) => issue.status !== "deferred").length,
+						totalIssueCount: issues.length,
 						completedIssueCount: issues.filter((issue) => issue.status === "done").length,
 						planCount: reachableEntities.filter((entity) => entity.kind === "plan").length,
 						prdCount: reachableEntities.filter((entity) => entity.kind === "prd").length,

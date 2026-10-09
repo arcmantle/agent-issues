@@ -1107,7 +1107,8 @@ export function getInitiativeTab(
 					adrCount: bundle.adrs.length,
 					contextTermCount: getContextDetails(executor, { scopeRef: bundle.initiative.id }).terms.length,
 					debtCount: bundle.entities.filter((entity) => entity.kind === "debt").length,
-					issueCount: bundle.issues.length,
+					issueCount: bundle.issues.filter((issue) => issue.status !== "deferred").length,
+					totalIssueCount: bundle.issues.length,
 					completedIssueCount: bundle.issues.filter((issue) => issue.status === "done").length,
 					planCount: bundle.entities.filter((entity) => entity.kind === "plan").length,
 					prdCount: bundle.prds.length,
@@ -1599,7 +1600,8 @@ export function getProjectSummary(executor: SqliteExecutor, input: { projectId: 
 						adrCount: reachableEntities.filter((entity) => entity.kind === "adr").length,
 						contextTermCount: contextTermCountByInitiativeId.get(initiative.id) ?? 0,
 						debtCount: reachableEntities.filter((entity) => entity.kind === "debt").length,
-						issueCount: issues.length,
+						issueCount: issues.filter((issue) => issue.status !== "deferred").length,
+						totalIssueCount: issues.length,
 						completedIssueCount: issues.filter((issue) => issue.status === "done").length,
 						planCount: reachableEntities.filter((entity) => entity.kind === "plan").length,
 						prdCount: reachableEntities.filter((entity) => entity.kind === "prd").length,
@@ -2070,7 +2072,7 @@ function getOpenSubIssues(executor: SqliteExecutor, issueId: string): EntityReco
 	return rows
 		.map(mapEntityRow)
 		.map((entity) => applyDerivedStatus(entity, statusMap))
-		.filter((entity) => entity.status !== "done");
+		.filter((entity) => entity.status !== "done" && entity.status !== "deferred");
 }
 
 function mapEntityRow(row: EntityRow): EntityRecord {

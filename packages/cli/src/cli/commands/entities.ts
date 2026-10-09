@@ -407,10 +407,10 @@ function deriveNextWork(
 	bundle: { initiative: EntityRecord; issues: EntityRecord[]; subIssueLinks: Array<{ parent: EntityRecord; issue: EntityRecord }> },
 	openBlockers: Record<string, string[]>
 ): NextWorkResult {
-	const unfinishedIssues = bundle.issues.filter((issue) => issue.status !== "done");
+	const unfinishedIssues = bundle.issues.filter((issue) => issue.status !== "done" && issue.status !== "deferred");
 	const blockersByReference = new Map(unfinishedIssues.map((issue) => [issue.reference, new Set(openBlockers[issue.reference] ?? [])]));
 	for (const { parent, issue } of bundle.subIssueLinks) {
-		if (parent.status !== "done" && issue.status !== "done") {
+		if (parent.status !== "done" && parent.status !== "deferred" && issue.status !== "done" && issue.status !== "deferred") {
 			blockersByReference.get(parent.reference)?.add(issue.reference);
 		}
 	}

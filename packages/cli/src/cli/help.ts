@@ -932,8 +932,8 @@ const COMMAND_SPECS: CommandSpec[] = [
 		positionals: [{ name: "initiativeOrDescendantId", description: "An initiative, PRD, user story, or issue in the initiative.", required: true }],
 		examples: ["agent-issues next-work INIT1 --json", "agent-issues next-work ISS7 --json"],
 		notes: [
-			"The result resolves an initiative from the supplied entity and includes all unfinished issues below it, including nested decomposed issues.",
-			"Available issues have no open blocks source and no unfinished sub-issue. Blocked issues name the issue references that must finish first.",
+			"The result resolves an initiative from the supplied entity and includes unfinished issues below it, except deferred issues, including nested decomposed issues.",
+			"Available issues have no open blocks source and no unfinished, non-deferred sub-issue. A deferred blocks source still blocks its target until done.",
 			"Each issue also lists the unfinished issues it unblocks, including its decomposed parent when applicable."
 		],
 		output: {

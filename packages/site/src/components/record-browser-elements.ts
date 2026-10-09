@@ -94,6 +94,7 @@ class RecordListItem extends LitElement {
 class RecordFilterToolbar extends LitElement {
 	static properties = {
 		countText: { type: String },
+		currentWorkFilter: { type: Boolean },
 		query: { type: String },
 		status: { type: String },
 		statuses: { attribute: false },
@@ -103,6 +104,7 @@ class RecordFilterToolbar extends LitElement {
 	};
 
 	public countText = "";
+	public currentWorkFilter = false;
 	public query = "";
 	public status = "all";
 	public statuses: string[] = [];
@@ -162,6 +164,9 @@ class RecordFilterToolbar extends LitElement {
 					.value=${this.status}
 					@change=${this.onStatusChange}
 				>
+					${when(this.currentWorkFilter, () => html`
+					<option value="current-work">Current work</option>
+					`)}
 					<option value="all">All statuses</option>
 					${this.statuses.map((status) => html`<option value=${status}>${status}</option>`)}
 				</select>

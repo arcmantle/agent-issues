@@ -41,6 +41,44 @@ export type StorageDriverContractOptions = {
 export function runStorageDriverContractSuite(options: StorageDriverContractOptions): void {
 	const { label, openStore, openStoreForProject } = options;
 
+	describe(`storage-driver seam: deferred issues (${label})`, () => {
+		it("retains deferred work and history while permitting parent completion", async () => {
+			const store = await openStore();
+			try {
+				const initiative = await store.createEntity({ kind: "initiative", title: "Deferred work" });
+				const parent = await store.createEntity({ kind: "issue", title: "Parent", parentId: initiative.id });
+				const child = await store.createEntity({ kind: "issue", title: "Optional child", body: "Retained content", parentId: parent.id });
+				const dependent = await store.createEntity({ kind: "issue", title: "Dependent", parentId: initiative.id });
+				await store.linkEntities({ fromId: child.id, toId: dependent.id, relationType: "blocks" });
+				await store.updateEntityStatus({ entityId: child.id, status: "deferred" });
+				await expect(store.updateEntityStatus({ entityId: dependent.id, status: "in-progress" })).rejects.toThrow(/blocked by/);
+				await store.updateEntityStatus({ entityId: dependent.id, status: "deferred" });
+				await expect(store.updateEntityStatus({ entityId: parent.id, status: "done" })).resolves.toMatchObject({ entity: { status: "done" } });
+				await expect(store.getEntityDetails(initiative.id)).resolves.toMatchObject({ entity: { status: "done" } });
+				await expect(store.queryEntities({ kind: "issue", statuses: ["deferred"] })).resolves.toMatchObject({
+					entities: expect.arrayContaining([expect.objectContaining({ id: child.id }), expect.objectContaining({ id: dependent.id })])
+				});
+				await store.updateEntityStatus({ entityId: child.id, status: "todo" });
+				await expect(store.getEntityDetails(child.id)).resolves.toMatchObject({
+					entity: { title: child.title, body: "Retained content", status: "todo" },
+					incoming: expect.arrayContaining([expect.objectContaining({ relationType: "decomposes", entity: expect.objectContaining({ id: parent.id }) })]),
+					outgoing: expect.arrayContaining([expect.objectContaining({ relationType: "blocks", entity: expect.objectContaining({ id: dependent.id }) })])
+				});
+				expect((await store.listEntityHistory(child.id)).map((entry) => entry.status)).toEqual(["todo", "deferred", "todo"]);
+				await expect(store.getEntityDetails(initiative.id)).resolves.toMatchObject({ entity: { status: "active" } });
+				await store.updateEntityStatus({ entityId: parent.id, status: "deferred" });
+				await expect(store.getEntityDetails(parent.id)).resolves.toMatchObject({ entity: { status: "deferred" } });
+				await expect(store.getEntityDetails(initiative.id)).resolves.toMatchObject({ entity: { status: "draft" } });
+				await store.updateEntityStatus({ entityId: child.id, status: "deferred" });
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "overview" })).resolves.toMatchObject({
+					rollup: { issueCount: 0, totalIssueCount: 3, completedIssueCount: 0 }
+				});
+			} finally {
+				await store.close();
+			}
+		});
+	});
+
 	describe(`storage-driver seam: Search (${label})`, () => {
 		it("reports availability and returns an exact entity identity match", async () => {
 			const store = await openStore();
@@ -1618,6 +1656,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				});
 				await store.createEntity({ kind: "issue", title: "Open issue", parentId: initiative.id });
 				await store.createEntity({ kind: "issue", title: "Done issue", parentId: initiative.id, status: "done" });
+				await store.createEntity({ kind: "issue", title: "Deferred issue", parentId: initiative.id, status: "deferred" });
 				const prd = await store.createEntity({ kind: "prd", title: "Summary PRD", parentId: initiative.id });
 				await store.createEntity({ kind: "userStory", title: "Summary story", parentId: prd.id });
 				await store.createEntity({ kind: "plan", title: "Summary Plan", parentId: initiative.id });
@@ -1629,6 +1668,9 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 				const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other initiative", parentId: otherEpic.id });
 
 				const summary = await store.getProjectSummary({ projectId: project.id });
+				await expect(store.getInitiativeTab({ initiativeId: initiative.id, tab: "overview" })).resolves.toMatchObject({
+					rollup: { issueCount: 2, totalIssueCount: 3, completedIssueCount: 1 }
+				});
 
 				expect(summary).toEqual(expect.objectContaining({
 					kind: "available",
@@ -1641,6 +1683,7 @@ export function runStorageDriverContractSuite(options: StorageDriverContractOpti
 							contextTermCount: 1,
 							debtCount: 1,
 							issueCount: 2,
+							totalIssueCount: 3,
 								completedIssueCount: 1,
 							planCount: 1,
 							prdCount: 1,

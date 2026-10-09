@@ -3236,6 +3236,8 @@ describe("agent-issues MCP server", () => {
 		const firstBlocked = await store.createEntity({ kind: "issue", title: "First blocked", parentId: initiative.id });
 		const secondBlocked = await store.createEntity({ kind: "issue", title: "Second blocked", parentId: initiative.id });
 		const selected = await store.createEntity({ kind: "issue", title: "Available selection", parentId: initiative.id });
+		await store.createEntity({ kind: "issue", title: "Later work", parentId: initiative.id, status: "deferred" });
+		await store.createEntity({ kind: "issue", title: "Optional child", parentId: selected.id, status: "deferred" });
 		await store.linkEntities({ fromId: blocker.id, relationType: "blocks", toId: firstBlocked.id });
 		await store.linkEntities({ fromId: blocker.id, relationType: "blocks", toId: secondBlocked.id });
 		const server = createMcpServer({ openStore: async () => store });

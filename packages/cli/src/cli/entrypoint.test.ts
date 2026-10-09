@@ -1822,6 +1822,11 @@ describe("cli", () => {
 		const prerequisite = await create("issue", "Publish results", initiative.reference);
 		const child = await create("issue", "Approve limits", parent.reference);
 		const independent = await create("issue", "Write release notes", initiative.reference);
+		const deferred = await create("issue", "Later work", initiative.reference);
+		const deferredChild = await create("issue", "Optional child", independent.reference);
+		for (const issue of [deferred, deferredChild]) {
+			await runCli(["status", issue.reference, "deferred", "--db", dbPath, "--json"], { cwd: root, stderr: createCapture().stream, stdout: createCapture().stream });
+		}
 		await runCli(["link", prerequisite.reference, "blocks", child.reference, "--db", dbPath, "--json"], {
 			cwd: root,
 			stderr: createCapture().stream,
@@ -1835,6 +1840,9 @@ describe("cli", () => {
 		);
 
 		expect(exitCode).toBe(0);
+		const work = JSON.parse(stdout.read()) as { available: Array<{ issue: { reference: string } }>; blocked: Array<{ issue: { reference: string } }> };
+		expect(work.available.map((item) => item.issue.reference).sort()).toEqual([prerequisite.reference, independent.reference].sort());
+		expect(work.blocked.map((item) => item.issue.reference).sort()).toEqual([child.reference, parent.reference].sort());
 		expect(JSON.parse(stdout.read())).toEqual({
 			initiative: expect.objectContaining({ reference: initiative.reference }),
 			available: expect.arrayContaining([

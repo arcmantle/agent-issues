@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveEntityStatuses, derivePrdStatus, getAllowedRelationTypes, getInitialStatus, ID_PREFIX, isAllowedRelation, isEntityType, isInitiativeComplete, isValidStatus } from "./domain.js";
+import { deriveEntityStatuses, derivePrdStatus, deriveUserStoryStatus, getAllowedRelationTypes, getInitialStatus, ID_PREFIX, isAllowedRelation, isEntityType, isInitiativeActive, isInitiativeComplete, isValidStatus } from "./domain.js";
+
+describe("deferred issues", () => {
+	it("allows deferral only for issues", () => {
+		expect(isValidStatus("issue", "deferred")).toBe(true);
+		for (const kind of ["initiative", "prd", "userStory", "debt"] as const) {
+			expect(isValidStatus(kind, "deferred")).toBe(false);
+		}
+	});
+
+	it("excludes deferred work from derived completion without treating it as started work", () => {
+		expect(deriveUserStoryStatus("ready", ["done", "deferred"])).toBe("done");
+		expect(deriveUserStoryStatus("ready", ["deferred"])).toBe("done");
+		expect(deriveUserStoryStatus("ready", ["todo", "deferred"])).toBe("ready");
+		expect(isInitiativeComplete(["done", "deferred"], ["approved"])).toBe(true);
+		expect(isInitiativeComplete(["deferred"], [])).toBe(true);
+		expect(isInitiativeComplete(["todo", "deferred"], [])).toBe(false);
+		expect(isInitiativeComplete(["deferred"], ["draft"])).toBe(false);
+		expect(isInitiativeActive(["todo", "deferred"], ["draft"])).toBe(false);
+	});
+});
 
 describe("Plans", () => {
 	it("has a draft lifecycle, a PLAN reference, initiative ownership, and PRD provenance", () => {

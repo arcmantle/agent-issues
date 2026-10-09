@@ -2179,7 +2179,7 @@ export class AgentIssuesStore {
 			return { adrs: rollup.adrCount ?? bundle.adrs.length, done: rollup.completedIssueCount, issues: rollup.issueCount, pct, stories: rollup.userStoryCount };
 		}
 
-		const total = bundle.issues.length;
+		const total = bundle.issues.filter((issue) => issue.status !== "deferred").length;
 		const done = bundle.issues.filter((issue) => this.isDoneStatus(issue.status)).length;
 		const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 		return { adrs: bundle.adrs.length, done, issues: total, pct, stories: bundle.userStories.length };
@@ -2709,7 +2709,7 @@ export class AgentIssuesStore {
 			return "danger";
 		}
 
-		if (status === "archived" || status === "done" || status === "complete" || status === "closed") {
+		if (status === "archived" || status === "deferred" || status === "done" || status === "complete" || status === "closed") {
 			return "neutral";
 		}
 

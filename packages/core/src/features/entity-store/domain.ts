@@ -22,7 +22,7 @@ export const STATUS_FLOW = {
 	prd: ["draft", "in-progress", "approved", "superseded"],
 	userStory: ["draft", "ready", "in-progress", "done", "superseded"],
 	adr: ["current", "superseded", "archived"],
-	issue: ["todo", "in-progress", "blocked", "done"],
+	issue: ["todo", "in-progress", "blocked", "deferred", "done"],
 	debt: ["open", "resolved", "archived"],
 	handoff: ["active", "done"],
 	plan: ["draft", "in-progress", "ready", "superseded"]
@@ -380,7 +380,7 @@ export function deriveUserStoryStatus(storedStatus: string, fixingIssueStatuses:
 		return storedStatus;
 	}
 
-	if (fixingIssueStatuses.every((status) => status === "done")) {
+	if (fixingIssueStatuses.every((status) => status === "done" || status === "deferred")) {
 		return "done";
 	}
 
@@ -397,7 +397,7 @@ export function isInitiativeComplete(trackedIssueStatuses: string[], ownedPrdSta
 	}
 
 	return (
-		trackedIssueStatuses.every((status) => status === "done") &&
+		trackedIssueStatuses.every((status) => status === "done" || status === "deferred") &&
 		ownedPrdStatuses.every((status) => status === "approved" || status === "superseded")
 	);
 }
@@ -409,7 +409,7 @@ export function isInitiativeComplete(trackedIssueStatuses: string[], ownedPrdSta
  * derived, so a PRD only reads as started once one of its own stories has).
  */
 export function isInitiativeActive(trackedIssueStatuses: string[], ownedPrdStatuses: string[]): boolean {
-	return trackedIssueStatuses.some((status) => status !== "todo") || ownedPrdStatuses.some((status) => status !== "draft");
+	return trackedIssueStatuses.some((status) => status !== "todo" && status !== "deferred") || ownedPrdStatuses.some((status) => status !== "draft");
 }
 
 export function deriveInitiativeStatus(storedStatus: string, trackedIssueStatuses: string[], ownedPrdStatuses: string[]): string {
@@ -445,11 +445,11 @@ export function derivePrdStatus(storedStatus: string, createdStoryStatuses: stri
 }
 
 export function deriveIssueStatus(storedStatus: string, subIssueStatuses: string[]): string {
-	if (subIssueStatuses.length === 0) {
+	if (subIssueStatuses.length === 0 || storedStatus === "deferred") {
 		return storedStatus;
 	}
 
-	if (subIssueStatuses.some((status) => status !== "done")) {
+	if (subIssueStatuses.some((status) => status !== "done" && status !== "deferred")) {
 		return "blocked";
 	}
 
@@ -514,18 +514,25 @@ export function deriveEntityStatuses<T extends Pick<EntityRecord, "id" | "kind" 
 		}
 
 		const statusesOf = (ids: string[] | undefined) => (ids ?? []).map((id) => deriveStatusFor(id));
+		const issueTreeStatusesOf = (ids: string[] | undefined) => {
+			const issueIds = new Set(ids);
+			for (const issueId of issueIds) {
+				for (const childId of decomposedSubIssuesByIssue.get(issueId) ?? []) issueIds.add(childId);
+			}
+			return statusesOf([...issueIds]);
+		};
 		let derivedStatus = entity.status;
 
 		if (entity.kind === "issue") {
 			derivedStatus = deriveIssueStatus(entity.status, statusesOf(decomposedSubIssuesByIssue.get(entity.id)));
 		} else if (entity.kind === "userStory") {
-			derivedStatus = deriveUserStoryStatus(entity.status, statusesOf(fixingIssuesByStory.get(entity.id)));
+			derivedStatus = deriveUserStoryStatus(entity.status, issueTreeStatusesOf(fixingIssuesByStory.get(entity.id)));
 		} else if (entity.kind === "prd") {
 			derivedStatus = derivePrdStatus(entity.status, statusesOf(createdStoriesByPrd.get(entity.id)));
 		} else if (entity.kind === "initiative") {
 			derivedStatus = deriveInitiativeStatus(
 				entity.status,
-				statusesOf(trackedIssuesByInitiative.get(entity.id)),
+				issueTreeStatusesOf(trackedIssuesByInitiative.get(entity.id)),
 				statusesOf(ownedPrdsByInitiative.get(entity.id))
 			);
 		}

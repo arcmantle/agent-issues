@@ -234,16 +234,18 @@ describe("entity detail pane", () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const parentIssue = makeEntity({ category: "priority phrase", id: "ISS_FULL_REFERENCE_123", kind: "issue", status: "todo", title: "Parent issue" });
 		const childIssue = makeEntity({ body: "priority phrase appears only in this body", id: "ISS2", kind: "issue", status: "done", title: "Child issue" });
+		const deferredIssue = makeEntity({ id: "ISS3", kind: "issue", status: "deferred", title: "Later child" });
+		const nestedIssue = makeEntity({ id: "ISS4", kind: "issue", status: "todo", title: "Current descendant" });
 		const story = makeEntity({ id: "US1", kind: "userStory", status: "draft", title: "Keep issue work visible" });
 		const adr = makeEntity({ id: "ADR1", kind: "adr", status: "current", title: "Use record tabs" });
 		const plan = makeEntity({ id: "PLAN1", kind: "plan", status: "active", title: "Related delivery plan" });
 		const snapshot = makeSnapshot({
-			entities: [initiative, parentIssue, childIssue, story, adr, plan],
+			entities: [initiative, parentIssue, childIssue, deferredIssue, nestedIssue, story, adr, plan],
 			initiatives: [makeBundle(initiative, {
 				constrainsLinks: [{ adr, issue: parentIssue }],
 				fixLinks: [{ issue: childIssue, userStory: story }],
-				issues: [parentIssue, childIssue],
-				subIssueLinks: [{ issue: childIssue, parent: parentIssue }],
+				issues: [parentIssue, childIssue, deferredIssue, nestedIssue],
+				subIssueLinks: [{ issue: childIssue, parent: parentIssue }, { issue: deferredIssue, parent: parentIssue }, { issue: nestedIssue, parent: deferredIssue }],
 				userStories: [story]
 			})],
 			relations: [makeRelation(parentIssue.id, "blocks", plan.id)]
@@ -253,8 +255,8 @@ describe("entity detail pane", () => {
 		const view = await mountDetail(store);
 
 		expect(tabLabels(view)).toEqual(["Overview", "Issues", "Plans", "ADRs", "User stories", "Graph"]);
-		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "1", plans: "1", userStories: "1" });
-		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 1 records");
+		expect(tabRecordCounts(view)).toEqual({ adrs: "1", issues: "3", plans: "1", userStories: "1" });
+		expect(view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.getAttribute("aria-label")).toBe("Issues: 3 records");
 		expect(view.shadowRoot?.querySelector('[data-tab="issues"] .ai-subtab-count')?.getAttribute("aria-hidden")).toBe("true");
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="adrs"]')?.click();
 		await view.updateComplete;
@@ -267,6 +269,14 @@ describe("entity detail pane", () => {
 		await view.updateComplete;
 		updateIssueRecordView(view, "issues", "list");
 		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-browser-list .record-row[data-id="ISS3"]')).toBeNull();
+		updateIssueRecordFilter(view, { status: "deferred" });
+		await view.updateComplete;
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS3"]);
+		updateIssueRecordFilter(view, { status: "all" });
+		await view.updateComplete;
+		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id).sort()).toEqual(["ISS2", "ISS3", "ISS4"]);
+		updateIssueRecordFilter(view, { status: "current-work" });
 		updateIssueRecordFilter(view, { query: "priority phrase" });
 		await view.updateComplete;
 		expect([...view.shadowRoot?.querySelectorAll<HTMLElement>(".record-browser-list .record-row") ?? []].map((record) => record.dataset.id)).toEqual(["ISS2"]);
@@ -284,6 +294,8 @@ describe("entity detail pane", () => {
 		await view.updateComplete;
 		updateIssueRecordView(view, "issues", "tree");
 		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.ai-ref[data-id="ISS3"]')).toBeNull();
+		expect(view.shadowRoot?.querySelector('.ai-ref[data-id="ISS4"]')).not.toBeNull();
 
 		view.shadowRoot?.querySelector<HTMLButtonElement>('[role="tab"][data-tab="userStories"]')?.click();
 		await view.updateComplete;

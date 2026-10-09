@@ -211,7 +211,7 @@ describe("initiative detail overview tab", () => {
 		const store = new AgentIssuesStore();
 		store.projectSummary.set({
 			counts: { completedInitiatives: 0, epics: 1, initiatives: 1 },
-			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ adrCount: 2, completedIssueCount: 0, contextTermCount: 8, debtCount: 3, initiative: initiativeSummary, issueCount: 4, planCount: 5, prdCount: 6, userStoryCount: 7 }] }],
+			epics: [{ epic: { ...initiativeSummary, id: "EPIC1", kind: "epic", title: "Viewer work" }, initiatives: [{ adrCount: 2, completedIssueCount: 0, contextTermCount: 8, debtCount: 3, initiative: initiativeSummary, issueCount: 0, totalIssueCount: 1, planCount: 5, prdCount: 6, userStoryCount: 7 }] }],
 			kind: "available",
 			project: { ...initiativeSummary, id: "PROJ1", kind: "project", title: "Project" }
 		});
@@ -220,7 +220,7 @@ describe("initiative detail overview tab", () => {
 		const view = await mountView(store);
 
 		expect(tabLabels(view)).toContain("Issues");
-		expect(tabRecordCounts(view)).toEqual({ adrs: "2", context: "8", debt: "3", issues: "4", plans: "5", prds: "6", userStories: "7" });
+		expect(tabRecordCounts(view)).toEqual({ adrs: "2", context: "8", debt: "3", issues: "1", plans: "5", prds: "6", userStories: "7" });
 		expect(view.shadowRoot?.querySelector(".kpi:last-child .k-num")?.textContent).toBe("2");
 	});
 
@@ -437,6 +437,31 @@ describe("initiative detail overview tab", () => {
 });
 
 describe("initiative detail record tabs", () => {
+	it("hides deferred issues by default and permits Deferred and All statuses filters", async () => {
+		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active" });
+		const current = makeEntity({ id: "ISS1", kind: "issue", status: "todo" });
+		const deferred = makeEntity({ id: "ISS2", kind: "issue", status: "deferred" });
+		const nested = makeEntity({ id: "ISS3", kind: "issue", status: "todo" });
+		const bundle = makeBundle(initiative, { issues: [current, deferred, nested], subIssueLinks: [{ parent: deferred, issue: nested }] });
+		const store = makeStore(bundle);
+		const view = await mountView(store);
+		view.shadowRoot?.querySelector<HTMLButtonElement>('[data-tab="issues"]')?.click();
+		await view.updateComplete;
+		expect(view.shadowRoot?.querySelector('.record-tree [data-id="ISS2"]')).toBeNull();
+		expect(view.shadowRoot?.querySelector('.record-tree [data-id="ISS3"]')).not.toBeNull();
+		updateRecordView(view, "issues", "list");
+		await view.updateComplete;
+		expect(recordItems(view).map((item) => item.dataset.id).sort()).toEqual(["ISS1", "ISS3"]);
+		updateRecordFilter(view, { status: "deferred" });
+		await view.updateComplete;
+		expect(recordItems(view).map((item) => item.dataset.id)).toEqual(["ISS2"]);
+		updateRecordFilter(view, { status: "all" });
+		await view.updateComplete;
+		expect(recordItems(view).map((item) => item.dataset.id).sort()).toEqual(["ISS1", "ISS2", "ISS3"]);
+		expect(store.initiativeStats(bundle)).toMatchObject({ issues: 2, done: 0, pct: 0 });
+		expect(store.initiativeStats(makeBundle(initiative, { issues: [deferred] }))).toMatchObject({ issues: 0, done: 0, pct: 0 });
+	});
+
 	it("orders issues by expected completion through their blockers", async () => {
 		const initiative = makeEntity({ id: "INIT1", kind: "initiative", status: "active", title: "Console Viewer" });
 		const completedBlocker = makeEntity({ id: "ISS1", kind: "issue", status: "done", title: "Completed blocker" });

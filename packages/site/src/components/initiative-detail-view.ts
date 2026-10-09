@@ -62,7 +62,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	protected collapsedIssueIds = new Set<string>();
 	protected collapsedOverviewSectionIds = new Set<string>();
 	protected recordQuery = "";
-	protected recordStatus = "all";
+	protected recordStatus = "current-work";
 	protected issueRecordView: RecordView = "tree";
 	protected userStoryRecordView: RecordView = "tree";
 	protected visibleGraphKinds = new Set<ProjectGraphKind>(INITIATIVE_GRAPH_KINDS);
@@ -104,7 +104,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		}
 
 		this.recordQuery = "";
-		this.recordStatus = "all";
+		this.recordStatus = tab === "issues" || tab === "userStories" ? "current-work" : "all";
 		this.store?.setInitTab(tab);
 	};
 
@@ -412,7 +412,8 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		const rankedRecords: RankedRecord[] = [];
 
 		for (const [index, record] of records.entries()) {
-			if (this.recordStatus !== "all" && record.status !== this.recordStatus) {
+			if (this.recordStatus === "current-work" && record.kind === "issue" && record.status === "deferred") continue;
+			if (this.recordStatus !== "all" && this.recordStatus !== "current-work" && record.status !== this.recordStatus) {
 				continue;
 			}
 
@@ -430,6 +431,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 	protected filterIssueTree(nodes: IssueTreeNode[], matchingIssueIds: ReadonlySet<string>): IssueTreeNode[] {
 		return nodes.flatMap((node) => {
 			const children = this.filterIssueTree(node.children, matchingIssueIds);
+			if (this.recordStatus === "current-work" && node.issue.status === "deferred") return children;
 			if (!matchingIssueIds.has(node.issue.id) && children.length === 0) return [];
 
 			return [{ ...node, children }];
@@ -517,8 +519,9 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 		<section class="record-browser record-tab">
 			<agent-issues-record-filter-toolbar
 				.countText=${`${filteredRecords.length} of ${records.length}`}
+				.currentWorkFilter=${options.treeTab !== undefined || records.some((record) => record.kind === "issue")}
 				.query=${this.recordQuery}
-				.status=${this.recordStatus}
+				.status=${this.recordStatus === "current-work" && !options.treeTab && !records.some((record) => record.kind === "issue") ? "all" : this.recordStatus}
 				.statuses=${statuses}
 				.title=${title}
 				.treeTab=${options.treeTab ?? null}
@@ -641,7 +644,7 @@ class InitiativeDetailView extends SignalWatcher(LitElement) {
 				adrs: rollup.adrCount ?? bundle.adrs.length,
 				context: rollup.contextTermCount ?? context?.terms.length ?? 0,
 				debt: rollup.debtCount ?? debtRecords.length,
-				issues: rollup.issueCount,
+				issues: rollup.totalIssueCount ?? rollup.issueCount,
 				plans: rollup.planCount ?? plans.length,
 				prds: rollup.prdCount ?? bundle.prds.length,
 				userStories: rollup.userStoryCount

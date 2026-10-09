@@ -244,6 +244,7 @@ export type InitiativeRollup = {
 	contextTermCount?: number;
 	debtCount?: number;
 	issueCount: number;
+	totalIssueCount?: number;
 	completedIssueCount: number;
 	planCount?: number;
 	prdCount?: number;

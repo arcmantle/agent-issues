@@ -29,7 +29,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	protected collapsedIssueIds = new Set<string>();
 	public entityDetailTab: EntityDetailTab = "overview";
 	protected recordQuery = "";
-	protected recordStatus = "all";
+	protected recordStatus = "current-work";
 	protected issueRecordView: RecordView = "tree";
 	protected userStoryRecordView: RecordView = "tree";
 	public visibleGraphKinds = new Set<ProjectGraphKind>(PROJECT_GRAPH_KINDS);
@@ -145,7 +145,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 
 		this.entityDetailTab = tab;
 		this.recordQuery = "";
-		this.recordStatus = "all";
+		this.recordStatus = tab === "issues" || tab === "userStories" ? "current-work" : "all";
 		const entityId = this.entityId ?? this.store?.selectedId.get();
 		if (entityId) {
 			this.store?.requestEntityTab(entityId, tab);
@@ -331,7 +331,8 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		const rankedRecords: RankedRecord[] = [];
 
 		for (const [index, record] of records.entries()) {
-			if (this.recordStatus !== "all" && record.status !== this.recordStatus) continue;
+			if (this.recordStatus === "current-work" && record.kind === "issue" && record.status === "deferred") continue;
+			if (this.recordStatus !== "all" && this.recordStatus !== "current-work" && record.status !== this.recordStatus) continue;
 
 			const rank = this.recordSearchRank(record, bundle);
 			if (rank !== null) rankedRecords.push({ index, rank, record });
@@ -349,6 +350,7 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 	protected filterIssueTree(nodes: IssueTreeNode[], matchingIssueIds: ReadonlySet<string>): IssueTreeNode[] {
 		return nodes.flatMap((node) => {
 			const children = this.filterIssueTree(node.children, matchingIssueIds);
+			if (this.recordStatus === "current-work" && node.issue.status === "deferred") return children;
 			if (!matchingIssueIds.has(node.issue.id) && children.length === 0) return [];
 
 			return [{ ...node, children }];
@@ -404,8 +406,9 @@ class IssueDetailView extends SignalWatcher(LitElement) {
 		<section class="ai-record-tab record-browser">
 			<agent-issues-record-filter-toolbar
 				.countText=${`${filteredRecords.length} of ${records.length}`}
+				.currentWorkFilter=${options.treeTab !== undefined || records.some((record) => record.kind === "issue")}
 				.query=${this.recordQuery}
-				.status=${this.recordStatus}
+				.status=${this.recordStatus === "current-work" && !options.treeTab && !records.some((record) => record.kind === "issue") ? "all" : this.recordStatus}
 				.statuses=${statuses}
 				.title=${title}
 				.treeTab=${options.treeTab ?? null}

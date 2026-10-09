@@ -106,6 +106,12 @@ Relations give these records meaning beyond a task list:
 
 Project context holds shared terms. Initiative context holds terms for that initiative. The context directory keeps these scopes distinct.
 
+### Deferred Issues
+
+Use `agent-issues status <issue-id> deferred` for optional work or work that is not actionable yet. Use `agent-issues status <issue-id> todo` to return it to current work. Both changes retain content, ownership, relations, and history.
+
+Deferred issues do not appear in `next-work` or count toward progress totals. A parent can be done when its only unfinished children are deferred. Browser issue lists hide deferred issues by default; use the Deferred or All statuses filter to show them. Deferral does not finish a dependency: an explicit `blocks` relation still applies until its source issue is done. Deferred is an issue-only status, not a replacement for blocked or debt.
+
 ## Pioneer
 
 Pioneer is a planning workflow for work that is too large or uncertain for one agent session. It is **not a separate entity kind**. Its map and decision tickets are issues with the types `pioneer-map` and `pioneer-ticket`.
