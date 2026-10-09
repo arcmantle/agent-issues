@@ -236,15 +236,7 @@ function repositoryHeader(review) {
 	const brand = `<div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div>`;
 	if (!review) return `${brand}<div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p>`;
 	const repository = repositories[state.repository];
-	return `<div class="eyebrow muted">Project</div><div class="brand current-project"><span class="brand-mark">${icon('folder-git-2')}</span><span>${escapeHtml(repository.projectIdentity || repository.name)}</span></div>${repository.projectIdentity ? '' : '<p class="muted">Not connected</p>'}`;
-}
-function refreshRepositoryContext() {
-	for (const panel of app.querySelectorAll('[data-page-panel="workspace"], [data-page-panel="planning"]')) {
-		const id = panel.dataset.repositoryScope === 'agent-issues' ? 'agent-issues' : state.repository;
-		const repository = repositories[id];
-		panel.querySelector(':scope > .repository-context')?.remove();
-		panel.insertAdjacentHTML('afterbegin', `<div class="repository-context" role="region" aria-label="Current repository"><div><strong>${icon('folder-git-2')}${escapeHtml(repository.name)}</strong><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="repository-project muted">Project / ${escapeHtml(repository.projectIdentity || 'Not connected')} <span>Tenant / ${escapeHtml(repository.tenant)}</span></p></div><button data-action="page" data-page="repositories">${icon('folders')}Repositories</button></div>`);
-	}
+	return `<div role="region" aria-label="Current repository"><div class="brand current-project"><span>${icon('folder-git-2')}</span><span>${escapeHtml(repository.name)}</span></div><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="repository-project muted">Project / ${escapeHtml(repository.projectIdentity || 'Not connected')}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p></div>`;
 }
 function selectRepository(id) {
 	if (id === state.repository || !repositories[id]) return;
@@ -271,7 +263,6 @@ function selectRepository(id) {
 	switchPage(state.page, false);
 	app.dataset.repository = id;
 	app.dataset.projectIdentity = repositories[id].projectIdentity || '';
-	refreshRepositoryContext();
 	refreshRepositories();
 	window.lucide?.createIcons();
 }
@@ -385,6 +376,11 @@ function switchPage(page, updateHistory = true) {
 	}
 	const panel = app.querySelector(`[data-page-panel="${page}"]:not([hidden])`);
 	panel.scrollTop = scrollPositions[panel.dataset.scrollKey] || 0;
+	if (document.activeElement === document.body || document.activeElement?.closest('[data-page-panel][hidden], [data-sidebar-panel][hidden]')) {
+		const heading = panel.querySelector('h1');
+		heading?.setAttribute('tabindex', '-1');
+		heading?.focus({ preventScroll: true });
+	}
 	requestAnimationFrame(() => terminals.forEach(({ fit, host }) => { if (host.offsetWidth && host.offsetHeight) fit.fit(); }));
 }
 function rememberFolders() {
@@ -432,7 +428,6 @@ function render() {
 	terminals = [];
 	app.innerHTML = ({ A: VariantA, B: VariantB, C: VariantC })[variant]();
 	if (variant === 'C') app.querySelector('.review-layout').insertAdjacentHTML('beforeend', repositoriesPage());
-	if (variant === 'C') refreshRepositoryContext();
 	document.querySelector('#variant-label').textContent = `${variant} / ${names[variant]}`;
 	document.body.dataset.variant = variant;
 	app.dataset.view = state.view;
@@ -584,7 +579,6 @@ document.addEventListener('click', (event) => {
 	if (action === 'page') {
 		event.preventDefault();
 		switchPage(button.dataset.page);
-		if (button.closest('.repository-context')) app.querySelector('#repository-search').focus();
 		return;
 	}
 	if (action === 'open-folder') { openDialog(action); return; }
