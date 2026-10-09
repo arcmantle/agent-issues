@@ -5,7 +5,10 @@ const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
 	planningMode: 'pioneer', graphZoom: .8,
-	planningSessions: { pioneer: { drafts: {}, paused: false, answers: [] }, plan: { drafts: {}, paused: false, answers: [] } },
+	planningSessions: {
+		pioneer: { drafts: {}, paused: false, answers: [], messages: [{ role: 'agent', kind: 'Findings', paragraphs: ['Native CLI sessions and a local runner are already selected. Provider control is resolved.', 'Workspace design and approval gates can be considered together. Recovery and usage decisions depend on these results.'] }] },
+		plan: { drafts: {}, paused: false, answers: [], messages: [{ role: 'agent', kind: 'Findings and recommendation', paragraphs: ['The current scope permits concurrent initiative runs in different repositories. Each repository has one active initiative.', 'Integration requires approval for each issue. Final merge requires separate approval. I recommend keeping these decisions in the first-release plan.', 'Provider choice, the plan review boundary, and release acceptance are not yet specified.'] }] },
+	},
 	planEntries: [
 		{ role: 'scope', body: 'Support concurrent initiative runs across different repositories.' },
 		{ role: 'decision', body: 'Keep one active initiative per repository.' },
@@ -66,8 +69,11 @@ function planningSession() {
 	const session = state.planningSessions[state.planningMode];
 	const questions = planningQuestions();
 	const status = session.paused ? 'Paused' : questions.length ? 'Needs your answers' : 'Ready for your review';
-	const last = session.answers.at(-1);
-	return `<section class="planning-session" aria-label="Planning agent session"><div class="planner-agent"><span>${icon('bot')}Planning agent / Copilot</span><div><span class="status ${questions.length ? 'waiting' : 'review'}">${status}</span>${questions.length ? `<button class="icon-button" data-action="planning-pause" title="${session.paused ? 'Resume planning' : 'Pause planning'}" aria-label="${session.paused ? 'Resume planning' : 'Pause planning'}">${icon(session.paused ? 'play' : 'pause')}</button>` : ''}</div></div>${last ? `<div class="planner-record"><span class="eyebrow muted">Agent recorded</span><p>${escapeHtml(last.result)}</p></div>` : ''}${questions.length ? `<div class="planner-question"><div class="eyebrow muted">Questions / ${questions.length}</div><form data-form="planning-answer" data-mode="${state.planningMode}">${questions.map((question, position) => `<div class="planner-question-field"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions.length}</div><h3>${question.question}</h3><label for="planning-answer-${question.index}">Answer ${position + 1}</label><textarea id="planning-answer-${question.index}" data-planning-question="${question.index}" name="answer-${question.index}" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.drafts[question.index] || '')}</textarea></div>`).join('')}<button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answers</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3><p>The planning agent has recorded your answers. No execution or integration was started.</p></div>`}${session.answers.length ? `<details class="planner-history"><summary>Conversation / ${session.answers.length} answers</summary><ol>${session.answers.map((answer) => `<li><strong>Agent</strong><p>${escapeHtml(answer.question)}</p><strong>You</strong><p>${escapeHtml(answer.answer)}</p><strong>Agent recorded</strong><p>${escapeHtml(answer.result)}</p></li>`).join('')}</ol></details>` : ''}</section>`;
+	return `<section class="planning-session" aria-label="Planning agent session">
+		<div class="planner-agent"><span>${icon('bot')}Planning agent / Copilot</span><div><span class="status ${questions.length ? 'waiting' : 'review'}">${status}</span>${questions.length ? `<button class="icon-button" data-action="planning-pause" title="${session.paused ? 'Resume planning' : 'Pause planning'}" aria-label="${session.paused ? 'Resume planning' : 'Pause planning'}">${icon(session.paused ? 'play' : 'pause')}</button>` : ''}</div></div>
+		<ol class="planner-conversation" aria-label="Planning conversation">${session.messages.map((message) => `<li class="planner-message ${message.role}"><div class="planner-message-heading"><strong>${icon(message.role === 'agent' ? 'bot' : 'user')}${message.role === 'agent' ? 'Agent' : 'You'}</strong><span>${escapeHtml(message.kind)}</span></div>${(message.paragraphs || []).map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('')}${message.answers ? `<dl>${message.answers.map((answer) => `<dt>${escapeHtml(answer.question)}</dt><dd>${escapeHtml(answer.answer)}</dd>`).join('')}</dl>` : ''}${message.records ? `<ul class="planner-message-records">${message.records.map((record) => `<li>${escapeHtml(record)}</li>`).join('')}</ul>` : ''}</li>`).join('')}</ol>
+		${questions.length ? `<div class="planner-question"><div class="eyebrow muted">Questions / ${questions.length}</div><form data-form="planning-answer" data-mode="${state.planningMode}">${questions.map((question, position) => `<div class="planner-question-field"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions.length}</div><h3>${question.question}</h3><label for="planning-answer-${question.index}">Answer ${position + 1}</label><textarea id="planning-answer-${question.index}" data-planning-question="${question.index}" name="answer-${question.index}" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.drafts[question.index] || '')}</textarea></div>`).join('')}<button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answers</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3></div>`}
+	</section>`;
 }
 function pioneerGraph() {
 	const edges = pioneerTickets.flatMap((ticket, index) => ticket.dependencies.map((dependency) => {
@@ -496,6 +502,13 @@ document.addEventListener('submit', (event) => {
 			else state.planEntries.push({ role: planQuestions[question.index].role, body: result });
 			session.answers.push({ question: question.question, answer: question.answer, result });
 			delete session.drafts[question.index];
+		});
+		session.messages.push({ role: 'user', kind: 'Answers', answers: answers.map((answer) => ({ question: answer.question, answer: answer.answer })) });
+		const nextQuestions = planningQuestions();
+		session.messages.push({
+			role: 'agent', kind: nextQuestions.length ? 'Planning update' : 'Review summary',
+			paragraphs: [`Recorded ${answers.length} planning answers.`, nextQuestions.length ? `The next unresolved topics are ${nextQuestions.map((question) => question.title).join(', ')}.` : 'The draft is ready for your review. No execution or integration was started.'],
+			records: session.answers.slice(-answers.length).map((answer) => answer.result),
 		});
 		refreshPlanning();
 		(app.querySelector('[data-planning-question]') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]')).focus();
