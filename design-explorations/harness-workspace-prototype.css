@@ -821,6 +821,240 @@ body[data-variant='C'] #app {
 	border-bottom-color: var(--accent);
 	color: var(--accent);
 }
+.initiative-route {
+	padding: 24px;
+}
+.route-heading {
+	display: flex;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 16px;
+}
+.route-heading h2 {
+	margin-top: 8px;
+	font-size: 20px;
+}
+.route-heading p {
+	margin-top: 8px;
+	font-size: 12px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.route-progress {
+	align-self: flex-start;
+	padding: 6px 0;
+	font-family: 'IBM Plex Mono', monospace;
+	font-size: 11px;
+	color: var(--accent);
+}
+.route-prds {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 18px;
+	margin: 24px 0;
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+}
+.route-prd {
+	justify-content: flex-start;
+	align-items: flex-start;
+	padding: 16px 0;
+	border: 0;
+	border-radius: 0;
+	text-align: left;
+	background: transparent;
+}
+.route-prd > span {
+	display: grid;
+	flex: 1;
+	gap: 7px;
+	min-width: 0;
+}
+.route-prd small, .route-prd > span > span {
+	font-size: 10px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.route-prd strong {
+	font-size: 12px;
+}
+.route-summary {
+	display: flex;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-bottom: 20px;
+}
+.route-summary > span {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 10px;
+	color: var(--muted);
+}
+.work-route {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 14px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.route-stage {
+	min-width: 0;
+}
+.route-stage-heading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 68px;
+	padding-bottom: 16px;
+	border-bottom: 2px solid var(--border);
+}
+.route-stage-heading > div {
+	flex: 1;
+	min-width: 0;
+}
+.route-stage-heading h3 {
+	font-size: 12px;
+}
+.route-stage-heading > div > span {
+	display: block;
+	margin-top: 5px;
+	font-size: 10px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.route-step {
+	display: grid;
+	flex-shrink: 0;
+	width: 24px;
+	height: 24px;
+	place-items: center;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	font-family: 'IBM Plex Mono', monospace;
+	font-size: 11px;
+}
+.route-stage:first-child .route-stage-heading {
+	border-color: var(--accent);
+}
+.route-issues {
+	display: grid;
+	gap: 12px;
+	margin: 16px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.route-issue {
+	display: flex;
+	align-items: stretch;
+	flex-direction: column;
+	gap: 10px;
+	width: 100%;
+	min-height: 150px;
+	padding: 12px;
+	border-left-width: 3px;
+	text-align: left;
+}
+.route-issue.running {
+	border-left-color: var(--accent);
+}
+.route-issue.waiting {
+	border-left-color: var(--warning);
+}
+.route-issue.review {
+	border-left-color: #347f92;
+}
+.route-issue.ready, .route-issue.integrated {
+	border-left-color: var(--accent);
+	background: #f0f7f2;
+}
+.status.blocked {
+	color: var(--muted);
+}
+.status.blocked::before {
+	background: var(--muted);
+}
+.route-issue-meta {
+	display: flex;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 7px;
+	font-size: 10px;
+}
+.route-issue strong {
+	font-size: 13px;
+	line-height: 1.45;
+}
+.route-issue-detail {
+	font-size: 10px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.route-issue-prd {
+	display: flex;
+	align-items: flex-start;
+	gap: 5px;
+	margin-top: auto;
+	padding-top: 10px;
+	border-top: 1px solid var(--border);
+	font-size: 10px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.record-state {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	font-size: 12px;
+}
+.record-section {
+	display: grid;
+	gap: 10px;
+	margin: 20px 0;
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+	font-size: 12px;
+	line-height: 1.6;
+}
+.record-section p {
+	margin: 0;
+}
+.record-section ul {
+	margin: 0;
+	padding-left: 18px;
+}
+.record-link {
+	justify-content: flex-start;
+	text-align: left;
+}
+@media (max-width: 1350px) {
+	.work-route {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.route-issues {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+@media (max-width: 700px) {
+	.initiative-route {
+		padding: 18px;
+	}
+	.route-prds, .route-issues {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.route-prds {
+		gap: 0;
+	}
+	.workspace-tabs {
+		gap: 16px;
+	}
+	.workspace-tabs button {
+		font-size: 12px;
+	}
+}
 .checkpoint-heading {
 	position: sticky;
 	z-index: 1;

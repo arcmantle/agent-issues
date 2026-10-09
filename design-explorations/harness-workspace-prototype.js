@@ -15,9 +15,38 @@ const initialState = () => ({
 let state = initialState();
 let viewedInitiative = 'harness';
 const initiativeViews = {
-	harness: { title: 'Initiative execution harness', summary: 'Coordinate agents, user decisions, and approved changes.', prd: 'Local execution workspace', story: 'Inspect and control agent work', issues: ['Session recovery', 'Usage limits', 'Approval checkpoint'], adrs: ['Native terminal workspace', 'Approved integration'] },
+	harness: { title: 'Initiative execution harness', summary: 'Coordinate agents, user decisions, and approved changes.', prd: 'Local execution workspace', story: 'Inspect and control agent work', issues: ['Session recovery', 'Usage limits', 'Approval checkpoint', 'Serial integration', 'Restart confirmation', 'Final merge approval'], adrs: ['Native terminal workspace', 'Approved integration'] },
 	navigation: { title: 'Tracker navigation', summary: 'Find tracked requirements and linked work.', prd: 'Connected work navigation', story: 'Browse initiative records', issues: ['Initiative selector', 'Linked record view', 'Work filters'], adrs: ['Shared tracker queries'], run: 'No active run' },
 };
+const routePrds = [
+	{ title: 'Local execution workspace', story: 'Inspect and control agent work', issues: [0, 1, 2] },
+	{ title: 'Safe delivery and recovery', story: 'Integrate and recover approved work', issues: [3, 4, 5] },
+];
+const routeIssues = [
+	{ stage: 0, dependencies: [], outcome: 'Restore recorded sessions without restarting interrupted agents automatically.', criteria: ['Restore pending decisions and recorded checkpoints.', 'Require confirmation before an interrupted agent restarts.'], evidence: '2 focused checks passed. Independent review is in progress.' },
+	{ stage: 0, dependencies: [], outcome: 'Apply one usage limit across all sessions in a provider integration.', criteria: ['Count usage across workers and repositories.', 'Pause new assignments when the limit is reached.'], evidence: 'Waiting for the user decision. Validation is not complete.' },
+	{ stage: 0, dependencies: [], outcome: 'Bind integration approval to the exact recorded changes.', criteria: ['A changed revision requires new approval.', 'Integrate only the approved revision.'], evidence: '6 checks passed. Independent review passed.' },
+	{ stage: 1, dependencies: [2], outcome: 'Integrate approved worker changes one issue at a time.', criteria: ['Keep worker changes in isolated worktrees.', 'Send conflicts to the run inbox.'], evidence: 'Not assigned. No validation evidence.' },
+	{ stage: 1, dependencies: [0, 1], outcome: 'Check restored state and usage before restarting an interrupted worker.', criteria: ['Read tracker, Git, and session state.', 'Require user confirmation before restart.'], evidence: 'Not assigned. No validation evidence.' },
+	{ stage: 2, dependencies: [3, 4], outcome: 'Request separate approval before the initiative branch merges to the target branch.', criteria: ['All required issue changes must be integrated.', 'Do not push automatically.'], evidence: 'Not assigned. No validation evidence.' },
+];
+const routeReference = (index) => `DEMO-${String(index + 1).padStart(2, '0')}`;
+function routeState(index) {
+	const worker = state.workers[index];
+	if (worker) return { label: labels[worker.status], tone: worker.status, detail: `Worker ${worker.id} / attempt ${worker.id}.1` };
+	const dependencies = routeIssues[index].dependencies;
+	const remaining = dependencies.filter((dependency) => state.workers[dependency]?.status !== 'integrated');
+	if (remaining.length) return { label: 'Blocked', tone: 'blocked', detail: `After ${remaining.map(routeReference).join(' + ')} integration` };
+	return { label: state.mode === 'running' ? 'Next available' : 'Scheduling paused', tone: 'ready', detail: 'No worker assigned' };
+}
+function initiativeRoute() {
+	const integrated = state.workers.filter((worker) => worker.status === 'integrated').length;
+	const issueNode = (index) => {
+		const status = routeState(index);
+		return `<li><button class="route-issue ${status.tone}" data-action="record" data-kind="issue" data-index="${index}"><span class="route-issue-meta"><span class="mono">${routeReference(index)}</span><span class="status ${status.tone}">${status.label}</span></span><strong>${initiativeViews.harness.issues[index]}</strong><span class="route-issue-detail">${status.detail}</span><span class="route-issue-prd">${icon('file-text')}${routePrds[index < 3 ? 0 : 1].title}${icon('arrow-up-right')}</span></button></li>`;
+	};
+	return `<section class="initiative-route"><div class="route-heading"><div><div class="eyebrow muted">Initiative / simulated</div><h2>${initiativeViews.harness.title}</h2><p>${initiativeViews.harness.summary}</p></div><span class="route-progress">${integrated} / 6 integrated</span></div><div class="route-prds">${routePrds.map((prd, index) => `<button class="route-prd" data-action="record" data-kind="prd" data-index="${index}">${icon('file-text')}<span><small>PRD ${String(index + 1).padStart(2, '0')}</small><strong>${prd.title}</strong><span>${prd.issues.length} issues / ${prd.story}</span></span>${icon('arrow-up-right')}</button>`).join('')}</div><div class="route-summary"><h3>Work route</h3><span>${icon('git-branch')}Dependencies wait for integration</span></div><ol class="work-route" aria-label="Initiative issue route">${['Current work', 'Next work', 'Final approval'].map((title, stage) => `<li class="route-stage"><div class="route-stage-heading"><span class="route-step">${stage + 1}</span><div><h3>${title}</h3><span>${['3 assigned / independent work', 'After prerequisite integration', 'After delivery and recovery'][stage]}</span></div>${stage < 2 ? icon('arrow-right') : icon('flag')}</div><ul class="route-issues">${routeIssues.flatMap((issue, index) => issue.stage === stage ? [issueNode(index)] : []).join('')}</ul></li>`).join('')}</ol></section>`;
+}
 let terminals = [];
 let scrollPositions = {};
 let variant = new URL(location.href).searchParams.get('variant') || 'A';
@@ -43,7 +72,8 @@ function runHeader(showBrand = false) {
 function trackedWork() {
 	const initiative = initiativeViews[viewedInitiative];
 	const row = (title, kind, index, status) => `<button class="tracked-record" data-action="record" data-kind="${kind}" data-index="${index}"><span>${icon(kind === 'issue' ? 'circle-dot' : 'file-text')}<span>${title}</span></span><small>${status}</small></button>`;
-	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${Object.entries(initiativeViews).map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'Harness / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRD / 1</summary>${row(initiative.prd, 'prd', 0, 'Draft')}<details open class="story-group"><summary>User story / 1</summary>${row(initiative.story, 'story', 0, 'In progress')}<div class="issue-group">${initiative.issues.map((title, index) => row(title, 'issue', index, viewedInitiative === 'harness' ? labels[state.workers[index].status] : 'Ready')).join('')}</div></details></details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
+	const prds = viewedInitiative === 'harness' ? routePrds : [{ title: initiative.prd, story: initiative.story, issues: [0, 1, 2] }];
+	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${Object.entries(initiativeViews).map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'Harness / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRDs / ${prds.length}</summary>${prds.map((prd, prdIndex) => `${row(prd.title, 'prd', prdIndex, 'Draft')}<details open class="story-group"><summary>User story</summary>${row(prd.story, 'story', prdIndex, 'In progress')}<div class="issue-group">${prd.issues.map((index) => row(initiative.issues[index], 'issue', index, viewedInitiative === 'harness' ? routeState(index).label : 'Ready')).join('')}</div></details>`).join('')}</details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
 }
 function workerList() {
 	return `<div class="section-label eyebrow"><span>Agents</span><span>${state.workers.filter((worker) => worker.visible).length} visible</span></div><div class="worker-list">${state.workers.map((worker) => `<label class="worker-row ${worker.visible ? 'selected' : ''}"><span class="worker-number">${worker.id}</span><span><strong>Worker ${worker.id}</strong><small>${labels[worker.status]}</small></span><input type="checkbox" data-worker="${worker.id}" ${worker.visible ? 'checked' : ''} aria-label="Show Worker ${worker.id} terminal" /></label>`).join('')}</div>`;
@@ -157,7 +187,7 @@ function VariantC() {
 		const initiative = initiativeViews[viewedInitiative];
 		return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section></div>`;
 	}
-	return `<div class="review-layout">${rail(true)}<section class="workspace" data-scroll-key="workspace-${state.view}">${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view"><button id="agents-tab" role="tab" data-action="workspace-view" data-view="agents" aria-controls="agents-panel" aria-selected="${state.view === 'agents'}">${icon('terminal')}Agents</button><button id="review-tab" role="tab" data-action="workspace-view" data-view="review" aria-controls="review-panel" aria-selected="${state.view === 'review'}">${icon('file-diff')}Review</button></div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section></div>`;
+	return `<div class="review-layout">${rail(true)}<section class="workspace" data-scroll-key="workspace-${state.view}">${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section></div>`;
 }
 function render() {
 	rememberScroll();
@@ -221,6 +251,7 @@ function changeVariant(direction) {
 	render();
 }
 function openDialog(action) {
+	dialog.removeAttribute('aria-labelledby');
 	if (action === 'terminate') {
 		dialog.innerHTML = `<form data-form="terminate"><h2>Terminate workers?</h2><p>Worker processes will end immediately. Recorded work remains available. Interrupted writes may be incomplete.</p><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="danger">${icon('octagon-x')}Terminate</button></div></form>`;
 	} else {
@@ -254,11 +285,18 @@ document.addEventListener('click', (event) => {
 		const initiative = initiativeViews[viewedInitiative];
 		const kind = button.dataset.kind;
 		const index = Number(button.dataset.index);
-		const title = ({ prd: [initiative.prd], story: [initiative.story], issue: initiative.issues, adr: initiative.adrs })[kind][index];
+		const prds = viewedInitiative === 'harness' ? routePrds : [{ title: initiative.prd, story: initiative.story, issues: [0, 1, 2] }];
+		const title = ({ prd: prds.map((prd) => prd.title), story: prds.map((prd) => prd.story), issue: initiative.issues, adr: initiative.adrs })[kind][index];
 		const worker = viewedInitiative === 'harness' && kind === 'issue' ? state.workers[index] : null;
-		dialog.innerHTML = `<div class="eyebrow muted">${kind === 'story' ? 'User story' : kind.toUpperCase()} / simulated record</div><h2>${title}</h2><p>${initiative.title}</p>${worker ? `<p>${worker.issue} / Worker ${worker.id}<br>${labels[worker.status]} / attempt ${worker.id}.1</p><button data-action="show-worker" data-id="${worker.id}">${icon('terminal')}Show terminal</button>` : `<p>${initiative.summary}</p>`}<div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
+		const issue = viewedInitiative === 'harness' && kind === 'issue' ? routeIssues[index] : null;
+		const status = issue ? routeState(index) : null;
+		const linkedIssue = (issueIndex) => `<button class="record-link" data-action="record" data-kind="issue" data-index="${issueIndex}">${icon('circle-dot')}${routeReference(issueIndex)} / ${initiative.issues[issueIndex]}</button>`;
+		const dependents = issue ? routeIssues.flatMap((candidate, candidateIndex) => candidate.dependencies.includes(index) ? [candidateIndex] : []) : [];
+		dialog.setAttribute('aria-labelledby', 'record-title');
+		dialog.innerHTML = `<div class="eyebrow muted">${kind === 'story' ? 'User story' : kind.toUpperCase()} / simulated record</div><h2 id="record-title">${title}</h2><p>${initiative.title}</p>${issue ? `<div class="record-state"><span class="mono">${routeReference(index)}</span><span class="status ${status.tone}">${status.label}</span><span>${status.detail}</span></div><section class="record-section"><h3>Outcome</h3><p>${issue.outcome}</p></section><section class="record-section"><h3>Acceptance criteria</h3><ul>${issue.criteria.map((criterion) => `<li>${criterion}</li>`).join('')}</ul></section><section class="record-section"><h3>Requirements</h3><button class="record-link" data-action="record" data-kind="prd" data-index="${index < 3 ? 0 : 1}">${icon('file-text')}${prds[index < 3 ? 0 : 1].title}</button><span class="muted">${prds[index < 3 ? 0 : 1].story}</span></section><section class="record-section"><h3>Dependencies / integration gates</h3>${issue.dependencies.length ? issue.dependencies.map(linkedIssue).join('') : '<p>No prerequisites. Independent work.</p>'}${dependents.length ? `<h3>Unblocks</h3>${dependents.map(linkedIssue).join('')}` : ''}</section><section class="record-section"><h3>Validation and review</h3><p>${issue.evidence}</p>${worker?.status === 'integrated' ? '<p>User approval recorded. Changes integrated.</p>' : ''}</section>${worker ? `<button data-action="show-worker" data-id="${worker.id}">${icon('terminal')}Show terminal</button>` : ''}` : `<p>${initiative.summary}</p>${['prd', 'story'].includes(kind) ? `<section class="record-section"><h3>Linked issues</h3>${prds[index].issues.map(linkedIssue).join('')}</section>` : ''}`}<div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
 		window.lucide?.createIcons();
-		dialog.showModal();
+		if (!dialog.open) dialog.showModal();
+		else { dialog.scrollTop = 0; dialog.querySelector('button').focus(); }
 		return;
 	}
 	if (action === 'active-run') viewedInitiative = 'harness';
@@ -266,6 +304,10 @@ document.addEventListener('click', (event) => {
 		state.view = 'agents';
 		state.workers.find((worker) => worker.id === button.dataset.id).visible = true;
 		dialog.close();
+		if (variant === 'C' && app.querySelector(`[data-terminal="${button.dataset.id}"]`)) switchWorkspace('agents');
+		else render();
+		app.querySelector(`[data-action="takeover"][data-id="${button.dataset.id}"]`)?.focus();
+		return;
 	}
 	if (['terminate', 'limits'].includes(action)) { openDialog(action); return; }
 	if (action === 'close-dialog') { dialog.close(); return; }
@@ -357,7 +399,9 @@ document.querySelector('#reset-prototype').addEventListener('click', () => { sta
 document.addEventListener('keydown', (event) => {
 	if (event.target.matches('[data-action="workspace-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
 		event.preventDefault();
-		const view = event.key === 'Home' ? 'agents' : event.key === 'End' ? 'review' : state.view === 'agents' ? 'review' : 'agents';
+		const views = ['agents', 'review', 'initiative'];
+		const current = views.indexOf(event.target.dataset.view);
+		const view = event.key === 'Home' ? views[0] : event.key === 'End' ? views.at(-1) : views[(current + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length];
 		switchWorkspace(view);
 		app.querySelector(`[data-action="workspace-view"][data-view="${view}"]`).focus();
 		return;
