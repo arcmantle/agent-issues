@@ -789,6 +789,17 @@ body[data-variant='C'] #app {
 	min-height: 0;
 	padding: 20px 28px;
 }
+.agent-selection {
+	margin-bottom: 20px;
+}
+.agent-selection .worker-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+	gap: 10px;
+}
+.agent-selection .worker-row {
+	margin: 0;
+}
 .review-terminals .terminal-grid {
 	min-height: 265px;
 	grid-auto-rows: 265px;
