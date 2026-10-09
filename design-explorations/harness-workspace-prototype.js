@@ -4,6 +4,14 @@ const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
+	planningMode: 'pioneer', graphZoom: .8, planningDraft: '', planningRole: 'question',
+	planEntries: [
+		{ role: 'scope', body: 'Support concurrent initiative runs across different repositories.' },
+		{ role: 'decision', body: 'Keep one active initiative per repository.' },
+		{ role: 'constraint', body: 'Require approval before integration and a separate approval before final merge.' },
+		{ role: 'question', body: 'Which provider controls belong in the first release?' },
+	],
+	pioneerResolutions: ['Use native CLI terminals. A local runner owns execution.', '', '', '', '', ''], pioneerDrafts: {},
 	limits: { copilot: 40, interpreter: 250 },
 	workers: [
 		{ id: '01', title: 'Session recovery', issue: 'DEMO-01', status: 'running', visible: true, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues tdd DEMO-01', '', 'Read issue context and recovery contract.', 'Run focused validation.', '', '$ pnpm test -- recovery', 'PASS  interrupted session records', 'PASS  restore pending inbox items', '', 'REFACTOR: no justified change.', 'Independent review is in progress.'] },
@@ -31,6 +39,46 @@ const routeIssues = [
 	{ stage: 2, dependencies: [3, 4], outcome: 'Request separate approval before the initiative branch merges to the target branch.', criteria: ['All required issue changes must be integrated.', 'Do not push automatically.'], evidence: 'Not assigned. No validation evidence.' },
 ];
 const routeReference = (index) => `DEMO-${String(index + 1).padStart(2, '0')}`;
+const pioneerTickets = [
+	{ title: 'Provider control', type: 'research', question: 'How should the harness control native agent sessions?', dependencies: [], position: [24, 24] },
+	{ title: 'Workspace design', type: 'prototype', question: 'Which workspace layout makes agents and user decisions easy to inspect?', dependencies: [0], position: [324, 24] },
+	{ title: 'Approval gates', type: 'grilling', question: 'Which approvals are required before changes can integrate?', dependencies: [0], position: [624, 24] },
+	{ title: 'Recovery model', type: 'research', question: 'How should interrupted work resume without repeating unsafe operations?', dependencies: [1], position: [174, 244] },
+	{ title: 'Usage accounting', type: 'task', question: 'What is the shared usage boundary across workers and repositories?', dependencies: [0, 2], position: [474, 244] },
+	{ title: 'First-release scope', type: 'grilling', question: 'Which capabilities and limits belong in the first release?', dependencies: [3, 4], position: [324, 464] },
+];
+function pioneerStatus(index) {
+	if (state.pioneerResolutions[index]) return 'Resolved';
+	return pioneerTickets[index].dependencies.some((dependency) => !state.pioneerResolutions[dependency]) ? 'Blocked' : 'Open';
+}
+function pioneerGraph() {
+	const edges = pioneerTickets.flatMap((ticket, index) => ticket.dependencies.map((dependency) => {
+		const source = pioneerTickets[dependency].position;
+		const target = ticket.position;
+		const sameRow = source[1] === target[1];
+		const start = sameRow ? [source[0] + 240, source[1] + 70] : [source[0] + 120, source[1] + 150];
+		const end = sameRow ? [target[0], target[1] + 70] : [target[0] + 120, target[1]];
+		const bend = (start[1] + end[1]) / 2;
+		const path = sameRow && index === 2 ? `M ${source[0] + 120} ${source[1]} V 8 H ${target[0] + 120} V ${target[1]}` : sameRow ? `M ${start.join(' ')} H ${end[0]}` : `M ${start.join(' ')} C ${start[0]} ${bend}, ${end[0]} ${bend}, ${end.join(' ')}`;
+		return `<path d="${path}" data-source="${dependency}" data-target="${index}" marker-end="url(#pioneer-arrow)" />`;
+	}));
+	return `<div class="graph-toolbar"><span>${pioneerTickets.length} tickets / ${edges.length} dependencies</span><div><button class="icon-button" data-action="graph-out" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><output aria-label="Graph zoom">${Math.round(state.graphZoom * 100)}%</output><button class="icon-button" data-action="graph-in" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="icon-button" data-action="graph-fit" title="Fit graph" aria-label="Fit graph">${icon('scan')}</button></div></div><div class="pioneer-viewport" data-scroll-key="pioneer-graph" tabindex="0" aria-label="Pioneer issue graph"><div class="pioneer-bounds" style="width:${900 * state.graphZoom}px;height:${640 * state.graphZoom}px"><div class="pioneer-canvas" style="transform:scale(${state.graphZoom})"><svg class="pioneer-edges" viewBox="0 0 900 640" aria-hidden="true"><defs><marker id="pioneer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.join('')}</svg>${pioneerTickets.map((ticket, index) => `<button class="pioneer-node ${pioneerStatus(index).toLowerCase()}" style="left:${ticket.position[0]}px;top:${ticket.position[1]}px" data-action="pioneer-ticket" data-index="${index}"><span class="route-issue-meta"><span class="mono">PIONEER-${String(index + 1).padStart(2, '0')}</span><span>${pioneerStatus(index)}</span></span><strong>${ticket.title}</strong><span>${ticket.type}</span><small>${ticket.question}</small></button>`).join('')}</div></div></div>`;
+}
+function singlePlan() {
+	return `<div class="single-plan-heading"><div><div class="eyebrow muted">Single plan / draft</div><h2>First-release harness</h2></div><span>${state.planEntries.length} entries</span></div><ol class="plan-entries">${state.planEntries.map((entry, index) => `<li><button data-action="plan-entry" data-index="${index}"><span class="plan-entry-number mono">${String(index + 1).padStart(2, '0')}</span><span><small>${entry.role}</small><span>${escapeHtml(entry.body)}</span></span>${icon('pencil')}</button></li>`).join('')}</ol><form class="plan-composer" data-form="plan-add"><label for="plan-role">Entry type</label><select id="plan-role" name="role">${['question', 'decision', 'scope', 'constraint', 'preference', 'consideration'].map((role) => `<option ${state.planningRole === role ? 'selected' : ''}>${role}</option>`).join('')}</select><label for="plan-body">New entry</label><textarea id="plan-body" name="body" rows="3" required>${escapeHtml(state.planningDraft)}</textarea><button class="primary">${icon('plus')}Add entry</button></form>`;
+}
+function planningWorkspace() {
+	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated</div><h2>Initiative execution harness</h2></div><div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div></div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>Complete the harness design</h3><p>Resolve provider control, workspace design, approvals, recovery, and usage before fixing the first-release scope.</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
+}
+function refreshPlanning() {
+	const graph = app.querySelector('.pioneer-viewport');
+	const scroll = { top: graph?.scrollTop || 0, left: graph?.scrollLeft || 0 };
+	app.querySelector('.pioneer-map-summary > span').textContent = `${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved`;
+	app.querySelector('#pioneer-graph-content').innerHTML = pioneerGraph();
+	app.querySelector('#single-plan-content').innerHTML = singlePlan();
+	app.querySelector('.pioneer-viewport').scrollTo(scroll.left, scroll.top);
+	window.lucide?.createIcons();
+}
 function routeState(index) {
 	const worker = state.workers[index];
 	if (worker) return { label: labels[worker.status], tone: worker.status, detail: `Worker ${worker.id} / attempt ${worker.id}.1` };
@@ -187,7 +235,7 @@ function VariantC() {
 		const initiative = initiativeViews[viewedInitiative];
 		return `<div class="review-layout">${rail(true)}<section class="workspace">${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">3 ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section></section></div>`;
 	}
-	return `<div class="review-layout">${rail(true)}<section class="workspace" data-scroll-key="workspace-${state.view}">${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section></div>`;
+	return `<div class="review-layout">${rail(true)}<section class="workspace" data-scroll-key="workspace-${state.view}">${runHeader()}<div class="workspace-body"><section class="workspace-views"><div class="workspace-tabs" role="tablist" aria-label="Workspace view">${[['agents', 'terminal', 'Agents'], ['review', 'file-diff', 'Review'], ['initiative', 'route', 'Initiative'], ['planning', 'notebook-pen', 'Planning']].map(([view, symbol, label]) => `<button id="${view}-tab" role="tab" data-action="workspace-view" data-view="${view}" aria-controls="${view}-panel" aria-selected="${state.view === view}">${icon(symbol)}${label}</button>`).join('')}</div><section id="agents-panel" role="tabpanel" aria-labelledby="agents-tab" data-workspace-panel="agents" class="review-terminals" ${state.view !== 'agents' ? 'hidden' : ''}><div class="viewport-label"><span class="eyebrow">Agent viewport</span><span>${state.workers.filter((worker) => worker.visible).length} selected terminals</span></div>${terminalGrid()}</section><section id="review-panel" role="tabpanel" aria-labelledby="review-tab" data-workspace-panel="review" ${state.view !== 'review' ? 'hidden' : ''}>${reviewCheckpoint()}</section><section id="initiative-panel" role="tabpanel" aria-labelledby="initiative-tab" data-workspace-panel="initiative" ${state.view !== 'initiative' ? 'hidden' : ''}>${initiativeRoute()}</section><section id="planning-panel" role="tabpanel" aria-labelledby="planning-tab" data-workspace-panel="planning" ${state.view !== 'planning' ? 'hidden' : ''}>${planningWorkspace()}</section></section><aside class="run-inbox" aria-label="Run inbox">${runInbox()}</aside></div></section></div>`;
 }
 function render() {
 	rememberScroll();
@@ -266,6 +314,30 @@ document.addEventListener('click', (event) => {
 	const action = button.dataset.action;
 	if (action === 'open-review') { switchWorkspace('review'); return; }
 	if (action === 'workspace-view') { switchWorkspace(button.dataset.view); return; }
+	if (action === 'planning-mode') {
+		state.planningMode = button.dataset.mode;
+		app.querySelectorAll('[data-planning-panel]').forEach((panel) => { panel.hidden = panel.dataset.planningPanel !== state.planningMode; });
+		app.querySelectorAll('[data-action="planning-mode"]').forEach((control) => control.setAttribute('aria-pressed', String(control.dataset.mode === state.planningMode)));
+		return;
+	}
+	if (['graph-in', 'graph-out', 'graph-fit'].includes(action)) {
+		const viewport = app.querySelector('.pioneer-viewport');
+		state.graphZoom = action === 'graph-fit' ? Math.min(1, (viewport.clientWidth - 16) / 900, (viewport.clientHeight - 16) / 640) : Math.max(.3, Math.min(1.5, state.graphZoom + (action === 'graph-in' ? .1 : -.1)));
+		refreshPlanning();
+		if (action === 'graph-fit') app.querySelector('.pioneer-viewport').scrollTo(0, 0);
+		app.querySelector(`[data-action="${action}"]`).focus();
+		return;
+	}
+	if (['pioneer-ticket', 'plan-entry'].includes(action)) {
+		const index = Number(button.dataset.index);
+		const ticket = pioneerTickets[index];
+		dialog.setAttribute('aria-labelledby', 'planning-record-title');
+		dialog.innerHTML = action === 'pioneer-ticket' ? `<form data-form="pioneer-resolution" data-index="${index}"><div class="eyebrow muted">Pioneer ticket / ${ticket.type} / simulated</div><h2 id="planning-record-title">${ticket.title}</h2><section class="record-section"><h3>Question</h3><p>${ticket.question}</p></section><section class="record-section"><h3>Dependencies</h3>${ticket.dependencies.length ? ticket.dependencies.map((dependency) => `<button type="button" class="record-link" data-action="pioneer-ticket" data-index="${dependency}">${icon('circle-dot')}${pioneerTickets[dependency].title} / ${pioneerStatus(dependency)}</button>`).join('') : '<p>No prerequisites.</p>'}</section><label for="ticket-resolution">Resolution</label><textarea id="ticket-resolution" name="body" rows="5">${escapeHtml(state.pioneerDrafts[index] ?? state.pioneerResolutions[index])}</textarea><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('save')}Save resolution</button></div></form>` : `<form data-form="plan-edit" data-index="${index}"><div class="eyebrow muted">Plan entry / ${state.planEntries[index].role} / simulated</div><h2 id="planning-record-title">Edit entry</h2><label for="edit-plan-entry">Entry</label><textarea id="edit-plan-entry" name="body" rows="6" required>${escapeHtml(state.planEntries[index].body)}</textarea><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('save')}Save entry</button></div></form>`;
+		window.lucide?.createIcons();
+		if (!dialog.open) dialog.showModal();
+		else { dialog.scrollTop = 0; dialog.querySelector('textarea').focus(); }
+		return;
+	}
 	if (['review-file', 'review-previous', 'review-next', 'clear-file-query'].includes(action)) {
 		if (action === 'review-file') state.reviewFile = Number(button.dataset.index);
 		if (action === 'clear-file-query') {
@@ -310,7 +382,12 @@ document.addEventListener('click', (event) => {
 		return;
 	}
 	if (['terminate', 'limits'].includes(action)) { openDialog(action); return; }
-	if (action === 'close-dialog') { dialog.close(); return; }
+	if (action === 'close-dialog') {
+		const ticketForm = dialog.querySelector('[data-form="pioneer-resolution"]');
+		if (ticketForm) delete state.pioneerDrafts[ticketForm.dataset.index];
+		dialog.close();
+		return;
+	}
 	if (action === 'pause') {
 		state.mode = state.mode === 'running' ? 'paused' : 'running';
 		notify(state.mode === 'paused' ? 'New assignments and integrations paused. Current agents continue.' : 'Harness scheduling resumed.');
@@ -348,6 +425,8 @@ document.addEventListener('click', (event) => {
 });
 document.addEventListener('input', (event) => {
 	if (event.target.matches('.answer-form [name="answer"]')) state.answerDraft = event.target.value;
+	if (event.target.id === 'plan-body') state.planningDraft = event.target.value;
+	if (event.target.id === 'ticket-resolution') state.pioneerDrafts[event.target.form.dataset.index] = event.target.value;
 	if (event.target.id === 'checkpoint-search') {
 		state.fileQuery = event.target.value;
 		const files = matchingFiles();
@@ -356,6 +435,7 @@ document.addEventListener('input', (event) => {
 	}
 });
 document.addEventListener('change', (event) => {
+	if (event.target.id === 'plan-role') { state.planningRole = event.target.value; return; }
 	if (event.target.id === 'initiative-selector') {
 		viewedInitiative = event.target.value;
 		render();
@@ -370,6 +450,21 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
+	if (['plan-add', 'plan-edit', 'pioneer-resolution'].includes(form.dataset.form)) {
+		const body = String(values.get('body')).trim();
+		const index = Number(form.dataset.index);
+		if (form.dataset.form === 'pioneer-resolution') { state.pioneerResolutions[index] = body; delete state.pioneerDrafts[index]; }
+		else {
+			if (!body) return;
+			if (form.dataset.form === 'plan-add') { state.planEntries.push({ role: String(values.get('role')), body }); state.planningDraft = ''; }
+			else state.planEntries[index].body = body;
+		}
+		dialog.close();
+		refreshPlanning();
+		app.querySelector(form.dataset.form === 'pioneer-resolution' ? `[data-action="pioneer-ticket"][data-index="${index}"]` : form.dataset.form === 'plan-edit' ? `[data-action="plan-entry"][data-index="${index}"]` : '#plan-body').focus();
+		notify('Planning change saved in the simulation.');
+		return;
+	}
 	if (form.dataset.form === 'answer') {
 		const worker = state.workers[1];
 		if (worker.manual || ['stopping', 'stopped', 'terminated'].includes(state.mode)) return;
@@ -394,19 +489,24 @@ document.addEventListener('submit', (event) => {
 	render();
 });
 document.querySelector('#previous-variant').addEventListener('click', () => changeVariant(-1));
+dialog.addEventListener('cancel', () => {
+	const ticketForm = dialog.querySelector('[data-form="pioneer-resolution"]');
+	if (ticketForm) delete state.pioneerDrafts[ticketForm.dataset.index];
+});
 document.querySelector('#next-variant').addEventListener('click', () => changeVariant(1));
 document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
+	if (event.key === 'Escape' && dialog.open) { event.preventDefault(); dialog.requestClose(); return; }
 	if (event.target.matches('[data-action="workspace-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
 		event.preventDefault();
-		const views = ['agents', 'review', 'initiative'];
+		const views = ['agents', 'review', 'initiative', 'planning'];
 		const current = views.indexOf(event.target.dataset.view);
 		const view = event.key === 'Home' ? views[0] : event.key === 'End' ? views.at(-1) : views[(current + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length];
 		switchWorkspace(view);
 		app.querySelector(`[data-action="workspace-view"][data-view="${view}"]`).focus();
 		return;
 	}
-	if (event.target.closest('input, textarea, select, [contenteditable], .xterm') || dialog.open) return;
+	if (event.target.closest('input, textarea, select, [contenteditable], .xterm, .pioneer-viewport') || dialog.open) return;
 	if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
 		event.preventDefault();
 		changeVariant(event.key === 'ArrowRight' ? 1 : -1);
