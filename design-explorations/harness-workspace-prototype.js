@@ -2,6 +2,12 @@ const app = document.querySelector('#app');
 const dialog = document.querySelector('#action-dialog');
 const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
+const applicationPages = ['workspace', 'planning', 'repositories', 'global-settings', 'project-settings'];
+const settingsProviders = {
+	copilot: { name: 'Copilot', models: ['Default', 'GPT-5'] },
+	claude: { name: 'Claude', models: ['Sonnet', 'Opus'] },
+	ollama: { name: 'Ollama', models: ['qwen3:8b', 'llama3.2'] },
+};
 const repositories = {
 	'agent-issues': { name: 'agent-issues', projectIdentity: 'agent-issues', path: '/Users/roen/Developer/Personal/agent-issues', tenant: 'local-roen', initiatives: ['harness', 'navigation'] },
 	'studio-site': { name: 'studio-site / example', projectIdentity: 'studio-site', path: '~/projects/studio-site', tenant: 'local-roen', initiatives: ['studio'] },
@@ -12,8 +18,12 @@ let folderBrowser = { path: '', parent: null, root: '', entries: [], loading: fa
 const initialState = () => ({
 	repository: 'agent-issues',
 	repositoryViews: Object.fromEntries(Object.entries(repositories).map(([id, repository]) => [id, { initiative: repository.initiatives[0], planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } }])),
-	page: ['planning', 'repositories'].includes(new URL(location.href).searchParams.get('page')) ? new URL(location.href).searchParams.get('page') : 'workspace',
+	page: applicationPages.includes(new URL(location.href).searchParams.get('page')) ? new URL(location.href).searchParams.get('page') : 'workspace',
 	repositoryQuery: '', nextRepository: 1,
+	settings: {
+		global: { budget: 200, warning: 150, projectBudget: 50, workers: 8, projectWorkers: 3, approval: true, providers: ['copilot'], models: Object.fromEntries(Object.entries(settingsProviders).map(([id, provider]) => [id, [...provider.models]])), connections: { copilot: true, claude: false, ollama: false } },
+		projects: {}, usage: { 'agent-issues': 23.60, 'studio-site': 9.80, 'task-api': 19.00 },
+	},
 	planningContext: '', nextPlanningContext: 1, planningLaunch: { brief: '', initiative: '', mode: 'plan' },
 	planningContexts: [{ id: 'harness', mode: 'pioneer', repository: 'agent-issues', projectIdentity: 'agent-issues', title: 'First-release harness', initiative: 'harness', brief: 'Complete the harness design.', saved: null }],
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
@@ -236,7 +246,7 @@ function repositoryHeader(review) {
 	const brand = `<div class="brand"><span class="brand-mark">${icon('workflow')}</span>agent-issues</div>`;
 	if (!review) return `${brand}<div class="eyebrow">Repository</div><h3>agent-issues</h3><p class="mono muted">local-roen / main</p>`;
 	const repository = repositories[state.repository];
-	return `<div role="region" aria-label="Current repository"><div class="brand current-project"><span>${icon('folder-git-2')}</span><span>${escapeHtml(repository.name)}</span></div><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="repository-project muted">Project / ${escapeHtml(repository.projectIdentity || 'Not connected')}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p></div>`;
+	return `<div role="region" aria-label="Current repository"><div class="repository-heading"><div class="brand current-project"><span>${icon('folder-git-2')}</span><span>${escapeHtml(repository.name)}</span></div><a class="project-settings-link" href="?variant=C&page=project-settings" data-action="page" data-page="project-settings" aria-label="Project Settings" title="Project Settings" ${state.page === 'project-settings' ? 'aria-current="page"' : ''}>${icon('settings-2')}</a></div><p class="repository-path mono muted">${escapeHtml(repository.path)}</p><p class="repository-project muted">Project / ${escapeHtml(repository.projectIdentity || 'Not connected')}</p><p class="muted">Tenant / ${escapeHtml(repository.tenant)}</p></div>`;
 }
 function selectRepository(id) {
 	if (id === state.repository || !repositories[id]) return;
@@ -263,6 +273,7 @@ function selectRepository(id) {
 	switchPage(state.page, false);
 	app.dataset.repository = id;
 	app.dataset.projectIdentity = repositories[id].projectIdentity || '';
+	refreshSettings();
 	refreshRepositories();
 	window.lucide?.createIcons();
 }
@@ -272,7 +283,92 @@ function repositoryWorkspace() {
 	return `${runHeader()}<section class="initiative-overview"><h2>${initiative.prd}</h2><p>${initiative.summary}</p><div class="overview-heading"><h3>Issues</h3><span class="muted">${initiative.issues.length} ready / no assignments</span></div>${initiative.issues.map((title, index) => `<button class="tracked-record" data-action="record" data-kind="issue" data-index="${index}"><span>${icon('circle-dot')}${title}</span><small>Ready</small></button>`).join('')}</section>`;
 }
 function applicationNavigation() {
-	return `<nav class="application-navigation" aria-label="Application pages">${[['workspace', 'activity', 'Workspace'], ['planning', 'notebook-pen', 'Planning'], ['repositories', 'folders', 'Repositories']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav>`;
+	return `<div class="application-navigation"><nav class="repository-pages" aria-label="Repository pages">${[['workspace', 'activity', 'Workspace'], ['planning', 'notebook-pen', 'Planning']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav><nav class="repository-navigation" aria-label="Global navigation">${[['repositories', 'folders', 'Repositories'], ['global-settings', 'settings', 'Global Settings']].map(([page, symbol, label]) => `<a href="?variant=C&page=${page}" data-action="page" data-page="${page}" aria-label="${label}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(symbol)}<span class="page-tooltip" aria-hidden="true">${label}</span></a>`).join('')}</nav></div>`;
+}
+function effectiveProjectSettings(id = state.repository) {
+	const global = state.settings.global;
+	const project = state.settings.projects[id] || {};
+	const budget = Math.min(project.budget ?? global.projectBudget, global.budget);
+	const providers = (project.providers ?? global.providers).filter((provider) => global.providers.includes(provider));
+	return {
+		budget,
+		warning: Math.min(project.warning ?? budget * .8, budget, global.warning),
+		workers: Math.min(project.workers ?? global.projectWorkers, global.workers),
+		approval: global.approval || (project.approval ?? global.approval),
+		providers,
+		models: Object.fromEntries(Object.keys(settingsProviders).map((provider) => [provider, (project.models?.[provider] ?? global.models[provider]).filter((model) => global.models[provider].includes(model))])),
+	};
+}
+function settingsMoney(value) {
+	return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+}
+function settingsUsage(scope) {
+	const global = state.settings.global;
+	const effective = effectiveProjectSettings();
+	const total = Object.values(state.settings.usage).reduce((sum, value) => sum + value, 0);
+	const used = scope === 'global' ? total : state.settings.usage[state.repository] || 0;
+	const budget = scope === 'global' ? global.budget : effective.budget;
+	const warning = scope === 'global' ? global.warning : effective.warning;
+	const status = total >= global.budget ? 'Global stop limit reached' : used >= budget ? 'Project stop limit reached' : total >= global.warning || used >= warning ? 'Warning threshold reached' : 'Within limits';
+	return `<section class="settings-usage" aria-label="${scope === 'global' ? 'Global' : 'Project'} usage"><div class="section-label"><h2>Usage</h2><span class="muted">Current month / Estimated / Example</span></div><dl><div><dt>Spend</dt><dd>${settingsMoney(used)}</dd></div><div><dt>Remaining budget</dt><dd>${settingsMoney(Math.max(0, budget - used))}</dd></div>${scope === 'project' ? `<div><dt>Global remaining</dt><dd>${settingsMoney(Math.max(0, global.budget - total))}</dd></div>` : `<div><dt>Stop limit</dt><dd>${settingsMoney(budget)}</dd></div>`}<div><dt>Limit state</dt><dd class="settings-limit-state">${status}</dd></div></dl></section>`;
+}
+function settingsNumber(scope, key, label, value, maximum, integer = false) {
+	const override = scope === 'project' ? state.settings.projects[state.repository]?.[key] : undefined;
+	const inherited = scope === 'project' && override == null;
+	return `<div class="settings-field" data-setting-row="${key}"><label for="${scope}-${key}">${label}</label>${scope === 'project' ? `<label class="settings-toggle"><input type="checkbox" name="override-${key}" data-setting-override="${key}" aria-label="Override ${escapeHtml(label)}" ${inherited ? '' : 'checked'} />Project override</label>` : ''}<input id="${scope}-${key}" name="${key}" type="number" min="${integer ? 1 : 0}" ${maximum == null ? '' : `max="${maximum}"`} step="${integer ? 1 : '.01'}" value="${value}" ${inherited ? 'disabled' : 'required'} /><span class="muted" data-setting-source>${inherited ? 'Inherited' : scope === 'project' ? 'Project override' : 'Global'} / ${integer ? value : settingsMoney(value)}</span></div>`;
+}
+function settingsProvidersForm(scope) {
+	const global = state.settings.global;
+	const project = state.settings.projects[state.repository] || {};
+	const effective = scope === 'global' ? global : effectiveProjectSettings();
+	const inheritedProviders = scope === 'project' && project.providers == null;
+	const inheritedModels = scope === 'project' && project.models == null;
+	return `<section class="settings-section"><h2>Providers And Models</h2>${scope === 'project' ? `<div class="settings-fields"><label>Permitted providers<select name="provider-mode" data-setting-group="providers"><option value="inherit" ${inheritedProviders ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedProviders ? '' : 'selected'}>Project override</option></select></label><label>Permitted models<select name="model-mode" data-setting-group="models"><option value="inherit" ${inheritedModels ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedModels ? '' : 'selected'}>Project override</option></select></label></div>` : ''}<div class="settings-provider-list">${Object.entries(settingsProviders).map(([id, provider]) => `<fieldset class="settings-provider"><legend>${provider.name}</legend><label class="settings-toggle"><input type="checkbox" name="providers" value="${id}" data-setting-control="providers" ${effective.providers.includes(id) ? 'checked' : ''} ${(inheritedProviders || scope === 'project' && !global.providers.includes(id)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.providers.includes(id)}" />Permitted${scope === 'project' && !global.providers.includes(id) ? ' / Blocked globally' : ''}</label>${scope === 'global' ? `<div class="settings-connection"><span data-connection-status="${id}">${global.connections[id] ? 'Connected / Example' : 'Not connected'}</span><button type="button" data-action="settings-connect" data-provider="${id}">${icon(global.connections[id] ? 'unlink' : 'plug')}${global.connections[id] ? 'Disconnect' : 'Connect'}</button></div>` : ''}<div class="settings-models">${provider.models.map((model) => `<label class="settings-toggle"><input type="checkbox" name="models-${id}" value="${escapeHtml(model)}" data-setting-control="models" ${effective.models[id].includes(model) ? 'checked' : ''} ${(inheritedModels || scope === 'project' && !global.models[id].includes(model)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.models[id].includes(model)}" />${escapeHtml(model)}${scope === 'project' && !global.models[id].includes(model) ? ' / Blocked globally' : ''}</label>`).join('')}</div></fieldset>`).join('')}</div></section>`;
+}
+function settingsContent(scope) {
+	const global = state.settings.global;
+	const effective = scope === 'global' ? global : effectiveProjectSettings();
+	const project = state.settings.projects[state.repository] || {};
+	return `<header class="page-heading"><h1>${scope === 'global' ? 'Global Settings' : 'Project Settings'}</h1>${scope === 'project' ? `<button data-action="page" data-page="global-settings">${icon('settings')}Global Settings</button>` : ''}</header><div class="settings-content">${settingsUsage(scope)}<form data-form="settings" data-scope="${scope}" data-repository="${state.repository}"><section class="settings-section"><h2>Cost Controls</h2><div class="settings-fields">${settingsNumber(scope, 'budget', scope === 'global' ? 'Global stop limit / USD' : 'Project stop limit / USD', effective.budget, scope === 'global' ? null : global.budget)}${settingsNumber(scope, 'warning', 'Warning threshold / USD', effective.warning, scope === 'global' ? null : Math.min(global.warning, effective.budget))}${scope === 'global' ? settingsNumber(scope, 'projectBudget', 'Default project budget / USD', global.projectBudget, global.budget) : ''}</div>${scope === 'project' ? `<p class="muted">Global stop limit / ${settingsMoney(global.budget)}. Global warning threshold / ${settingsMoney(global.warning)}.</p>` : `<div class="settings-fields">${settingsNumber(scope, 'copilotRequests', 'Copilot request limit', state.limits.copilot, null, true)}${settingsNumber(scope, 'interpreterCalls', 'Interpreter call limit', state.limits.interpreter, null, true)}</div>`}</section><section class="settings-section"><h2>Workers And Approvals</h2><div class="settings-fields">${settingsNumber(scope, 'workers', scope === 'global' ? 'Total worker limit' : 'Project worker limit', effective.workers, scope === 'global' ? null : global.workers, true)}${scope === 'global' ? settingsNumber(scope, 'projectWorkers', 'Default project worker limit', global.projectWorkers, global.workers, true) : ''}</div>${scope === 'project' ? `<p class="muted">Global worker limit / ${global.workers}</p><label>New-run approval<select name="approval"><option value="inherit" ${project.approval == null ? 'selected' : ''}>Inherited / ${global.approval ? 'Required' : 'Not required'}</option><option value="true" ${project.approval === true ? 'selected' : ''}>Required</option><option value="false" ${project.approval === false && !global.approval ? 'selected' : ''} ${global.approval ? 'disabled' : ''}>Not required${global.approval ? ' / Blocked globally' : ''}</option></select></label>` : `<label class="settings-toggle"><input type="checkbox" name="approval" ${global.approval ? 'checked' : ''} />Require approval for new runs</label>`}<div class="settings-approvals"><label class="settings-toggle"><input type="checkbox" checked disabled />Integration approval / Required</label><label class="settings-toggle"><input type="checkbox" checked disabled />Final merge approval / Required</label></div></section>${settingsProvidersForm(scope)}<p class="settings-error" role="alert"></p><div class="settings-actions"><span class="muted" role="status" data-settings-status>Saved / This session</span>${scope === 'project' ? `<button type="button" data-action="settings-inherit">${icon('rotate-ccw')}Use Global Defaults</button>` : ''}<button class="primary" type="submit">${icon('save')}Save Settings</button></div></form></div>`;
+}
+function settingsPage(scope) {
+	return `<section class="workspace settings-page" data-page-panel="${scope}-settings" data-settings-scope="${scope}" data-scroll-key="${scope}-settings" ${state.page === `${scope}-settings` ? '' : 'hidden'}>${settingsContent(scope)}</section>`;
+}
+function refreshSettings() {
+	for (const panel of app.querySelectorAll('[data-settings-scope]')) panel.innerHTML = settingsContent(panel.dataset.settingsScope);
+	window.lucide?.createIcons();
+}
+function saveSettings(form, values) {
+	const scope = form.dataset.scope;
+	if (scope === 'project' && form.dataset.repository !== state.repository) return;
+	const global = state.settings.global;
+	const next = scope === 'global' ? { ...global } : {};
+	for (const key of scope === 'global' ? ['budget', 'warning', 'projectBudget', 'workers', 'projectWorkers'] : ['budget', 'warning', 'workers']) {
+		if (scope === 'global' || values.has(`override-${key}`)) next[key] = Number(values.get(key));
+	}
+	next.approval = scope === 'global' ? values.has('approval') : values.get('approval') === 'inherit' ? null : values.get('approval') === 'true';
+	if (scope === 'global' || values.get('provider-mode') === 'custom') next.providers = values.getAll('providers');
+	if (scope === 'global' || values.get('model-mode') === 'custom') next.models = Object.fromEntries(Object.keys(settingsProviders).map((id) => [id, values.getAll(`models-${id}`)]));
+	const budget = next.budget ?? Math.min(global.projectBudget, global.budget);
+	const warning = next.warning ?? Math.min(budget * .8, global.warning);
+	let error = '';
+	if (warning > budget) error = 'The warning threshold must not exceed the stop limit.';
+	if (scope === 'global' && (next.projectBudget > budget || next.projectWorkers > next.workers)) error = 'Project defaults must not exceed global limits.';
+	if (scope === 'project' && (budget > global.budget || warning > global.warning || (next.workers ?? global.projectWorkers) > global.workers || next.approval === false && global.approval)) error = 'Project settings must not exceed global limits.';
+	const providers = next.providers ?? global.providers;
+	const models = next.models ?? global.models;
+	if (scope === 'project' && (providers.some((id) => !global.providers.includes(id)) || Object.keys(settingsProviders).some((id) => models[id].some((model) => !global.models[id].includes(model))))) error = 'Only globally permitted providers and models are available.';
+	if (providers.some((id) => !models[id].length)) error = 'Select at least one model for each permitted provider.';
+	if (error) { form.querySelector('.settings-error').textContent = error; return; }
+	if (scope === 'global') {
+		state.settings.global = next;
+		state.limits = { copilot: Number(values.get('copilotRequests')), interpreter: Number(values.get('interpreterCalls')) };
+		const usagePanel = app.querySelector('.rail .usage');
+		if (usagePanel) usagePanel.outerHTML = usage();
+	} else state.settings.projects[state.repository] = next;
+	refreshSettings();
+	app.querySelector(`[data-settings-scope="${scope}"] [type="submit"]`).focus({ preventScroll: true });
+	notify('Simulated settings saved for this session.');
 }
 function repositoryList() {
 	const query = state.repositoryQuery.trim().toLowerCase();
@@ -427,7 +523,7 @@ function render() {
 	terminals.forEach(({ terminal, observer }) => { observer.disconnect(); terminal.dispose(); });
 	terminals = [];
 	app.innerHTML = ({ A: VariantA, B: VariantB, C: VariantC })[variant]();
-	if (variant === 'C') app.querySelector('.review-layout').insertAdjacentHTML('beforeend', repositoriesPage());
+	if (variant === 'C') app.querySelector('.review-layout').insertAdjacentHTML('beforeend', repositoriesPage() + settingsPage('global') + settingsPage('project'));
 	document.querySelector('#variant-label').textContent = `${variant} / ${names[variant]}`;
 	document.body.dataset.variant = variant;
 	app.dataset.view = state.view;
@@ -572,6 +668,18 @@ document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
 	if (!button || button.disabled) return;
 	const action = button.dataset.action;
+	if (action === 'limits' && variant === 'C') { switchPage('global-settings'); return; }
+	if (action === 'settings-inherit') { delete state.settings.projects[state.repository]; refreshSettings(); app.querySelector('[data-action="settings-inherit"]').focus(); notify('Project settings now inherit global defaults.'); return; }
+	if (action === 'settings-connect') {
+		const id = button.dataset.provider;
+		state.settings.global.connections[id] = !state.settings.global.connections[id];
+		const connected = state.settings.global.connections[id];
+		app.querySelector(`[data-connection-status="${id}"]`).textContent = connected ? 'Connected / Example' : 'Not connected';
+		button.innerHTML = `${icon(connected ? 'unlink' : 'plug')}${connected ? 'Disconnect' : 'Connect'}`;
+		window.lucide?.createIcons();
+		notify('Simulated provider connection updated.');
+		return;
+	}
 	if (action === 'active-run' && state.repository !== 'agent-issues') {
 		selectRepository('agent-issues');
 		if (viewedInitiative === 'harness') return;
@@ -723,7 +831,24 @@ document.addEventListener('input', (event) => {
 		refreshCheckpoint();
 	}
 });
+document.addEventListener('input', (event) => {
+	const form = event.target.closest('[data-form="settings"]');
+	if (form) form.querySelector('[data-settings-status]').textContent = 'Unsaved changes';
+});
 document.addEventListener('change', (event) => {
+	const settingsForm = event.target.closest('[data-form="settings"]');
+	if (settingsForm) {
+		settingsForm.querySelector('[data-settings-status]').textContent = 'Unsaved changes';
+		if (event.target.dataset.settingOverride) {
+			const row = event.target.closest('[data-setting-row]');
+			const field = row.querySelector('input[type="number"]');
+			field.disabled = !event.target.checked;
+			field.required = event.target.checked;
+			row.querySelector('[data-setting-source]').textContent = event.target.checked ? 'Project override' : 'Inherited';
+		}
+		if (event.target.dataset.settingGroup) for (const input of settingsForm.querySelectorAll(`[data-setting-control="${event.target.dataset.settingGroup}"]`)) input.disabled = event.target.value === 'inherit' || input.dataset.globalBlocked === 'true';
+		return;
+	}
 	if (event.target.id === 'initiative-selector') {
 		viewedInitiative = event.target.value;
 		state.repositoryViews[state.repository].initiative = viewedInitiative;
@@ -740,6 +865,7 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
+	if (form.dataset.form === 'settings') { saveSettings(form, values); return; }
 	if (form.dataset.form === 'browse-folder') { browseFolders(String(values.get('path')).trim()); return; }
 	if (form.dataset.form === 'planning-start') {
 		if (form.dataset.repository !== state.repository) return;
@@ -820,7 +946,7 @@ document.querySelector('#next-variant').addEventListener('click', () => changeVa
 window.addEventListener('popstate', () => {
 	const params = new URL(location.href).searchParams;
 	const nextVariant = variants.includes(params.get('variant')) ? params.get('variant') : 'A';
-	const page = ['planning', 'repositories'].includes(params.get('page')) ? params.get('page') : 'workspace';
+	const page = applicationPages.includes(params.get('page')) ? params.get('page') : 'workspace';
 	if (nextVariant !== variant) {
 		variant = nextVariant;
 		state.page = page;
