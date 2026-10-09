@@ -4,14 +4,14 @@ const variants = ['A', 'B', 'C'];
 const names = { A: 'Workbench', B: 'Signal room', C: 'Review desk' };
 const initialState = () => ({
 	mode: 'running', view: 'agents', tab: 'inbox', file: 0, reviewFile: 0, fileQuery: '', collapsedFolders: [], question: true, answerDraft: '', approved: false, integrated: false,
-	planningMode: 'pioneer', graphZoom: .8, planningDraft: '', planningRole: 'question',
+	planningMode: 'pioneer', graphZoom: .8,
+	planningSessions: { pioneer: { draft: '', paused: false, answers: [] }, plan: { draft: '', paused: false, answers: [] } },
 	planEntries: [
 		{ role: 'scope', body: 'Support concurrent initiative runs across different repositories.' },
 		{ role: 'decision', body: 'Keep one active initiative per repository.' },
 		{ role: 'constraint', body: 'Require approval before integration and a separate approval before final merge.' },
-		{ role: 'question', body: 'Which provider controls belong in the first release?' },
 	],
-	pioneerResolutions: ['Use native CLI terminals. A local runner owns execution.', '', '', '', '', ''], pioneerDrafts: {},
+	pioneerResolutions: ['Use native CLI terminals. A local runner owns execution.', '', '', '', '', ''],
 	limits: { copilot: 40, interpreter: 250 },
 	workers: [
 		{ id: '01', title: 'Session recovery', issue: 'DEMO-01', status: 'running', visible: true, manual: false, lines: ['GitHub Copilot / simulated session', '', '> /agent-issues tdd DEMO-01', '', 'Read issue context and recovery contract.', 'Run focused validation.', '', '$ pnpm test -- recovery', 'PASS  interrupted session records', 'PASS  restore pending inbox items', '', 'REFACTOR: no justified change.', 'Independent review is in progress.'] },
@@ -49,7 +49,31 @@ const pioneerTickets = [
 ];
 function pioneerStatus(index) {
 	if (state.pioneerResolutions[index]) return 'Resolved';
+	if (index === activePioneerTicket()) return 'Active';
 	return pioneerTickets[index].dependencies.some((dependency) => !state.pioneerResolutions[dependency]) ? 'Blocked' : 'Open';
+}
+const planQuestions = [
+	{ question: 'Which coding providers must the first release support?', role: 'scope', prefix: 'First-release providers' },
+	{ question: 'When should the agent stop planning and ask you to review the plan?', role: 'decision', prefix: 'Plan review boundary' },
+	{ question: 'What must be demonstrated before you accept the first release?', role: 'constraint', prefix: 'Release acceptance' },
+];
+function activePioneerTicket() {
+	return pioneerTickets.findIndex((ticket, index) => !state.pioneerResolutions[index] && ticket.dependencies.every((dependency) => state.pioneerResolutions[dependency]));
+}
+function planningQuestion() {
+	if (state.planningMode === 'pioneer') {
+		const index = activePioneerTicket();
+		return index < 0 ? null : { index, title: pioneerTickets[index].title, question: pioneerTickets[index].question };
+	}
+	const index = state.planningSessions.plan.answers.length;
+	return index >= planQuestions.length ? null : { index, title: 'First-release harness', question: planQuestions[index].question };
+}
+function planningSession() {
+	const session = state.planningSessions[state.planningMode];
+	const question = planningQuestion();
+	const status = session.paused ? 'Paused' : question ? 'Needs your answer' : 'Ready for your review';
+	const last = session.answers.at(-1);
+	return `<section class="planning-session" aria-label="Planning agent session"><div class="planner-agent"><span>${icon('bot')}Planning agent / Copilot</span><div><span class="status ${question ? 'waiting' : 'review'}">${status}</span>${question ? `<button class="icon-button" data-action="planning-pause" title="${session.paused ? 'Resume planning' : 'Pause planning'}" aria-label="${session.paused ? 'Resume planning' : 'Pause planning'}">${icon(session.paused ? 'play' : 'pause')}</button>` : ''}</div></div>${last ? `<div class="planner-record"><span class="eyebrow muted">Agent recorded</span><p>${escapeHtml(last.result)}</p></div>` : ''}${question ? `<div class="planner-question"><div class="eyebrow muted">${state.planningMode === 'pioneer' ? 'Active ticket / ' + question.title : 'Question ' + (question.index + 1) + ' / ' + planQuestions.length}</div><h3>${question.question}</h3><form data-form="planning-answer" data-mode="${state.planningMode}"><label for="planning-answer">Your answer</label><textarea id="planning-answer" name="answer" rows="3" required ${session.paused ? 'disabled' : ''}>${escapeHtml(session.draft)}</textarea><button class="primary" ${session.paused ? 'disabled' : ''}>${icon('send')}Send answer</button></form></div>` : `<div class="planner-question"><h3>${state.planningMode === 'pioneer' ? 'Map decisions recorded' : 'Draft plan ready'}</h3><p>The planning agent has recorded your answers. No execution or integration was started.</p></div>`}${session.answers.length ? `<details class="planner-history"><summary>Conversation / ${session.answers.length} answers</summary><ol>${session.answers.map((answer) => `<li><strong>Agent</strong><p>${escapeHtml(answer.question)}</p><strong>You</strong><p>${escapeHtml(answer.answer)}</p><strong>Agent recorded</strong><p>${escapeHtml(answer.result)}</p></li>`).join('')}</ol></details>` : ''}</section>`;
 }
 function pioneerGraph() {
 	const edges = pioneerTickets.flatMap((ticket, index) => ticket.dependencies.map((dependency) => {
@@ -65,14 +89,15 @@ function pioneerGraph() {
 	return `<div class="graph-toolbar"><span>${pioneerTickets.length} tickets / ${edges.length} dependencies</span><div><button class="icon-button" data-action="graph-out" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><output aria-label="Graph zoom">${Math.round(state.graphZoom * 100)}%</output><button class="icon-button" data-action="graph-in" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="icon-button" data-action="graph-fit" title="Fit graph" aria-label="Fit graph">${icon('scan')}</button></div></div><div class="pioneer-viewport" data-scroll-key="pioneer-graph" tabindex="0" aria-label="Pioneer issue graph"><div class="pioneer-bounds" style="width:${900 * state.graphZoom}px;height:${640 * state.graphZoom}px"><div class="pioneer-canvas" style="transform:scale(${state.graphZoom})"><svg class="pioneer-edges" viewBox="0 0 900 640" aria-hidden="true"><defs><marker id="pioneer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>${edges.join('')}</svg>${pioneerTickets.map((ticket, index) => `<button class="pioneer-node ${pioneerStatus(index).toLowerCase()}" style="left:${ticket.position[0]}px;top:${ticket.position[1]}px" data-action="pioneer-ticket" data-index="${index}"><span class="route-issue-meta"><span class="mono">PIONEER-${String(index + 1).padStart(2, '0')}</span><span>${pioneerStatus(index)}</span></span><strong>${ticket.title}</strong><span>${ticket.type}</span><small>${ticket.question}</small></button>`).join('')}</div></div></div>`;
 }
 function singlePlan() {
-	return `<div class="single-plan-heading"><div><div class="eyebrow muted">Single plan / draft</div><h2>First-release harness</h2></div><span>${state.planEntries.length} entries</span></div><ol class="plan-entries">${state.planEntries.map((entry, index) => `<li><button data-action="plan-entry" data-index="${index}"><span class="plan-entry-number mono">${String(index + 1).padStart(2, '0')}</span><span><small>${entry.role}</small><span>${escapeHtml(entry.body)}</span></span>${icon('pencil')}</button></li>`).join('')}</ol><form class="plan-composer" data-form="plan-add"><label for="plan-role">Entry type</label><select id="plan-role" name="role">${['question', 'decision', 'scope', 'constraint', 'preference', 'consideration'].map((role) => `<option ${state.planningRole === role ? 'selected' : ''}>${role}</option>`).join('')}</select><label for="plan-body">New entry</label><textarea id="plan-body" name="body" rows="3" required>${escapeHtml(state.planningDraft)}</textarea><button class="primary">${icon('plus')}Add entry</button></form>`;
+	return `<div class="single-plan-heading"><div><div class="eyebrow muted">Agent-authored plan / draft</div><h2>First-release harness</h2></div><span>${state.planEntries.length} entries</span></div><ol class="plan-entries">${state.planEntries.map((entry, index) => `<li class="plan-entry"><span class="plan-entry-number mono">${String(index + 1).padStart(2, '0')}</span><span><small>${entry.role}</small><span>${escapeHtml(entry.body)}</span></span></li>`).join('')}</ol>`;
 }
 function planningWorkspace() {
-	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated</div><h2>Initiative execution harness</h2></div><div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div></div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>Complete the harness design</h3><p>Resolve provider control, workspace design, approvals, recovery, and usage before fixing the first-release scope.</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
+	return `<section class="planning-workspace"><div class="planning-heading"><div><div class="eyebrow muted">Planning / simulated</div><h2>Initiative execution harness</h2></div><div class="planning-modes" role="group" aria-label="Planning mode">${[['pioneer', 'git-branch', 'Pioneer'], ['plan', 'notebook-pen', 'Plan']].map(([mode, symbol, title]) => `<button data-action="planning-mode" data-mode="${mode}" aria-pressed="${state.planningMode === mode}">${icon(symbol)}${title}</button>`).join('')}</div></div><div id="planning-session-content">${planningSession()}</div><section data-planning-panel="pioneer" ${state.planningMode !== 'pioneer' ? 'hidden' : ''}><div class="pioneer-map-summary"><div><div class="eyebrow muted">Pioneer map / destination</div><h3>Complete the harness design</h3><p>Resolve provider control, workspace design, approvals, recovery, and usage before fixing the first-release scope.</p></div><span>${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved</span></div><div id="pioneer-graph-content">${pioneerGraph()}</div></section><section data-planning-panel="plan" ${state.planningMode !== 'plan' ? 'hidden' : ''}><div id="single-plan-content">${singlePlan()}</div></section></section>`;
 }
 function refreshPlanning() {
 	const graph = app.querySelector('.pioneer-viewport');
 	const scroll = { top: graph?.scrollTop || 0, left: graph?.scrollLeft || 0 };
+	app.querySelector('#planning-session-content').innerHTML = planningSession();
 	app.querySelector('.pioneer-map-summary > span').textContent = `${state.pioneerResolutions.filter(Boolean).length} / ${pioneerTickets.length} resolved`;
 	app.querySelector('#pioneer-graph-content').innerHTML = pioneerGraph();
 	app.querySelector('#single-plan-content').innerHTML = singlePlan();
@@ -318,6 +343,15 @@ document.addEventListener('click', (event) => {
 		state.planningMode = button.dataset.mode;
 		app.querySelectorAll('[data-planning-panel]').forEach((panel) => { panel.hidden = panel.dataset.planningPanel !== state.planningMode; });
 		app.querySelectorAll('[data-action="planning-mode"]').forEach((control) => control.setAttribute('aria-pressed', String(control.dataset.mode === state.planningMode)));
+		app.querySelector('#planning-session-content').innerHTML = planningSession();
+		window.lucide?.createIcons();
+		return;
+	}
+	if (action === 'planning-pause') {
+		const session = state.planningSessions[state.planningMode];
+		session.paused = !session.paused;
+		refreshPlanning();
+		app.querySelector('[data-action="planning-pause"]').focus();
 		return;
 	}
 	if (['graph-in', 'graph-out', 'graph-fit'].includes(action)) {
@@ -328,14 +362,14 @@ document.addEventListener('click', (event) => {
 		app.querySelector(`[data-action="${action}"]`).focus();
 		return;
 	}
-	if (['pioneer-ticket', 'plan-entry'].includes(action)) {
+	if (action === 'pioneer-ticket') {
 		const index = Number(button.dataset.index);
 		const ticket = pioneerTickets[index];
 		dialog.setAttribute('aria-labelledby', 'planning-record-title');
-		dialog.innerHTML = action === 'pioneer-ticket' ? `<form data-form="pioneer-resolution" data-index="${index}"><div class="eyebrow muted">Pioneer ticket / ${ticket.type} / simulated</div><h2 id="planning-record-title">${ticket.title}</h2><section class="record-section"><h3>Question</h3><p>${ticket.question}</p></section><section class="record-section"><h3>Dependencies</h3>${ticket.dependencies.length ? ticket.dependencies.map((dependency) => `<button type="button" class="record-link" data-action="pioneer-ticket" data-index="${dependency}">${icon('circle-dot')}${pioneerTickets[dependency].title} / ${pioneerStatus(dependency)}</button>`).join('') : '<p>No prerequisites.</p>'}</section><label for="ticket-resolution">Resolution</label><textarea id="ticket-resolution" name="body" rows="5">${escapeHtml(state.pioneerDrafts[index] ?? state.pioneerResolutions[index])}</textarea><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('save')}Save resolution</button></div></form>` : `<form data-form="plan-edit" data-index="${index}"><div class="eyebrow muted">Plan entry / ${state.planEntries[index].role} / simulated</div><h2 id="planning-record-title">Edit entry</h2><label for="edit-plan-entry">Entry</label><textarea id="edit-plan-entry" name="body" rows="6" required>${escapeHtml(state.planEntries[index].body)}</textarea><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('save')}Save entry</button></div></form>`;
+		dialog.innerHTML = `<div class="eyebrow muted">Pioneer ticket / ${ticket.type} / ${pioneerStatus(index)}</div><h2 id="planning-record-title">${ticket.title}</h2><section class="record-section"><h3>Question</h3><p>${ticket.question}</p></section><section class="record-section"><h3>Dependencies</h3>${ticket.dependencies.length ? ticket.dependencies.map((dependency) => `<button class="record-link" data-action="pioneer-ticket" data-index="${dependency}">${icon('circle-dot')}${pioneerTickets[dependency].title} / ${pioneerStatus(dependency)}</button>`).join('') : '<p>No prerequisites.</p>'}</section><section class="record-section"><h3>Agent-recorded resolution</h3><p>${escapeHtml(state.pioneerResolutions[index] || 'Not yet resolved.')}</p></section><div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
 		window.lucide?.createIcons();
 		if (!dialog.open) dialog.showModal();
-		else { dialog.scrollTop = 0; dialog.querySelector('textarea').focus(); }
+		else { dialog.scrollTop = 0; dialog.querySelector('button').focus(); }
 		return;
 	}
 	if (['review-file', 'review-previous', 'review-next', 'clear-file-query'].includes(action)) {
@@ -383,8 +417,6 @@ document.addEventListener('click', (event) => {
 	}
 	if (['terminate', 'limits'].includes(action)) { openDialog(action); return; }
 	if (action === 'close-dialog') {
-		const ticketForm = dialog.querySelector('[data-form="pioneer-resolution"]');
-		if (ticketForm) delete state.pioneerDrafts[ticketForm.dataset.index];
 		dialog.close();
 		return;
 	}
@@ -425,8 +457,7 @@ document.addEventListener('click', (event) => {
 });
 document.addEventListener('input', (event) => {
 	if (event.target.matches('.answer-form [name="answer"]')) state.answerDraft = event.target.value;
-	if (event.target.id === 'plan-body') state.planningDraft = event.target.value;
-	if (event.target.id === 'ticket-resolution') state.pioneerDrafts[event.target.form.dataset.index] = event.target.value;
+	if (event.target.id === 'planning-answer') state.planningSessions[event.target.form.dataset.mode].draft = event.target.value;
 	if (event.target.id === 'checkpoint-search') {
 		state.fileQuery = event.target.value;
 		const files = matchingFiles();
@@ -435,7 +466,6 @@ document.addEventListener('input', (event) => {
 	}
 });
 document.addEventListener('change', (event) => {
-	if (event.target.id === 'plan-role') { state.planningRole = event.target.value; return; }
 	if (event.target.id === 'initiative-selector') {
 		viewedInitiative = event.target.value;
 		render();
@@ -450,19 +480,20 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
-	if (['plan-add', 'plan-edit', 'pioneer-resolution'].includes(form.dataset.form)) {
-		const body = String(values.get('body')).trim();
-		const index = Number(form.dataset.index);
-		if (form.dataset.form === 'pioneer-resolution') { state.pioneerResolutions[index] = body; delete state.pioneerDrafts[index]; }
-		else {
-			if (!body) return;
-			if (form.dataset.form === 'plan-add') { state.planEntries.push({ role: String(values.get('role')), body }); state.planningDraft = ''; }
-			else state.planEntries[index].body = body;
-		}
-		dialog.close();
+	if (form.dataset.form === 'planning-answer') {
+		if (form.dataset.mode !== state.planningMode) return;
+		const session = state.planningSessions[state.planningMode];
+		const question = planningQuestion();
+		const answer = String(values.get('answer')).trim();
+		if (!answer || session.paused || !question) return;
+		const result = state.planningMode === 'pioneer' ? `${question.title}: ${answer}` : `${planQuestions[question.index].prefix}: ${answer}`;
+		if (state.planningMode === 'pioneer') state.pioneerResolutions[question.index] = result;
+		else state.planEntries.push({ role: planQuestions[question.index].role, body: result });
+		session.answers.push({ question: question.question, answer, result });
+		session.draft = '';
 		refreshPlanning();
-		app.querySelector(form.dataset.form === 'pioneer-resolution' ? `[data-action="pioneer-ticket"][data-index="${index}"]` : form.dataset.form === 'plan-edit' ? `[data-action="plan-entry"][data-index="${index}"]` : '#plan-body').focus();
-		notify('Planning change saved in the simulation.');
+		(app.querySelector('#planning-answer') || app.querySelector('[data-action="planning-mode"][aria-pressed="true"]')).focus();
+		notify('Simulated planning agent recorded your answer.');
 		return;
 	}
 	if (form.dataset.form === 'answer') {
@@ -489,10 +520,6 @@ document.addEventListener('submit', (event) => {
 	render();
 });
 document.querySelector('#previous-variant').addEventListener('click', () => changeVariant(-1));
-dialog.addEventListener('cancel', () => {
-	const ticketForm = dialog.querySelector('[data-form="pioneer-resolution"]');
-	if (ticketForm) delete state.pioneerDrafts[ticketForm.dataset.index];
-});
 document.querySelector('#next-variant').addEventListener('click', () => changeVariant(1));
 document.querySelector('#reset-prototype').addEventListener('click', () => { state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {

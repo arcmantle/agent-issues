@@ -1173,8 +1173,12 @@ body[data-variant='C'] #app {
 	border-top: 3px solid #81909c;
 	text-align: left;
 }
-.pioneer-node.open {
+.pioneer-node.open, .pioneer-node.active {
 	border-top-color: #347f92;
+}
+.pioneer-node.active {
+	border-color: #347f92;
+	background: #eff8fb;
 }
 .pioneer-node.resolved {
 	border-top-color: var(--accent);
@@ -1202,7 +1206,8 @@ body[data-variant='C'] #app {
 	padding: 0;
 	list-style: none;
 }
-.plan-entries button {
+.plan-entry {
+	display: flex;
 	justify-content: flex-start;
 	align-items: flex-start;
 	gap: 14px;
@@ -1218,7 +1223,7 @@ body[data-variant='C'] #app {
 	font-size: 11px;
 	color: var(--muted);
 }
-.plan-entries button > span:nth-child(2) {
+.plan-entry > span:nth-child(2) {
 	display: grid;
 	flex: 1;
 	gap: 8px;
@@ -1231,19 +1236,68 @@ body[data-variant='C'] #app {
 	text-transform: uppercase;
 	color: var(--muted);
 }
-.plan-composer {
-	display: grid;
-	gap: 10px;
-	margin-top: 24px;
+.planning-session {
+	margin-bottom: 24px;
+	border-top: 2px solid #347f92;
+	border-bottom: 1px solid var(--border);
 }
-.plan-composer label {
+.planner-agent, .planner-agent > span, .planner-agent > div {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.planner-agent {
+	justify-content: space-between;
+	padding: 14px 0;
 	font-size: 12px;
 }
-.plan-composer select {
-	max-width: 200px;
+.planner-question {
+	padding: 16px 0;
 }
-.plan-composer button {
+.planner-question h3 {
+	margin: 8px 0 16px;
+	font-size: 17px;
+	line-height: 1.5;
+}
+.planner-question form {
+	display: grid;
+	gap: 10px;
+}
+.planner-question label {
+	font-size: 12px;
+}
+.planner-question button {
 	justify-self: start;
+}
+.planner-record {
+	padding: 14px;
+	border-left: 3px solid var(--accent);
+	background: #f0f7f2;
+}
+.planner-record p, .planner-history p, .planner-question p {
+	margin-top: 8px;
+	font-size: 12px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+.planner-history {
+	padding: 16px 0;
+	border-top: 1px solid var(--border);
+	font-size: 12px;
+}
+.planner-history summary {
+	cursor: pointer;
+}
+.planner-history ol {
+	padding: 0;
+	list-style: none;
+}
+.planner-history li {
+	display: grid;
+	gap: 6px;
+	padding: 16px 0;
+	border-top: 1px solid var(--border);
 }
 @media (max-width: 700px) {
 	.planning-workspace {
