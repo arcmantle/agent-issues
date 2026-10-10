@@ -105,7 +105,7 @@ const planQuestions = () => state.planningContext === 'harness' ? harnessQuestio
 const planningSnapshot = () => ({ planningMode: state.planningMode, pioneerView: state.pioneerView, graphZoom: state.graphZoom, planningSessions: state.planningSessions, planEntries: state.planEntries, pioneerResolutions: state.pioneerResolutions });
 function planningStartForm() {
 	const draft = state.planningLaunch;
-	return `<form class="planning-start-form" data-form="planning-start" data-repository="${state.repository}"><label for="planning-brief">Starting point</label><textarea id="planning-brief" name="brief" rows="5" required>${escapeHtml(draft.brief)}</textarea><label for="planning-initiative">Initiative</label><select id="planning-initiative" name="initiative"><option value="">Not yet defined</option>${repositoryInitiatives().map(([id, initiative]) => `<option value="${id}" ${draft.initiative === id ? 'selected' : ''}>${initiative.title}</option>`).join('')}</select><fieldset><legend>Mode</legend>${['plan', 'pioneer'].map((mode) => `<label><input type="radio" name="mode" value="${mode}" ${draft.mode === mode ? 'checked' : ''} />${mode === 'plan' ? 'Plan' : 'Pioneer'}</label>`).join('')}</fieldset><div class="dialog-actions"><button class="primary">${icon('play')}Start planning</button></div></form>`;
+	return `<form class="planning-start-form" data-form="planning-start" data-repository="${state.repository}"><label for="planning-brief">Starting point</label><textarea id="planning-brief" name="brief" rows="5" required>${escapeHtml(draft.brief)}</textarea><label for="planning-initiative">Initiative</label><harness-select id="planning-initiative" name="initiative"><option value="">Not yet defined</option>${repositoryInitiatives().map(([id, initiative]) => `<option value="${id}" ${draft.initiative === id ? 'selected' : ''}>${initiative.title}</option>`).join('')}</harness-select><fieldset><legend>Mode</legend>${['plan', 'pioneer'].map((mode) => `<label><input type="radio" name="mode" value="${mode}" ${draft.mode === mode ? 'checked' : ''} />${mode === 'plan' ? 'Plan' : 'Pioneer'}</label>`).join('')}</fieldset><div class="dialog-actions"><button class="primary">${icon('play')}Start planning</button></div></form>`;
 }
 function planningSidebar() {
 	const contexts = state.planningContexts.filter((context) => context.repository === state.repository);
@@ -211,6 +211,105 @@ let variant = new URL(location.href).searchParams.get('variant') || 'A';
 if (!variants.includes(variant)) variant = 'A';
 const icon = (name) => `<i data-lucide="${name}"></i>`;
 const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+let selectSequence = 0;
+class HarnessSelect extends HTMLElement {
+	connectedCallback() {
+		if (this.querySelector('.select-trigger')) return;
+		const options = [...this.querySelectorAll('option')].map((option) => ({ value: option.getAttribute('value') || '', label: option.textContent, selected: option.hasAttribute('selected'), disabled: option.hasAttribute('disabled') }));
+		const selected = options.find((option) => option.selected && !option.disabled) || options.find((option) => !option.disabled);
+		const controlId = this.id || `select-${++selectSequence}`;
+		const labels = [...document.querySelectorAll('label')].filter((label) => label.htmlFor === this.id && this.id);
+		const wrappingLabel = this.closest('label');
+		const labelCopy = wrappingLabel?.cloneNode(true);
+		labelCopy?.querySelector('harness-select')?.remove();
+		this.selectLabel = this.getAttribute('aria-label') || labels[0]?.textContent.trim() || labelCopy?.textContent.trim() || this.getAttribute('name');
+		const input = document.createElement('input');
+		for (const attribute of this.attributes) input.setAttribute(attribute.name, attribute.value);
+		input.type = 'hidden';
+		input.id = controlId;
+		input.value = selected?.value || '';
+		this.removeAttribute('id');
+		this.innerHTML = `<button id="${controlId}-trigger" type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="${controlId}-menu" ${this.hasAttribute('disabled') ? 'disabled' : ''}><span>${escapeHtml(selected?.label || '')}</span>${icon('chevron-down')}</button><div id="${controlId}-menu" class="select-menu" popover="auto" role="listbox" aria-label="${escapeHtml(this.selectLabel)}">${options.map((option) => `<button type="button" role="option" tabindex="-1" aria-selected="${option === selected}" data-value="${escapeHtml(option.value)}" ${option.disabled ? 'disabled' : ''}><span>${escapeHtml(option.label)}</span>${icon('check')}</button>`).join('')}</div>`;
+		this.prepend(input);
+		labels.forEach((label) => { label.htmlFor = `${controlId}-trigger`; });
+		this.querySelector('.select-trigger').setAttribute('aria-label', `${this.selectLabel}: ${selected?.label || ''}`);
+	}
+}
+customElements.define('harness-select', HarnessSelect);
+function positionSelect(menu) {
+	const bounds = menu.parentElement.querySelector('.select-trigger').getBoundingClientRect();
+	const width = Math.min(Math.max(bounds.width, 240), window.innerWidth - 24);
+	const below = window.innerHeight - bounds.bottom - 20;
+	const above = bounds.top - 20;
+	const useBelow = below >= Math.min(320, above);
+	menu.style.width = `${width}px`;
+	menu.style.maxHeight = `${Math.max(0, Math.min(320, useBelow ? below : above))}px`;
+	menu.style.left = `${Math.max(12, Math.min(bounds.left, window.innerWidth - width - 12))}px`;
+	menu.style.top = useBelow ? `${bounds.bottom + 8}px` : 'auto';
+	menu.style.bottom = useBelow ? 'auto' : `${window.innerHeight - bounds.top + 8}px`;
+}
+document.addEventListener('click', (event) => {
+	const control = event.target.closest('harness-select');
+	if (!control) return;
+	const button = event.target.closest('button');
+	if (!button || button.disabled) return;
+	event.preventDefault();
+	const menu = control.querySelector('.select-menu');
+	if (button.matches('.select-trigger')) {
+		menu.togglePopover();
+		if (menu.matches(':popover-open')) (menu.querySelector('[aria-selected="true"]:not(:disabled)') || menu.querySelector('[role="option"]:not(:disabled)'))?.focus({ preventScroll: true });
+		return;
+	}
+	if (!button.matches('[role="option"]')) return;
+	const input = control.querySelector('input');
+	input.value = button.dataset.value;
+	control.querySelector('.select-trigger span').textContent = button.querySelector('span').textContent;
+	control.querySelector('.select-trigger').setAttribute('aria-label', `${control.selectLabel}: ${button.querySelector('span').textContent}`);
+	for (const option of menu.querySelectorAll('[role="option"]')) option.setAttribute('aria-selected', String(option === button));
+	menu.hidePopover();
+	const triggerId = `${input.id}-trigger`;
+	input.dispatchEvent(new Event('input', { bubbles: true }));
+	input.dispatchEvent(new Event('change', { bubbles: true }));
+	document.getElementById(triggerId)?.focus({ preventScroll: true });
+});
+document.addEventListener('beforetoggle', (event) => {
+	if (event.target.matches('.select-menu') && event.newState === 'open') positionSelect(event.target);
+}, true);
+document.addEventListener('toggle', (event) => {
+	if (!event.target.matches('.select-menu')) return;
+	const trigger = event.target.parentElement.querySelector('.select-trigger');
+	trigger.setAttribute('aria-expanded', String(event.newState === 'open'));
+}, true);
+document.addEventListener('keydown', (event) => {
+	const control = event.target.closest('harness-select');
+	if (!control) return;
+	event.stopImmediatePropagation();
+	const menu = control.querySelector('.select-menu');
+	const open = menu.matches(':popover-open');
+	const options = [...menu.querySelectorAll('[role="option"]:not(:disabled)')];
+	if (event.key === 'Escape' && open) {
+		event.preventDefault();
+		menu.hidePopover();
+		control.querySelector('.select-trigger').focus();
+	} else if (event.key === 'Tab' && open) {
+		menu.hidePopover();
+		control.querySelector('.select-trigger').focus();
+	}
+	else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+		event.preventDefault();
+		const current = options.indexOf(open ? document.activeElement : menu.querySelector('[aria-selected="true"]'));
+		if (!open) menu.showPopover();
+		const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+		options[index]?.focus();
+	} else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey && event.key !== ' ') {
+		event.preventDefault();
+		const now = Date.now();
+		control.searchText = now - (control.searchTime || 0) < 700 ? `${control.searchText || ''}${event.key}` : event.key;
+		control.searchTime = now;
+		if (!open) menu.showPopover();
+		options.find((option) => option.textContent.trim().toLowerCase().startsWith(control.searchText.toLowerCase()))?.focus();
+	}
+});
 const labels = { running: 'Working', waiting: 'Needs answer', review: 'Review ready', integrated: 'Integrated', stopping: 'Shutdown requested', stopped: 'Stopped', terminated: 'Terminated', paused: 'Paused for change' };
 const pendingCount = () => Number(state.question) + Number(!state.integrated) + (variant === 'C' ? currentChangeRequests().filter((request) => ['question', 'proposal'].includes(request.status)).length : 0);
 const runLabel = () => ({ running: 'Running', paused: 'Paused', stopping: 'Stopping', stopped: 'Stopped', terminated: 'Terminated' })[state.mode];
@@ -267,12 +366,12 @@ function openChangeRequest(id = null) {
 	dialog.setAttribute('aria-labelledby', 'change-request-heading');
 	let content;
 	if (!request) {
-		content = `<form data-form="change-request"><label for="change-brief">What do you want to add or change?</label><textarea id="change-brief" name="brief" required>${escapeHtml(state.changeDraft)}</textarea><label>Related work<select name="target"><option value="">New work</option>${initiativeViews.harness.issues.map((title, index) => `<option value="${index}">${routeReference(index)} / ${escapeHtml(title)}</option>`).join('')}</select></label><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('send')}Send request</button></div></form>`;
+		content = `<form data-form="change-request"><label for="change-brief">What do you want to add or change?</label><textarea id="change-brief" name="brief" required>${escapeHtml(state.changeDraft)}</textarea><label>Related work<harness-select name="target"><option value="">New work</option>${initiativeViews.harness.issues.map((title, index) => `<option value="${index}">${routeReference(index)} / ${escapeHtml(title)}</option>`).join('')}</harness-select></label><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('send')}Send request</button></div></form>`;
 	} else if (request.status === 'question') {
 		content = `<form data-form="change-answer"><label for="change-answer">What result must this change produce?</label><textarea id="change-answer" name="answer" required>${escapeHtml(request.draft || '')}</textarea><div class="dialog-actions"><button type="button" data-action="close-dialog">Close</button><button class="primary">${icon('send')}Send answer</button></div></form>`;
 	} else if (request.status === 'proposal') {
 		const canPause = request.target != null && request.target < 3 && ['running', 'waiting', 'review'].includes(state.workers[request.target].status) && ['running', 'paused'].includes(state.mode);
-		content = `<form data-form="change-approve"><section class="change-proposal"><h3>Proposed issue / ${request.reference}</h3><p>${escapeHtml(request.title)}</p><h4>Acceptance criteria</h4><p>${escapeHtml(request.criteria)}</p><p>${request.target == null ? 'New work. Existing issues will not change.' : `Related issue: ${routeReference(request.target)} / ${escapeHtml(initiativeViews.harness.issues[request.target])}. Existing work will not change.`}</p><label>Work plan<select name="strategy"><option value="followup">Add a follow-up issue</option>${canPause ? '<option value="pause">Pause affected work and add a follow-up</option>' : ''}${request.target != null && request.target >= 3 ? '<option value="revise">Revise the queued issue</option>' : ''}</select></label></section><div class="dialog-actions"><button type="button" data-action="change-decline">Decline</button><button type="button" data-action="change-separate">${icon('notebook-pen')}Start a separate initiative</button><button class="primary">${icon('check')}Approve proposal</button></div></form>`;
+		content = `<form data-form="change-approve"><section class="change-proposal"><h3>Proposed issue / ${request.reference}</h3><p>${escapeHtml(request.title)}</p><h4>Acceptance criteria</h4><p>${escapeHtml(request.criteria)}</p><p>${request.target == null ? 'New work. Existing issues will not change.' : `Related issue: ${routeReference(request.target)} / ${escapeHtml(initiativeViews.harness.issues[request.target])}. Existing work will not change.`}</p><label>Work plan<harness-select name="strategy"><option value="followup">Add a follow-up issue</option>${canPause ? '<option value="pause">Pause affected work and add a follow-up</option>' : ''}${request.target != null && request.target >= 3 ? '<option value="revise">Revise the queued issue</option>' : ''}</harness-select></label></section><div class="dialog-actions"><button type="button" data-action="change-decline">Decline</button><button type="button" data-action="change-separate">${icon('notebook-pen')}Start a separate initiative</button><button class="primary">${icon('check')}Approve proposal</button></div></form>`;
 	} else {
 		content = `<p class="muted">${request.status === 'approved' ? `${request.reference} / ${request.strategy === 'revise' ? 'Queued issue revised' : 'Follow-up queued'}` : request.status === 'separate' ? 'Moved to separate planning.' : 'Proposal declined.'}</p><div class="dialog-actions">${request.previousWorkerStatus && state.workers[request.target].status === 'paused' && ['running', 'paused'].includes(state.mode) ? `<button data-action="change-resume">${icon('play')}Resume affected work</button>` : ''}<button data-action="close-dialog">Close</button></div>`;
 	}
@@ -329,7 +428,7 @@ function trackedWork() {
 	if (!initiative) return '<section><h3>No initiatives</h3><button data-action="page" data-page="planning">' + icon('notebook-pen') + 'Start planning</button></section>';
 	const row = (title, kind, index, status) => `<button class="tracked-record" data-action="record" data-kind="${kind}" data-index="${index}"><span>${icon(kind === 'issue' ? 'circle-dot' : 'file-text')}<span>${title}</span></span><small>${status}</small></button>`;
 	const prds = viewedInitiative === 'harness' ? routePrds : [{ title: initiative.prd, story: initiative.story, issues: [0, 1, 2] }];
-	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><select id="initiative-selector" aria-label="Select initiative">${repositoryInitiatives().map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'agent-issues / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRDs / ${prds.length}</summary>${prds.map((prd, prdIndex) => `${row(prd.title, 'prd', prdIndex, 'Draft')}<details open class="story-group"><summary>User story</summary>${row(prd.story, 'story', prdIndex, 'In progress')}<div class="issue-group">${prd.issues.map((index) => row(initiative.issues[index], 'issue', index, viewedInitiative === 'harness' ? routeState(index).label : 'Ready')).join('')}</div></details>`).join('')}</details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
+	return `<section class="initiative-navigation"><label class="eyebrow muted" for="initiative-selector">Initiative</label><harness-select id="initiative-selector" aria-label="Select initiative">${repositoryInitiatives().map(([key, value]) => `<option value="${key}" ${viewedInitiative === key ? 'selected' : ''}>${value.title}</option>`).join('')}</harness-select><div class="scope-run">${viewedInitiative === 'harness' ? `Run 004 / ${runLabel()}` : initiative.run}</div>${viewedInitiative !== 'harness' ? '<button class="active-run-link" data-action="active-run">' + icon('activity') + 'agent-issues / ' + runLabel() + '</button>' : ''}<nav class="tracked-work" aria-label="Initiative work"><details open><summary>PRDs / ${prds.length}</summary>${prds.map((prd, prdIndex) => `${row(prd.title, 'prd', prdIndex, 'Draft')}<details open class="story-group"><summary>User story</summary>${row(prd.story, 'story', prdIndex, 'In progress')}<div class="issue-group">${prd.issues.map((index) => row(initiative.issues[index], 'issue', index, viewedInitiative === 'harness' ? routeState(index).label : 'Ready')).join('')}</div></details>`).join('')}</details><details><summary>ADRs / ${initiative.adrs.length}</summary>${initiative.adrs.map((title, index) => row(title, 'adr', index, 'Current')).join('')}</details></nav></section>`;
 }
 function workerList(title = 'Agents') {
 	return `<div class="section-label eyebrow"><span>${title}</span><span>${state.workers.filter((worker) => worker.visible).length} visible</span></div><div class="worker-list">${state.workers.map((worker) => `<label class="worker-row ${worker.visible ? 'selected' : ''}"><span class="worker-number">${worker.id}</span><span><strong>Worker ${worker.id}</strong><small>${labels[worker.status]}</small></span><input type="checkbox" data-worker="${worker.id}" ${worker.visible ? 'checked' : ''} aria-label="Show Worker ${worker.id} terminal" /></label>`).join('')}</div>`;
@@ -454,13 +553,13 @@ function settingsProvidersForm(scope) {
 	const effective = scope === 'global' ? global : effectiveProjectSettings();
 	const inheritedProviders = scope === 'project' && project.providers == null;
 	const inheritedModels = scope === 'project' && project.models == null;
-	return `<section class="settings-section"><h2>Providers And Models</h2>${scope === 'project' ? `<div class="settings-fields"><label>Permitted providers<select name="provider-mode" data-setting-group="providers"><option value="inherit" ${inheritedProviders ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedProviders ? '' : 'selected'}>Project override</option></select></label><label>Permitted models<select name="model-mode" data-setting-group="models"><option value="inherit" ${inheritedModels ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedModels ? '' : 'selected'}>Project override</option></select></label></div>` : ''}<div class="settings-provider-list">${Object.entries(settingsProviders).map(([id, provider]) => `<fieldset class="settings-provider"><legend>${provider.name}</legend><label class="settings-toggle"><input type="checkbox" name="providers" value="${id}" data-setting-control="providers" ${effective.providers.includes(id) ? 'checked' : ''} ${(inheritedProviders || scope === 'project' && !global.providers.includes(id)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.providers.includes(id)}" />Permitted${scope === 'project' && !global.providers.includes(id) ? ' / Blocked globally' : ''}</label>${scope === 'global' ? `<div class="settings-connection"><span data-connection-status="${id}">${global.connections[id] ? 'Connected / Example' : 'Not connected'}</span><button type="button" data-action="settings-connect" data-provider="${id}">${icon(global.connections[id] ? 'unlink' : 'plug')}${global.connections[id] ? 'Disconnect' : 'Connect'}</button></div>` : ''}${settingsModelSelector(scope, id, provider, effective, inheritedModels)}</fieldset>`).join('')}</div></section>`;
+	return `<section class="settings-section"><h2>Providers And Models</h2>${scope === 'project' ? `<div class="settings-fields"><label>Permitted providers<harness-select name="provider-mode" data-setting-group="providers"><option value="inherit" ${inheritedProviders ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedProviders ? '' : 'selected'}>Project override</option></harness-select></label><label>Permitted models<harness-select name="model-mode" data-setting-group="models"><option value="inherit" ${inheritedModels ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedModels ? '' : 'selected'}>Project override</option></harness-select></label></div>` : ''}<div class="settings-provider-list">${Object.entries(settingsProviders).map(([id, provider]) => `<fieldset class="settings-provider"><legend>${provider.name}</legend><label class="settings-toggle"><input type="checkbox" name="providers" value="${id}" data-setting-control="providers" ${effective.providers.includes(id) ? 'checked' : ''} ${(inheritedProviders || scope === 'project' && !global.providers.includes(id)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.providers.includes(id)}" />Permitted${scope === 'project' && !global.providers.includes(id) ? ' / Blocked globally' : ''}</label>${scope === 'global' ? `<div class="settings-connection"><span data-connection-status="${id}">${global.connections[id] ? 'Connected / Example' : 'Not connected'}</span><button type="button" data-action="settings-connect" data-provider="${id}">${icon(global.connections[id] ? 'unlink' : 'plug')}${global.connections[id] ? 'Disconnect' : 'Connect'}</button></div>` : ''}${settingsModelSelector(scope, id, provider, effective, inheritedModels)}</fieldset>`).join('')}</div></section>`;
 }
 function settingsContent(scope) {
 	const global = state.settings.global;
 	const effective = scope === 'global' ? global : effectiveProjectSettings();
 	const project = state.settings.projects[state.repository] || {};
-	return `<header class="page-heading"><h1>${scope === 'global' ? 'Global Settings' : 'Project Settings'}</h1>${scope === 'project' ? `<button data-action="page" data-page="global-settings">${icon('settings')}Global Settings</button>` : ''}</header><div class="settings-content">${settingsUsage(scope)}<form data-form="settings" data-scope="${scope}" data-repository="${state.repository}"><section class="settings-section"><h2>Cost Controls</h2><div class="settings-fields">${settingsNumber(scope, 'budget', scope === 'global' ? 'Global stop limit / USD' : 'Project stop limit / USD', effective.budget, scope === 'global' ? null : global.budget)}${settingsNumber(scope, 'warning', 'Warning threshold / USD', effective.warning, scope === 'global' ? null : Math.min(global.warning, effective.budget))}${scope === 'global' ? settingsNumber(scope, 'projectBudget', 'Default project budget / USD', global.projectBudget, global.budget) : ''}</div>${scope === 'project' ? `<p class="muted">Global stop limit / ${settingsMoney(global.budget)}. Global warning threshold / ${settingsMoney(global.warning)}.</p>` : `<div class="settings-fields">${settingsNumber(scope, 'copilotRequests', 'Copilot request limit', state.limits.copilot, null, true)}${settingsNumber(scope, 'interpreterCalls', 'Interpreter call limit', state.limits.interpreter, null, true)}</div>`}</section><section class="settings-section"><h2>Workers And Approvals</h2><div class="settings-fields">${settingsNumber(scope, 'workers', scope === 'global' ? 'Total worker limit' : 'Project worker limit', effective.workers, scope === 'global' ? null : global.workers, true)}${scope === 'global' ? settingsNumber(scope, 'projectWorkers', 'Default project worker limit', global.projectWorkers, global.workers, true) : ''}</div>${scope === 'project' ? `<p class="muted">Global worker limit / ${global.workers}</p><label>New-run approval<select name="approval"><option value="inherit" ${project.approval == null ? 'selected' : ''}>Inherited / ${global.approval ? 'Required' : 'Not required'}</option><option value="true" ${project.approval === true ? 'selected' : ''}>Required</option><option value="false" ${project.approval === false && !global.approval ? 'selected' : ''} ${global.approval ? 'disabled' : ''}>Not required${global.approval ? ' / Blocked globally' : ''}</option></select></label>` : `<label class="settings-toggle"><input type="checkbox" name="approval" ${global.approval ? 'checked' : ''} />Require approval for new runs</label>`}<div class="settings-approvals"><label class="settings-toggle"><input type="checkbox" checked disabled />Integration approval / Required</label><label class="settings-toggle"><input type="checkbox" checked disabled />Final merge approval / Required</label></div></section>${settingsProvidersForm(scope)}<p class="settings-error" role="alert"></p><div class="settings-actions"><span class="muted" role="status" data-settings-status>Saved / This session</span>${scope === 'project' ? `<button type="button" data-action="settings-inherit">${icon('rotate-ccw')}Use Global Defaults</button>` : ''}<button class="primary" type="submit">${icon('save')}Save Settings</button></div></form></div>`;
+	return `<header class="page-heading"><h1>${scope === 'global' ? 'Global Settings' : 'Project Settings'}</h1>${scope === 'project' ? `<button data-action="page" data-page="global-settings">${icon('settings')}Global Settings</button>` : ''}</header><div class="settings-content">${settingsUsage(scope)}<form data-form="settings" data-scope="${scope}" data-repository="${state.repository}"><section class="settings-section"><h2>Cost Controls</h2><div class="settings-fields">${settingsNumber(scope, 'budget', scope === 'global' ? 'Global stop limit / USD' : 'Project stop limit / USD', effective.budget, scope === 'global' ? null : global.budget)}${settingsNumber(scope, 'warning', 'Warning threshold / USD', effective.warning, scope === 'global' ? null : Math.min(global.warning, effective.budget))}${scope === 'global' ? settingsNumber(scope, 'projectBudget', 'Default project budget / USD', global.projectBudget, global.budget) : ''}</div>${scope === 'project' ? `<p class="muted">Global stop limit / ${settingsMoney(global.budget)}. Global warning threshold / ${settingsMoney(global.warning)}.</p>` : `<div class="settings-fields">${settingsNumber(scope, 'copilotRequests', 'Copilot request limit', state.limits.copilot, null, true)}${settingsNumber(scope, 'interpreterCalls', 'Interpreter call limit', state.limits.interpreter, null, true)}</div>`}</section><section class="settings-section"><h2>Workers And Approvals</h2><div class="settings-fields">${settingsNumber(scope, 'workers', scope === 'global' ? 'Total worker limit' : 'Project worker limit', effective.workers, scope === 'global' ? null : global.workers, true)}${scope === 'global' ? settingsNumber(scope, 'projectWorkers', 'Default project worker limit', global.projectWorkers, global.workers, true) : ''}</div>${scope === 'project' ? `<p class="muted">Global worker limit / ${global.workers}</p><label>New-run approval<harness-select name="approval"><option value="inherit" ${project.approval == null ? 'selected' : ''}>Inherited / ${global.approval ? 'Required' : 'Not required'}</option><option value="true" ${project.approval === true ? 'selected' : ''}>Required</option><option value="false" ${project.approval === false && !global.approval ? 'selected' : ''} ${global.approval ? 'disabled' : ''}>Not required${global.approval ? ' / Blocked globally' : ''}</option></harness-select></label>` : `<label class="settings-toggle"><input type="checkbox" name="approval" ${global.approval ? 'checked' : ''} />Require approval for new runs</label>`}<div class="settings-approvals"><label class="settings-toggle"><input type="checkbox" checked disabled />Integration approval / Required</label><label class="settings-toggle"><input type="checkbox" checked disabled />Final merge approval / Required</label></div></section>${settingsProvidersForm(scope)}<p class="settings-error" role="alert"></p><div class="settings-actions"><span class="muted" role="status" data-settings-status>Saved / This session</span>${scope === 'project' ? `<button type="button" data-action="settings-inherit">${icon('rotate-ccw')}Use Global Defaults</button>` : ''}<button class="primary" type="submit">${icon('save')}Save Settings</button></div></form></div>`;
 }
 function settingsPage(scope) {
 	return `<section class="workspace settings-page" data-page-panel="${scope}-settings" data-settings-scope="${scope}" data-scroll-key="${scope}-settings" ${state.page === `${scope}-settings` ? '' : 'hidden'}>${settingsContent(scope)}</section>`;
@@ -548,16 +647,26 @@ const checkpointFiles = Array.from({ length: 50 }, (_, index) => {
 	const modules = ['approval', 'checkpoint', 'recovery', 'session', 'usage', 'worker', 'integration', 'inbox', 'limits', 'scheduler'];
 	const folder = folders[Math.floor(index / 10)];
 	const name = `${modules[index % 10]}${folder === 'tests' ? '.test' : ''}.ts`;
-	return { index, folder, name, path: `${folder}/${name}`, added: index % 9 + 3, removed: index % 4, kind: index % 7 === 0 ? 'A' : 'M' };
+	const kind = index % 11 === 10 ? 'D' : index % 7 === 0 ? 'A' : 'M';
+	return { index, folder, name, path: `${folder}/${name}`, added: kind === 'D' ? 0 : index % 9 + 3, removed: kind === 'D' ? 9 : kind === 'A' ? 0 : index % 4, kind };
 });
 const matchingFiles = () => checkpointFiles.filter((file) => file.path.toLowerCase().includes(state.fileQuery.toLowerCase().trim()));
+function checkpointFileTree(files, parent = '') {
+	const names = [...new Set(files.map((file) => file.folder.slice(parent ? parent.length + 1 : 0).split('/')[0]))];
+	return names.map((name) => {
+		const path = parent ? `${parent}/${name}` : name;
+		const children = files.filter((file) => file.folder === path || file.folder.startsWith(`${path}/`));
+		const nested = children.filter((file) => file.folder !== path);
+		const rows = children.filter((file) => file.folder === path).map((file) => `<button class="checkpoint-file ${file.index === state.reviewFile ? 'active' : ''}" data-action="review-file" data-index="${file.index}" aria-current="${file.index === state.reviewFile ? 'true' : 'false'}" aria-label="${file.path}, ${file.kind === 'A' ? 'added' : file.kind === 'D' ? 'deleted' : 'modified'}" title="${file.path} / +${file.added} -${file.removed}">${icon('file-code-2')}<span class="tree-name">${file.name}</span><span class="file-change file-change-${file.kind.toLowerCase()}" aria-hidden="true">${file.kind}</span></button>`).join('');
+		return `<details class="checkpoint-folder" data-folder="${path}" ${state.collapsedFolders.includes(path) ? '' : 'open'}><summary title="${path}">${icon('chevron-right')}${icon('folder')}<span class="tree-name">${name}</span><span class="tree-count">${children.length}</span></summary><div class="checkpoint-folder-children">${nested.length ? checkpointFileTree(nested, path) : ''}${rows}</div></details>`;
+	}).join('');
+}
 function checkpointBrowser() {
 	const files = matchingFiles();
 	const selected = checkpointFiles[state.reviewFile];
 	const position = files.findIndex((file) => file.index === state.reviewFile);
-	const folders = [...new Set(files.map((file) => file.folder))];
 	const diff = [`@@ ${selected.path} / simulated checkpoint @@`, ...diffs[state.reviewFile % diffs.length]];
-	return `<div class="checkpoint-files" data-scroll-key="checkpoint-files" aria-label="Changed files"><div class="file-result-count">${files.length} of 50 files</div>${folders.map((folder) => `<details data-folder="${folder}" ${state.collapsedFolders.includes(folder) ? '' : 'open'}><summary>${folder} <span>${files.filter((file) => file.folder === folder).length}</span></summary>${files.filter((file) => file.folder === folder).map((file) => `<button class="checkpoint-file ${file.index === state.reviewFile ? 'active' : ''}" data-action="review-file" data-index="${file.index}" aria-current="${file.index === state.reviewFile ? 'true' : 'false'}" title="${file.path}"><span>${file.name}</span><small><b>${file.kind}</b> +${file.added} -${file.removed}</small></button>`).join('')}</details>`).join('')}${!files.length ? '<p class="no-files">No matching files</p>' : ''}</div><section class="checkpoint-selected"><div class="selected-file-header"><span class="mono">${selected.path}</span><div><span>${position < 0 ? 'Outside filter' : `${position + 1} / ${files.length}`}</span><button class="icon-button" data-action="review-previous" aria-label="Previous changed file" title="Previous changed file" ${position <= 0 ? 'disabled' : ''}>${icon('chevron-up')}</button><button class="icon-button" data-action="review-next" aria-label="Next changed file" title="Next changed file" ${position < 0 || position >= files.length - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button></div></div><pre class="diff checkpoint-diff" data-scroll-key="checkpoint-diff" aria-label="Selected checkpoint diff">${diff.map((line) => `<span class="${line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : ''}">${escapeHtml(line)}</span>`).join('')}</pre></section>`;
+	return `<div class="checkpoint-files" data-scroll-key="checkpoint-files" aria-label="Changed files"><div class="file-result-count">${files.length} of 50 files</div>${checkpointFileTree(files)}${!files.length ? '<p class="no-files">No matching files</p>' : ''}</div><section class="checkpoint-selected"><div class="selected-file-header"><span class="mono">${selected.path}</span><div><span>${position < 0 ? 'Outside filter' : `${position + 1} / ${files.length}`}</span><button class="icon-button" data-action="review-previous" aria-label="Previous changed file" title="Previous changed file" ${position <= 0 ? 'disabled' : ''}>${icon('chevron-up')}</button><button class="icon-button" data-action="review-next" aria-label="Next changed file" title="Next changed file" ${position < 0 || position >= files.length - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button></div></div><pre class="diff checkpoint-diff" data-scroll-key="checkpoint-diff" aria-label="Selected checkpoint diff">${diff.map((line) => `<span class="${line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : ''}">${escapeHtml(line)}</span>`).join('')}</pre></section>`;
 }
 function reviewCheckpoint() {
 	const added = checkpointFiles.reduce((total, file) => total + file.added, 0);
@@ -618,11 +727,18 @@ function rememberFolders() {
 }
 function refreshCheckpoint() {
 	const browser = app.querySelector('.checkpoint-browser');
+	const focusedAction = browser.contains(document.activeElement) ? document.activeElement.dataset.action : null;
 	const listScroll = browser.querySelector('.checkpoint-files').scrollTop;
 	rememberFolders();
+	const selectedFolder = checkpointFiles[state.reviewFile].folder;
+	state.collapsedFolders = state.collapsedFolders.filter((folder) => selectedFolder !== folder && !selectedFolder.startsWith(`${folder}/`));
 	browser.innerHTML = checkpointBrowser();
 	browser.querySelector('.checkpoint-files').scrollTop = listScroll;
 	window.lucide?.createIcons();
+	if (focusedAction) {
+		const target = focusedAction === 'review-file' ? browser.querySelector('.checkpoint-file.active') : browser.querySelector(`[data-action="${focusedAction}"]:not(:disabled)`);
+		(target || browser.querySelector('.checkpoint-file.active'))?.focus({ preventScroll: true });
+	}
 }
 function activityContent() {
 	return state.activity.map((entry, index) => `<div class="activity-entry"><span class="mono muted">${index === 0 ? 'now' : `-${index}m`}</span><span>${escapeHtml(entry)}</span></div>`).join('');
@@ -987,6 +1103,7 @@ document.addEventListener('beforetoggle', (event) => {
 }, true);
 for (const eventName of ['resize', 'scroll']) window.addEventListener(eventName, () => {
 	for (const menu of app.querySelectorAll('.settings-model-menu:popover-open')) positionSettingsModels(menu);
+	for (const menu of document.querySelectorAll('.select-menu:popover-open')) positionSelect(menu);
 }, true);
 document.addEventListener('input', (event) => {
 	if (event.target.closest('[data-form="change-request"], [data-form="change-answer"]')) {

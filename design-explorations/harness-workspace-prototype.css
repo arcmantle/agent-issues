@@ -24,7 +24,7 @@
 body {
 	margin: 0;
 }
-button, input, textarea, select {
+button, input, textarea {
 	font: inherit;
 }
 button {
@@ -48,7 +48,7 @@ button:disabled {
 	opacity: .45;
 	cursor: not-allowed;
 }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible {
 	outline: 2px solid #428b71;
 	outline-offset: 3px;
 }
@@ -474,7 +474,7 @@ progress::-webkit-progress-value {
 	line-height: 1.6;
 	color: var(--muted);
 }
-textarea, input[type='number'], select {
+textarea, input[type='number'] {
 	width: 100%;
 	padding: 10px;
 	border: 1px solid var(--border);
@@ -862,7 +862,7 @@ body[data-variant='C'] #app {
 	align-content: start;
 	gap: 8px;
 }
-.settings-content input[type='number'], .settings-content select {
+.settings-content input[type='number'] {
 	min-width: 0;
 	width: 100%;
 	min-height: 36px;
@@ -873,7 +873,7 @@ body[data-variant='C'] #app {
 	color: var(--ink);
 	background: var(--surface);
 }
-.settings-content select {
+.settings-content harness-select {
 	margin-top: 8px;
 }
 .settings-content input:disabled {
@@ -904,6 +904,58 @@ body[data-variant='C'] #app {
 }
 .settings-model-selector {
 	margin-top: 20px;
+}
+harness-select {
+	display: block;
+	min-width: 0;
+	width: 100%;
+}
+.select-trigger {
+	justify-content: space-between;
+	width: 100%;
+	min-height: 36px;
+	padding: 8px 10px;
+	text-align: left;
+}
+.select-trigger span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.select-menu {
+	position: fixed;
+	box-sizing: border-box;
+	margin: 0;
+	padding: 4px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	font-size: 12px;
+	color: var(--ink);
+	background: var(--surface);
+	box-shadow: 0 8px 24px #0002;
+}
+.select-menu [role='option'] {
+	justify-content: space-between;
+	width: 100%;
+	min-height: 36px;
+	border: 0;
+	text-align: left;
+}
+.select-menu [role='option'] span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.select-menu [role='option'] svg {
+	visibility: hidden;
+}
+.select-menu [aria-selected='true'] {
+	background: var(--subtle);
+}
+.select-menu [aria-selected='true'] svg {
+	visibility: visible;
 }
 .settings-model-trigger {
 	display: flex;
@@ -1138,7 +1190,7 @@ body[data-variant='C'] #app {
 .initiative-navigation {
 	min-width: 0;
 }
-.initiative-navigation select {
+.initiative-navigation harness-select {
 	margin-top: 8px;
 	font-size: 12px;
 }
@@ -2011,7 +2063,7 @@ body[data-variant='C'] #app {
 .checkpoint-browser {
 	display: grid;
 	flex: 1;
-	grid-template-columns: 190px minmax(0, 1fr);
+	grid-template-columns: 240px minmax(0, 1fr);
 	grid-template-rows: minmax(0, 1fr);
 	min-height: 0;
 }
@@ -2028,21 +2080,52 @@ body[data-variant='C'] #app {
 	color: var(--muted);
 }
 .checkpoint-files summary {
-	padding: 10px 12px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 28px;
+	padding: 4px 8px;
 	font-size: 11px;
-	font-weight: 600;
+	list-style: none;
 	cursor: pointer;
 }
-.checkpoint-files summary span {
+.checkpoint-files summary::-webkit-details-marker {
+	display: none;
+}
+.checkpoint-folder[open] > summary > svg:first-child {
+	transform: rotate(90deg);
+}
+.checkpoint-folder-children {
+	padding-left: 12px;
+}
+.checkpoint-files svg {
+	flex-shrink: 0;
+	width: 14px;
+	height: 14px;
+	color: var(--muted);
+}
+.tree-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.tree-count, .file-change {
+	flex-shrink: 0;
+	margin-left: auto;
+	font-size: 10px;
+}
+.tree-count {
 	color: var(--muted);
 }
 .checkpoint-file {
 	display: flex;
-	align-items: flex-start;
-	flex-direction: column;
-	gap: 5px;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 6px;
 	width: 100%;
-	padding: 9px 18px;
+	min-height: 28px;
+	padding: 4px 8px 4px 28px;
 	border: 0;
 	border-radius: 0;
 	font-family: 'IBM Plex Mono', monospace;
@@ -2051,15 +2134,17 @@ body[data-variant='C'] #app {
 	background: transparent;
 }
 .checkpoint-file.active {
+	box-shadow: inset 2px 0 var(--accent);
 	background: #e9f2ed;
 }
-.checkpoint-file small {
-	font-size: 10px;
-	color: var(--muted);
+.file-change-a {
+	color: #2f6c4b;
 }
-.checkpoint-file b {
-	margin-right: 8px;
-	font-weight: 500;
+.file-change-m {
+	color: #865d1d;
+}
+.file-change-d {
+	color: #a25050;
 }
 .checkpoint-selected {
 	display: flex;
@@ -2101,6 +2186,9 @@ body[data-variant='C'] #app {
 @media (max-width: 700px) {
 	.workspace-tabs {
 		padding: 0 16px;
+	}
+	.review-layout .workspace-views {
+		min-height: 760px;
 	}
 	.checkpoint-browser {
 		grid-template-columns: minmax(0, 1fr);
