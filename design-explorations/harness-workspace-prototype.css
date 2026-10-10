@@ -1218,14 +1218,82 @@ body[data-variant='C'] #app {
 	min-height: 0;
 	border-bottom: 1px solid var(--border);
 }
+.run-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+.change-history {
+	padding: 20px 28px;
+	border-top: 1px solid var(--border);
+}
+.change-history-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
+.change-history-row button, .change-history-row p, .change-message p, .change-proposal p {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.change-message {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
+.change-conversation {
+	margin-bottom: 20px;
+}
+.change-proposal {
+	padding: 16px 0;
+	border-top: 1px solid var(--border);
+}
+.review-layout [data-page-panel='workspace']:not([hidden]) {
+	display: flex;
+	flex-direction: column;
+}
+.review-layout [data-page-panel='workspace'] > .run-header {
+	flex-shrink: 0;
+}
+.review-layout [data-page-panel='workspace'] > .workspace-body {
+	flex: 1 1 0;
+}
 .workspace-views {
+	display: flex;
+	flex-direction: column;
 	min-width: 0;
+	min-height: 0;
+}
+.workspace-views > .workspace-tabs {
+	flex-shrink: 0;
+}
+.workspace-views > [data-workspace-panel] {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+#review-panel:not([hidden]) {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	overflow: hidden;
 }
 .run-inbox {
 	min-width: 0;
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	border-left: 1px solid var(--border);
 }
 .review-main {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
 }
@@ -1904,8 +1972,9 @@ body[data-variant='C'] #app {
 .checkpoint-heading {
 	position: sticky;
 	z-index: 1;
-	top: 48px;
+	top: 0;
 	display: flex;
+	flex-shrink: 0;
 	align-items: center;
 	justify-content: space-between;
 	flex-wrap: wrap;
@@ -1925,6 +1994,7 @@ body[data-variant='C'] #app {
 }
 .checkpoint-search {
 	display: flex;
+	flex-shrink: 0;
 	align-items: center;
 	gap: 8px;
 	padding: 12px 18px;
@@ -1940,11 +2010,13 @@ body[data-variant='C'] #app {
 }
 .checkpoint-browser {
 	display: grid;
+	flex: 1;
 	grid-template-columns: 190px minmax(0, 1fr);
-	min-height: 420px;
+	grid-template-rows: minmax(0, 1fr);
+	min-height: 0;
 }
 .checkpoint-files {
-	max-height: 420px;
+	min-height: 0;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	border-right: 1px solid var(--border);
@@ -1990,10 +2062,14 @@ body[data-variant='C'] #app {
 	font-weight: 500;
 }
 .checkpoint-selected {
+	display: flex;
+	flex-direction: column;
 	min-width: 0;
+	min-height: 0;
 }
 .selected-file-header {
 	display: flex;
+	flex-shrink: 0;
 	align-items: center;
 	justify-content: space-between;
 	flex-wrap: wrap;
@@ -2011,8 +2087,11 @@ body[data-variant='C'] #app {
 	gap: 6px;
 }
 .review-layout .checkpoint-diff {
-	max-height: 360px;
+	flex: 1;
+	min-height: 0;
+	max-height: none;
 	overflow: auto;
+	overscroll-behavior: contain;
 }
 .no-files {
 	padding: 12px;
@@ -2025,6 +2104,7 @@ body[data-variant='C'] #app {
 	}
 	.checkpoint-browser {
 		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
 	}
 	.checkpoint-files {
 		max-height: 180px;
@@ -2143,7 +2223,15 @@ dialog input {
 	.workspace-body {
 		grid-template-columns: minmax(0, 1fr);
 	}
+	.review-layout [data-page-panel='workspace'] > .workspace-body {
+		flex-basis: auto;
+	}
+	.workspace-views {
+		height: 60dvh;
+		min-height: 0;
+	}
 	.run-inbox {
+		max-height: 60dvh;
 		border-top: 1px solid var(--border);
 		border-left: 0;
 	}

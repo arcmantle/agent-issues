@@ -20,6 +20,7 @@ const initialState = () => ({
 	repositoryViews: Object.fromEntries(Object.entries(repositories).map(([id, repository]) => [id, { initiative: repository.initiatives[0], planningContext: '', planningLaunch: { brief: '', initiative: '', mode: 'plan' } }])),
 	page: applicationPages.includes(new URL(location.href).searchParams.get('page')) ? new URL(location.href).searchParams.get('page') : 'workspace',
 	repositoryQuery: '', nextRepository: 1,
+	changeRequests: [], nextChangeRequest: 1, changeDraft: '', changeDialog: null,
 	settings: {
 		global: { budget: 200, warning: 150, projectBudget: 50, workers: 8, projectWorkers: 3, approval: true, providers: ['copilot'], models: Object.fromEntries(Object.entries(settingsProviders).map(([id, provider]) => [id, [...provider.models]])), connections: { copilot: true, claude: false, ollama: false } },
 		projects: {}, usage: { 'agent-issues': 23.60, 'studio-site': 9.80, 'task-api': 19.00 },
@@ -188,6 +189,7 @@ function refreshPlanning() {
 	window.lucide?.createIcons();
 }
 function routeState(index) {
+	if (index === 5 && currentChangeRequests().some((request) => request.status === 'approved' && request.strategy !== 'revise')) return { label: 'Blocked', tone: 'blocked', detail: 'Added work must finish before final merge' };
 	const worker = state.workers[index];
 	if (worker) return { label: labels[worker.status], tone: worker.status, detail: `Worker ${worker.id} / attempt ${worker.id}.1` };
 	const dependencies = routeIssues[index].dependencies;
@@ -209,8 +211,8 @@ let variant = new URL(location.href).searchParams.get('variant') || 'A';
 if (!variants.includes(variant)) variant = 'A';
 const icon = (name) => `<i data-lucide="${name}"></i>`;
 const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-const labels = { running: 'Working', waiting: 'Needs answer', review: 'Review ready', integrated: 'Integrated', stopping: 'Shutdown requested', stopped: 'Stopped', terminated: 'Terminated' };
-const pendingCount = () => Number(state.question) + Number(!state.integrated);
+const labels = { running: 'Working', waiting: 'Needs answer', review: 'Review ready', integrated: 'Integrated', stopping: 'Shutdown requested', stopped: 'Stopped', terminated: 'Terminated', paused: 'Paused for change' };
+const pendingCount = () => Number(state.question) + Number(!state.integrated) + (variant === 'C' ? currentChangeRequests().filter((request) => ['question', 'proposal'].includes(request.status)).length : 0);
 const runLabel = () => ({ running: 'Running', paused: 'Paused', stopping: 'Stopping', stopped: 'Stopped', terminated: 'Terminated' })[state.mode];
 
 function controls() {
@@ -223,7 +225,104 @@ function controls() {
 }
 function runHeader(showBrand = false, initiativeId = viewedInitiative) {
 	const browsing = variant === 'C' && initiativeId !== 'harness';
-	return `<header class="run-header"><div>${showBrand ? '<div class="brand">agent-issues / harness</div>' : ''}<h1>${browsing ? initiativeViews[initiativeId].title : initiativeViews.harness.title}</h1><div class="run-subtitle">${browsing ? '<span>No active run</span><span>Read-only view</span>' : `<span class="status ${state.mode}">${runLabel()}</span><span class="mono">harness/initiative</span><span>Run 004</span>`}</div></div>${browsing ? '<button data-action="active-run">' + icon('arrow-left') + 'agent-issues / ' + runLabel() + '</button>' : controls()}</header>`;
+	return `<header class="run-header"><div>${showBrand ? '<div class="brand">agent-issues / harness</div>' : ''}<h1>${browsing ? initiativeViews[initiativeId].title : initiativeViews.harness.title}</h1><div class="run-subtitle">${browsing ? '<span>No active run</span><span>Read-only view</span>' : `<span class="status ${state.mode}">${runLabel()}</span><span class="mono">harness/initiative</span><span>Run 004</span>`}</div></div>${browsing ? '<button data-action="active-run">' + icon('arrow-left') + 'agent-issues / ' + runLabel() + '</button>' : `<div class="run-actions">${variant === 'C' ? `<button data-action="request-change">${icon('message-square-plus')}Request change</button>` : ''}${controls()}</div>`}</header>`;
+}
+
+function currentChangeRequests() {
+	return state.changeRequests.filter((request) => request.repository === state.repository && request.initiative === viewedInitiative);
+}
+function changeRequestInbox() {
+	return currentChangeRequests().filter((request) => ['question', 'proposal'].includes(request.status)).map((request) => `<article class="inbox-item"><span class="item-kind">${icon('messages-square')}Coordinating agent</span><h3>${escapeHtml(request.title)}</h3><p>${request.status === 'question' ? 'Answer required' : 'Proposal awaits approval'}</p><button data-action="change-conversation" data-id="${request.id}">${icon('messages-square')}Open request</button></article>`).join('');
+}
+function refreshChangeRequests() {
+	const inbox = app.querySelector('.run-inbox');
+	if (inbox) {
+		const scroll = inbox.scrollTop;
+		inbox.innerHTML = runInbox();
+		inbox.scrollTop = scroll;
+	}
+	const route = app.querySelector('#initiative-panel');
+	if (route) route.innerHTML = initiativeRoute() + changeRequestQueue() + changeRequestHistory();
+	for (const worker of state.workers) {
+		const status = app.querySelector(`[data-terminal="${worker.id}"]`)?.closest('.terminal-panel').querySelector('.status');
+		if (status) { status.className = `status ${worker.status}`; status.textContent = labels[worker.status]; }
+	}
+	for (const button of app.querySelectorAll('[data-action="approve"]')) button.disabled = state.mode !== 'running' || state.integrated || state.workers[2].status === 'paused';
+	window.lucide?.createIcons();
+}
+function changeRequestQueue() {
+	const requests = currentChangeRequests().filter((request) => request.status === 'approved');
+	if (!requests.length) return '';
+	return `<section class="change-history"><h3>Added work / before final merge</h3>${requests.map((request) => `<div class="change-history-row"><div><button data-action="change-conversation" data-id="${request.id}">${icon('circle-dot')}${request.reference} / ${escapeHtml(request.title)}</button><p>${escapeHtml(request.criteria)}</p></div><span class="muted">${request.strategy === 'revise' ? `${routeReference(request.target)} revised` : request.target != null && state.workers[request.target]?.status !== 'integrated' ? `Waiting for ${routeReference(request.target)} merge` : state.mode === 'running' ? 'Ready / no worker assigned' : 'Scheduling paused'}</span></div>`).join('')}</section>`;
+}
+function changeRequestHistory() {
+	const requests = currentChangeRequests();
+	if (!requests.length) return '';
+	return `<section class="change-history"><h3>Change requests</h3>${requests.map((request) => `<div class="change-history-row"><button data-action="change-conversation" data-id="${request.id}">${icon('messages-square')}${escapeHtml(request.title)}</button><span class="muted">${{ question: 'Needs answer', proposal: 'Needs approval', approved: 'Added to queue', declined: 'Declined', separate: 'Separate planning' }[request.status]}</span></div>`).join('')}</section>`;
+}
+function openChangeRequest(id = null) {
+	const request = id == null ? null : currentChangeRequests().find((item) => item.id === id);
+	if (id != null && !request) return;
+	state.changeDialog = { repository: state.repository, initiative: viewedInitiative, id };
+	dialog.setAttribute('aria-labelledby', 'change-request-heading');
+	let content;
+	if (!request) {
+		content = `<form data-form="change-request"><label for="change-brief">What do you want to add or change?</label><textarea id="change-brief" name="brief" required>${escapeHtml(state.changeDraft)}</textarea><label>Related work<select name="target"><option value="">New work</option>${initiativeViews.harness.issues.map((title, index) => `<option value="${index}">${routeReference(index)} / ${escapeHtml(title)}</option>`).join('')}</select></label><div class="dialog-actions"><button type="button" data-action="close-dialog">Cancel</button><button class="primary">${icon('send')}Send request</button></div></form>`;
+	} else if (request.status === 'question') {
+		content = `<form data-form="change-answer"><label for="change-answer">What result must this change produce?</label><textarea id="change-answer" name="answer" required>${escapeHtml(request.draft || '')}</textarea><div class="dialog-actions"><button type="button" data-action="close-dialog">Close</button><button class="primary">${icon('send')}Send answer</button></div></form>`;
+	} else if (request.status === 'proposal') {
+		const canPause = request.target != null && request.target < 3 && ['running', 'waiting', 'review'].includes(state.workers[request.target].status) && ['running', 'paused'].includes(state.mode);
+		content = `<form data-form="change-approve"><section class="change-proposal"><h3>Proposed issue / ${request.reference}</h3><p>${escapeHtml(request.title)}</p><h4>Acceptance criteria</h4><p>${escapeHtml(request.criteria)}</p><p>${request.target == null ? 'New work. Existing issues will not change.' : `Related issue: ${routeReference(request.target)} / ${escapeHtml(initiativeViews.harness.issues[request.target])}. Existing work will not change.`}</p><label>Work plan<select name="strategy"><option value="followup">Add a follow-up issue</option>${canPause ? '<option value="pause">Pause affected work and add a follow-up</option>' : ''}${request.target != null && request.target >= 3 ? '<option value="revise">Revise the queued issue</option>' : ''}</select></label></section><div class="dialog-actions"><button type="button" data-action="change-decline">Decline</button><button type="button" data-action="change-separate">${icon('notebook-pen')}Start a separate initiative</button><button class="primary">${icon('check')}Approve proposal</button></div></form>`;
+	} else {
+		content = `<p class="muted">${request.status === 'approved' ? `${request.reference} / ${request.strategy === 'revise' ? 'Queued issue revised' : 'Follow-up queued'}` : request.status === 'separate' ? 'Moved to separate planning.' : 'Proposal declined.'}</p><div class="dialog-actions">${request.previousWorkerStatus && state.workers[request.target].status === 'paused' && ['running', 'paused'].includes(state.mode) ? `<button data-action="change-resume">${icon('play')}Resume affected work</button>` : ''}<button data-action="close-dialog">Close</button></div>`;
+	}
+	dialog.innerHTML = `<h2 id="change-request-heading">${request ? 'Change request' : 'Request change'}</h2><p class="muted">${escapeHtml(repositories[state.repository].name)} / ${escapeHtml(initiativeViews[viewedInitiative].title)} / Coordinating agent</p>${request ? `<div class="change-conversation" aria-label="Change conversation">${request.messages.map((message) => `<div class="change-message"><strong>${message.role === 'user' ? 'You' : 'Coordinating agent'}</strong><p>${escapeHtml(message.text)}</p></div>`).join('')}</div>` : ''}${content}`;
+	window.lucide?.createIcons();
+	if (!dialog.open) dialog.showModal();
+	dialog.querySelector('textarea, select, button')?.focus();
+}
+function submitChangeRequest(form, values) {
+	const scope = state.changeDialog;
+	if (!scope || scope.repository !== state.repository || scope.initiative !== viewedInitiative) return;
+	const request = currentChangeRequests().find((item) => item.id === scope.id);
+	if (form.dataset.form === 'change-request') {
+		const brief = String(values.get('brief') || '').trim();
+		if (!brief) { form.querySelector('textarea').setCustomValidity('Enter a request.'); form.reportValidity(); return; }
+		const target = values.get('target') === '' ? null : Number(values.get('target'));
+		if (target != null && (!Number.isInteger(target) || !routeIssues[target])) return;
+		const id = state.nextChangeRequest++;
+		state.changeRequests.push({ id, repository: scope.repository, initiative: scope.initiative, title: brief.split('\n')[0].slice(0, 100), brief, target, status: 'question', messages: [{ role: 'user', text: brief }, { role: 'agent', text: target == null ? 'I will propose a new issue. What result must this change produce? Existing work can continue.' : `I will check this request against ${routeReference(target)}. What result must it produce? I will not change existing work without your approval.` }] });
+		state.changeDraft = '';
+		refreshChangeRequests();
+		openChangeRequest(id);
+		return;
+	}
+	if (!request) return;
+	if (form.dataset.form === 'change-answer' && request.status === 'question') {
+		const answer = String(values.get('answer') || '').trim();
+		if (!answer) { form.querySelector('textarea').setCustomValidity('Enter an answer.'); form.reportValidity(); return; }
+		request.criteria = answer;
+		request.draft = '';
+		request.reference = `CHANGE-${String(request.id).padStart(2, '0')}`;
+		request.status = 'proposal';
+		request.messages.push({ role: 'user', text: answer }, { role: 'agent', text: 'I propose one issue with your requested result as its acceptance criteria. Review the work plan before you approve it. Nothing has entered the queue.' });
+	} else if (form.dataset.form === 'change-approve' && request.status === 'proposal') {
+		const strategy = String(values.get('strategy'));
+		if (!['followup', 'pause', 'revise'].includes(strategy)) return;
+		if (strategy === 'pause' && (request.target == null || request.target >= 3 || !['running', 'waiting', 'review'].includes(state.workers[request.target].status) || !['running', 'paused'].includes(state.mode))) return;
+		if (strategy === 'revise' && (request.target == null || request.target < 3)) return;
+		request.strategy = strategy;
+		request.status = 'approved';
+		if (strategy === 'pause') {
+			const worker = state.workers[request.target];
+			request.previousWorkerStatus = worker.status;
+			worker.status = 'paused';
+		}
+		request.messages.push({ role: 'user', text: `Approved: ${strategy === 'revise' ? 'revise the queued issue' : strategy === 'pause' ? 'pause affected work and add a follow-up' : 'add a follow-up issue'}.` }, { role: 'agent', text: strategy === 'revise' ? 'The queued issue now includes this request. No worker assignment changed.' : `The follow-up is queued${request.target != null ? ` after ${routeReference(request.target)} is merged` : ''}. ${strategy === 'pause' ? 'The affected worker is paused in this simulation. Other work can continue. Resume the worker when you are ready.' : 'Existing work can continue.'}` });
+		state.activity.unshift(`${request.reference}: change proposal approved.`);
+	} else return;
+	refreshChangeRequests();
+	openChangeRequest(request.id);
 }
 function trackedWork() {
 	const initiative = initiativeViews[viewedInitiative];
@@ -425,12 +524,12 @@ function terminalGrid() {
 function questionItem() {
 	if (!state.question) return '';
 	const worker = state.workers[1];
-	const blocked = worker.manual || ['stopping', 'stopped', 'terminated'].includes(state.mode);
+	const blocked = worker.manual || worker.status === 'paused' || ['stopping', 'stopped', 'terminated'].includes(state.mode);
 	return `<article class="inbox-item"><div class="item-kicker"><span class="item-kind">${icon('message-circle')}Decision required</span><span>Worker 02</span></div><h3>One limit across all workers?</h3><p>Should Copilot usage be counted per worker or across the whole provider integration?</p><form class="answer-form" data-form="answer"><textarea name="answer" placeholder="Your decision..." aria-label="Answer for Worker 02" required ${blocked ? 'disabled' : ''}>${escapeHtml(state.answerDraft)}</textarea><button class="primary" ${blocked ? 'disabled' : ''}>${icon('send')}Send to Worker 02</button></form>${worker.manual ? '<p>Terminal input is owned by you.</p>' : ''}</article>`;
 }
 function approvalItem() {
 	if (state.integrated) return '';
-	return `<article class="inbox-item"><div class="item-kicker"><span class="item-kind">${icon('git-pull-request')}Integration approval</span><span>Worker 03</span></div><h3>Approval checkpoint</h3><p>DEMO-03 / attempt 03.1<br>Skill complete. Changes are not integrated.</p><div class="approval-evidence"><span>${icon('check')}6 checks passed</span><span>${icon('check')}Review passed</span><span class="mono">+24 -7</span></div><div class="approval-actions"><button data-action="changes">${icon('file-diff')}Inspect changes</button><button class="primary" data-action="approve" ${state.mode !== 'running' ? 'disabled' : ''}>${icon('git-merge')}Approve integration</button></div></article>`;
+	return `<article class="inbox-item"><div class="item-kicker"><span class="item-kind">${icon('git-pull-request')}Integration approval</span><span>Worker 03</span></div><h3>Approval checkpoint</h3><p>DEMO-03 / attempt 03.1<br>Skill complete. Changes are not integrated.</p><div class="approval-evidence"><span>${icon('check')}6 checks passed</span><span>${icon('check')}Review passed</span><span class="mono">+24 -7</span></div><div class="approval-actions"><button data-action="changes">${icon('file-diff')}Inspect changes</button><button class="primary" data-action="approve" ${state.mode !== 'running' ? 'disabled' : ''}>${icon('git-merge')}Approve merge</button></div></article>`;
 }
 function inboxContent() {
 	return `<div class="inbox-items">${questionItem()}${approvalItem()}${pendingCount() === 0 ? '<article class="inbox-item"><span class="item-kind">' + icon('check-check') + 'All decisions supplied</span><p>Independent work can continue.</p></article>' : ''}</div>`;
@@ -463,10 +562,10 @@ function checkpointBrowser() {
 function reviewCheckpoint() {
 	const added = checkpointFiles.reduce((total, file) => total + file.added, 0);
 	const removed = checkpointFiles.reduce((total, file) => total + file.removed, 0);
-	return `<section class="review-main"><div class="checkpoint-heading"><div><h2>Approval checkpoint</h2><div class="checkpoint-context">DEMO-03 / attempt 03.1 / c7b90a2<br>50 files <span class="additions">+${added}</span> -${removed} / simulated</div></div><button class="primary" data-action="approve" ${state.mode !== 'running' || state.integrated ? 'disabled' : ''}>${icon(state.integrated ? 'check' : 'git-merge')}${state.integrated ? 'Integrated' : 'Approve integration'}</button></div><div class="checkpoint-search"><label for="checkpoint-search">${icon('search')}</label><input id="checkpoint-search" type="search" aria-label="Search changed files" placeholder="Find a file..." value="${escapeHtml(state.fileQuery)}" /><button class="icon-button" data-action="clear-file-query" title="Clear file search" aria-label="Clear file search">${icon('x')}</button></div><div class="checkpoint-browser">${checkpointBrowser()}</div></section>`;
+	return `<section class="review-main"><div class="checkpoint-heading"><div><h2>Approval checkpoint</h2><div class="checkpoint-context">DEMO-03 / attempt 03.1 / c7b90a2<br>50 files <span class="additions">+${added}</span> -${removed} / simulated</div></div><button class="primary" data-action="approve" ${state.mode !== 'running' || state.integrated ? 'disabled' : ''}>${icon(state.integrated ? 'check' : 'git-merge')}${state.integrated ? 'Integrated' : 'Approve merge'}</button></div><div class="checkpoint-search"><label for="checkpoint-search">${icon('search')}</label><input id="checkpoint-search" type="search" aria-label="Search changed files" placeholder="Find a file..." value="${escapeHtml(state.fileQuery)}" /><button class="icon-button" data-action="clear-file-query" title="Clear file search" aria-label="Clear file search">${icon('x')}</button></div><div class="checkpoint-browser">${checkpointBrowser()}</div></section>`;
 }
 function runInbox() {
-	return `<div class="panel-title"><h2>Run inbox <span class="count">${pendingCount()}</span></h2></div><div class="tabs" role="tablist" aria-label="Run decisions">${['inbox', 'activity'].map((tab) => `<button role="tab" aria-selected="${state.tab === tab}" class="${state.tab === tab ? 'active' : ''}" data-action="tab" data-tab="${tab}">${tab === 'inbox' ? 'Inbox' : 'Activity'}</button>`).join('')}</div><section>${state.tab === 'activity' ? activityContent() : `${questionItem()}${state.integrated ? '<article class="inbox-item"><h3>Integration recorded</h3><p>DEMO-03 / simulated integration complete.</p></article>' : '<article class="inbox-item"><h3>Review ready</h3><p>DEMO-03 / 6 checks passed / independent review passed. Integration awaits your approval.</p><button data-action="open-review">' + icon('file-diff') + 'Open review</button></article>'}`}</section>`;
+	return `<div class="panel-title"><h2>Run inbox <span class="count">${pendingCount()}</span></h2></div><div class="tabs" role="tablist" aria-label="Run decisions">${['inbox', 'activity'].map((tab) => `<button role="tab" aria-selected="${state.tab === tab}" class="${state.tab === tab ? 'active' : ''}" data-action="tab" data-tab="${tab}">${tab === 'inbox' ? 'Inbox' : 'Activity'}</button>`).join('')}</div><section>${state.tab === 'activity' ? activityContent() : `${changeRequestInbox()}${questionItem()}${state.integrated ? '<article class="inbox-item"><h3>Integration recorded</h3><p>DEMO-03 / simulated integration complete.</p></article>' : '<article class="inbox-item"><h3>Review ready</h3><p>DEMO-03 / 6 checks passed / independent review passed. Integration awaits your approval.</p><button data-action="open-review">' + icon('file-diff') + 'Open review</button></article>'}`}</section>`;
 }
 function rememberScroll() {
 	for (const region of app.querySelectorAll('[data-scroll-key]')) {
@@ -556,11 +655,15 @@ function render() {
 	terminals = [];
 	app.innerHTML = ({ A: VariantA, B: VariantB, C: VariantC })[variant]();
 	if (variant === 'C') app.querySelector('.review-layout').insertAdjacentHTML('beforeend', repositoriesPage() + settingsPage('global') + settingsPage('project'));
+	app.querySelector('#initiative-panel')?.insertAdjacentHTML('beforeend', changeRequestQueue() + changeRequestHistory());
 	document.querySelector('#variant-label').textContent = `${variant} / ${names[variant]}`;
 	document.body.dataset.variant = variant;
 	app.dataset.view = state.view;
 	app.dataset.page = state.page;
 	for (const tab of app.querySelectorAll('[data-action="workspace-view"]')) tab.tabIndex = tab.dataset.view === state.view ? 0 : -1;
+	for (const panel of app.querySelectorAll('[data-workspace-panel]')) panel.dataset.scrollKey = `tab-${panel.dataset.workspacePanel}`;
+	app.querySelector('.run-inbox')?.setAttribute('data-scroll-key', 'run-inbox');
+	for (const button of app.querySelectorAll('[data-action="approve"]')) button.disabled = state.mode !== 'running' || state.integrated || state.workers[2].status === 'paused';
 	app.querySelector('.review-layout .rail')?.setAttribute('data-scroll-key', `sidebar-${state.repository}`);
 	app.dataset.repository = state.repository;
 	app.dataset.projectIdentity = repositories[state.repository].projectIdentity || '';
@@ -700,6 +803,36 @@ document.addEventListener('click', (event) => {
 	const button = event.target.closest('[data-action]');
 	if (!button || button.disabled) return;
 	const action = button.dataset.action;
+	if (action === 'change-resume') {
+		const request = currentChangeRequests().find((item) => item.id === state.changeDialog?.id);
+		if (!request?.previousWorkerStatus || state.workers[request.target].status !== 'paused' || !['running', 'paused'].includes(state.mode)) return;
+		state.workers[request.target].status = request.previousWorkerStatus;
+		delete request.previousWorkerStatus;
+		request.messages.push({ role: 'user', text: 'Resume affected work.' }, { role: 'agent', text: 'The affected worker resumed its previous state. The follow-up remains queued.' });
+		refreshChangeRequests();
+		openChangeRequest(request.id);
+		return;
+	}
+	if (action === 'request-change') { openChangeRequest(); return; }
+	if (action === 'change-conversation') { openChangeRequest(Number(button.dataset.id)); return; }
+	if (action === 'change-decline' || action === 'change-separate') {
+		const request = currentChangeRequests().find((item) => item.id === state.changeDialog?.id);
+		if (!request || request.status !== 'proposal') return;
+		request.status = action === 'change-decline' ? 'declined' : 'separate';
+		request.messages.push({ role: 'user', text: action === 'change-decline' ? 'Decline this proposal.' : 'Start a separate initiative.' }, { role: 'agent', text: action === 'change-decline' ? 'No work was added or changed.' : 'The request is ready for separate planning. No initiative or run has been created.' });
+		refreshChangeRequests();
+		if (action === 'change-separate') {
+			dialog.close();
+			const current = planningContext();
+			if (current) current.saved = planningSnapshot();
+			state.planningContext = '';
+			state.planningLaunch = { brief: `${request.brief}\n\nAcceptance criteria: ${request.criteria}`, initiative: '', mode: 'plan' };
+			refreshPlanningPage();
+			switchPage('planning');
+			app.querySelector('#planning-brief').focus();
+		} else openChangeRequest(request.id);
+		return;
+	}
 	if (action === 'limits' && variant === 'C') { switchPage('global-settings'); return; }
 	if (action === 'settings-inherit') { delete state.settings.projects[state.repository]; refreshSettings(); app.querySelector('[data-action="settings-inherit"]').focus(); notify('Project settings now inherit global defaults.'); return; }
 	if (action === 'settings-connect') {
@@ -791,6 +924,10 @@ document.addEventListener('click', (event) => {
 		dialog.setAttribute('aria-labelledby', 'record-title');
 		dialog.innerHTML = `<div class="eyebrow muted">${kind === 'story' ? 'User story' : kind.toUpperCase()} / simulated record</div><h2 id="record-title">${title}</h2><p>${initiative.title}</p>${issue ? `<div class="record-state"><span class="mono">${routeReference(index)}</span><span class="status ${status.tone}">${status.label}</span><span>${status.detail}</span></div><section class="record-section"><h3>Outcome</h3><p>${issue.outcome}</p></section><section class="record-section"><h3>Acceptance criteria</h3><ul>${issue.criteria.map((criterion) => `<li>${criterion}</li>`).join('')}</ul></section><section class="record-section"><h3>Requirements</h3><button class="record-link" data-action="record" data-kind="prd" data-index="${index < 3 ? 0 : 1}">${icon('file-text')}${prds[index < 3 ? 0 : 1].title}</button><span class="muted">${prds[index < 3 ? 0 : 1].story}</span></section><section class="record-section"><h3>Dependencies / integration gates</h3>${issue.dependencies.length ? issue.dependencies.map(linkedIssue).join('') : '<p>No prerequisites. Independent work.</p>'}${dependents.length ? `<h3>Unblocks</h3>${dependents.map(linkedIssue).join('')}` : ''}</section><section class="record-section"><h3>Validation and review</h3><p>${issue.evidence}</p>${worker?.status === 'integrated' ? '<p>User approval recorded. Changes integrated.</p>' : ''}</section>${worker ? `<button data-action="show-worker" data-id="${worker.id}">${icon('terminal')}Show terminal</button>` : ''}` : `<p>${initiative.summary}</p>${['prd', 'story'].includes(kind) ? `<section class="record-section"><h3>Linked issues</h3>${prds[index].issues.map(linkedIssue).join('')}</section>` : ''}`}<div class="dialog-actions"><button data-action="close-dialog">Close</button></div>`;
 		window.lucide?.createIcons();
+		if (issue) {
+			const revisions = currentChangeRequests().filter((request) => request.status === 'approved' && request.strategy === 'revise' && request.target === index);
+			if (revisions.length) dialog.querySelector('.dialog-actions').insertAdjacentHTML('beforebegin', `<section class="record-section"><h3>Approved changes to queued work</h3>${revisions.map((request) => `<p>${escapeHtml(request.title)}</p><p>Acceptance criteria: ${escapeHtml(request.criteria)}</p>`).join('')}</section>`);
+		}
 		if (!dialog.open) dialog.showModal();
 		else { dialog.scrollTop = 0; dialog.querySelector('button').focus(); }
 		return;
@@ -816,7 +953,7 @@ document.addEventListener('click', (event) => {
 	}
 	if (action === 'stop') {
 		state.mode = 'stopping';
-		state.workers.filter((worker) => ['running', 'waiting'].includes(worker.status)).forEach((worker) => { worker.status = 'stopping'; worker.lines.push('Simulated shutdown requested. Waiting for worker response.'); });
+		state.workers.filter((worker) => ['running', 'waiting', 'paused'].includes(worker.status)).forEach((worker) => { worker.status = 'stopping'; worker.lines.push('Simulated shutdown requested. Waiting for worker response.'); });
 		notify('Shutdown requested. Recorded work is preserved.');
 		const stoppingState = state;
 		setTimeout(() => {
@@ -852,6 +989,14 @@ for (const eventName of ['resize', 'scroll']) window.addEventListener(eventName,
 	for (const menu of app.querySelectorAll('.settings-model-menu:popover-open')) positionSettingsModels(menu);
 }, true);
 document.addEventListener('input', (event) => {
+	if (event.target.closest('[data-form="change-request"], [data-form="change-answer"]')) {
+		event.target.setCustomValidity('');
+		if (event.target.name === 'brief') state.changeDraft = event.target.value;
+		if (event.target.name === 'answer') {
+			const request = currentChangeRequests().find((item) => item.id === state.changeDialog?.id);
+			if (request) request.draft = event.target.value;
+		}
+	}
 	if (event.target.id === 'repository-search') { state.repositoryQuery = event.target.value; refreshRepositories(); return; }
 	if (event.target.closest('[data-form="planning-start"]')) {
 		state.planningLaunch[event.target.name] = event.target.value;
@@ -912,6 +1057,7 @@ document.addEventListener('submit', (event) => {
 	if (!form.dataset.form) return;
 	event.preventDefault();
 	const values = new FormData(form);
+	if (['change-request', 'change-answer', 'change-approve'].includes(form.dataset.form)) { submitChangeRequest(form, values); return; }
 	if (form.dataset.form === 'settings') { saveSettings(form, values); return; }
 	if (form.dataset.form === 'browse-folder') { browseFolders(String(values.get('path')).trim()); return; }
 	if (form.dataset.form === 'planning-start') {
@@ -967,7 +1113,7 @@ document.addEventListener('submit', (event) => {
 	}
 	if (form.dataset.form === 'answer') {
 		const worker = state.workers[1];
-		if (worker.manual || ['stopping', 'stopped', 'terminated'].includes(state.mode)) return;
+		if (worker.manual || worker.status === 'paused' || ['stopping', 'stopped', 'terminated'].includes(state.mode)) return;
 		state.question = false;
 		state.answerDraft = '';
 		worker.status = 'running';
@@ -977,7 +1123,7 @@ document.addEventListener('submit', (event) => {
 	}
 	if (form.dataset.form === 'terminate') {
 		state.mode = 'terminated';
-		state.workers.filter((worker) => ['running', 'waiting', 'stopping'].includes(worker.status)).forEach((worker) => { worker.status = 'terminated'; worker.lines.push('Simulated termination. State check required before restart.'); });
+		state.workers.filter((worker) => ['running', 'waiting', 'paused', 'stopping'].includes(worker.status)).forEach((worker) => { worker.status = 'terminated'; worker.lines.push('Simulated termination. State check required before restart.'); });
 		dialog.close();
 		notify('Simulated workers terminated. Work remains recorded.');
 	}
