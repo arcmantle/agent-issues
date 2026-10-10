@@ -317,13 +317,45 @@ function settingsNumber(scope, key, label, value, maximum, integer = false) {
 	const inherited = scope === 'project' && override == null;
 	return `<div class="settings-field" data-setting-row="${key}"><label for="${scope}-${key}">${label}</label>${scope === 'project' ? `<label class="settings-toggle"><input type="checkbox" name="override-${key}" data-setting-override="${key}" aria-label="Override ${escapeHtml(label)}" ${inherited ? '' : 'checked'} />Project override</label>` : ''}<input id="${scope}-${key}" name="${key}" type="number" min="${integer ? 1 : 0}" ${maximum == null ? '' : `max="${maximum}"`} step="${integer ? 1 : '.01'}" value="${value}" ${inherited ? 'disabled' : 'required'} /><span class="muted" data-setting-source>${inherited ? 'Inherited' : scope === 'project' ? 'Project override' : 'Global'} / ${integer ? value : settingsMoney(value)}</span></div>`;
 }
+function settingsModelSelector(scope, id, provider, effective, inherited) {
+	const blocked = (model) => scope === 'project' && !state.settings.global.models[id].includes(model);
+	return `<div class="settings-model-selector"><button type="button" class="settings-model-trigger" popovertarget="${scope}-${id}-models" aria-label="${provider.name} permitted models"><span>Models</span><span data-model-count>${effective.models[id].length} selected</span>${icon('chevron-down')}</button><div id="${scope}-${id}-models" class="settings-model-menu" popover="auto" role="group" aria-label="${provider.name} permitted models"><input type="search" data-model-search aria-label="Search ${provider.name} models" placeholder="Search models" autofocus /><label class="settings-toggle"><input type="checkbox" data-model-selected-only />Selected only</label><div class="settings-models">${provider.models.map((model) => `<label class="settings-toggle" data-model-option><input type="checkbox" name="models-${id}" value="${escapeHtml(model)}" data-setting-control="models" ${effective.models[id].includes(model) ? 'checked' : ''} ${inherited || blocked(model) ? 'disabled' : ''} data-global-blocked="${blocked(model)}" />${escapeHtml(model)}${blocked(model) ? ' / Blocked globally' : ''}</label>`).join('')}</div><p class="muted" data-model-empty hidden>No models found</p></div></div>`;
+}
+function positionSettingsModels(menu) {
+	const trigger = menu.closest('.settings-model-selector').querySelector('.settings-model-trigger');
+	const bounds = trigger.getBoundingClientRect();
+	const width = Math.min(360, window.innerWidth - 24);
+	const below = window.innerHeight - bounds.bottom - 20;
+	const above = bounds.top - 20;
+	const useBelow = below >= Math.min(360, above);
+	const height = Math.max(0, Math.min(360, useBelow ? below : above));
+	menu.style.width = `${width}px`;
+	menu.style.maxHeight = `${height}px`;
+	menu.style.left = `${Math.max(12, Math.min(bounds.left, window.innerWidth - width - 12))}px`;
+	menu.style.top = useBelow ? `${bounds.bottom + 8}px` : 'auto';
+	menu.style.bottom = useBelow ? 'auto' : `${window.innerHeight - bounds.top + 8}px`;
+}
+function filterSettingsModels(selector) {
+	const query = selector.querySelector('[data-model-search]').value.trim().toLowerCase();
+	const selectedOnly = selector.querySelector('[data-model-selected-only]').checked;
+	let visible = 0;
+	let selected = 0;
+	for (const option of selector.querySelectorAll('[data-model-option]')) {
+		const input = option.querySelector('input');
+		if (input.checked) selected++;
+		option.hidden = !input.value.toLowerCase().includes(query) || selectedOnly && !input.checked;
+		if (!option.hidden) visible++;
+	}
+	selector.querySelector('[data-model-count]').textContent = `${selected} selected`;
+	selector.querySelector('[data-model-empty]').hidden = visible > 0;
+}
 function settingsProvidersForm(scope) {
 	const global = state.settings.global;
 	const project = state.settings.projects[state.repository] || {};
 	const effective = scope === 'global' ? global : effectiveProjectSettings();
 	const inheritedProviders = scope === 'project' && project.providers == null;
 	const inheritedModels = scope === 'project' && project.models == null;
-	return `<section class="settings-section"><h2>Providers And Models</h2>${scope === 'project' ? `<div class="settings-fields"><label>Permitted providers<select name="provider-mode" data-setting-group="providers"><option value="inherit" ${inheritedProviders ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedProviders ? '' : 'selected'}>Project override</option></select></label><label>Permitted models<select name="model-mode" data-setting-group="models"><option value="inherit" ${inheritedModels ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedModels ? '' : 'selected'}>Project override</option></select></label></div>` : ''}<div class="settings-provider-list">${Object.entries(settingsProviders).map(([id, provider]) => `<fieldset class="settings-provider"><legend>${provider.name}</legend><label class="settings-toggle"><input type="checkbox" name="providers" value="${id}" data-setting-control="providers" ${effective.providers.includes(id) ? 'checked' : ''} ${(inheritedProviders || scope === 'project' && !global.providers.includes(id)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.providers.includes(id)}" />Permitted${scope === 'project' && !global.providers.includes(id) ? ' / Blocked globally' : ''}</label>${scope === 'global' ? `<div class="settings-connection"><span data-connection-status="${id}">${global.connections[id] ? 'Connected / Example' : 'Not connected'}</span><button type="button" data-action="settings-connect" data-provider="${id}">${icon(global.connections[id] ? 'unlink' : 'plug')}${global.connections[id] ? 'Disconnect' : 'Connect'}</button></div>` : ''}<div class="settings-models">${provider.models.map((model) => `<label class="settings-toggle"><input type="checkbox" name="models-${id}" value="${escapeHtml(model)}" data-setting-control="models" ${effective.models[id].includes(model) ? 'checked' : ''} ${(inheritedModels || scope === 'project' && !global.models[id].includes(model)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.models[id].includes(model)}" />${escapeHtml(model)}${scope === 'project' && !global.models[id].includes(model) ? ' / Blocked globally' : ''}</label>`).join('')}</div></fieldset>`).join('')}</div></section>`;
+	return `<section class="settings-section"><h2>Providers And Models</h2>${scope === 'project' ? `<div class="settings-fields"><label>Permitted providers<select name="provider-mode" data-setting-group="providers"><option value="inherit" ${inheritedProviders ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedProviders ? '' : 'selected'}>Project override</option></select></label><label>Permitted models<select name="model-mode" data-setting-group="models"><option value="inherit" ${inheritedModels ? 'selected' : ''}>Inherited</option><option value="custom" ${inheritedModels ? '' : 'selected'}>Project override</option></select></label></div>` : ''}<div class="settings-provider-list">${Object.entries(settingsProviders).map(([id, provider]) => `<fieldset class="settings-provider"><legend>${provider.name}</legend><label class="settings-toggle"><input type="checkbox" name="providers" value="${id}" data-setting-control="providers" ${effective.providers.includes(id) ? 'checked' : ''} ${(inheritedProviders || scope === 'project' && !global.providers.includes(id)) ? 'disabled' : ''} data-global-blocked="${scope === 'project' && !global.providers.includes(id)}" />Permitted${scope === 'project' && !global.providers.includes(id) ? ' / Blocked globally' : ''}</label>${scope === 'global' ? `<div class="settings-connection"><span data-connection-status="${id}">${global.connections[id] ? 'Connected / Example' : 'Not connected'}</span><button type="button" data-action="settings-connect" data-provider="${id}">${icon(global.connections[id] ? 'unlink' : 'plug')}${global.connections[id] ? 'Disconnect' : 'Connect'}</button></div>` : ''}${settingsModelSelector(scope, id, provider, effective, inheritedModels)}</fieldset>`).join('')}</div></section>`;
 }
 function settingsContent(scope) {
 	const global = state.settings.global;
@@ -813,6 +845,12 @@ document.addEventListener('click', (event) => {
 	}
 	render();
 });
+document.addEventListener('beforetoggle', (event) => {
+	if (event.target.matches('.settings-model-menu') && event.newState === 'open') positionSettingsModels(event.target);
+}, true);
+for (const eventName of ['resize', 'scroll']) window.addEventListener(eventName, () => {
+	for (const menu of app.querySelectorAll('.settings-model-menu:popover-open')) positionSettingsModels(menu);
+}, true);
 document.addEventListener('input', (event) => {
 	if (event.target.id === 'repository-search') { state.repositoryQuery = event.target.value; refreshRepositories(); return; }
 	if (event.target.closest('[data-form="planning-start"]')) {
@@ -832,12 +870,21 @@ document.addEventListener('input', (event) => {
 	}
 });
 document.addEventListener('input', (event) => {
+	if (event.target.matches('[data-model-search]')) {
+		filterSettingsModels(event.target.closest('.settings-model-selector'));
+		return;
+	}
 	const form = event.target.closest('[data-form="settings"]');
 	if (form) form.querySelector('[data-settings-status]').textContent = 'Unsaved changes';
 });
 document.addEventListener('change', (event) => {
+	if (event.target.matches('[data-model-search], [data-model-selected-only]')) {
+		filterSettingsModels(event.target.closest('.settings-model-selector'));
+		return;
+	}
 	const settingsForm = event.target.closest('[data-form="settings"]');
 	if (settingsForm) {
+		if (event.target.dataset.settingControl === 'models') filterSettingsModels(event.target.closest('.settings-model-selector'));
 		settingsForm.querySelector('[data-settings-status]').textContent = 'Unsaved changes';
 		if (event.target.dataset.settingOverride) {
 			const row = event.target.closest('[data-setting-row]');
@@ -955,6 +1002,13 @@ window.addEventListener('popstate', () => {
 });
 document.querySelector('#reset-prototype').addEventListener('click', () => { for (const [id, repository] of Object.entries(repositories)) { if (repository.added) delete repositories[id]; } state = initialState(); viewedInitiative = 'harness'; scrollPositions = {}; app.querySelectorAll('[data-scroll-key]').forEach((region) => { region.scrollTop = 0; }); app.querySelectorAll('.checkpoint-files [data-folder]').forEach((folder) => { folder.open = true; }); render(); notify('Simulation reset.'); });
 document.addEventListener('keydown', (event) => {
+	const modelMenu = app.querySelector('.settings-model-menu:popover-open');
+	if (event.key === 'Escape' && modelMenu) {
+		event.preventDefault();
+		modelMenu.hidePopover();
+		modelMenu.closest('.settings-model-selector').querySelector('.settings-model-trigger').focus();
+		return;
+	}
 	if (event.key === 'Escape' && dialog.open) { event.preventDefault(); dialog.requestClose(); return; }
 	if (event.target.matches('[data-action="pioneer-view"]') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
 		event.preventDefault();
@@ -972,7 +1026,7 @@ document.addEventListener('keydown', (event) => {
 		app.querySelector(`[data-action="workspace-view"][data-view="${view}"]`).focus();
 		return;
 	}
-	if (event.target.closest('input, textarea, select, [contenteditable], .xterm, .pioneer-viewport, .application-navigation') || dialog.open) return;
+	if (event.target.closest('input, textarea, select, [contenteditable], .xterm, .pioneer-viewport, .application-navigation, .settings-model-selector') || dialog.open) return;
 	if (['ArrowLeft', 'ArrowRight'].includes(event.key)) {
 		event.preventDefault();
 		changeVariant(event.key === 'ArrowRight' ? 1 : -1);
