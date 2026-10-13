@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Harness Prototype | Agent Issues</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
+	<link rel="stylesheet" href="harness-merge-prototype.css" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+	<script defer src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+	<script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+	<script defer src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+	<script defer src="https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js"></script>
+	<script defer src="harness-merge-prototype.js"></script>
+</head>
+<body>
+	<div class="prototype-notice"><strong>DESIGN PROTOTYPE</strong><span>Simulated merge agent / No live agents or Git writes</span></div>
+	<div class="app-shell">
+		<nav class="app-navigation" aria-label="Application pages">
+			<a href="/?variant=C&page=workspace" aria-label="Workspace" title="Workspace"><i data-lucide="activity"></i></a>
+			<a href="/?variant=C&page=planning" aria-label="Planning" title="Planning"><i data-lucide="notebook-pen"></i></a>
+			<span class="nav-spacer"></span>
+			<a href="/?variant=C&page=repositories" aria-label="Repositories" title="Repositories"><i data-lucide="folders"></i></a>
+			<a href="/?variant=C&page=global-settings" aria-label="Global Settings" title="Global Settings"><i data-lucide="settings"></i></a>
+		</nav>
+		<aside id="repository-sidebar" class="repository-sidebar" aria-label="Repository and integration queue"></aside>
+		<main id="merge-workspace"></main>
+	</div>
+	<nav id="prototype-switcher" class="prototype-switcher" aria-label="Simulation controls"></nav>
+	<dialog id="merge-dialog"></dialog>
+	<div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

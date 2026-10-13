@@ -13,10 +13,13 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const files = new Map([
-	['/', ['harness-workspace-prototype.html', 'text/html']],
+	['/', ['harness-merge-prototype.html', 'text/html']],
 	['/harness-workspace-prototype.html', ['harness-workspace-prototype.html', 'text/html']],
 	['/harness-workspace-prototype.css', ['harness-workspace-prototype.css', 'text/css']],
 	['/harness-workspace-prototype.js', ['harness-workspace-prototype.js', 'text/javascript']],
+	['/harness-merge-prototype.html', ['harness-merge-prototype.html', 'text/html']],
+	['/harness-merge-prototype.css', ['harness-merge-prototype.css', 'text/css']],
+	['/harness-merge-prototype.js', ['harness-merge-prototype.js', 'text/javascript']],
 ]);
 const server = createServer(async (request, response) => {
 	const url = new URL(request.url, 'http://localhost');
@@ -99,5 +102,5 @@ server.on('error', (error) => {
 	}
 	throw error;
 });
-server.on('listening', () => console.log(`Harness prototype: http://127.0.0.1:${port}/?variant=A`));
+server.on('listening', () => console.log(`Harness prototype: http://127.0.0.1:${port}/`));
 server.listen(port, '127.0.0.1');
