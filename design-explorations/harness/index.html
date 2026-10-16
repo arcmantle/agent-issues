@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1"
+		/>
+		<title>Harness Prototype | Agent Issues</title>
+		<link
+			rel="preconnect"
+			href="https://fonts.googleapis.com"
+		/>
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap"
+		/>
+		<link
+			rel="stylesheet"
+			href="app.css"
+		/>
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"
+		/>
+		<script
+			defer
+			src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"
+		></script>
+		<script
+			defer
+			src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"
+		></script>
+		<script
+			defer
+			src="https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js"
+		></script>
+		<script
+			type="module"
+			src="/app.ts"
+		></script>
+	</head>
+	<body data-variant="C">
+		<div class="prototype-notice">
+			<strong>DESIGN PROTOTYPE</strong
+			><span>Simulated activity / No live agents or Git writes</span>
+		</div>
+		<harness-application id="app"></harness-application>
+	</body>
+</html>
