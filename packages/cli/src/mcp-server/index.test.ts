@@ -357,7 +357,7 @@ describe("agent-issues MCP server", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-instruction-catalog-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "instructions.db"));
-		await store.importInstructionBundle({ version: packageJson.version, items: Array.from({ length: 40 }, (_, index) => ({
+		await store.importInstructionBundle({ version: packageJson.version, items: Array.from({ length: 320 }, (_, index) => ({
 			key: `fragment/item-${String(index).padStart(3, "0")}`, kind: "fragment" as const, body: "Large source\n".repeat(1000)
 		})) });
 		const expected = await store.listInstructionSources({ version: packageJson.version });
@@ -373,7 +373,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall("instructionSource", continuation ? { continuation } : {}));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { items: Array<{ key: string; body?: string }>; nextContinuation: string | null };
 				for (const item of page.items) {
 					expect(item.body).toBeUndefined();
@@ -412,7 +412,7 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(path.join(directory, "instructions.db"));
 		const key = "skill/history";
 		await store.importInstructionBundle({ version: packageJson.version, items: [{ key, kind: "skill", body: "Default" }, { key: "skill/empty", kind: "skill", body: "Empty history" }] });
-		for (let index = 0; index < 24; index++) {
+		for (let index = 0; index < 192; index++) {
 			const current = await store.readInstructionSource({ key, version: packageJson.version });
 			await store.saveInstructionSource({ key, version: packageJson.version, expectedRevision: current.source.revision, body: `Revision ${index}\n${"Long source\n".repeat(1000)}` });
 		}
@@ -429,7 +429,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(historyCall("instructionSource", "list", { key, ...(continuation ? { continuation } : {}) }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { revisions: Array<{ body?: string; source: { revision: number }; reads: { body: { tool: string; arguments: Record<string, unknown> } } }>; nextContinuation: string | null };
 				for (const entry of page.revisions) {
 					expect(entry.body).toBeUndefined();
@@ -439,7 +439,7 @@ describe("agent-issues MCP server", () => {
 					const read = page.revisions[0].reads.body;
 					const body = await client.callTool({ name: read.tool, arguments: read.arguments });
 					expect(body.isError).not.toBe(true);
-					expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBeLessThanOrEqual(8192);
+					expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBeLessThanOrEqual(65536);
 				}
 				continuation = page.nextContinuation;
 				expect(++pages).toBeLessThan(50);
@@ -458,12 +458,12 @@ describe("agent-issues MCP server", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-instruction-dependencies-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "instructions.db"));
-		const fragments = Array.from({ length: 80 }, (_, index) => ({ key: `fragment/dependency-${String(index).padStart(3, "0")}`, kind: "fragment" as const, body: "Rules" }));
+		const fragments = Array.from({ length: 640 }, (_, index) => ({ key: `fragment/dependency-${String(index).padStart(3, "0")}`, kind: "fragment" as const, body: "Rules" }));
 		const key = fragments[0].key;
 		await store.importInstructionBundle({ version: packageJson.version, items: [
 			...fragments.map((item, index) => index === 0 ? { ...item, body: fragments.slice(1).map((target) => `<!-- include:${target.key} -->`).join("\n") } : item),
 			{ key: "skill/empty", kind: "skill", body: "No dependencies" },
-			...Array.from({ length: 40 }, (_, index) => ({ key: `skill/dependent-${String(index).padStart(3, "0")}`, kind: "skill" as const, body: `<!-- include:${key} -->` }))
+			...Array.from({ length: 320 }, (_, index) => ({ key: `skill/dependent-${String(index).padStart(3, "0")}`, kind: "skill" as const, body: `<!-- include:${key} -->` }))
 		] });
 		await store.saveInstructionSource({ key: fragments[1].key, version: packageJson.version, body: "Modified rules", expectedRevision: 1 });
 		const expected = await store.inspectInstructionDependencies({ key, version: packageJson.version });
@@ -481,7 +481,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool({ name: "instruction_inspect", arguments: { request: { action: "dependencies", key, ...(continuation ? { continuation } : {}) } } });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as typeof expected & { nextContinuation: string | null };
 				dependencies.push(...page.dependencies);
 				affectedInstructions.push(...page.affectedInstructions);
@@ -526,7 +526,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool({ name: "instruction_inspect", arguments: { request: { action: "compare", key, ...(offset ? { offset, documentHash } : {}) } } });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const content = result.content as Array<{ type: "text"; text: string }>;
 				expect(content).toHaveLength(2);
 				const metadata = JSON.parse(content[0].text) as { nextOffset: number | null; documentHash: string; format: string };
@@ -542,7 +542,7 @@ describe("agent-issues MCP server", () => {
 			for (const invalid of [{ offset: 1 }, { offset: 1, documentHash: "0".repeat(64) }, { offset: Number.MAX_SAFE_INTEGER, documentHash }, { key: "skill/other", offset: 1, documentHash }]) {
 				const result = await client.callTool({ name: "instruction_inspect", arguments: { request: { action: "compare", key, ...invalid } } });
 				expect(result.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				expect(result.content).toHaveLength(1);
 			}
 			await store.saveInstructionSource({ key, version: packageJson.version, body: "Changed", expectedRevision: expected.currentSource.source.revision });
@@ -563,10 +563,10 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(dbPath, { tenant: "instruction-owner" });
 		const { store: otherStore } = await openSqliteStore(dbPath, { tenant: "instruction-other" });
 		const key = "skill/cursors";
-		const fragments = Array.from({ length: 40 }, (_, index) => ({ key: `fragment/cursor-${String(index).padStart(3, "0")}`, kind: "fragment" as const, body: "Rules" }));
+		const fragments = Array.from({ length: 320 }, (_, index) => ({ key: `fragment/cursor-${String(index).padStart(3, "0")}`, kind: "fragment" as const, body: "Rules" }));
 		const body = fragments.map((item) => `<!-- include:${item.key} -->`).join("\n");
 		await store.importInstructionBundle({ version: packageJson.version, items: [...fragments, { key, kind: "skill", body }] });
-		for (let index = 0; index < 20; index++) {
+		for (let index = 0; index < 160; index++) {
 			const source = await store.readInstructionSource({ key, version: packageJson.version });
 			await store.saveInstructionSource({ key, version: packageJson.version, body: `${body}\n${index}`, expectedRevision: source.source.revision });
 		}
@@ -588,7 +588,7 @@ describe("agent-issues MCP server", () => {
 				const result = await client.callTool(request);
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			activeStore = otherStore;
 			expect((await client.callTool(call(continuation))).isError).toBe(true);
@@ -606,7 +606,7 @@ describe("agent-issues MCP server", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-instruction-oversized-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "instructions.db"));
-		const key = `fragment/${"large-key".repeat(1500)}`;
+		const key = `fragment/${"large-key".repeat(12000)}`;
 		await store.importInstructionBundle({ version: packageJson.version, items: [
 			{ key, kind: "fragment", body: "Rules" },
 			{ key: "skill/root", kind: "skill", body: `<!-- include:${key} -->` }
@@ -623,9 +623,9 @@ describe("agent-issues MCP server", () => {
 					: { name: "instruction_inspect", arguments: { request: { action: "dependencies", key: "skill/root" } } };
 			const result = await client.callTool(request);
 			expect(result.isError).toBe(true);
-			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			expect(result.structuredContent).toBeUndefined();
-			expect(JSON.stringify(result.content)).toContain("8192-byte response budget");
+			expect(JSON.stringify(result.content)).toContain("65536-byte response budget");
 		} finally {
 			await client.close();
 			await server.close();
@@ -641,7 +641,7 @@ describe("agent-issues MCP server", () => {
 		const initiative = await store.createEntity({ kind: "initiative", title: "Plan paging" });
 		const plan = await store.createEntity({ kind: "plan", title: "Paged Plan", parentId: initiative.id });
 		const issue = await store.createEntity({ kind: "issue", title: "Linked work" });
-		for (let index = 0; index < 18; index++) {
+		for (let index = 0; index < 144; index++) {
 			await store.createPlanEntry({ planId: plan.id, role: "decision", body: `Decision ${index}\n${"Large body\n".repeat(1000)}`, referencedEntityIds: [issue.id] });
 		}
 		const expected = (await store.listPlanEntries({ planId: plan.id })).sort((first, second) => first.id < second.id ? -1 : 1);
@@ -660,7 +660,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall("planEntry", { planId: plan.reference, ...(continuation ? { continuation } : {}) }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { entries: Array<{ reference: string; body?: string; role: string; referencedEntityIds: string[]; revision: number; reads: { body: { tool: string; arguments: unknown } } }>; nextContinuation: string | null };
 				for (const entry of page.entries) {
 					expect(entry).toMatchObject({ role: "decision", referencedEntityIds: [issue.id], revision: 1, reads: { body: { tool: "resource_body" } } });
@@ -689,9 +689,9 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(path.join(directory, "plans.db"));
 		const initiative = await store.createEntity({ kind: "initiative", title: "History paging" });
 		const plan = await store.createEntity({ kind: "plan", title: "History Plan", parentId: initiative.id });
-		let entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Original body\n".repeat(1000) });
-		for (let revision = 2; revision <= 16; revision++) {
-			entry = await store.updatePlanEntry({ entryId: entry.id, body: `Revision ${revision}\n${"Large history body\n".repeat(1000)}`, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
+		let entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Original body\n".repeat(10) });
+		for (let revision = 2; revision <= 128; revision++) {
+			entry = await store.updatePlanEntry({ entryId: entry.id, body: `Revision ${revision}\n${"History body\n".repeat(10)}`, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
 		}
 		await store.deletePlanEntry({ entryId: entry.id, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
 		const server = createMcpServer({ openStore: async () => store });
@@ -706,10 +706,10 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(historyCall("planEntry", "list", { entryId: entry.reference, ...(continuation ? { continuation } : {}) }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { history: Array<{ targetRevision: number; headRevision: number; body?: string; tombstone: boolean; reads: { body: { tool: string; arguments: unknown } } }>; nextContinuation: string | null };
 				for (const revision of page.history) {
-					expect(revision).toMatchObject({ headRevision: 17, reads: { body: { tool: "resource_body", arguments: { request: { resource: "planEntry", ...{ entryId: entry.reference, revision: revision.targetRevision } } } } } });
+					expect(revision).toMatchObject({ headRevision: 129, reads: { body: { tool: "resource_body", arguments: { request: { resource: "planEntry", ...{ entryId: entry.reference, revision: revision.targetRevision } } } } } });
 					expect(revision.body).toBeUndefined();
 					revisions.push(revision.targetRevision);
 				}
@@ -717,7 +717,7 @@ describe("agent-issues MCP server", () => {
 				expect(++pageCount).toBeLessThan(30);
 			} while (continuation !== null);
 			expect(pageCount).toBeGreaterThan(1);
-			expect(revisions).toEqual(Array.from({ length: 17 }, (_, index) => index + 1));
+			expect(revisions).toEqual(Array.from({ length: 129 }, (_, index) => index + 1));
 		} finally {
 			await client.close();
 			await server.close();
@@ -749,7 +749,7 @@ describe("agent-issues MCP server", () => {
 				do {
 					const result = await client.callTool(collectionCall(tool, planDetailArguments(tool, { entryId: entry.reference, ...(historical ? { revision: 1 } : {}), ...(offset ? { offset, documentHash } : {}) })));
 					expect(result.isError).not.toBe(true);
-					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 					expect(result.structuredContent).toBeUndefined();
 					const content = result.content as Array<{ text: string }>;
 					const metadata = JSON.parse(content[0].text) as { reference: string; revision: number; documentHash: string; offset: number; nextOffset: number | null };
@@ -783,7 +783,7 @@ describe("agent-issues MCP server", () => {
 		const plan = await store.createEntity({ kind: "plan", title: "Continuation Plan", parentId: initiative.id });
 		let entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Revision 1" });
 		const otherEntry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Other entry" });
-		for (let index = 2; index <= 16; index++) {
+		for (let index = 2; index <= 100; index++) {
 			if (tool === "planEntry") await store.createPlanEntry({ planId: plan.id, role: "decision", body: `Entry ${index}` });
 			else entry = await store.updatePlanEntry({ entryId: entry.id, body: `Revision ${index}`, expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
 		}
@@ -801,7 +801,7 @@ describe("agent-issues MCP server", () => {
 				const result = await client.callTool(collectionCall(tool, { ...request, continuation: invalid }));
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			const otherInitiative = await store.createEntity({ kind: "initiative", title: "Other continuation" });
 			const otherPlan = await store.createEntity({ kind: "plan", title: "Other Plan", parentId: otherInitiative.id });
@@ -817,11 +817,11 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall(tool, { ...request, continuation }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as typeof first;
 				values.push(...(tool === "planEntry" ? page.entries!.map((item) => item.id) : page.history!.map((item) => item.targetRevision)));
 				continuation = page.nextContinuation;
-				expect(values.length).toBeLessThan(30);
+				expect(values.length).toBeLessThan(130);
 			} while (continuation !== null);
 			const expected = tool === "planEntry"
 				? (await store.listPlanEntries({ planId: plan.id })).map((item) => item.id).filter((id) => id > first.entries!.at(-1)!.id).sort()
@@ -841,7 +841,7 @@ describe("agent-issues MCP server", () => {
 		const initiative = await store.createEntity({ kind: "initiative", title: "Large links" });
 		const plan = await store.createEntity({ kind: "plan", title: "Links Plan", parentId: initiative.id });
 		const linkedIds: string[] = [];
-		for (let index = 0; index < 300; index++) linkedIds.push((await store.createEntity({ kind: "issue", title: `Linked ${index}` })).id);
+		for (let index = 0; index < 2000; index++) linkedIds.push((await store.createEntity({ kind: "issue", title: `Linked ${index}` })).id);
 		const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "All linked work", referencedEntityIds: linkedIds });
 		const server = createMcpServer({ openStore: async () => store });
 		const client = new Client({ name: "plan-links-test", version: "1.0.0" });
@@ -852,7 +852,7 @@ describe("agent-issues MCP server", () => {
 			for (const [name, request] of [["planEntry", { planId: plan.id }], ["planEntryHistory", { entryId: entry.id }]] as const) {
 				const result = await client.callTool(collectionCall(name, request));
 				expect(result.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				expect(result.structuredContent).toBeUndefined();
 				expect(JSON.stringify(result.content)).toContain("resource_show");
 			}
@@ -863,7 +863,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool({ name: "resource_show", arguments: planDetailArguments("resource_show", { entryId: entry.reference, revision: 1, ...(offset ? { offset, documentHash } : {}) }) });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const content = result.content as Array<{ text: string }>;
 				const metadata = JSON.parse(content[0].text) as { documentHash: string; nextOffset: number | null };
 				documentHash ??= metadata.documentHash;
@@ -908,7 +908,7 @@ describe("agent-issues MCP server", () => {
 			for (const input of invalidInputs) {
 				const failure = await client.callTool(collectionCall(tool, planDetailArguments(tool, input)));
 				expect(failure.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(failure), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(failure), "utf8")).toBeLessThanOrEqual(65536);
 				expect(failure.structuredContent).toBeUndefined();
 				expect(failure.content).toHaveLength(1);
 			}
@@ -917,14 +917,14 @@ describe("agent-issues MCP server", () => {
 			expect(crossScope.isError).toBe(true);
 			expect(crossScope.content).toHaveLength(1);
 			expect(crossScope.structuredContent).toBeUndefined();
-			expect(Buffer.byteLength(JSON.stringify(crossScope), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(crossScope), "utf8")).toBeLessThanOrEqual(65536);
 			options.projectIdentity = "plan-parts-a";
 			const otherTool = tool === "resource_body" ? "resource_show" : "resource_body";
 			const crossTool = await client.callTool(collectionCall(otherTool, planDetailArguments(otherTool, { entryId: entry.reference, documentHash: metadata.documentHash })));
 			expect(crossTool.isError).toBe(true);
 			expect(crossTool.content).toHaveLength(1);
 			expect(crossTool.structuredContent).toBeUndefined();
-			expect(Buffer.byteLength(JSON.stringify(crossTool), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(crossTool), "utf8")).toBeLessThanOrEqual(65536);
 			await store.updatePlanEntry({ entryId: entry.id, body: "Changed source", expectedRevision: entry.revision, expectedContentHash: entry.contentHash });
 			const changed = await client.callTool(collectionCall(tool, planDetailArguments(tool, { entryId: entry.reference, documentHash: metadata.documentHash })));
 			expect(changed.isError).toBe(true);
@@ -1007,10 +1007,11 @@ describe("agent-issues MCP server", () => {
 	});
 
 	it.each([
-		["empty", ""],
-		["large Markdown", "# Instructions\n\nRead the complete document.\n".repeat(900)],
-		["escaped Unicode", "\u{1F680}\u00e9\u4e2d\n\"\\\t\u0000".repeat(3_000)]
-	])("reads complete bounded instruction parts (%s)", async (_name, body) => {
+		["empty", "", true],
+		["large Markdown in one call", "# Instructions\n\nRead the complete document.\n".repeat(900), true],
+		["larger Markdown", "# Instructions\n\nRead the complete document.\n".repeat(3_600), false],
+		["escaped Unicode", "\u{1F680}\u00e9\u4e2d\n\"\\\t\u0000".repeat(12_000), false]
+	] as const)("reads complete bounded instruction parts (%s)", async (_name, body, singlePart) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-instruction-parts-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "instructions.db"));
@@ -1033,7 +1034,7 @@ describe("agent-issues MCP server", () => {
 				const argumentsValue = { key: "skill/prepare", ...(offset ? { offset, documentHash } : {}) };
 				const result = await client.callTool({ name: "instruction_retrieve", arguments: argumentsValue });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8 * 1024);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(64 * 1024);
 				const content = result.content as Array<{ type: string; text: string }>;
 				expect(content).toHaveLength(2);
 				const metadata = JSON.parse(content[0].text) as { version: string; documentHash: string; offset: number; nextOffset: number | null };
@@ -1050,8 +1051,8 @@ describe("agent-issues MCP server", () => {
 				expect(++partCount).toBeLessThan(100);
 			} while (offset !== null);
 			expect(reconstructed).toBe(body);
-			if (body.length > 8 * 1024) expect(partCount).toBeGreaterThan(1);
-			else expect(partCount).toBe(1);
+			if (singlePart) expect(partCount).toBe(1);
+			else expect(partCount).toBeGreaterThan(1);
 		} finally {
 			await client.close();
 			await server.close();
@@ -1088,7 +1089,7 @@ describe("agent-issues MCP server", () => {
 					entityId: entity.reference, ...(revision ? { revision } : {}), ...(offset ? { offset, documentHash } : {})
 				} } });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				expect(result.structuredContent).toBeUndefined();
 				const content = result.content as Array<{ text: string }>;
 				expect(content).toHaveLength(2);
@@ -1117,7 +1118,7 @@ describe("agent-issues MCP server", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-entity-offsets-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "entities.db"));
-		const body = "\u{1F680}" + "Read the body.\n".repeat(2_000);
+		const body = "\u{1F680}" + "Read the body.\n".repeat(16_000);
 		const entity = await store.createEntity({ kind: "issue", title: "First", body });
 		const other = await store.createEntity({ kind: "issue", title: "Other", body });
 		const server = createMcpServer({ openStore: async () => store });
@@ -1143,7 +1144,7 @@ describe("agent-issues MCP server", () => {
 			]) {
 				const result = await client.callTool({ name: "resource_body", arguments: { request: { resource: "entity", ...argumentsValue } } });
 				expect(result.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				expect(result.structuredContent).toBeUndefined();
 				expect(result.content).toEqual([{ type: "text", text: expect.any(String) }]);
 			}
@@ -1214,7 +1215,7 @@ describe("agent-issues MCP server", () => {
 				do {
 					const result = await client.callTool({ name: "resource_body", arguments: { request: { ...selected, ...(offset ? { offset, documentHash } : {}) } } });
 					expect(result.isError).not.toBe(true);
-					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 					expect(result.structuredContent).toBeUndefined();
 					const content = result.content as Array<{ text: string }>;
 					const metadata = JSON.parse(content[0].text);
@@ -1242,7 +1243,7 @@ describe("agent-issues MCP server", () => {
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
 				expect(result.content).toHaveLength(1);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			options.projectIdentity = "another-workspace";
 			expect((await client.callTool({ name: "resource_body", arguments: { request: { ...request, documentHash: original.documentHash } } })).isError).toBe(true);
@@ -1266,7 +1267,7 @@ describe("agent-issues MCP server", () => {
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "instructions.db"));
 		const source = "<!-- include:fragment/rules -->";
-		const rules = "\u{1F680}" + "Read these instructions.\n".repeat(900);
+		const rules = "\u{1F680}" + "Read these instructions.\n".repeat(9_000);
 		await store.importInstructionBundle({ version: packageJson.version, items: [
 			{ key: "skill/prepare", kind: "skill", body: source },
 			{ key: "skill/other", kind: "skill", body: source },
@@ -1333,7 +1334,7 @@ describe("agent-issues MCP server", () => {
 			]) {
 				const result = await client.callTool({ name: "resource_body", arguments: { request } });
 				expect(result.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			expect(openStore).not.toHaveBeenCalled();
 		} finally {
@@ -2392,9 +2393,7 @@ describe("agent-issues MCP server", () => {
 		await store.close();
 	});
 
-	it.each([
-		["initiative_bundle", 24], ["entity_next_work", 24], ["initiative_bundle", 0], ["entity_next_work", 0]
-	] as const)("reads complete byte-bounded combined sections through %s (%i issues)", async (tool, issueCount) => {
+	it.each([120, 0])("reads complete byte-bounded initiative sections (%i issues)", async (issueCount) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-combined-pages-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "combined.db"));
@@ -2404,7 +2403,7 @@ describe("agent-issues MCP server", () => {
 			const issue = await store.createEntity({ kind: "issue", title: `Work ${index}`, body: "Full source.\n".repeat(2_000), parentId: initiative.id });
 			expected.push(issue.id);
 		}
-		if (tool === "initiative_bundle" && issueCount > 0) {
+		if (issueCount > 0) {
 			const prd = await store.createEntity({ kind: "prd", title: "Shared outcomes", parentId: initiative.id, body: "Full source.\n".repeat(2_000) });
 			const story = await store.createEntity({ kind: "userStory", title: "Read complete work", parentId: prd.id, body: "Full source.\n".repeat(2_000) });
 			const adr = await store.createEntity({ kind: "adr", title: "Read constraints", parentId: initiative.id, body: "Full source.\n".repeat(2_000) });
@@ -2426,22 +2425,18 @@ describe("agent-issues MCP server", () => {
 			const actual: string[] = [];
 			let pageCount = 0;
 			do {
-				const result = await client.callTool(collectionCall(tool, {
-					...(tool === "initiative_bundle" ? { initiativeId: initiative.reference } : { scopeId: initiative.reference }),
+				const result = await client.callTool(collectionCall("initiative_bundle", {
+					initiativeId: initiative.reference,
 					...(continuation === null ? {} : { continuation })
 				}));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
-				const page = result.structuredContent as { issues?: Array<{ id: string; body?: string }>; available?: Array<{ issue: { id: string; body?: string } }>; nextContinuation: string | null };
-				if (tool === "entity_next_work" && issueCount === 0) expect(result.structuredContent).toMatchObject({ recommendation: null });
-				if (tool === "initiative_bundle") {
-					for (const [section, items] of Object.entries(result.structuredContent!)) {
-						if (Array.isArray(items)) (sections[section] ??= []).push(...items);
-					}
-					expect(JSON.stringify(result.structuredContent)).not.toContain("Full source.");
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
+				const page = result.structuredContent as { issues: Array<{ id: string; body?: string }>; nextContinuation: string | null };
+				for (const [section, items] of Object.entries(result.structuredContent!)) {
+					if (Array.isArray(items)) (sections[section] ??= []).push(...items);
 				}
-				const issues = tool === "initiative_bundle" ? page.issues! : page.available!.map((item) => item.issue);
-				for (const issue of issues) {
+				expect(JSON.stringify(result.structuredContent)).not.toContain("Full source.");
+				for (const issue of page.issues) {
 					expect(issue).not.toHaveProperty("body");
 					actual.push(issue.id);
 				}
@@ -2450,13 +2445,11 @@ describe("agent-issues MCP server", () => {
 				expect(++pageCount).toBeLessThan(100);
 			} while (continuation !== null);
 			expect(actual.slice().sort()).toEqual(expected.sort());
-			if (tool === "initiative_bundle") {
-				const normalize = (value: unknown) => JSON.parse(JSON.stringify(value, (key, item) => ["body", "bodySource", "reads"].includes(key) ? undefined : item));
-				for (const [section, items] of Object.entries(expectedBundle)) {
-					if (!Array.isArray(items)) continue;
-					expect(sections[section]).toHaveLength(items.length);
-					expect(normalize(sections[section])).toEqual(expect.arrayContaining(normalize(items)));
-				}
+			const normalize = (value: unknown) => JSON.parse(JSON.stringify(value, (key, item) => ["body", "bodySource", "reads"].includes(key) ? undefined : item));
+			for (const [section, items] of Object.entries(expectedBundle)) {
+				if (!Array.isArray(items)) continue;
+				expect(sections[section]).toHaveLength(items.length);
+				expect(normalize(sections[section])).toEqual(expect.arrayContaining(normalize(items)));
 			}
 			if (issueCount > 0) expect(pageCount).toBeGreaterThan(1);
 			else expect(pageCount).toBe(1);
@@ -2467,46 +2460,42 @@ describe("agent-issues MCP server", () => {
 		}
 	});
 
-	it.each(["initiative_bundle", "entity_next_work"])("binds combined %s continuation and reads changed later records", async (tool) => {
+	it("binds initiative continuation and reads changed later records", async () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-combined-continuation-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "combined.db"));
 		const initiative = await store.createEntity({ kind: "initiative", title: "Continuation" });
 		const issues: Array<Awaited<ReturnType<typeof store.createEntity>>> = [];
-		for (let index = 0; index < 16; index++) issues.push(await store.createEntity({ kind: "issue", title: `Work ${index} ${"summary ".repeat(30)}`, parentId: initiative.id }));
+		for (let index = 0; index < 16; index++) issues.push(await store.createEntity({ kind: "issue", title: `Work ${index} ${"summary ".repeat(300)}`, parentId: initiative.id }));
 		issues.sort((first, second) => first.id < second.id ? -1 : 1);
 		const other = await store.createEntity({ kind: "initiative", title: "Other scope" });
 		const server = createMcpServer({ openStore: async () => store });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		const client = new Client({ name: "combined-continuation-test", version: "1.0.0" });
-		const request = tool === "initiative_bundle" ? { initiativeId: initiative.reference } : { scopeId: initiative.reference };
+		const request = { initiativeId: initiative.reference };
 		try {
 			await server.connect(serverTransport);
 			await client.connect(clientTransport);
-			const first = (await client.callTool(collectionCall(tool, request))).structuredContent as { nextContinuation: string };
+			const first = (await client.callTool(collectionCall("initiative_bundle", request))).structuredContent as { nextContinuation: string };
 			expect(first.nextContinuation).toEqual(expect.any(String));
 			for (const continuation of ["invalid", `${first.nextContinuation}x`]) {
-				const result = await client.callTool(collectionCall(tool, { ...request, continuation }));
+				const result = await client.callTool(collectionCall("initiative_bundle", { ...request, continuation }));
 				expect(result.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
-			const changedScope = tool === "initiative_bundle" ? { initiativeId: other.reference } : { scopeId: other.reference };
-			expect((await client.callTool(collectionCall(tool, { ...changedScope, continuation: first.nextContinuation }))).isError).toBe(true);
-			const otherTool = tool === "initiative_bundle" ? "entity_next_work" : "initiative_bundle";
-			const otherRequest = tool === "initiative_bundle" ? { scopeId: initiative.reference } : { initiativeId: initiative.reference };
-			expect((await client.callTool(collectionCall(otherTool, { ...otherRequest, continuation: first.nextContinuation }))).isError).toBe(true);
+			expect((await client.callTool(collectionCall("initiative_bundle", { initiativeId: other.reference, continuation: first.nextContinuation }))).isError).toBe(true);
+			expect((await client.callTool({ name: "relation_query", arguments: { entityId: initiative.reference, continuation: first.nextContinuation } })).isError).toBe(true);
 			const last = issues.at(-1)!;
 			await store.updateEntity({ entityId: last.id, title: "Changed later record", expectedRevision: last.revision, expectedContentHash: last.contentHash });
 			let continuation: string | null = first.nextContinuation;
 			let changed = false;
 			let pageCount = 0;
 			while (continuation !== null) {
-				const result = await client.callTool(collectionCall(tool, { ...request, continuation }));
+				const result = await client.callTool(collectionCall("initiative_bundle", { ...request, continuation }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
-				const page = result.structuredContent as { entities?: Array<{ id: string; title: string }>; available?: Array<{ issue: { id: string; title: string } }>; nextContinuation: string | null };
-				const records = tool === "initiative_bundle" ? page.entities! : page.available!.map((item) => item.issue);
-				changed ||= records.some((record) => record.id === last.id && record.title === "Changed later record");
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
+				const page = result.structuredContent as { entities: Array<{ id: string; title: string }>; nextContinuation: string | null };
+				changed ||= page.entities.some((record) => record.id === last.id && record.title === "Changed later record");
 				continuation = page.nextContinuation;
 				expect(++pageCount).toBeLessThan(100);
 			}
@@ -2518,11 +2507,14 @@ describe("agent-issues MCP server", () => {
 		}
 	});
 
-	it.each(["initiative_bundle", "entity_next_work"])("rejects oversized combined %s metadata without a partial page", async (tool) => {
+	it.each([
+		["initiative_bundle", "initiative"], ["entity_next_work", "initiative"], ["entity_next_work", "candidate"]
+	] as const)("rejects oversized %s %s metadata without partial data", async (tool, oversized) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-combined-oversized-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "combined.db"));
-		const initiative = await store.createEntity({ kind: "initiative", title: "title ".repeat(2_000) });
+		const initiative = await store.createEntity({ kind: "initiative", title: oversized === "initiative" ? "title ".repeat(16_000) : "Candidate budget" });
+		if (oversized === "candidate") await store.createEntity({ kind: "issue", title: "title ".repeat(16_000), parentId: initiative.id });
 		const server = createMcpServer({ openStore: async () => store });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		const client = new Client({ name: "combined-oversized-test", version: "1.0.0" });
@@ -2532,7 +2524,7 @@ describe("agent-issues MCP server", () => {
 			const result = await client.callTool(collectionCall(tool, tool === "initiative_bundle" ? { initiativeId: initiative.reference } : { scopeId: initiative.reference }));
 			expect(result.isError).toBe(true);
 			expect(result).not.toHaveProperty("structuredContent");
-			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(`agent-issues ${tool === "initiative_bundle" ? "show" : "next-work"} ${initiative.reference} --json`) }]);
 		} finally {
 			await client.close();
@@ -2541,7 +2533,63 @@ describe("agent-issues MCP server", () => {
 		}
 	});
 
-	it.each([true, false])("reads a complete next-work blocker collection with a retained recommendation (internal blockers %s)", async (internalBlockers) => {
+	it("returns bounded next-work candidates in unblock order without a server recommendation", async () => {
+		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-work-candidates-"));
+		directories.push(directory);
+		const { store } = await openSqliteStore(path.join(directory, "work.db"));
+		const initiative = await store.createEntity({ kind: "initiative", title: "Candidate selection" });
+		const issues: Array<Awaited<ReturnType<typeof store.createEntity>>> = [];
+		for (let index = 0; index < 12; index++) {
+			issues.push(await store.createEntity({ kind: "issue", title: `Candidate ${index}`, body: "Read only when needed.", parentId: initiative.id }));
+		}
+		const firstBlocked = await store.createEntity({ kind: "issue", title: "First blocked issue", parentId: initiative.id });
+		const secondBlocked = await store.createEntity({ kind: "issue", title: "Second blocked issue", parentId: initiative.id });
+		await store.linkEntities({ fromId: issues[11].id, relationType: "blocks", toId: firstBlocked.id });
+		await store.linkEntities({ fromId: issues[11].id, relationType: "blocks", toId: secondBlocked.id });
+		await store.linkEntities({ fromId: issues[10].id, relationType: "blocks", toId: firstBlocked.id });
+		const expected = [issues[11], issues[10], ...issues.slice(0, 10).sort((first, second) => first.id < second.id ? -1 : 1)];
+		const server = createMcpServer({ openStore: async () => store });
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "work-candidates-test", version: "1.0.0" });
+		try {
+			await server.connect(serverTransport);
+			await client.connect(clientTransport);
+			for (const limit of [undefined, 1, 20]) {
+				const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: issues[0].reference, ...(limit === undefined ? {} : { limit }) } });
+				expect(result.isError).not.toBe(true);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
+				const response = result.structuredContent as {
+					available: Array<{ issue: { id: string; reads: { body: { tool: string } } }; unfinishedUnblockCount: number }>;
+					counts: { available: number; blocked: number };
+					hasMore: boolean;
+				};
+				expect(response.available.map((item) => item.issue.id)).toEqual(expected.slice(0, limit ?? 5).map((issue) => issue.id));
+				expect(response.available[0].unfinishedUnblockCount).toBe(2);
+				expect(response.counts).toEqual({ available: 12, blocked: 2 });
+				expect(response.hasMore).toBe((limit ?? 5) < 12);
+				for (const field of ["recommendation", "blocked", "blockerLinks", "unblockLinks", "nextContinuation"]) expect(response).not.toHaveProperty(field);
+				for (const candidate of response.available) {
+					expect(candidate.issue).not.toHaveProperty("body");
+					expect(candidate.issue.reads.body.tool).toBe("resource_body");
+					expect(candidate).not.toHaveProperty("unblocks");
+				}
+			}
+			for (const limit of [0, 21, 1.5, "5"]) {
+				const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: initiative.reference, limit } });
+				expect(result.isError).toBe(true);
+				expect(result).not.toHaveProperty("structuredContent");
+			}
+			const tool = (await client.listTools()).tools.find((item) => item.name === "entity_next_work")!;
+			expect(tool.inputSchema.properties).not.toHaveProperty("continuation");
+			expect(tool.inputSchema.properties).toHaveProperty("limit", expect.objectContaining({ minimum: 1, maximum: 20, default: 5 }));
+		} finally {
+			await client.close();
+			await server.close();
+			await store.close();
+		}
+	});
+
+	it.each([true, false])("returns next-work counts without dependency collections (internal blockers %s)", async (internalBlockers) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-work-blockers-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "work.db"));
@@ -2559,42 +2607,22 @@ describe("agent-issues MCP server", () => {
 		try {
 			await server.connect(serverTransport);
 			await client.connect(clientTransport);
-			let continuation: string | null = null;
-			const actual: string[] = [];
-			const seenBlocked: string[] = [];
-			let selected: string | undefined;
-			let pageCount = 0;
-			do {
-				const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: initiative.reference, ...(continuation ? { continuation } : {}) } });
-				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
-				const page = result.structuredContent as {
-					recommendation: { issue: { reference: string }; reason: { unfinishedUnblockCount: number } };
-					blocked: Array<{ issue: { reference: string }; blockerCount: number }>;
-					blockerLinks: Array<{ issue: string; blocker: string }>;
-					nextContinuation: string | null;
-				};
-				if (internalBlockers) {
-					selected ??= page.recommendation.issue.reference;
-					expect(page.recommendation.issue.reference).toBe(selected);
-					expect(blockers).toContain(selected);
-					expect(page.recommendation.reason.unfinishedUnblockCount).toBe(1);
-				} else {
-					expect(page.recommendation).toBeNull();
-				}
-				for (const item of page.blocked) {
-					expect(item.blockerCount).toBe(90);
-					seenBlocked.push(item.issue.reference);
-				}
-				for (const link of page.blockerLinks) {
-					expect(link.issue).toBe(blocked.reference);
-					actual.push(link.blocker);
-				}
-				continuation = page.nextContinuation;
-				expect(++pageCount).toBeLessThan(200);
-			} while (continuation !== null);
-			expect(actual.sort()).toEqual(blockers.sort());
-			expect(seenBlocked).toEqual([blocked.reference]);
+			const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: initiative.reference } });
+			expect(result.isError).not.toBe(true);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
+			const response = result.structuredContent as {
+				available: Array<{ issue: { reference: string }; unfinishedUnblockCount: number }>;
+				counts: { available: number; blocked: number };
+				hasMore: boolean;
+			};
+			expect(response.counts).toEqual({ available: internalBlockers ? 90 : 0, blocked: 1 });
+			expect(response.available).toHaveLength(internalBlockers ? 5 : 0);
+			expect(response.hasMore).toBe(internalBlockers);
+			for (const item of response.available) {
+				expect(blockers).toContain(item.issue.reference);
+				expect(item.unfinishedUnblockCount).toBe(1);
+			}
+			for (const field of ["recommendation", "blocked", "blockerLinks", "unblockLinks", "nextContinuation"]) expect(response).not.toHaveProperty(field);
 		} finally {
 			await client.close();
 			await server.close();
@@ -2609,7 +2637,7 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(dbPath);
 		const expected: string[] = [];
 		for (let index = 0; index < 24; index++) {
-			const entity = await store.createEntity({ kind: "issue", title: `Issue ${index} ${"Read this summary. ".repeat(5)}`, body: "Complete body.\n".repeat(1_000) });
+			const entity = await store.createEntity({ kind: "issue", title: `Issue ${index} ${"Read this summary. ".repeat(100)}`, body: "Complete body.\n".repeat(1_000) });
 			expected.push(entity.id);
 		}
 		const credentialStoreOptions = fakeCredentialStore();
@@ -2629,7 +2657,7 @@ describe("agent-issues MCP server", () => {
 					kind: "issue", ...(limit === undefined ? {} : { limit }), ...(continuation === null ? {} : { continuation })
 				}));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { entities: Array<{ id: string; reads: { body: { tool: string; arguments: { entityId: string } } } }>; nextContinuation: string | null };
 				expect(page.entities.length).toBeGreaterThan(0);
 				if (limit !== undefined) expect(page.entities.length).toBeLessThanOrEqual(limit);
@@ -2680,7 +2708,7 @@ describe("agent-issues MCP server", () => {
 			const expectInvalid = async (argumentsValue: Record<string, unknown>, resource = "entity") => {
 				const result = await client.callTool(collectionCall(resource, argumentsValue));
 				expect(result.isError).toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				expect(result.structuredContent).toBeUndefined();
 			};
 			for (const change of [
@@ -2787,7 +2815,7 @@ describe("agent-issues MCP server", () => {
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "entities.db"));
 		const entity = scenario === "oversized summary"
-			? await store.createEntity({ kind: "issue", title: "\u{1F680}\"\\".repeat(3_000) })
+			? await store.createEntity({ kind: "issue", title: "\u{1F680}\"\\".repeat(12_000) })
 			: undefined;
 		const server = createMcpServer({ openStore: async () => {
 			if (scenario === "oversized error") throw new Error("Storage unavailable. ".repeat(3_000));
@@ -2799,7 +2827,7 @@ describe("agent-issues MCP server", () => {
 			await server.connect(serverTransport);
 			await client.connect(clientTransport);
 			const result = await client.callTool(collectionCall("entity", { kind: "issue" }));
-			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			if (scenario === "empty") {
 				expect(result.isError).not.toBe(true);
 				expect(result.structuredContent).toEqual({ entities: [], nextContinuation: null });
@@ -2954,7 +2982,7 @@ describe("agent-issues MCP server", () => {
 		expect(relations).toMatchObject({ structuredContent: { outgoing: [expect.objectContaining({ entity: expect.objectContaining({ reference: target.reference }) })] } });
 		expect(bundleIssues).toEqual(expect.arrayContaining([expect.objectContaining({ reference: source.reference })]));
 		expect(shown.isError).not.toBe(true);
-		expect(Buffer.byteLength(JSON.stringify(shown), "utf8")).toBeLessThanOrEqual(8192);
+		expect(Buffer.byteLength(JSON.stringify(shown), "utf8")).toBeLessThanOrEqual(65536);
 		expect(shown).toMatchObject({ structuredContent: {
 			entity: { reference: initiative.reference, kind: "initiative", revision: initiative.revision },
 			reads: { body: { tool: "resource_body", arguments: { request: { resource: "entity", ...{ entityId: initiative.reference } } } } }
@@ -2976,7 +3004,7 @@ describe("agent-issues MCP server", () => {
 		const anchor = await store.createEntity({ kind: "issue", title: "Relation anchor", body: "Large source body\n".repeat(2_000) });
 		const expected: string[] = [];
 		for (let index = 0; index < linkCount; index++) {
-			const neighbor = await store.createEntity({ kind: "issue", title: `Neighbor ${index} ${"title ".repeat(70)}`, body: "Large related body\n".repeat(2_000) });
+			const neighbor = await store.createEntity({ kind: "issue", title: `Neighbor ${index} ${"title ".repeat(560)}`, body: "Large related body\n".repeat(2_000) });
 			const edgeDirection = index % 2 === 0 ? "incoming" : "outgoing";
 			await store.linkEntities({ fromId: edgeDirection === "incoming" ? neighbor.id : anchor.id, relationType: "blocks", toId: edgeDirection === "incoming" ? anchor.id : neighbor.id });
 			if (direction === "both" || direction === edgeDirection) expected.push(`${edgeDirection}:${neighbor.reference}`);
@@ -2994,7 +3022,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool({ name: "relation_query", arguments: { entityId: anchor.reference, direction, types: ["blocks"], ...(continuation ? { continuation } : {}) } });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { incoming: Array<{ relationType: string; entity: { id: string; reference: string } }>; outgoing: Array<{ relationType: string; entity: { id: string; reference: string } }>; nextContinuation: string | null };
 				for (const edgeDirection of ["incoming", "outgoing"] as const) {
 					for (const edge of page[edgeDirection]) {
@@ -3029,7 +3057,7 @@ describe("agent-issues MCP server", () => {
 		const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
 		const plan = await store.createEntity({ kind: "plan", title: "Linked Plan", parentId: initiative.id });
 		const expected: string[] = [];
-		for (let index = 0; index < 12; index++) {
+		for (let index = 0; index < 100; index++) {
 			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: `Decision ${index}\n${"Complete decision text\n".repeat(2_000)}`, referencedEntityIds: [anchor.id] });
 			expected.push(entry.reference);
 		}
@@ -3045,7 +3073,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool({ name: "relation_query", arguments: { entityId: anchor.reference, direction: "outgoing", types: ["blocks"], ...(continuation ? { continuation } : {}) } });
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { planEntries: Array<{ reference: string; reads: { details: { tool: string; arguments: Record<string, unknown> } } }>; nextContinuation: string | null };
 				for (const entry of page.planEntries) {
 					expect(entry).not.toHaveProperty("body");
@@ -3074,7 +3102,7 @@ describe("agent-issues MCP server", () => {
 		const anchor = await store.createEntity({ kind: "issue", title: "Anchor" });
 		const other = await store.createEntity({ kind: "issue", title: "Other" });
 		for (let index = 0; index < 8; index++) {
-			const neighbor = await store.createEntity({ kind: "issue", title: `Neighbor ${index} ${"summary ".repeat(100)}` });
+			const neighbor = await store.createEntity({ kind: "issue", title: `Neighbor ${index} ${"summary ".repeat(800)}` });
 			await store.linkEntities({ fromId: anchor.id, relationType: "blocks", toId: neighbor.id });
 		}
 		const server = createMcpServer({ openStore: async () => store });
@@ -3106,7 +3134,7 @@ describe("agent-issues MCP server", () => {
 				const result = await client.callTool({ name: "relation_query", arguments: argumentsValue });
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			const crossServer = await otherClient.callTool({ name: "relation_query", arguments: { ...request, continuation } });
 			expect(crossServer.isError).toBe(true);
@@ -3127,7 +3155,7 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(path.join(directory, "relations.db"));
 		const anchor = await store.createEntity({ kind: "issue", title: "Anchor" });
 		const neighbors = [];
-		for (let index = 0; index < 12; index++) neighbors.push(await store.createEntity({ kind: "issue", title: `Neighbor ${index} ${"summary ".repeat(100)}` }));
+		for (let index = 0; index < 12; index++) neighbors.push(await store.createEntity({ kind: "issue", title: `Neighbor ${index} ${"summary ".repeat(800)}` }));
 		neighbors.sort((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
 		for (const neighbor of neighbors.slice(1, -1)) await store.linkEntities({ fromId: anchor.id, relationType: "blocks", toId: neighbor.id });
 		const server = createMcpServer({ openStore: async () => store });
@@ -3178,7 +3206,7 @@ describe("agent-issues MCP server", () => {
 			const initiative = await store.createEntity({ kind: "initiative", title: "Plan initiative" });
 			const plan = await store.createEntity({ kind: "plan", title: "Linked Plan", parentId: initiative.id });
 			const referencedEntityIds = [anchor.id];
-			for (let index = 0; index < 120; index++) referencedEntityIds.push((await store.createEntity({ kind: "issue", title: `Linked issue ${index}` })).id);
+			for (let index = 0; index < 1000; index++) referencedEntityIds.push((await store.createEntity({ kind: "issue", title: `Linked issue ${index}` })).id);
 			const entry = await store.createPlanEntry({ planId: plan.id, role: "decision", body: "Decision", referencedEntityIds });
 			detailReference = entry.reference;
 		}
@@ -3191,7 +3219,7 @@ describe("agent-issues MCP server", () => {
 			const result = await client.callTool({ name: "relation_query", arguments: { entityId: anchor.reference, direction: "outgoing" } });
 			expect(result.isError).toBe(true);
 			expect(result.structuredContent).toBeUndefined();
-			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(detailReference) }]);
 		} finally {
 			await client.close();
@@ -3200,32 +3228,52 @@ describe("agent-issues MCP server", () => {
 		}
 	});
 
-	it("ranks available and blocked work through entity_next_work", async () => {
+	it("keeps next-work parent and deferred blocker rules and reports completed work", async () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "agent-issues.db"));
 		const initiative = await store.createEntity({ kind: "initiative", title: "Work initiative" });
-		const blocker = await store.createEntity({ kind: "issue", title: "Blocker", parentId: initiative.id });
+		const parent = await store.createEntity({ kind: "issue", title: "Parent", parentId: initiative.id });
+		const child = await store.createEntity({ kind: "issue", title: "Child", parentId: parent.id });
+		const blocker = await store.createEntity({ kind: "issue", title: "External deferred blocker", status: "deferred" });
 		const blocked = await store.createEntity({ kind: "issue", title: "Blocked", parentId: initiative.id });
+		await store.createEntity({ kind: "issue", title: "Finished", status: "done", parentId: initiative.id });
+		await store.createEntity({ kind: "issue", title: "Later", status: "deferred", parentId: initiative.id });
 		await store.linkEntities({ fromId: blocker.id, relationType: "blocks", toId: blocked.id });
 		const server = createMcpServer({ openStore: async () => store });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		const client = new Client({ name: "agent-issues-test", version: "1.0.0" });
 
-		await server.connect(serverTransport);
-		await client.connect(clientTransport);
-		const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: blocked.reference } });
-
-		expect(result).toMatchObject({
-			structuredContent: {
-				available: [expect.objectContaining({ issue: expect.objectContaining({ reference: blocker.reference }) })],
-				blocked: [expect.objectContaining({ issue: expect.objectContaining({ reference: blocked.reference }), blockers: [blocker.reference] })]
-			}
-		});
-
-		await client.close();
-		await server.close();
-		await store.close();
+		try {
+			await server.connect(serverTransport);
+			await client.connect(clientTransport);
+			const read = async () => {
+				const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: blocked.reference } });
+				expect(result.isError).not.toBe(true);
+				return result.structuredContent;
+			};
+			expect(await read()).toMatchObject({
+				available: [{ issue: { reference: child.reference }, unfinishedUnblockCount: 1 }],
+				counts: { available: 1, blocked: 2 }, hasMore: false
+			});
+			await store.updateEntityStatus({ entityId: child.id, status: "done" });
+			expect(await read()).toMatchObject({
+				available: [{ issue: { reference: parent.reference }, unfinishedUnblockCount: 0 }],
+				counts: { available: 1, blocked: 1 }, hasMore: false
+			});
+			await store.updateEntityStatus({ entityId: parent.id, status: "done" });
+			expect(await read()).toMatchObject({ available: [], counts: { available: 0, blocked: 1 }, hasMore: false });
+			await store.updateEntityStatus({ entityId: blocker.id, status: "done" });
+			expect(await read()).toMatchObject({
+				available: [{ issue: { reference: blocked.reference } }], counts: { available: 1, blocked: 0 }, hasMore: false
+			});
+			await store.updateEntityStatus({ entityId: blocked.id, status: "done" });
+			expect(await read()).toMatchObject({ available: [], counts: { available: 0, blocked: 0 }, hasMore: false });
+		} finally {
+			await client.close();
+			await server.close();
+			await store.close();
+		}
 	});
 
 	it("excludes every issue with an unfinished blocker from available entity_next_work", async () => {
@@ -3247,27 +3295,11 @@ describe("agent-issues MCP server", () => {
 
 		await server.connect(serverTransport);
 		await client.connect(clientTransport);
-		const content: {
-			available: Array<{ issue: { reference: string } }>;
-			blocked: Array<{ issue: { reference: string }; blockers: string[] }>;
-		} = { available: [], blocked: [] };
-		let continuation: string | null = null;
-		let workPages = 0;
-		do {
-			const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: selected.reference, ...(continuation ? { continuation } : {}) } });
-			expect(result.isError).not.toBe(true);
-			const page = result.structuredContent as typeof content & { nextContinuation: string | null };
-			content.available.push(...page.available);
-			content.blocked.push(...page.blocked);
-			continuation = page.nextContinuation;
-			expect(++workPages).toBeLessThan(20);
-		} while (continuation !== null);
-
-		expect(content.available.map((item) => item.issue.reference).sort()).toEqual([blocker.reference, selected.reference].sort());
-		expect(content.blocked).toEqual(expect.arrayContaining([
-			expect.objectContaining({ issue: expect.objectContaining({ reference: firstBlocked.reference }), blockers: [blocker.reference] }),
-			expect.objectContaining({ issue: expect.objectContaining({ reference: secondBlocked.reference }), blockers: [blocker.reference] })
-		]));
+		const result = await client.callTool({ name: "entity_next_work", arguments: { scopeId: selected.reference } });
+		expect(result.isError).not.toBe(true);
+		const content = result.structuredContent as { available: Array<{ issue: { reference: string } }>; counts: { available: number; blocked: number } };
+		expect(content.available.map((item) => item.issue.reference)).toEqual([blocker.reference, selected.reference]);
+		expect(content.counts).toEqual({ available: 2, blocked: 2 });
 
 		await client.close();
 		await server.close();
@@ -3289,7 +3321,7 @@ describe("agent-issues MCP server", () => {
 		const result = await client.callTool({ name: "resource_show", arguments: { request: { resource: "entity", reference: issue.reference } } });
 
 		expect(result.isError).not.toBe(true);
-		expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+		expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 		expect(result).toMatchObject({ structuredContent: {
 			entity: { id: issue.id, reference: issue.reference, kind: "issue", title: "Read through MCP", revision: issue.revision },
 			reads: {
@@ -3328,7 +3360,7 @@ describe("agent-issues MCP server", () => {
 			const reference = scenario === "metadata" ? issue.reference : "missing".repeat(6_000);
 			const result = await client.callTool({ name: "resource_show", arguments: { request: { resource: "entity", reference } } });
 			expect(result.isError).toBe(true);
-			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			if (scenario === "metadata") {
 				expect(result.structuredContent).toMatchObject({
 					error: expect.stringContaining("metadata"), reference: issue.reference,
@@ -3550,7 +3582,7 @@ describe("agent-issues MCP server", () => {
 			await client.connect(clientTransport);
 			const result = await client.callTool(collectionCall("comment", { issueId: issue.reference, all: true }));
 			expect(result.isError).not.toBe(true);
-			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			const page = result.structuredContent as { comments: Array<{ reference: string; reads: { body: { tool: string; arguments: Record<string, unknown> } } }>; total: number; nextBefore: string | null };
 			expect(page).toMatchObject({ total: 1, nextBefore: null });
 			expect(page.comments[0]).not.toHaveProperty("body");
@@ -3563,7 +3595,7 @@ describe("agent-issues MCP server", () => {
 				const request = read.arguments.request as Record<string, unknown>;
 				const part = await client.callTool({ name: read.tool, arguments: { request: { ...request, offset, ...(documentHash ? { documentHash } : {}) } } });
 				expect(part.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(part), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(part), "utf8")).toBeLessThanOrEqual(65536);
 				const content = part.content as Array<{ text: string }>;
 				const metadata = JSON.parse(content[0].text);
 				expect(metadata.offset).toBe(assembled.length);
@@ -3586,7 +3618,7 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(path.join(directory, "comments.db"));
 		const issue = await store.createEntity({ kind: "issue", title: "Comment history issue" });
 		let comment = await store.createIssueComment({ issueId: issue.id, body: "First revision\n".repeat(1_000) });
-		for (let revision = 2; revision <= 18; revision++) {
+		for (let revision = 2; revision <= 100; revision++) {
 			comment = await store.updateIssueComment({ commentId: comment.id, body: `Revision ${revision}\n`.repeat(1_000), expectedRevision: comment.revision, expectedContentHash: comment.contentHash });
 		}
 		const server = createMcpServer({ openStore: async () => store });
@@ -3601,7 +3633,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(historyCall("comment", "list", { commentId: comment.reference, ...(continuation ? { continuation } : {}) }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { history: Array<{ targetRevision: number; reads: { body: { tool: string; arguments: { commentId: string; revision: number } } } }>; nextContinuation: string | null };
 				expect(page.history.length).toBeGreaterThan(0);
 				for (const entry of page.history) {
@@ -3613,7 +3645,7 @@ describe("agent-issues MCP server", () => {
 				expect(++pages).toBeLessThan(20);
 			} while (continuation !== null);
 			expect(pages).toBeGreaterThan(1);
-			expect(revisions).toEqual(Array.from({ length: 18 }, (_, index) => index + 1));
+			expect(revisions).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
 			const empty = await client.callTool(historyCall("comment", "list", { commentId: randomUUID() }));
 			expect(empty).toMatchObject({ structuredContent: { history: [], nextContinuation: null } });
 		} finally {
@@ -3644,7 +3676,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall("comment", { issueId: issue.reference, all: true, ...(before ? { before } : {}) }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { comments: Array<{ reference: string }>; total: number; nextBefore: string | null };
 				expect(page.total).toBe(total);
 				expect(page.comments.length).toBeGreaterThan(0);
@@ -3660,7 +3692,7 @@ describe("agent-issues MCP server", () => {
 						const invalid = await client.callTool(collectionCall("comment", argumentsValue));
 						expect(invalid.isError).toBe(true);
 						expect(invalid.structuredContent).toBeUndefined();
-						expect(Buffer.byteLength(JSON.stringify(invalid), "utf8")).toBeLessThanOrEqual(8192);
+						expect(Buffer.byteLength(JSON.stringify(invalid), "utf8")).toBeLessThanOrEqual(65536);
 					}
 					await store.createIssueComment({ issueId: issue.id, body: "Newer than the first page" });
 					total++;
@@ -3682,7 +3714,7 @@ describe("agent-issues MCP server", () => {
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "comments.db"));
 		const issue = await store.createEntity({ kind: "issue", title: "Comment snapshot issue" });
-		const originalBody = "Original body\n".repeat(1_000);
+		const originalBody = "Original body\n".repeat(8_000);
 		let comment = await store.createIssueComment({ issueId: issue.id, body: originalBody });
 		const other = await store.createIssueComment({ issueId: issue.id, body: originalBody });
 		const server = createMcpServer({ openStore: async () => store });
@@ -3708,14 +3740,14 @@ describe("agent-issues MCP server", () => {
 				expect(invalid.isError).toBe(true);
 				expect(invalid.structuredContent).toBeUndefined();
 				expect((invalid.content as Array<{ text: string }>)).toHaveLength(1);
-				expect(Buffer.byteLength(JSON.stringify(invalid), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(invalid), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			const historical = await client.callTool({ name: "resource_body", arguments: { request: { resource: "comment", ...{ commentId: comment.reference, revision: 1, offset: metadata.nextOffset, documentHash: metadata.documentHash } } } });
 			expect(historical.isError).not.toBe(true);
 			expect((historical.content as Array<{ text: string }>)[1].text).toBe(originalBody.slice(metadata.nextOffset));
 			const restarted = await client.callTool({ name: "resource_body", arguments: { request: { resource: "comment", ...{ commentId: comment.reference } } } });
 			expect((restarted.content as Array<{ text: string }>)[1].text).toBe("Changed body");
-			for (let revision = 3; revision <= 18; revision++) comment = await store.updateIssueComment({ commentId: comment.id, body: `Revision ${revision}`, expectedRevision: comment.revision, expectedContentHash: comment.contentHash });
+			for (let revision = 3; revision <= 100; revision++) comment = await store.updateIssueComment({ commentId: comment.id, body: `Revision ${revision}`, expectedRevision: comment.revision, expectedContentHash: comment.contentHash });
 			const history = await client.callTool(historyCall("comment", "list", { commentId: comment.reference }));
 			const page = history.structuredContent as { history: Array<{ targetRevision: number }>; nextContinuation: string };
 			expect(page.nextContinuation).toEqual(expect.any(String));
@@ -3737,13 +3769,13 @@ describe("agent-issues MCP server", () => {
 				const invalid = await client.callTool(historyCall("comment", "list", argumentsValue));
 				expect(invalid.isError).toBe(true);
 				expect(invalid.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(invalid), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(invalid), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			await store.updateIssueComment({ commentId: comment.id, body: "Added revision", expectedRevision: comment.revision, expectedContentHash: comment.contentHash });
 			const next = await client.callTool(historyCall("comment", "list", { commentId: comment.reference, continuation: page.nextContinuation }));
 			const nextPage = next.structuredContent as { history: Array<{ targetRevision: number; headRevision: number }> };
 			expect(nextPage.history[0].targetRevision).toBe(page.history.at(-1)!.targetRevision + 1);
-			expect(nextPage.history.every((entry) => entry.headRevision === 19)).toBe(true);
+			expect(nextPage.history.every((entry) => entry.headRevision === 101)).toBe(true);
 		} finally {
 			await client.close();
 			await server.close();
@@ -3757,7 +3789,7 @@ describe("agent-issues MCP server", () => {
 		const { store } = await openSqliteStore(path.join(directory, "comments.db"));
 		const issue = await store.createEntity({ kind: "issue", title: "Oversized comment metadata" });
 		const referencedIssueIds: string[] = [];
-		for (let index = 0; index < 120; index++) referencedIssueIds.push((await store.createEntity({ kind: "issue", title: `Reference ${index}` })).id);
+		for (let index = 0; index < 1000; index++) referencedIssueIds.push((await store.createEntity({ kind: "issue", title: `Reference ${index}` })).id);
 		const comment = await store.createIssueComment({ issueId: issue.id, body: "Complete body despite large references", referencedIssueIds });
 		const server = createMcpServer({ openStore: async () => store });
 		const client = new Client({ name: "comment-metadata-test", version: "1.0.0" });
@@ -3772,8 +3804,8 @@ describe("agent-issues MCP server", () => {
 				const result = await client.callTool(request);
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
-				expect((result.content as Array<{ text: string }>)[0].text).toContain("8192-byte response budget");
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
+				expect((result.content as Array<{ text: string }>)[0].text).toContain("65536-byte response budget");
 			}
 			const body = await client.callTool({ name: "resource_body", arguments: { request: { resource: "comment", ...{ commentId: comment.reference } } } });
 			expect(body.isError).not.toBe(true);
@@ -3848,7 +3880,7 @@ describe("agent-issues MCP server", () => {
 		const definition = "Large term definition\n".repeat(1000).trim();
 		await store.upsertContext({ title: "Shared glossary", summary });
 		await store.defineContextTerm({ term: "Shared term", definition });
-		for (let index = 0; index < 12; index++) {
+		for (let index = 0; index < 100; index++) {
 			const initiative = await store.createEntity({ kind: "initiative", title: `Glossary ${index}` });
 			await store.upsertContext({ scopeRef: initiative.reference, title: `Context ${index}`, summary });
 			await store.defineContextTerm({ scopeRef: initiative.reference, term: `Term ${index}`, definition });
@@ -3874,7 +3906,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall(tool, continuation ? { continuation } : {}));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				expect(JSON.stringify(result)).not.toContain("Large context summary");
 				expect(JSON.stringify(result)).not.toContain("Large term definition");
 				const page = result.structuredContent as {
@@ -3910,7 +3942,7 @@ describe("agent-issues MCP server", () => {
 				do {
 					const result = await client.callTool({ name: read!.tool, arguments: { request: { ...read!.arguments.request, ...(offset === null ? {} : { offset, documentHash }) } } });
 					expect(result.isError).not.toBe(true);
-					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 					const content = result.content as Array<{ type: "text"; text: string }>;
 					const metadata = JSON.parse(content[0].text) as { nextOffset: number | null; documentHash: string };
 					body += content[1].text;
@@ -3931,7 +3963,7 @@ describe("agent-issues MCP server", () => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-context-continuation-"));
 		directories.push(directory);
 		const { store } = await openSqliteStore(path.join(directory, "contexts.db"));
-		for (let index = 0; index < 12; index++) {
+		for (let index = 0; index < 100; index++) {
 			const initiative = await store.createEntity({ kind: "initiative", title: `Scope ${index}` });
 			await store.upsertContext({ scopeRef: initiative.id, title: `Context ${index}`, summary: "Searchable summary" });
 			await store.defineContextTerm({ scopeRef: initiative.id, term: `Term ${index}`, definition: "Searchable definition" });
@@ -3952,7 +3984,7 @@ describe("agent-issues MCP server", () => {
 				const result = await client.callTool(collectionCall(tool, { ...request, continuation: invalid }));
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			}
 			const otherTool = tool === "context" ? "contextDirectory" : "context";
 			expect((await client.callTool(collectionCall(otherTool, { continuation: first.nextContinuation }))).isError).toBe(true);
@@ -3975,7 +4007,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall(tool, { ...request, continuation }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { contexts?: Array<{ context: { key: string; title: string } }>; initiatives?: Array<{ context: { key: string; title: string } }>; nextContinuation: string | null };
 				for (const item of page.contexts ?? page.initiatives ?? []) {
 					keys.push(item.context.key);
@@ -4005,25 +4037,25 @@ describe("agent-issues MCP server", () => {
 			await client.connect(clientTransport);
 			const empty = await client.callTool(collectionCall(tool, tool === "context_search" ? { query: "No matching terms" } : {}));
 			expect(empty.isError).not.toBe(true);
-			expect(Buffer.byteLength(JSON.stringify(empty), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(empty), "utf8")).toBeLessThanOrEqual(65536);
 			expect(empty.structuredContent).toMatchObject({ nextContinuation: null });
 			if (tool === "context_search") expect(empty.structuredContent).toMatchObject({ shared: null, initiatives: [], terms: [], duplicateTerms: [] });
 			else if (tool === "contextDirectory") expect(empty.structuredContent).toMatchObject({ initiatives: [], terms: [], duplicateTerms: [] });
 			else expect(empty.structuredContent).toMatchObject({ contexts: [{ context: { exists: false }, termCount: 0 }] });
-			let saved = await store.upsertContext({ title: "Oversized title".repeat(1000), summary: "Small body" });
+			let saved = await store.upsertContext({ title: "Oversized title".repeat(8000), summary: "Small body" });
 			const oversized = await client.callTool(collectionCall(tool, {}));
 			expect(oversized.isError).toBe(true);
 			expect(oversized.structuredContent).toBeUndefined();
-			expect(Buffer.byteLength(JSON.stringify(oversized), "utf8")).toBeLessThanOrEqual(8192);
+			expect(Buffer.byteLength(JSON.stringify(oversized), "utf8")).toBeLessThanOrEqual(65536);
 			expect(JSON.stringify(oversized.content)).toContain("agent-issues context");
 			if (tool !== "context") {
 				saved = await store.upsertContext({ title: "Small title", summary: "Small body", expectedRevision: saved.context.revision, expectedContentHash: saved.context.contentHash });
-				await store.defineContextTerm({ term: "Huge metadata", definition: "Small definition", avoid: ["Oversized alternative".repeat(1000)] });
+				await store.defineContextTerm({ term: "Huge metadata", definition: "Small definition", avoid: ["Oversized alternative".repeat(8000)] });
 				let continuation: string | null = null;
 				let failed = false;
 				for (let pageCount = 0; pageCount < 4; pageCount++) {
 					const result = await client.callTool(collectionCall(tool, continuation ? { continuation } : {}));
-					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+					expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 					if (result.isError) {
 						expect(result.structuredContent).toBeUndefined();
 						failed = true;
@@ -4183,7 +4215,7 @@ describe("agent-issues MCP server", () => {
 		const initiative = await store.createEntity({ kind: "initiative", title: "Parent" });
 		await store.createEntity({ kind: "issue", title: "Parented issue", parentId: initiative.id });
 		for (let index = 0; index < 18; index++) {
-			await store.createEntity({ kind: "issue", title: `Orphan ${index} ${"summary ".repeat(80)}`, body: "Large orphan body\n".repeat(2_000) });
+			await store.createEntity({ kind: "issue", title: `Orphan ${index} ${"summary ".repeat(640)}`, body: "Large orphan body\n".repeat(2_000) });
 		}
 		const expected = (await store.listOrphans(kind)).toSorted((first, second) => first.id < second.id ? -1 : first.id > second.id ? 1 : 0);
 		const server = createMcpServer({ openStore: async () => store });
@@ -4198,7 +4230,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall("orphanEntity", { ...(kind ? { kind } : {}), ...(continuation ? { continuation } : {}) }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { entities: Array<{ reference: string; reads: { body: { tool: string; arguments: { entityId: string } } } }>; nextContinuation: string | null };
 				expect(page.nextContinuation === null || typeof page.nextContinuation === "string").toBe(true);
 				for (const entity of page.entities) {
@@ -4220,7 +4252,7 @@ describe("agent-issues MCP server", () => {
 		}
 	});
 
-	it.each([0, 30])("reads complete bounded tenant_list pages (%s extra tenants)", async (tenantCount) => {
+	it.each([0, 240])("reads complete bounded tenant_list pages (%s extra tenants)", async (tenantCount) => {
 		const directory = mkdtempSync(path.join(tmpdir(), "agent-issues-mcp-server-"));
 		directories.push(directory);
 		const dbPath = path.join(directory, "agent-issues.db");
@@ -4243,7 +4275,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall("tenant", continuation ? { continuation } : {}));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { tenants: typeof expected; nextContinuation: string | null };
 				expect(page.nextContinuation === null || typeof page.nextContinuation === "string").toBe(true);
 				seen.push(...page.tenants);
@@ -4265,12 +4297,12 @@ describe("agent-issues MCP server", () => {
 		const dbPath = path.join(directory, "lists.db");
 		const { store } = await openSqliteStore(dbPath);
 		const { store: otherStore } = await openSqliteStore(dbPath, { tenant: "other-owner" });
-		for (let index = 0; index < 20; index++) {
+		for (let index = 0; index < (toolName === "tenant" ? 160 : 20); index++) {
 			if (toolName === "tenant") {
 				const { store: tenantStore } = await openSqliteStore(dbPath, { tenant: `Tenant ${index} ${"display ".repeat(60)}` });
 				await tenantStore.close();
 			} else {
-				await store.createEntity({ kind: "issue", title: `Issue ${index} ${"summary ".repeat(80)}` });
+				await store.createEntity({ kind: "issue", title: `Issue ${index} ${"summary ".repeat(640)}` });
 			}
 		}
 		let activeStore = store;
@@ -4297,7 +4329,7 @@ describe("agent-issues MCP server", () => {
 				const result = await client.callTool(collectionCall(name, argumentsValue));
 				expect(result.isError).toBe(true);
 				expect(result.structuredContent).toBeUndefined();
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 			};
 			await expectDenied({ ...continuedRequest, continuation: "invalid" });
 			await expectDenied({ ...continuedRequest, continuation: `${continuation.slice(0, -1)}!` });
@@ -4341,12 +4373,12 @@ describe("agent-issues MCP server", () => {
 		directories.push(directory);
 		const dbPath = path.join(directory, "lists.db");
 		const { store } = await openSqliteStore(dbPath);
-		for (let index = 0; index < 20; index++) {
+		for (let index = 0; index < (toolName === "tenant" ? 160 : 20); index++) {
 			if (toolName === "tenant") {
 				const { store: tenantStore } = await openSqliteStore(dbPath, { tenant: `Tenant ${index} ${"display ".repeat(60)}` });
 				await tenantStore.close();
 			} else {
-				await store.createEntity({ kind: "issue", title: `Issue ${index} ${"summary ".repeat(80)}` });
+				await store.createEntity({ kind: "issue", title: `Issue ${index} ${"summary ".repeat(640)}` });
 			}
 		}
 		const server = createMcpServer({ openStore: async () => store });
@@ -4386,7 +4418,7 @@ describe("agent-issues MCP server", () => {
 			do {
 				const result = await client.callTool(collectionCall(toolName, { ...request, continuation }));
 				expect(result.isError).not.toBe(true);
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				const page = result.structuredContent as { tenants?: Array<{ id: string }>; entities?: Array<{ id: string }>; nextContinuation: string | null };
 				remaining.push(...page[collection]!.map((item) => item.id));
 				continuation = page.nextContinuation;
@@ -4406,9 +4438,9 @@ describe("agent-issues MCP server", () => {
 		directories.push(directory);
 		const dbPath = path.join(directory, "lists.db");
 		const { store } = await openSqliteStore(dbPath);
-		const title = "\u{1F680}\"\\".repeat(3_000);
+		const title = "\u{1F680}\"\\".repeat(12_000);
 		if (toolName === "tenant") {
-			const { store: tenantStore } = await openSqliteStore(dbPath, { tenant: "long-tenant-name".repeat(1_000) });
+			const { store: tenantStore } = await openSqliteStore(dbPath, { tenant: "long-tenant-name".repeat(8_000) });
 			await tenantStore.close();
 		} else {
 			await store.createEntity({ kind: "issue", title });
@@ -4423,10 +4455,10 @@ describe("agent-issues MCP server", () => {
 			let pages = 0;
 			for (;;) {
 				const result = await client.callTool(collectionCall(toolName, { ...(toolName === "orphanEntity" ? { kind: "issue" } : {}), ...(continuation ? { continuation } : {}) }));
-				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(8192);
+				expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(65536);
 				if (result.isError) {
 					expect(result.structuredContent).toBeUndefined();
-					expect((result.content as Array<{ text: string }>)[0].text).toContain("8192-byte response budget");
+					expect((result.content as Array<{ text: string }>)[0].text).toContain("65536-byte response budget");
 					break;
 				}
 				continuation = (result.structuredContent as { nextContinuation: string | null }).nextContinuation;

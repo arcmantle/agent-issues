@@ -17,11 +17,12 @@ Accept the active initiative, or an issue whose initiative you can resolve from 
 
 ## Selection
 
-1. Run the **Next Work** recipe with the supplied initiative or descendant. This one operation resolves a PRD, user story, or issue to its owning initiative and returns the complete work order.
+1. Run the **Next Work** recipe with the supplied initiative or descendant. This operation resolves the owning initiative and returns up to five next-in-line candidates, total available and blocked counts, and `hasMore`.
 2. A candidate is **workable** when it appears in `available`. The command excludes issues with an open `blocks` source and parent issues with unfinished decomposed children.
-3. Use `unblocks` to prefer work that releases the most unfinished issues. A child issue lists its decomposed parent in `unblocks`, so the command makes the path to an unfinished parent explicit.
-4. Prefer the thinnest tracer-bullet slice among the available issues with the largest unblock count. Run the **Entity Read** recipe only for finalists whose authored outcome or acceptance criteria you need to compare.
-5. Run the **Initiative Read** recipe only when the work order lacks the records needed for a planned initiative-wide decision.
+3. Use `unfinishedUnblockCount` to prefer work that releases the most unfinished issues. This count includes an unfinished decomposed parent that the child can release. The server orders candidates by this count, then by immutable issue ID. It does not choose the recommendation.
+4. Choose the thinnest tracer-bullet slice among the returned candidates with the largest unblock count. Use the candidates' **Entity Body Read** references only for finalists whose authored outcome or acceptance criteria you need to compare. Use immutable issue ID when those comparisons still tie.
+5. Select from the returned list without reading every available issue. `hasMore` is not a request to fetch more. Set an explicit `limit` up to 20 only if the current candidates do not support the selection, and state the reason. Do not increase the limit only to compare more tied issues.
+6. Run the selected issue's **Relation Query** recipe for its parent or leaf classification, user stories it `fixes`, and blocker details. Run the **Initiative Read** recipe only for a separate, planned initiative-wide decision.
 
 Use the refreshed graph each time. Do not rely on state you captured before the previous issue finished.
 
@@ -32,8 +33,8 @@ When one or more issues are workable, always return one explicit recommendation.
 Return, in this order:
 
 1. **Recommendation:** The selected issue's reference and title.
-2. **Why this issue:** A short comparison that states its unfinished unblock count and the tracer-bullet tie-break used against other workable issues.
-3. **Also workable:** Every other available issue, with its reference and title.
+2. **Why this issue:** A short comparison that states its unfinished unblock count and the tracer-bullet tie-break used against the other returned candidates.
+3. **Other candidates:** The other returned candidates, with their references and titles. When `hasMore` is true, state that the returned list is not the complete available list. Do not fetch the remaining issues to report them.
 4. The selected issue's:
 
 - Reference and title.
@@ -41,11 +42,11 @@ Return, in this order:
 - user stories it `fixes`
 - open blockers
 
-Even when only one issue is workable, label it as the recommendation and state why it is the only current choice.
+When only one candidate is returned, still label it as the recommendation. Call it the only current choice only when `counts.available` is one.
 
 If no issue is workable, return one of:
 
-- **Complete:** every issue in the initiative is `done`, no matter what the initiative's manual status says.
-- **Blocked:** unfinished issues remain. Report the blocker chain.
+- **Complete:** `counts.available` and `counts.blocked` are both zero. No unfinished, non-deferred issue work remains, no matter what the initiative's manual status says.
+- **Blocked:** `counts.available` is zero and `counts.blocked` is positive. Report the blocked count. Use the **Entity List** and filtered **Relation Query** recipes only when the caller needs a blocker chain.
 
 Do not set the selected issue to `in-progress`. The caller decides whether to start it.

@@ -49,7 +49,7 @@ Plugin skill and agent files contain discovery metadata and the reading procedur
 
 Each instruction source with local Markdown links has a generated **Referenced Instruction Keys** section. Use its exact keys to retrieve required documents. The build resolves each link from its source file, not from the assembled skill. It rejects missing instruction targets. For example, the context format uses `fragment/domain-modeling/context-format`, not `fragment/context-format`. Reference links do not include document bodies.
 
-Each successful MCP response is at most 8 KiB of serialized UTF-8 JSON. The first text block contains metadata: `version`, `documentHash`, `offset`, and `nextOffset`. The second contains readable Markdown without a duplicate body in structured content. Call again with the same `key` and `documentHash`, with the integer `nextOffset` as `offset`, until `nextOffset` is null. Read all parts in order before using the instructions. All parts must have the same document hash and release version.
+Each successful MCP response is at most 64 KiB of serialized UTF-8 JSON. The first text block contains metadata: `version`, `documentHash`, `offset`, and `nextOffset`. The second contains readable Markdown without a duplicate body in structured content. Call again with the same `key` and `documentHash`, with the integer `nextOffset` as `offset`, until `nextOffset` is null. Read all parts in order before using the instructions. All parts must have the same document hash and release version.
 
 The document hash identifies the complete instruction snapshot, including source and fragment revisions. A positive offset requires this hash. Offsets count UTF-16 code units, not bytes; copy the returned value without calculating it. If the document changes, discard all parts and restart with `key` only. Invalid offsets, positions inside a surrogate pair, and wrong document hashes fail without returning partial Markdown. Continuation needs no signed token or server-side state. No local files or shell commands are required. CLI retrieval still returns the complete document in one call.
 
@@ -77,7 +77,7 @@ The tool returns metadata and complete body or detail read references, not autho
 
 Use `resource_body` to read entity bodies, Plan-entry bodies, context summaries, term definitions, comment bodies, or unexpanded instruction sources. Follow the shared Resource Body Read recipe and the returned read references. Put resource identifiers, selected revision, offset, and hash inside `request`. Copy each returned `nextOffset` until it is null, then join all Markdown parts without separators.
 
-Each serialized response is at most 8192 UTF-8 JSON bytes. A changed document requires a restart, not partial use. This tool does not assemble instruction fragments. Skill and agent loaders must continue to use `instruction_retrieve`.
+Each serialized response is at most 65536 UTF-8 JSON bytes. A changed document requires a restart, not partial use. This tool does not assemble instruction fragments. Skill and agent loaders must continue to use `instruction_retrieve`.
 
 ## Resource Revisions
 

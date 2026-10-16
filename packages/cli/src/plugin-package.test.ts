@@ -108,6 +108,13 @@ describe("portable plugin package", () => {
 			expect(prototype.body).toContain('- `UI.md`: `fragment/prototype/ui`.');
 			const tdd = await store.retrieveInstruction({ version, key: "skill/tdd" });
 			expect(tdd.body).toContain('- `tests.md`: `fragment/tdd/tests`.');
+			const nextWork = await store.retrieveInstruction({ version, key: "skill/next-work" });
+			expect(nextWork.body).toContain("returns up to five next-in-line candidates");
+			expect(nextWork.body).toContain("It does not choose the recommendation.");
+			expect(nextWork.body).toContain("Select from the returned list without reading every available issue.");
+			expect(nextWork.body).toContain("`entity_next_work({ scopeId, limit? })`");
+			expect(nextWork.body).not.toContain("returns the complete work order");
+			expect(nextWork.body).not.toContain("Join all sections before you compare candidates");
 			await expect(store.retrieveInstruction({ version: "missing-release", key: "skill/prepare" })).rejects.toThrow();
 		} finally {
 			await store.close();

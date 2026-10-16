@@ -1,4 +1,4 @@
-const MAX_RESPONSE_BYTES = 8 * 1024;
+const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export function formatMarkdownResponse(
 	body: string,
@@ -6,7 +6,8 @@ export function formatMarkdownResponse(
 	documentHash: string,
 	toolName: string,
 	offset = 0,
-	expectedDocumentHash?: string
+	expectedDocumentHash?: string,
+	maxResponseBytes = MAX_RESPONSE_BYTES
 ) {
 	const restart = `Discard all parts and restart ${toolName} without offset and documentHash.`;
 	if (offset > 0 && expectedDocumentHash === undefined) {
@@ -32,14 +33,14 @@ export function formatMarkdownResponse(
 		] };
 	};
 	let lower = offset;
-	let upper = Math.min(body.length, offset + MAX_RESPONSE_BYTES);
+	let upper = Math.min(body.length, offset + maxResponseBytes);
 	while (lower < upper) {
 		const middle = Math.ceil((lower + upper) / 2);
-		if (Buffer.byteLength(JSON.stringify(responseAt(middle)), "utf8") <= MAX_RESPONSE_BYTES) lower = middle;
+		if (Buffer.byteLength(JSON.stringify(responseAt(middle)), "utf8") <= maxResponseBytes) lower = middle;
 		else upper = middle - 1;
 	}
 	const response = responseAt(lower);
-	if (Buffer.byteLength(JSON.stringify(response), "utf8") > MAX_RESPONSE_BYTES
+	if (Buffer.byteLength(JSON.stringify(response), "utf8") > maxResponseBytes
 		|| (offset < body.length && response.content[1].text.length === 0)) {
 		throw new Error(`Document metadata exceeds the response budget. ${restart}`);
 	}

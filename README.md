@@ -132,7 +132,7 @@ To read an earlier revision of any entity kind, start with the latest record and
 
 **Local use without cloud setup.** SQLite provides the default persistent store. The PostgreSQL API supports the remote path. Local use does not require Entra ID registration or a running PostgreSQL service.
 
-**Explicit contracts for agents.** MCP collection and body reads are bounded to 8192 serialized UTF-8 JSON bytes. Continuation tokens and body hashes support larger reads. JSON output, typed resource requests, and schema discovery reduce dependence on free-form text parsing.
+**Explicit contracts for agents.** MCP collection and body reads are bounded to 65536 serialized UTF-8 JSON bytes. Continuation tokens and body hashes support larger reads. JSON output, typed resource requests, and schema discovery reduce dependence on free-form text parsing.
 
 **Guarded changes.** MCP resource edits require an expected revision and content hash. Entity and tenant deletion require an impact inspection and a confirmation token. These checks protect against stale writes and unintended deletion.
 
@@ -331,7 +331,7 @@ Use the read-only MCP tool `resource_list` for collections. Its typed `request.r
 
 Paged collections return `nextContinuation`; copy it into `request.continuation` with the same request until null. Comments return `nextBefore`; copy it into `request.before` and prepend older pages to keep chronological order. The optional comment `all` flag cannot disable paging. Instruction catalogs retain their existing result contract.
 
-Existing bounded summary pages remain within 8192 serialized UTF-8 JSON bytes. Follow returned read references for complete bodies and metadata. Continuation is bound to the resource, selected operation, tenant, workspace/project, filters, limits, order, and server process. Invalid or cross-resource tokens return errors without a page. Pages are live reads, not snapshots. Complete CLI collection commands are unchanged. The replaced collection tools have no public aliases.
+Existing bounded summary pages remain within 65536 serialized UTF-8 JSON bytes. Follow returned read references for complete bodies and metadata. Continuation is bound to the resource, selected operation, tenant, workspace/project, filters, limits, order, and server process. Invalid or cross-resource tokens return errors without a page. Pages are live reads, not snapshots. Complete CLI collection commands are unchanged. The replaced collection tools have no public aliases.
 
 ## Resource Text Reads
 
@@ -341,7 +341,7 @@ Use the read-only MCP tool `resource_body` for complete current or historical te
 { "request": { "resource": "entity", "entityId": "<entity-reference>", "revision": 1 } }
 ```
 
-Omit `revision` for current text. The first text block contains resource identity, revision, scope, `documentHash`, `offset`, and `nextOffset`. The second contains Markdown. Copy `nextOffset` into `request.offset` with the same request and returned hash until it is null. Join all Markdown parts without separators. Each serialized response is at most 8192 UTF-8 JSON bytes and does not duplicate text in structured content.
+Omit `revision` for current text. The first text block contains resource identity, revision, scope, `documentHash`, `offset`, and `nextOffset`. The second contains Markdown. Copy `nextOffset` into `request.offset` with the same request and returned hash until it is null. Join all Markdown parts without separators. Each serialized response is at most 65536 UTF-8 JSON bytes and does not duplicate text in structured content.
 
 Invalid requests, unavailable revisions, and mismatched hashes return errors without partial text. A changed current body requires a restart without offset and hash. A selected historical revision stays fixed. Hashes are bound to resource kind, revision, tenant, workspace, and applicable instruction owner.
 
@@ -355,7 +355,7 @@ Use the read-only MCP tool `resource_history` with a typed `request` object. Use
 { "request": { "resource": "entity", "action": "revision", "entityId": "<entity-reference>", "revision": 1 } }
 ```
 
-Selected revisions return historical metadata and revision-pinned `resource_body` references, not historical text. Keep target and head revision meanings distinct. Comment and Plan-entry histories retain ascending revision order, 8192-byte summary pages, and `nextContinuation`; copy it into `request.continuation` with the same request until null. Instruction histories retain their existing newest-first collection contract.
+Selected revisions return historical metadata and revision-pinned `resource_body` references, not historical text. Keep target and head revision meanings distinct. Comment and Plan-entry histories retain ascending revision order, 65536-byte summary pages, and `nextContinuation`; copy it into `request.continuation` with the same request until null. Instruction histories retain their existing newest-first collection contract.
 
 Continuation is bound to resource kind, action, identity, scope, order, and server process. Invalid or cross-resource reuse returns an error without a page. Histories are live reads, not snapshots. The separate revision tools and the instruction-inspection `history` and `revision` actions are removed without aliases. CLI history commands, restores, confirmations, and writes remain unchanged.
 

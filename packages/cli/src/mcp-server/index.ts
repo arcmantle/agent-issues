@@ -340,7 +340,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"instruction_retrieve",
 		{
-			description: "Retrieve the complete instructions for a skill or agent by key. Use this tool when a loader requires instruction_retrieve, such as key skill/start-work. Returns database Markdown with all required fragments included, in bounded parts. The first text block is JSON metadata; the second is Markdown. Call again with the same key, documentHash, and nextOffset as offset until nextOffset is null. Copy the returned offset; do not calculate it. Read all parts before use. On failure, stop; on a changed document, discard all parts and restart with key only.",
+			description: "Retrieve the complete instructions for a skill or agent by key. Use this tool when a loader requires instruction_retrieve, such as key skill/start-work. Returns database Markdown with all required fragments included, in parts within 65536 UTF-8 JSON bytes. The first text block is JSON metadata; the second is Markdown. Call again with the same key, documentHash, and nextOffset as offset until nextOffset is null. Copy the returned offset; do not calculate it. Read all parts before use. On failure, stop; on a changed document, discard all parts and restart with key only.",
 			inputSchema: {
 				key: z.string().min(1),
 				offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
@@ -353,7 +353,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"instruction_inspect",
 		{
-			description: "Inspect instruction sources without saving changes. Set request.action to compare, dependencies, or preview. Compare returns complete JSON in parts within 8192 UTF-8 JSON bytes: the first text block is metadata with format json; the second is a JSON text part. Copy nextOffset into request.offset with the same key and documentHash until null, join text parts without separators, then parse JSON. The hash binds the owner, scope, release, and selected source snapshots; changed sources require restart without offset and documentHash. Dependencies returns bounded dependencies, affectedInstructions, and modifiedFragments sections in section/key order. Copy nextContinuation into request.continuation with the same key until null and join each section. Dependency pages are live reads, not snapshots; earlier keys are not revisited. Invalid continuation or oversized summaries returns an error without a page. Preview expands pending changes without activation. Use resource_list for catalog summaries, resource_history for revision summaries, resource_body for unexpanded Markdown, and instruction_retrieve for runtime instructions.",
+			description: "Inspect instruction sources without saving changes. Set request.action to compare, dependencies, or preview. Compare returns complete JSON in parts within 65536 UTF-8 JSON bytes: the first text block is metadata with format json; the second is a JSON text part. Copy nextOffset into request.offset with the same key and documentHash until null, join text parts without separators, then parse JSON. The hash binds the owner, scope, release, and selected source snapshots; changed sources require restart without offset and documentHash. Dependencies returns bounded dependencies, affectedInstructions, and modifiedFragments sections in section/key order. Copy nextContinuation into request.continuation with the same key until null and join each section. Dependency pages are live reads, not snapshots; earlier keys are not revisited. Invalid continuation or oversized summaries returns an error without a page. Preview expands pending changes without activation. Use resource_list for catalog summaries, resource_history for revision summaries, resource_body for unexpanded Markdown, and instruction_retrieve for runtime instructions.",
 			annotations: { readOnlyHint: true },
 			inputSchema: { request: z.discriminatedUnion("action", [
 				z.object({ action: z.literal("compare"), key: z.string().min(1), offset: resourceBodyPartSchema.offset, documentHash: resourceBodyPartSchema.documentHash }),
@@ -699,7 +699,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"resource_list",
 		{
-			description: "List resources without changes. Set request.resource to entity (required kind; optional statuses, parentId, limit), orphanEntity (optional kind), planEntry (required planId), context (view list or directory), comment (required issueId), instructionSource, or tenant. Keep each request unchanged during traversal. Paged routes return nextContinuation; copy it into request.continuation until null. Instruction catalog summaries use ascending item-key order and exclude Markdown bodies; use returned resource_body or CLI detail references for complete source. Comments retain newest-page ordering: copy nextBefore into request.before and prepend older pages; all cannot disable paging. Summary pages fit 8192 UTF-8 JSON bytes. Pages are live reads, not snapshots. Tokens are bound to the resource, operation, owner, release where applicable, scope, filters, order, and server process. Invalid continuation or oversized metadata returns an error without a page. Use returned read references for complete details.",
+			description: "List resources without changes. Set request.resource to entity (required kind; optional statuses, parentId, limit), orphanEntity (optional kind), planEntry (required planId), context (view list or directory), comment (required issueId), instructionSource, or tenant. Keep each request unchanged during traversal. Paged routes return nextContinuation; copy it into request.continuation until null. Instruction catalog summaries use ascending item-key order and exclude Markdown bodies; use returned resource_body or CLI detail references for complete source. Comments retain newest-page ordering: copy nextBefore into request.before and prepend older pages; all cannot disable paging. Summary pages fit 65536 UTF-8 JSON bytes. Pages are live reads, not snapshots. Tokens are bound to the resource, operation, owner, release where applicable, scope, filters, order, and server process. Invalid continuation or oversized metadata returns an error without a page. Use returned read references for complete details.",
 			annotations: { readOnlyHint: true },
 			inputSchema: { request: resourceListSchema }
 		},
@@ -719,7 +719,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"resource_body",
 		{
-			description: "Read complete current or historical resource text in parts within 8192 UTF-8 JSON bytes. Set request.resource to entity, planEntry, context, contextTerm, comment, or instructionSource and supply its identifiers. Instruction source is unexpanded Markdown; use instruction_retrieve for runtime instructions. The first text block is metadata; the second is Markdown. Copy nextOffset into request.offset with the same resource, revision, and documentHash until null. Read all parts before use. On a changed document, discard all parts and restart without offset and documentHash.",
+			description: "Read complete current or historical resource text in parts within 65536 UTF-8 JSON bytes. Set request.resource to entity, planEntry, context, contextTerm, comment, or instructionSource and supply its identifiers. Instruction source is unexpanded Markdown; use instruction_retrieve for runtime instructions. The first text block is metadata; the second is Markdown. Copy nextOffset into request.offset with the same resource, revision, and documentHash until null. Read all parts before use. On a changed document, discard all parts and restart without offset and documentHash.",
 			annotations: { readOnlyHint: true },
 			inputSchema: { request: resourceBodySchema }
 		},
@@ -828,7 +828,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"resource_history",
 		{
-			description: "Read resource revision metadata without historical text. Use action list for comment, planEntry, or instructionSource histories; use action revision for entity, context, contextTerm, or instructionSource with a positive revision. Follow returned resource_body or complete CLI detail references for selected text. History pages fit within 8192 UTF-8 JSON bytes: copy nextContinuation into request.continuation with the same request until null. Instruction revisions use ascending source-revision order and exclude Markdown bodies. Continuation is bound to the resource, action, identity, owner and release where applicable, tenant, workspace/project, order, and server process. Histories are live reads, not snapshots; later revisions can appear and headRevision can change. Invalid continuation or oversized summaries returns an error without a page. Unsupported combinations fail before storage opens. Restores and writes use separate tools.",
+			description: "Read resource revision metadata without historical text. Use action list for comment, planEntry, or instructionSource histories; use action revision for entity, context, contextTerm, or instructionSource with a positive revision. Follow returned resource_body or complete CLI detail references for selected text. History pages fit within 65536 UTF-8 JSON bytes: copy nextContinuation into request.continuation with the same request until null. Instruction revisions use ascending source-revision order and exclude Markdown bodies. Continuation is bound to the resource, action, identity, owner and release where applicable, tenant, workspace/project, order, and server process. Histories are live reads, not snapshots; later revisions can appear and headRevision can change. Invalid continuation or oversized summaries returns an error without a page. Unsupported combinations fail before storage opens. Restores and writes use separate tools.",
 			annotations: { readOnlyHint: true },
 			inputSchema: { request: resourceHistorySchema }
 		},
@@ -872,7 +872,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"resource_show",
 		{
-			description: "Read resource metadata without authored bodies. Set request.resource to entity with reference, planEntry with entryId, context with optional scopeRef, contextTerm with term and optional scopeRef, or instructionSource with key. Plan-entry view summary is the default; view details returns complete metadata, including link and supersession collections, in bounded JSON parts. Details accepts optional revision, offset, and documentHash inside request. Join second text blocks without separators, then parse JSON. Copy nextOffset into request.offset with the same entry, revision, view, and hash until null. Parts fit 8192 UTF-8 JSON bytes. Invalid continuation or changed documents returns an error without partial data; discard parts and restart. Bodies use resource_body. For issueBreakdown use action show with draftId or latest with targetId. Follow returned read references. Use initiative_bundle explicitly for an initiative graph and instruction_retrieve for runtime instructions.",
+			description: "Read resource metadata without authored bodies. Set request.resource to entity with reference, planEntry with entryId, context with optional scopeRef, contextTerm with term and optional scopeRef, or instructionSource with key. Plan-entry view summary is the default; view details returns complete metadata, including link and supersession collections, in bounded JSON parts. Details accepts optional revision, offset, and documentHash inside request. Join second text blocks without separators, then parse JSON. Copy nextOffset into request.offset with the same entry, revision, view, and hash until null. Parts fit 65536 UTF-8 JSON bytes. Invalid continuation or changed documents returns an error without partial data; discard parts and restart. Bodies use resource_body. For issueBreakdown use action show with draftId or latest with targetId. Follow returned read references. Use initiative_bundle explicitly for an initiative graph and instruction_retrieve for runtime instructions.",
 			annotations: { readOnlyHint: true },
 			inputSchema: { request: z.discriminatedUnion("resource", [
 				z.object({ resource: z.literal("entity"), reference: z.string().min(1) }).strict(),
@@ -939,9 +939,9 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 					details: { command: "agent-issues", arguments: ["show", entity.reference, "--json"] }
 				};
 				const result = toolResult({ entity, reads });
-				if (Buffer.byteLength(JSON.stringify(result), "utf8") <= 8192) return result;
+				if (Buffer.byteLength(JSON.stringify(result), "utf8") <= 65536) return result;
 				return {
-					...toolResult({ error: "Entity metadata exceeds the 8192-byte response budget. No metadata was returned. Use the complete CLI detail read.", reference: entity.reference, reads }),
+					...toolResult({ error: "Entity metadata exceeds the 65536-byte response budget. No metadata was returned. Use the complete CLI detail read.", reference: entity.reference, reads }),
 					isError: true
 				};
 			} catch (error) {
@@ -1049,7 +1049,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"context_search",
 		{
-			description: "Search context summary sections within 8192 UTF-8 JSON bytes. Copy nextContinuation with the same query and view until null and join all sections. Order is the JSON tuple of section and immutable context key or normalized term, with term spelling as a tie-breaker. Definitions and bodies use returned resource_body references. Continuation is bound to the operation, tenant, workspace/project, trimmed query, view, order, and server process. Pages are live reads: earlier keys are not revisited and later matches use current data. Invalid continuation or oversized summaries return an error with no page.",
+			description: "Search context summary sections within 65536 UTF-8 JSON bytes. Copy nextContinuation with the same query and view until null and join all sections. Order is the JSON tuple of section and immutable context key or normalized term, with term spelling as a tie-breaker. Definitions and bodies use returned resource_body references. Continuation is bound to the operation, tenant, workspace/project, trimmed query, view, order, and server process. Pages are live reads: earlier keys are not revisited and later matches use current data. Invalid continuation or oversized summaries return an error with no page.",
 			inputSchema: {
 				query: z.string().min(1).optional(),
 				view: z.enum(["all", "global", "initiatives"]).optional(),
@@ -1133,7 +1133,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				}
 			}));
 			return formatSummaryListPage(entries, "entries", after, requestHash, entityListSecret,
-				(entry) => `Plan-entry summary exceeds the 8192-byte response budget. No page was returned. Use resource_show with resource planEntry, view details, entryId ${entry.reference}, and revision ${entry.revision}, or agent-issues plan-entry list ${plan.entity.reference} --json.`);
+				(entry) => `Plan-entry summary exceeds the 65536-byte response budget. No page was returned. Use resource_show with resource planEntry, view details, entryId ${entry.reference}, and revision ${entry.revision}, or agent-issues plan-entry list ${plan.entity.reference} --json.`);
 		} catch (error) {
 			return boundedReadError(error, "Plan-entry list failed.", "Plan-entry list failed. No page was returned. Check the Plan and restart without continuation.");
 		}
@@ -1153,7 +1153,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				}
 			}));
 			return formatRevisionHistoryPage(history, after, requestHash, entityListSecret,
-				`Plan-entry revision metadata exceeds the 8192-byte response budget. No page was returned. Use resource_show with resource planEntry, view details, and entryId ${entry.reference}, or agent-issues plan-entry history ${entry.reference} --json.`);
+				`Plan-entry revision metadata exceeds the 65536-byte response budget. No page was returned. Use resource_show with resource planEntry, view details, and entryId ${entry.reference}, or agent-issues plan-entry history ${entry.reference} --json.`);
 		} catch (error) {
 			return boundedReadError(error, "Plan-entry history failed.", "Plan-entry history failed. No page was returned. Check the entry and restart without continuation.");
 		}
@@ -1187,7 +1187,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			})).digest("hex");
 			const after = readPageContinuation(continuation, requestHash, entityListSecret, "tenant_list");
 			return formatSummaryListPage(await store.listTenants(), "tenants", after, requestHash, entityListSecret,
-				"Tenant summary exceeds the 8192-byte response budget. No page was returned. Use agent-issues tenant list --json for complete details.");
+				"Tenant summary exceeds the 65536-byte response budget. No page was returned. Use agent-issues tenant list --json for complete details.");
 		} catch (error) {
 			return boundedReadError(error, "Tenant list failed.", "Tenant list failed. Error details exceed the response budget. No page was returned. Check authorization and restart without continuation.");
 		}
@@ -1309,7 +1309,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"relation_query",
 		{
-			description: "Read relation and linked Plan provenance summaries within 8192 serialized UTF-8 JSON bytes. Keys sort by JSON tuples of section, relation type, and immutable item ID. Plan provenance is independent of entity-relation filters. Copy nextContinuation into continuation with the same request until null; join all sections across pages. Continuation is bound to the entity, tenant, workspace/project, direction, type filters, and server process. Pages are live reads, not a snapshot: later keys use current metadata; removed links disappear; keys at or before the cursor are not revisited. Invalid continuation or oversized metadata returns a bounded error with no page. Bodies use separate detail reads.",
+			description: "Read relation and linked Plan provenance summaries within 65536 serialized UTF-8 JSON bytes. Keys sort by JSON tuples of section, relation type, and immutable item ID. Plan provenance is independent of entity-relation filters. Copy nextContinuation into continuation with the same request until null; join all sections across pages. Continuation is bound to the entity, tenant, workspace/project, direction, type filters, and server process. Pages are live reads, not a snapshot: later keys use current metadata; removed links disappear; keys at or before the cursor are not revisited. Invalid continuation or oversized metadata returns a bounded error with no page. Bodies use separate detail reads.",
 			inputSchema: {
 				entityId: z.string().min(1),
 				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
@@ -1337,7 +1337,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"initiative_bundle",
 		{
-			description: "Explicitly read initiative summary sections within 8192 UTF-8 JSON bytes. Copy nextContinuation into continuation with the same initiative until null and join every section across pages. Keys sort by section and immutable IDs. Bodies use resource_body. Continuation is bound to the initiative, tenant, workspace/project, operation, order, and server process. Pages read current data, not a snapshot: earlier keys are not revisited and later keys use current records. Invalid continuation or oversized metadata returns an error with a complete CLI detail reference.",
+			description: "Explicitly read initiative summary sections within 65536 UTF-8 JSON bytes. Copy nextContinuation into continuation with the same initiative until null and join every section across pages. Keys sort by section and immutable IDs. Bodies use resource_body. Continuation is bound to the initiative, tenant, workspace/project, operation, order, and server process. Pages read current data, not a snapshot: earlier keys are not revisited and later keys use current records. Invalid continuation or oversized metadata returns an error with a complete CLI detail reference.",
 			inputSchema: { initiativeId: z.string().min(1), continuation: z.string().min(1).max(2048).optional() }
 		},
 		async ({ initiativeId, continuation }) => {
@@ -1369,37 +1369,30 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	server.registerTool(
 		"entity_next_work",
 		{
-			description: "Read work summary sections within 8192 UTF-8 JSON bytes. Copy nextContinuation into continuation with the same scope until null and join all sections. Recommendation and its unfinished-unblock-count reason repeat on each page; ties use immutable issue ID. available and blocked include counts; large inline reference lists are omitted and supplied completely through blockerLinks and unblockLinks. Bodies use resource_body. Keys sort by section and stable identity. Continuation binds the requested scope, initiative, tenant, workspace/project, operation, order, and server process. Pages read current data, not a snapshot; membership and recommendation can change. Restart after work-state changes. Availability and blocker rules are unchanged. Invalid continuation or oversized metadata returns a bounded error with a CLI detail reference.",
-			inputSchema: { scopeId: z.string().min(1), continuation: z.string().min(1).max(2048).optional() }
+			description: "Read next-in-line available issue candidates within 65536 UTF-8 JSON bytes. Resolves the scope to its initiative. Returns up to five candidates by default; limit accepts one to 20. Candidates sort by descending unfinishedUnblockCount, then ascending immutable issue ID. counts gives total available and blocked issues; hasMore indicates available issues outside the returned list. The skill selects the recommendation and reads finalist outcomes through resource_body only when needed. Do not fetch every available issue. No recommendation, blocked collection, dependency links, or continuation is returned. Availability and parent-child blocker rules are unchanged. Read again after work-state changes. Oversized responses return a bounded error with a complete CLI detail reference.",
+			inputSchema: { scopeId: z.string().min(1), limit: z.number().int().min(1).max(20).default(5) }
 		},
-		async ({ scopeId, continuation }) => {
+		async ({ scopeId, limit }) => {
 			try {
 				const scope = await resolveScope();
 				const store = await options.openStore(scope);
 				const initiative = await resolveContainingInitiative(store, scopeId);
 				const [bundle, allIssues] = await Promise.all([store.getInitiativeBundle(initiative.id), store.queryEntities({ kind: "issue" })]);
-				const requestHash = createHash("sha256").update(JSON.stringify({
-					operation: "entity_next_work", scope, tenantId: store.tenantId, initiativeId: initiative.id, scopeId, order: "section-id-asc"
-				})).digest("hex");
-				const after = readPageContinuation(continuation, requestHash, entityListSecret, "entity_next_work");
 				const work = deriveNextWork(bundle, allIssues.openBlockers ?? {});
-				const items = [...work.available, ...work.blocked];
-				const summarize = (item: NextWorkItem) => ({ issue: combinedEntitySummary(item.issue),
-					blockerCount: item.blockers.length, unfinishedUnblockCount: item.unblocks.length,
-					...(Buffer.byteLength(JSON.stringify(item.blockers), "utf8") <= 1024 ? { blockers: item.blockers } : {}),
-					...(Buffer.byteLength(JSON.stringify(item.unblocks), "utf8") <= 1024 ? { unblocks: item.unblocks } : {})
+				const candidates = work.available.slice().sort((first, second) => second.unblocks.length - first.unblocks.length
+					|| (first.issue.id < second.issue.id ? -1 : first.issue.id > second.issue.id ? 1 : 0)).slice(0, limit);
+				const response = toolResult({
+					initiative: combinedEntitySummary(bundle.initiative),
+					available: candidates.map((item) => ({ issue: combinedEntitySummary(item.issue), unfinishedUnblockCount: item.unblocks.length })),
+					counts: { available: work.available.length, blocked: work.blocked.length },
+					hasMore: work.available.length > candidates.length
 				});
-				const selected = work.available.slice().sort((first, second) => second.unblocks.length - first.unblocks.length
-					|| (first.issue.id < second.issue.id ? -1 : first.issue.id > second.issue.id ? 1 : 0))[0];
-				const recommendation = selected ? { issue: combinedEntitySummary(selected.issue),
-					reason: { unfinishedUnblockCount: selected.unblocks.length, tieBreak: "immutable-issue-id-asc" } } : null;
-				return formatCombinedPage(bundle.initiative, {
-					available: work.available.map(summarize), blocked: work.blocked.map(summarize),
-					blockerLinks: items.flatMap((item) => item.blockers.map((blocker) => ({ issue: item.issue.reference, blocker }))),
-					unblockLinks: items.flatMap((item) => item.unblocks.map((unblocks) => ({ issue: item.issue.reference, unblocks })))
-				}, after, requestHash, entityListSecret, `agent-issues next-work ${initiative.reference} --json`, { recommendation });
+				if (Buffer.byteLength(JSON.stringify(response), "utf8") > 65536) {
+					throw new Error(`Next-work candidates exceed the response budget. No candidates were returned. Use agent-issues next-work ${initiative.reference} --json for complete details.`);
+				}
+				return response;
 			} catch (error) {
-				return boundedReadError(error, "Next-work read failed.", "Next-work read failed. No page was returned. Use agent-issues next-work <initiative> --json for complete details.");
+				return boundedReadError(error, "Next-work read failed.", "Next-work read failed. No candidates were returned. Use agent-issues next-work <initiative> --json for complete details.");
 			}
 		}
 	);
@@ -1456,7 +1449,7 @@ function formatCombinedPage(initiative: EntityRecord, collections: Record<string
 		return toolResult({ initiative: combinedEntitySummary(initiative), ...metadata, ...Object.fromEntries(Object.keys(collections).map((section) => [section,
 			page.filter((item) => item.section === section).map((item) => item.value)])), nextContinuation });
 	};
-	if (Buffer.byteLength(JSON.stringify(responseAt(0)), "utf8") > 8192) throw new Error(`Initiative metadata exceeds the response budget. No page was returned. Use ${details}.`);
+	if (Buffer.byteLength(JSON.stringify(responseAt(0)), "utf8") > 65536) throw new Error(`Initiative metadata exceeds the response budget. No page was returned. Use ${details}.`);
 	return boundedCollectionPage(responseAt, remaining.length, `Combined summary exceeds the response budget. No page was returned. Use ${details}.`);
 }
 
@@ -1512,11 +1505,11 @@ function formatRelationPage(result: Awaited<ReturnType<StorageDriver["queryEntit
 		});
 	};
 	let response = responseAt(0);
-	if (Buffer.byteLength(JSON.stringify(response), "utf8") > 8192) throw new Error("Relation identity exceeds the 8192-byte response budget. No page was returned.");
+	if (Buffer.byteLength(JSON.stringify(response), "utf8") > 65536) throw new Error("Relation identity exceeds the 65536-byte response budget. No page was returned.");
 	for (let count = 1; count <= remaining.length; count++) {
 		const candidate = responseAt(count);
-		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 8192) {
-			if (count === 1) throw new Error(`Relation summary exceeds the 8192-byte response budget. No page was returned. Use ${remaining[0].details}.`);
+		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 65536) {
+			if (count === 1) throw new Error(`Relation summary exceeds the 65536-byte response budget. No page was returned. Use ${remaining[0].details}.`);
 			break;
 		}
 		response = candidate;
@@ -1533,7 +1526,7 @@ function formatEntityListPage(entities: EntitySummary[], after: string | undefin
 		}
 	}));
 	return formatSummaryListPage(summaries, "entities", after, requestHash, secret,
-		(summary) => `Entity summary exceeds the 8192-byte response budget. No page was returned. Use agent-issues show ${summary.reference} --json for complete details.`, limit);
+		(summary) => `Entity summary exceeds the 65536-byte response budget. No page was returned. Use agent-issues show ${summary.reference} --json for complete details.`, limit);
 }
 
 function formatSummaryListPage<Summary extends { id: string }>(summaries: Summary[], collection: "tenants" | "entities" | "entries", after: string | undefined, requestHash: string, secret: Buffer, oversizedMessage: string | ((summary: Summary) => string), limit?: number) {
@@ -1551,7 +1544,7 @@ function formatSummaryListPage<Summary extends { id: string }>(summaries: Summar
 	const itemLimit = Math.min(limit ?? remaining.length, remaining.length);
 	for (let count = 1; count <= itemLimit; count++) {
 		const candidate = responseAt(count);
-		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 8192) {
+		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 65536) {
 			if (count === 1) throw new Error(typeof oversizedMessage === "string" ? oversizedMessage : oversizedMessage(remaining[0]));
 			break;
 		}
@@ -1613,8 +1606,8 @@ function formatKeyedCollectionPage<Item extends { key: string }>(items: Item[], 
 		}
 		return toolResult({ ...format(remaining.slice(0, count)), nextContinuation });
 	};
-	if (Buffer.byteLength(JSON.stringify(responseAt(0)), "utf8") > 8192) throw new Error(`${label} request metadata exceeds the 8192-byte response budget. No page was returned. Use ${details}.`);
-	return boundedCollectionPage(responseAt, remaining.length, `${label} summary exceeds the 8192-byte response budget. No page was returned. Use ${details} for complete details.`);
+	if (Buffer.byteLength(JSON.stringify(responseAt(0)), "utf8") > 65536) throw new Error(`${label} request metadata exceeds the 65536-byte response budget. No page was returned. Use ${details}.`);
+	return boundedCollectionPage(responseAt, remaining.length, `${label} summary exceeds the 65536-byte response budget. No page was returned. Use ${details} for complete details.`);
 }
 
 function formatCommentListPage(page: Awaited<ReturnType<StorageDriver["listIssueComments"]>>, requestHash: string, secret: Buffer) {
@@ -1635,14 +1628,14 @@ function formatCommentListPage(page: Awaited<ReturnType<StorageDriver["listIssue
 		}
 		return toolResult({ comments, users: page.users.filter((user) => userIds.has(user.id)), total: page.total, nextBefore });
 	};
-	return boundedCollectionPage(responseAt, summaries.length, "Comment summary exceeds the 8192-byte response budget. No page was returned. Use agent-issues comment list <issue> --all --json for complete metadata.");
+	return boundedCollectionPage(responseAt, summaries.length, "Comment summary exceeds the 65536-byte response budget. No page was returned. Use agent-issues comment list <issue> --all --json for complete metadata.");
 }
 
 function formatCommentHistoryPage(history: Awaited<ReturnType<StorageDriver["listIssueCommentHistory"]>>, after: string | undefined, requestHash: string, secret: Buffer) {
 	const summaries = history.map(({ body: _body, ...entry }) => ({
 			...entry, reads: { body: { tool: "resource_body", arguments: { request: { resource: "comment", commentId: entry.commentId, revision: entry.targetRevision } } } }
 		}));
-	return formatRevisionHistoryPage(summaries, after, requestHash, secret, "Comment revision metadata exceeds the 8192-byte response budget. No page was returned. Use agent-issues comment history <comment> --json for complete metadata.");
+	return formatRevisionHistoryPage(summaries, after, requestHash, secret, "Comment revision metadata exceeds the 65536-byte response budget. No page was returned. Use agent-issues comment history <comment> --json for complete metadata.");
 }
 
 function formatRevisionHistoryPage<Summary extends { targetRevision: number }>(summaries: Summary[], after: string | undefined, requestHash: string, secret: Buffer, oversizedMessage: string) {
@@ -1663,7 +1656,7 @@ function boundedCollectionPage(responseAt: (count: number) => ReturnType<typeof 
 	let response = responseAt(0);
 	for (let count = 1; count <= itemCount; count++) {
 		const candidate = responseAt(count);
-		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 8192) {
+		if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > 65536) {
 			if (count === 1) throw new Error(oversizedMessage);
 			break;
 		}
@@ -1674,7 +1667,7 @@ function boundedCollectionPage(responseAt: (count: number) => ReturnType<typeof 
 
 function boundedReadError(error: unknown, message: string, oversizedMessage: string) {
 	const result = { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : message }] };
-	if (Buffer.byteLength(JSON.stringify(result), "utf8") > 8192) result.content[0].text = oversizedMessage;
+	if (Buffer.byteLength(JSON.stringify(result), "utf8") > 65536) result.content[0].text = oversizedMessage;
 	return result;
 }
 

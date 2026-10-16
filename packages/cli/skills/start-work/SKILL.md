@@ -51,7 +51,7 @@ When the build skill reports the finished issue:
 - Run `next-work` for the active initiative again. Use this fresh result as the authority. Do not rely on, repeat, or summarize an availability list from the build skill.
 - If `next-work` returns a recommendation, begin the reply with `Recommendation:` and name that issue's reference and title. State the short selection reason that `next-work` returned, then ask whether to continue with that recommended issue. Do not ask the user to choose from the available issues.
 - If the user agrees, treat the recommendation as the selected issue and return to step 3 to decide the approach. Do not repeat step 2.
-- If no issue is workable, report whether the initiative's issue work is complete, or show the remaining blocker chain that `next-work` returned.
+- If no issue is workable, report whether the initiative's issue work is complete, or report the blocked count that `next-work` returned. Read a blocker chain only when the user needs those details.
 - If the user declines, or when the work is complete, blocked, or out of scope, leave the tracker accurate. Offer `/agent-issues handoff` so the next session can start cleanly.
 
 Do not run more than one issue through one tdd run. One issue at a time keeps the tracker and the slices honest.

@@ -110,3 +110,19 @@ User invokes with a map (URL or number). A ticket is **optional** — without on
 5. Add newly surfaced tickets with the **Entity Create And Edit** recipe, then link them with the **Entity Relations** recipe; graduate any fog that the answer made specific. Remove each graduated patch from **Not yet specified** so it exists only in its new ticket. If the answer shows that a ticket sits beyond the destination, **rule it out of scope** instead of resolving it on the route. If the decision invalidates other map parts, update or delete those tickets. When no open tickets or in-scope fog remain, run the **Entity State And Structure** recipe to set the map status to `done`.
 
 The user may run unblocked tickets in parallel, so expect other sessions to be editing the tracker concurrently.
+
+## Next-session prompt
+
+Every session-ending question MUST end with the exact prompt the user can copy and paste into a new session without edits. Put the complete prompt in a fenced `text` block as the final content of the response. Do not put another question or explanation after it.
+
+Start the prompt with the skill invocation for the next action, such as `/agent-issues pioneer`, `/agent-issues plan`, or `/agent-issues prototype`. Select the skill yourself from the ticket type and its Notes; do not ask the user to select a skill or assemble the prompt. Use `/agent-issues pioneer` to continue the map and select the next ticket. For an unfinished ticket, name the skill needed to resume its current work and include the ticket reference, map reference, and selected Plan reference. For `/agent-issues plan`, also specify that `domain-modeling` must be active.
+
+Use actual titles and complete tracker references. Replace every placeholder before you show the prompt. Include all context needed to resume from the tracker without the previous conversation. Keep the prompt short; do not repeat the skill's workflow instructions. Do not claim the next ticket in the current session. If no ticket is available, use `/agent-issues pioneer` to review **Not yet specified** and the blockers with the user.
+
+After charting a map or completing a ticket, use this form with every placeholder replaced:
+
+```text
+/agent-issues pioneer Continue the map "<map title>" (<complete map reference>) with Plan <complete Plan reference>.
+```
+
+If the map is complete, or no map was created, ask the user which next action to take and provide the exact skill invocation and prompt for that action. Do not invent tracker references or present a completed map as unfinished.
